@@ -29,7 +29,7 @@ use crate::themes::theme::{CustomTheme, SelectedSystemThemes, ThemeKind};
 use crate::ui_components::blended_colors;
 use crate::user_config::{self, WarpConfig};
 use crate::window_settings::WindowSettings;
-use crate::{send_telemetry_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent};
+use crate::{GlobalResourceHandlesProvider, TelemetryEvent, send_telemetry_from_ctx};
 
 // UI does not scale, so we set a fixed size for all text.
 const FONT_SIZE: f32 = 14.;
@@ -563,50 +563,62 @@ impl SettingsImportView {
 
             KeysSettings::handle(ctx).update(ctx, |keys_settings, ctx| {
                 if let Some(extra_meta_keys) = config.option_as_meta.importable_value() {
-                    report_if_error!(keys_settings
-                        .extra_meta_keys
-                        .set_value(extra_meta_keys, ctx))
+                    report_if_error!(
+                        keys_settings
+                            .extra_meta_keys
+                            .set_value(extra_meta_keys, ctx)
+                    )
                 }
             });
             if let Some(Some(mouse_and_scroll_reporting)) =
                 config.mouse_and_scroll_reporting.importable_value()
             {
                 AltScreenReporting::handle(ctx).update(ctx, |reporting, ctx| {
-                    report_if_error!(reporting
-                        .mouse_reporting_enabled
-                        .set_value(mouse_and_scroll_reporting.mouse_reporting, ctx));
-                    report_if_error!(reporting
-                        .scroll_reporting_enabled
-                        .set_value(mouse_and_scroll_reporting.scroll_reporting, ctx));
+                    report_if_error!(
+                        reporting
+                            .mouse_reporting_enabled
+                            .set_value(mouse_and_scroll_reporting.mouse_reporting, ctx)
+                    );
+                    report_if_error!(
+                        reporting
+                            .scroll_reporting_enabled
+                            .set_value(mouse_and_scroll_reporting.scroll_reporting, ctx)
+                    );
                 });
             }
             if let Some(font) = config.font.importable_value() {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
                     if let Some(font_size) = font.size {
-                        report_if_error!(font_settings
-                            .monospace_font_size
-                            .set_value(font_size, ctx))
+                        report_if_error!(
+                            font_settings.monospace_font_size.set_value(font_size, ctx)
+                        )
                     }
                     if let Some(font_family) = font.family {
-                        report_if_error!(font_settings
-                            .monospace_font_name
-                            .set_value(font_family, ctx))
+                        report_if_error!(
+                            font_settings
+                                .monospace_font_name
+                                .set_value(font_family, ctx)
+                        )
                     }
                 });
             }
             if let Some(Some(default_shell)) = config.default_shell.importable_value() {
                 SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .startup_shell_override
-                        .set_value(default_shell, ctx));
+                    report_if_error!(
+                        settings
+                            .startup_shell_override
+                            .set_value(default_shell, ctx)
+                    );
                 });
             }
 
             if let Some(Some(working_directory)) = config.working_directory.importable_value() {
                 SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .working_directory_config
-                        .set_value(working_directory, ctx))
+                    report_if_error!(
+                        settings
+                            .working_directory_config
+                            .set_value(working_directory, ctx)
+                    )
                 });
             }
             if let Some(Ok(hotkey_mode)) = config.hotkey_mode.importable_value() {
@@ -629,14 +641,16 @@ impl SettingsImportView {
             WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
                 if let Some((cols, rows)) = config.window_size.importable_value() {
                     if cols.is_some() || rows.is_some() {
-                        report_if_error!(window_settings
-                            .open_windows_at_custom_size
-                            .set_value(true, ctx));
+                        report_if_error!(
+                            window_settings
+                                .open_windows_at_custom_size
+                                .set_value(true, ctx)
+                        );
                     }
                     if let Some(cols) = cols {
-                        report_if_error!(window_settings
-                            .new_windows_num_columns
-                            .set_value(cols, ctx));
+                        report_if_error!(
+                            window_settings.new_windows_num_columns.set_value(cols, ctx)
+                        );
                     }
                     if let Some(rows) = rows {
                         report_if_error!(window_settings.new_windows_num_rows.set_value(rows, ctx));
@@ -644,25 +658,29 @@ impl SettingsImportView {
                 }
                 if let Some(opacity_settings) = config.opacity.importable_value() {
                     if let Some(opacity) = opacity_settings.opacity {
-                        report_if_error!(window_settings
-                            .background_opacity
-                            .set_value(opacity, ctx));
+                        report_if_error!(
+                            window_settings.background_opacity.set_value(opacity, ctx)
+                        );
                     }
                     if let Some(blur_radius) = opacity_settings.blur_radius {
                         ctx.windows()
                             .set_all_windows_background_blur_radius(blur_radius);
-                        report_if_error!(window_settings
-                            .background_blur_radius
-                            .set_value(blur_radius, ctx));
+                        report_if_error!(
+                            window_settings
+                                .background_blur_radius
+                                .set_value(blur_radius, ctx)
+                        );
                     }
                 }
             });
 
             if let Some(Some(copy_on_select)) = config.copy_on_select.importable_value() {
                 SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
-                    report_if_error!(selection_settings
-                        .copy_on_select
-                        .set_value(copy_on_select, ctx));
+                    report_if_error!(
+                        selection_settings
+                            .copy_on_select
+                            .set_value(copy_on_select, ctx)
+                    );
                 });
             }
 
@@ -686,9 +704,11 @@ impl SettingsImportView {
 
     fn reset_preferences(&self, ctx: &mut ViewContext<SettingsImportView>) {
         ThemeSettings::handle(ctx).update(ctx, |theme_settings, ctx| {
-            report_if_error!(theme_settings
-                .selected_system_themes
-                .set_value_to_default(ctx));
+            report_if_error!(
+                theme_settings
+                    .selected_system_themes
+                    .set_value_to_default(ctx)
+            );
             report_if_error!(theme_settings.theme_kind.set_value_to_default(ctx));
             report_if_error!(theme_settings.use_system_theme.set_value_to_default(ctx));
         });
@@ -715,13 +735,17 @@ impl SettingsImportView {
         });
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .open_windows_at_custom_size
-                .set_value_to_default(ctx));
+            report_if_error!(
+                window_settings
+                    .open_windows_at_custom_size
+                    .set_value_to_default(ctx)
+            );
             report_if_error!(window_settings.background_opacity.set_value_to_default(ctx));
-            report_if_error!(window_settings
-                .background_blur_radius
-                .set_value_to_default(ctx));
+            report_if_error!(
+                window_settings
+                    .background_blur_radius
+                    .set_value_to_default(ctx)
+            );
         });
 
         SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
@@ -779,9 +803,11 @@ impl SettingsImportView {
                     theme_path,
                 ));
                 ThemeSettings::handle(ctx).update(ctx, |theme_settings, ctx| {
-                    report_if_error!(theme_settings
-                        .theme_kind
-                        .set_value(theme_kind.clone(), ctx,));
+                    report_if_error!(
+                        theme_settings
+                            .theme_kind
+                            .set_value(theme_kind.clone(), ctx,)
+                    );
                     report_if_error!(theme_settings.use_system_theme.set_value(false, ctx));
                 });
                 WarpConfig::handle(ctx).update(ctx, |config, ctx| {
@@ -1065,17 +1091,18 @@ impl TypedActionView for SettingsImportView {
                 self.set_preferences(ctx, terminal_type_and_profile);
 
                 // write_theme can fail because we write themes in a separate directory.
-                if let Some(theme_type) =
-                    ImportedConfigModel::as_ref(ctx).write_theme(terminal_type_and_profile)
-                {
-                    SettingsImportView::set_theme(
-                        ctx,
-                        theme_type,
-                        &self.configs[selected_idx].config_name,
-                    );
-                    ctx.emit(SettingsImportEvent::Completed(true));
-                } else {
-                    ctx.emit(SettingsImportEvent::Completed(false));
+                match ImportedConfigModel::as_ref(ctx).write_theme(terminal_type_and_profile) {
+                    Some(theme_type) => {
+                        SettingsImportView::set_theme(
+                            ctx,
+                            theme_type,
+                            &self.configs[selected_idx].config_name,
+                        );
+                        ctx.emit(SettingsImportEvent::Completed(true));
+                    }
+                    _ => {
+                        ctx.emit(SettingsImportEvent::Completed(false));
+                    }
                 }
                 self.state = State::Completed {
                     imported_idx: self.radio_button_state.get_selected_idx(),

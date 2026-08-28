@@ -7,14 +7,16 @@ use warpui::elements::{
     Text,
 };
 use warpui::fonts::{Properties, Style};
-use warpui::{Action, AppContext, Element};
+use warpui::{Action, AppContext, Element, SingletonEntity as _};
 
 use crate::ai::custom_model_routers::is_custom_router_id;
 use crate::ai::llms::{
-    should_show_bedrock_icon_for_model, should_show_key_icon_for_model, DisableReason, LLMId,
-    LLMInfo,
+    DisableReason, LLMId, LLMInfo, LLMPreferences, ModelIconFlags, is_model_allowed_for_scope,
+    model_leading_icon, should_show_bedrock_icon_for_model,
+    should_show_gemini_enterprise_agent_platform_icon_for_model, should_show_key_icon_for_model,
 };
 use crate::menu::{MenuItem, MenuItemFields, MenuTooltipPosition};
+use crate::workspaces::user_workspaces::TeamScope;
 
 pub fn is_auto(llm: &LLMInfo) -> bool {
     llm.display_name.to_lowercase().contains("auto")
@@ -67,37 +69,56 @@ fn with_cost_and_profile_info<A: Action + Clone>(
     }
 }
 
+/// Which same-family variants a menu renders as one row, labelled by the family rather than
+/// the specific variant. The picked row then opens a sidecar to choose within the family.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CollapsedModelVariants {
+    pub auto: bool,
+    pub reasoning: bool,
+}
+
+impl CollapsedModelVariants {
+    pub fn all() -> Self {
+        Self {
+            auto: true,
+            reasoning: true,
+        }
+    }
+}
+
 fn make_item_fields<A: Action + Clone>(
     llm: &LLMInfo,
     action: impl Fn(&LLMInfo) -> A,
     position_id_fn: Option<&dyn Fn(&LLMId) -> String>,
     model_id_to_add_profile_default_label_to: Option<&LLMId>,
-    collapse_auto: bool,
-    collapse_reasoning_variants: bool,
+    collapse: CollapsedModelVariants,
+    scope: &dyn TeamScope,
     app: &AppContext,
 ) -> MenuItem<A> {
-    let label = if collapse_auto && is_auto(llm) {
+    let is_auto_model = is_auto(llm);
+    let label = if collapse.auto && is_auto_model {
         "auto".to_string()
-    } else if collapse_reasoning_variants && llm.has_reasoning_level() {
+    } else if collapse.reasoning && llm.has_reasoning_level() {
         llm.base_model_name().to_string()
     } else {
         llm.menu_display_name()
     };
-    let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
-    let is_using_api_key = should_show_key_icon_for_model(llm, app);
+    let is_using_bedrock = should_show_bedrock_icon_for_model(llm, scope, app);
+    let is_using_gemini_enterprise_agent_platform =
+        should_show_gemini_enterprise_agent_platform_icon_for_model(llm, scope, app);
+    let is_using_api_key = should_show_key_icon_for_model(llm, scope, app);
     let is_custom_router = is_custom_router_id(llm.id.as_str());
-    let leading_icon = if is_using_bedrock {
-        Icon::Aws
-    } else if is_custom_router {
-        Icon::Dataflow
-    } else {
-        llm.provider.icon().unwrap_or(Icon::Oz)
-    };
-    let trailing_credential_icon = if !is_using_bedrock && is_using_api_key {
-        Some(Icon::Key)
-    } else {
-        None
-    };
+    let leading_icon = model_leading_icon(
+        llm,
+        ModelIconFlags {
+            is_custom_router,
+            is_auto: is_auto_model,
+            is_using_bedrock,
+            is_using_gemini_enterprise: is_using_gemini_enterprise_agent_platform,
+        },
+    );
+    let is_using_cloud_host = is_using_bedrock || is_using_gemini_enterprise_agent_platform;
+    let trailing_credential_icon = (!is_using_cloud_host && is_using_api_key).then_some(Icon::Key);
 
     let mut item = if let Some(position_id_fn) = position_id_fn {
         let position_id = position_id_fn(&llm.id);
@@ -178,20 +199,22 @@ pub fn available_model_menu_items<A: Action + Clone>(
     action: impl Fn(&LLMInfo) -> A,
     model_id_to_add_profile_default_label_to: Option<&LLMId>,
     position_id_fn: Option<&dyn Fn(&LLMId) -> String>,
-    collapse_auto: bool,
-    collapse_reasoning_variants: bool,
+    collapse: CollapsedModelVariants,
+    scope: &dyn TeamScope,
     app: &AppContext,
 ) -> Vec<MenuItem<A>> {
+    let prefs = LLMPreferences::as_ref(app);
     choices
         .into_iter()
+        .filter(|llm| is_model_allowed_for_scope(prefs, llm, scope, app))
         .map(|llm| {
             make_item_fields(
                 llm,
                 &action,
                 position_id_fn,
                 model_id_to_add_profile_default_label_to,
-                collapse_auto,
-                collapse_reasoning_variants,
+                collapse,
+                scope,
                 app,
             )
         })

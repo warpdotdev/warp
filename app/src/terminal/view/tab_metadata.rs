@@ -1,7 +1,7 @@
 use warpui::AppContext;
 
 use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::{git_line_changes_from_chips, ContextChipKind};
+use crate::context_chips::{ContextChipKind, git_line_changes_from_chips};
 use crate::terminal::TerminalView;
 
 impl TerminalView {
@@ -48,6 +48,7 @@ impl TerminalView {
             if block.finished()
                 && !block.is_background()
                 && !block.is_static()
+                && !block.is_in_band_command_block()
                 && (block.bootstrap_stage().is_done() || block.is_restored())
             {
                 let cmd = block.command_to_string();

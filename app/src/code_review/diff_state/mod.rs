@@ -20,9 +20,9 @@ use crate::code_review::diff_size_limits::DiffSize;
 use crate::util::git::{BranchEntry, Commit, FileChangeEntry, PrInfo};
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 mod local;
+pub use local::LocalDiffStateModel;
 #[cfg(feature = "local_fs")]
 pub(crate) use local::diff_metadata_against_head;
-pub use local::LocalDiffStateModel;
 
 mod remote;
 pub use remote::RemoteDiffStateModel;

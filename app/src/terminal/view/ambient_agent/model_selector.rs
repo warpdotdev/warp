@@ -4,8 +4,8 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, Container, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -32,6 +32,7 @@ use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 const ITEM_FONT_SIZE: f32 = 14.;
 
@@ -285,23 +286,18 @@ impl ModelSelector {
             .value()
             .get(harness.config_name())
             .cloned();
-        if let Some(saved) = saved {
-            if HarnessAvailabilityModel::as_ref(ctx)
+        if let Some(saved) = saved
+            && HarnessAvailabilityModel::as_ref(ctx)
                 .models_for(harness)
                 .is_some_and(|models| {
                     models.iter().any(|m| {
                         m.id == saved.model_id && m.reasoning_level == saved.reasoning_level
                     })
                 })
-            {
-                ambient_model.update(ctx, |model, ctx| {
-                    model.set_harness_model_selection(
-                        Some(saved.model_id),
-                        saved.reasoning_level,
-                        ctx,
-                    );
-                });
-            }
+        {
+            ambient_model.update(ctx, |model, ctx| {
+                model.set_harness_model_selection(Some(saved.model_id), saved.reasoning_level, ctx);
+            });
         }
     }
 
@@ -421,10 +417,15 @@ impl ModelSelector {
                         })
                 })
                 .unwrap_or_else(|| "default".to_string()),
-            _ => LLMPreferences::as_ref(ctx)
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
-                .display_name
-                .clone(),
+            _ => {
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
+                LLMPreferences::as_ref(ctx)
+                    .get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
+                    .display_name
+                    .clone()
+            }
         };
         self.button.update(ctx, |button, ctx| {
             button.set_label(active_label, ctx);
@@ -441,6 +442,8 @@ impl ModelSelector {
 
         // Branch on harness: third-party harnesses show their own model list (e.g. opus,
         // sonnet, haiku), while Oz / no-harness fall back to the Agent Mode LLM list.
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let (mut items, selected_action): (
             Vec<MenuItem<ModelSelectorAction>>,
             ModelSelectorAction,
@@ -448,7 +451,7 @@ impl ModelSelector {
             Some(harness) if !matches!(harness, Harness::Oz | Harness::Unknown) => {
                 self.build_harness_menu_items(harness, &query, hover_background, ctx)
             }
-            _ => self.build_oz_menu_items(&query, hover_background, ctx),
+            _ => self.build_oz_menu_items(&query, hover_background, &scope, ctx),
         };
 
         if items.is_empty() {
@@ -481,17 +484,18 @@ impl ModelSelector {
         &self,
         query: &str,
         hover_background: Fill,
+        scope: &ResolvedTeamScope,
         ctx: &AppContext,
     ) -> (Vec<MenuItem<ModelSelectorAction>>, ModelSelectorAction) {
         let llm_preferences = LLMPreferences::as_ref(ctx);
         let active_llm_id = llm_preferences
-            .get_active_base_model(ctx, Some(self.terminal_view_id))
+            .get_active_base_model(scope, ctx, Some(self.terminal_view_id))
             .id
             .clone();
 
         let mut auto_choices = Vec::new();
         let mut other_choices = Vec::new();
-        for llm in llm_preferences.get_base_llm_choices_for_agent_mode(ctx) {
+        for llm in llm_preferences.get_base_llm_choices_for_agent_mode(scope, ctx) {
             if llm_preferences.custom_llm_info_for_id(&llm.id).is_some() {
                 continue;
             }
@@ -515,7 +519,7 @@ impl ModelSelector {
                 let leading_icon = if is_custom_router_id(llm.id.as_str()) {
                     Icon::Dataflow
                 } else {
-                    llm.provider.icon().unwrap_or(Icon::Oz)
+                    llm.provider.icon().unwrap_or(Icon::Agent)
                 };
                 let fields = MenuItemFields::new(display_name)
                     .with_icon(leading_icon)
@@ -660,8 +664,16 @@ impl TypedActionView for ModelSelector {
             ModelSelectorAction::SelectModel(llm_id) => {
                 let terminal_view_id = self.terminal_view_id;
                 let id_for_update = llm_id.clone();
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                );
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.update_preferred_agent_mode_llm(&id_for_update, terminal_view_id, ctx);
+                    prefs.update_preferred_agent_mode_llm(
+                        &scope,
+                        &id_for_update,
+                        terminal_view_id,
+                        ctx,
+                    );
                 });
                 self.set_menu_visibility(false, ctx);
             }
@@ -671,20 +683,20 @@ impl TypedActionView for ModelSelector {
                 reasoning_level,
             } => {
                 let is_default = model_id.is_empty();
-                if let Some(ambient_agent_model) = self.ambient_agent_model.clone() {
-                    if ambient_agent_model.as_ref(ctx).selected_harness() == *harness {
-                        ambient_agent_model.update(ctx, |model, ctx| {
-                            model.set_harness_model_selection(
-                                (!is_default).then(|| model_id.clone()),
-                                if is_default {
-                                    None
-                                } else {
-                                    reasoning_level.clone()
-                                },
-                                ctx,
-                            );
-                        });
-                    }
+                if let Some(ambient_agent_model) = self.ambient_agent_model.clone()
+                    && ambient_agent_model.as_ref(ctx).selected_harness() == *harness
+                {
+                    ambient_agent_model.update(ctx, |model, ctx| {
+                        model.set_harness_model_selection(
+                            (!is_default).then(|| model_id.clone()),
+                            if is_default {
+                                None
+                            } else {
+                                reasoning_level.clone()
+                            },
+                            ctx,
+                        );
+                    });
                 }
                 // Persist the selection per-harness to settings for next time.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {

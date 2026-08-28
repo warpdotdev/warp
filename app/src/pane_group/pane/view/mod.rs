@@ -198,12 +198,12 @@ impl<P: BackingView> PaneView<P> {
     /// Handles events from the pane stack model.
     fn handle_pane_stack_event(&mut self, event: &PaneStackEvent<P>, ctx: &mut ViewContext<Self>) {
         // Set the focus handle for newly added views
-        if let PaneStackEvent::ViewAdded(view) = event {
-            if let Some(focus_handle) = &self.focus_handle {
-                view.update(ctx, |child, ctx| {
-                    child.set_focus_handle(focus_handle.clone(), ctx);
-                });
-            }
+        if let PaneStackEvent::ViewAdded(view) = event
+            && let Some(focus_handle) = &self.focus_handle
+        {
+            view.update(ctx, |child, ctx| {
+                child.set_focus_handle(focus_handle.clone(), ctx);
+            });
         }
 
         let new_child = self.child(ctx);
@@ -236,7 +236,8 @@ impl<P: BackingView> PaneView<P> {
         match event {
             PaneConfigurationEvent::ShowAccentBorderUpdated
             | PaneConfigurationEvent::DimEvenIfFocusedUpdated => ctx.notify(),
-            PaneConfigurationEvent::RefreshPaneHeaderOverflowMenuItems => {
+            PaneConfigurationEvent::RefreshPaneHeaderOverflowMenuItems
+            | PaneConfigurationEvent::SharedSessionLinkChanged => {
                 let child = self.child(ctx);
                 let items = child.read(ctx, |view, ctx| view.pane_header_overflow_menu_items(ctx));
                 self.header.update(ctx, |header, ctx| {
@@ -246,6 +247,11 @@ impl<P: BackingView> PaneView<P> {
                 self.header.update(ctx, |header, ctx| {
                     header.set_toolbelt_buttons(buttons, ctx);
                 });
+                if matches!(event, PaneConfigurationEvent::SharedSessionLinkChanged) {
+                    self.header.update(ctx, |header, ctx| {
+                        header.refresh_shared_session_link(ctx);
+                    });
+                }
                 ctx.notify();
             }
             PaneConfigurationEvent::ShareableObjectChanged(object) => {

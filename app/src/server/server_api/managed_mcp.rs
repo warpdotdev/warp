@@ -1,12 +1,11 @@
 // We don't resolve managed MCPs from agent run CLI flows on WASM, so this code is unused there.
 #![cfg_attr(target_family = "wasm", expect(dead_code))]
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::MutationBuilder;
 #[cfg(test)]
 use mockall::automock;
-use uuid::Uuid;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfig, CreateManagedMcpClientConfigInput,
     CreateManagedMcpClientConfigOutput, CreateManagedMcpClientConfigResult,
@@ -20,9 +19,11 @@ use crate::server::graphql::{get_request_context, get_user_facing_error_message}
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait ManagedMcpClient: 'static + Send + Sync {
+    /// `uid` is a managed MCP server UUID or a well-known integration id
+    /// (e.g. "linear") — the GraphQL input is an opaque `ID!`.
     async fn create_managed_mcp_client_config(
         &self,
-        uid: Uuid,
+        uid: String,
     ) -> Result<CreateManagedMcpClientConfigOutput>;
 }
 
@@ -31,11 +32,11 @@ pub trait ManagedMcpClient: 'static + Send + Sync {
 impl ManagedMcpClient for ServerApi {
     async fn create_managed_mcp_client_config(
         &self,
-        uid: Uuid,
+        uid: String,
     ) -> Result<CreateManagedMcpClientConfigOutput> {
         let variables = CreateManagedMcpClientConfigVariables {
             input: CreateManagedMcpClientConfigInput {
-                uid: cynic::Id::new(uid.to_string()),
+                uid: cynic::Id::new(uid),
             },
             request_context: get_request_context(),
         };

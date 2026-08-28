@@ -10,31 +10,31 @@ use std::sync::Arc;
 pub use ai::agent::convert::ConvertToAPITypeError;
 use ai::api_keys::ApiKeyManager;
 pub use convert_from::{
-    user_inputs_from_messages, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    MessageToAIAgentOutputMessageError, user_inputs_from_messages,
 };
 use futures_lite::Stream;
-use mcp::TemplatableMCPServerInfo;
 pub use r#impl::generate_multi_agent_output;
+use mcp::TemplatableMCPServerInfo;
 use serde::Serialize;
-use warp_core::channel::ChannelState;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, EntityId, SingletonEntity as _};
 
-use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
+use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, ServerOutputId, Suggestions};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput, SessionContext};
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AIExecutionProfileAppExt;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::server::server_api::AIApiError;
 use crate::settings::AISettings;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Unique, server-generated conversation-scoped token to be roundtripped to the API when sending
 /// requests that follow-up within a given conversation.
@@ -58,6 +58,31 @@ impl ServerConversationToken {
         )
     }
 
+    pub fn debugging_payload(&self, request_id: Option<&ServerOutputId>) -> String {
+        self.debugging_payload_for_channel(request_id, ChannelState::channel())
+    }
+
+    fn debugging_payload_for_channel(
+        &self,
+        request_id: Option<&ServerOutputId>,
+        channel: Channel,
+    ) -> String {
+        if channel.is_dogfood() {
+            match request_id {
+                Some(request_id) => format!("{}?request={request_id}", self.debug_link()),
+                None => self.debug_link(),
+            }
+        } else {
+            match request_id {
+                Some(request_id) => format!(
+                    "{{\"request_id\":\"{request_id}\",\"conversation_id\":\"{}\"}}",
+                    self.as_str()
+                ),
+                None => format!("{{\"conversation_id\":\"{}\"}}", self.as_str()),
+            }
+        }
+    }
+
     pub fn conversation_link(&self) -> String {
         format!(
             "{}/conversation/{}",
@@ -67,6 +92,9 @@ impl ServerConversationToken {
     }
 }
 
+#[cfg(test)]
+#[path = "api_tests.rs"]
+mod tests;
 impl From<ServerConversationToken> for String {
     fn from(value: ServerConversationToken) -> Self {
         value.0
@@ -112,6 +140,11 @@ pub struct RequestParams {
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
+    /// Whether `scope`'s team allows members to use their own provider credentials.
+    ///
+    /// A later mutation of [`Self::api_keys`] must gate on this, not on plan entitlement alone:
+    /// `api_keys` stays `Some(..)` for org-level credentials that survive the team's policy.
+    pub member_byo_credentials_allowed: bool,
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
     /// User-provided custom model providers (BYOK endpoints).
@@ -179,6 +212,7 @@ impl RequestParams {
             mcp_context: None,
             planning_enabled: false,
             should_redact_secrets: false,
+            member_byo_credentials_allowed: false,
             api_keys: None,
             custom_model_providers: None,
             custom_model_routers: None,
@@ -196,12 +230,13 @@ impl RequestParams {
         }
     }
 
-    pub fn new(
+    pub(crate) fn new(
         terminal_view_id: Option<EntityId>,
         session_context: SessionContext,
         request_input: &RequestInput,
         conversation: ConversationData,
         metadata: Option<RequestMetadata>,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let ai_settings = AISettings::as_ref(app);
@@ -235,6 +270,9 @@ impl RequestParams {
                     .get_active_cli_spawned_servers()
                     .values(),
             );
+
+            // Include built-in Warp-hosted servers (e.g. the Factory MCP).
+            active_servers.extend(templatable_manager.get_active_builtin_servers().values());
 
             let servers: Vec<MCPServer> = active_servers
                 .into_iter()
@@ -278,17 +316,23 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
-        let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
+        // Bedrock and Gemini Enterprise are admin-configured host credentials rather than member
+        // BYO keys, so they deliberately skip this gate.
+        let member_byo_credentials_allowed = user_workspaces.are_member_byo_keys_allowed(scope);
+        let is_byo_enabled =
+            user_workspaces.is_byo_api_key_enabled(app) && member_byo_credentials_allowed;
         #[cfg(not(target_family = "wasm"))]
-        let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
+        let geap_binding =
+            crate::ai::geap_credentials::current_geap_policy(scope, app).mint_binding();
         #[cfg(target_family = "wasm")]
         let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
             is_byo_enabled,
-            user_workspaces.is_aws_bedrock_credentials_enabled(app),
+            user_workspaces.is_aws_bedrock_credentials_enabled(scope, app),
             geap_binding,
         );
-        let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
+        let is_custom_inference_enabled = user_workspaces.is_byo_endpoint_enabled(app)
+            && user_workspaces.are_member_byo_endpoints_allowed(scope);
         let custom_model_providers =
             api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled);
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
@@ -324,7 +368,7 @@ impl RequestParams {
         let is_ambient_agent = conversation.ambient_agent_task_id.is_some();
         let computer_use_enabled = FeatureFlag::AgentModeComputerUse.is_enabled()
             && BlocklistAIPermissions::as_ref(app)
-                .get_computer_use_setting(app, terminal_view_id)
+                .get_computer_use_setting(terminal_view_id, scope, app)
                 .is_enabled()
             && computer_use::is_supported_on_current_platform()
             && (FeatureFlag::LocalComputerUse.is_enabled() || is_ambient_agent);
@@ -371,6 +415,7 @@ impl RequestParams {
             mcp_context,
             planning_enabled: true,
             should_redact_secrets,
+            member_byo_credentials_allowed,
             api_keys,
             custom_model_providers,
             custom_model_routers,

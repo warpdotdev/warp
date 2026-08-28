@@ -1,21 +1,24 @@
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 pub use ai::api_keys::AwsCredentials;
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy, AwsCredentialsState};
 use anyhow::Context;
-use aws_credential_types::provider::error::CredentialsError;
 use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::error::CredentialsError;
 use futures::channel::oneshot::channel;
 use futures::future::BoxFuture;
+use parking_lot::FairMutex;
 use tokio::sync::Mutex;
 use vec1::vec1;
 use warp_errors::report_error;
-use warp_managed_secrets::client::IdentityTokenOptions;
 use warp_managed_secrets::ManagedSecretManager;
+use warp_managed_secrets::client::IdentityTokenOptions;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
 use crate::settings::{AISettings, AISettingsChangedEvent};
-use crate::terminal::event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted};
+use crate::terminal::event::{AfterBlockCompletedEvent, BlockType};
+use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
@@ -102,10 +105,10 @@ static STS_CLIENT_CACHE: Mutex<Option<(String, aws_sdk_sts::Client)>> = Mutex::c
 
 pub(crate) async fn sts_client(region: &str) -> aws_sdk_sts::Client {
     let mut cache = STS_CLIENT_CACHE.lock().await;
-    if let Some((cached_region, client)) = cache.as_ref() {
-        if cached_region == region {
-            return client.clone();
-        }
+    if let Some((cached_region, client)) = cache.as_ref()
+        && cached_region == region
+    {
+        return client.clone();
     }
 
     let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -176,6 +179,7 @@ pub trait AwsCredentialRefresher {
     fn register_model_event_dispatcher(
         &mut self,
         model_events: &ModelHandle<ModelEventDispatcher>,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Self>,
     ) where
         Self: Sized;
@@ -191,14 +195,25 @@ impl AwsCredentialRefresher for ApiKeyManager {
     fn register_model_event_dispatcher(
         &mut self,
         model_events: &ModelHandle<ModelEventDispatcher>,
+        terminal_model: Arc<FairMutex<TerminalModel>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        ctx.subscribe_to_model(model_events, |manager, _, event, ctx| {
+        // we cannot simply capture the strong references, or we risk having a reference cycle.
+        let terminal_model_weak = Arc::downgrade(&terminal_model);
+        ctx.subscribe_to_model(model_events, move |manager, _, event, ctx| {
+            let Some(terminal_model) = terminal_model_weak.upgrade() else {
+                return;
+            };
+
             if let ModelEvent::AfterBlockCompleted(AfterBlockCompletedEvent {
-                block_type: BlockType::User(UserBlockCompleted { command, .. }),
+                block_type: BlockType::User(user_block_completed),
                 ..
             }) = event
             {
+                let command = user_block_completed.command.get_with(|compute| {
+                    let model = terminal_model.lock();
+                    compute(model.block_list())
+                });
                 let auth_command = &AISettings::as_ref(ctx).aws_bedrock_auth_refresh_command;
                 if command.trim().starts_with(auth_command.trim()) {
                     log::debug!("Detected AWS auth command completion, refreshing credentials");
@@ -260,7 +275,11 @@ fn refresh_aws_credentials_local_chain(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) -> BoxFuture<'static, Result<(), String>> {
-    let is_available = UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled(ctx);
+    // Credential loading is a background `ApiKeyManager` job with no window behind it, and
+    // there is one local AWS credential store, so it runs if any of the user's teams enables
+    // Bedrock. Whether a given request may then carry those credentials is decided separately.
+    let is_available =
+        UserWorkspaces::as_ref(ctx).is_aws_bedrock_credentials_enabled_for_any_team(ctx);
 
     if !is_available {
         manager.set_aws_credentials_state(AwsCredentialsState::Disabled, ctx);
@@ -365,8 +384,10 @@ fn refresh_aws_credentials_oidc(
                         .as_service_error()
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| err.to_string());
-                    report_error!(anyhow::Error::new(err)
-                        .context("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error"));
+                    report_error!(
+                        anyhow::Error::new(err)
+                            .context("Bedrock OIDC: STS AssumeRoleWithWebIdentity SDK error")
+                    );
                     anyhow::anyhow!("STS AssumeRoleWithWebIdentity failed: {detail}")
                 })?
                 .credentials

@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_channel::Sender;
+use byte_unit::Byte;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use parking_lot::FairMutex;
@@ -12,22 +14,20 @@ use session_sharing_protocol::sharer::{
     DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
+use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
 use super::{
-    startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    Stage, StartupFailure, StartupRetryState, startup_max_attempts,
 };
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
-use crate::editor::ReplicaId;
+use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::shared_session::{
-    SharedSessionScrollbackType, SharedSessionSource, MAX_BYTES_SHAREABLE,
-};
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::{MAX_BYTES_SHAREABLE, SharedSessionSource};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -67,16 +67,16 @@ fn test_startup_failure_retryability() {
         .is_retryable()
     );
 
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::ScrollbackTooLarge {}
-    )
-    .is_retryable());
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::NoUserQuotaRemaining {
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::ScrollbackTooLarge {})
+            .is_retryable()
+    );
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::NoUserQuotaRemaining {
             quota_type: QuotaType::SessionsCreated,
-        }
-    )
-    .is_retryable());
+        })
+        .is_retryable()
+    );
     assert!(
         !StartupFailure::ServerRejected(FailedToInitializeSessionReason::UserNotFound)
             .is_retryable()
@@ -168,7 +168,6 @@ fn create_network(
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
     let (ordered_events_tx, ordered_events_rx) = async_channel::unbounded();
-    let scrollback_type = SharedSessionScrollbackType::None;
     let active_prompt = ActivePrompt::default();
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
@@ -176,10 +175,9 @@ fn create_network(
         Network::new_for_test(
             terminal_model,
             ordered_events_rx,
-            scrollback_type,
             active_prompt,
             Selection::None,
-            ReplicaId::random(),
+            Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
             ctx,
         )
     });
@@ -379,12 +377,11 @@ fn test_handle_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        // Use a generous tick budget: this is the only test that waits on the real
-        // ~50ms PTY batch timer to fire, and the default assert_eventually! budget
-        // (~100ms) is too tight on Windows, where coarse timer granularity (~15.6ms)
-        // plus loaded single-threaded-executor CI intermittently pushes the flush
-        // past it. The larger budget keeps the real batch-timer path under test while
-        // eliminating the flake.
+        // The test executor uses real (async_io) timers with no mock clock, so this
+        // test relies on the batch timer actually firing. Under test builds
+        // PTY_READS_BATCH_THRESHOLD is larger than the ~50ms production value so the
+        // transient `Batching` state below is reliably observable instead of racing the
+        // timer under coarse scheduler granularity (which flaked on Windows CI).
         assert_eventually!(
             200 =>
             network.read(&app, |network, _ctx| {
@@ -393,14 +390,16 @@ fn test_handle_pty_read_event_while_not_batching() {
             "Batching status should be batching"
         );
 
-        // When the timer is done, the accumulated event should be sent to the server.
-        assert_eventually!(
-            200 =>
-            ws_proxy_rx.len() == 1,
-            "Accumulated event should be sent to the server"
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // When the batch timer fires, the accumulated event is flushed to the server.
+        // Await the flush directly rather than polling a fixed tick budget, but bound the
+        // wait (generously, relative to the test-build batch threshold) so a regression in
+        // the timer/flush path fails this test promptly instead of hanging until the CI
+        // timeout.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(PTY_READS_BATCH_THRESHOLD * 20)
+            .await
+            .expect("Accumulated event should be flushed before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -412,6 +411,25 @@ fn test_handle_pty_read_event_while_not_batching() {
             assert!(matches!(network.pty_bytes_batch_status, PtyBytesBatchStatus::NotBatching { last_sent_at } if last_sent_at > init_time));
         });
     });
+}
+
+/// Waits until the mock terminal model reports its active block as bootstrapped.
+///
+/// `start_ordered_terminal_events_listener` silently drops ordered events until this is
+/// true, so callers must wait for it instead of racing it: sending an event beforehand can
+/// flake if the listener task hasn't observed the bootstrapped state yet. Uses the same
+/// generous 2s budget as the `recv()` timeouts below it, rather than the default
+/// `assert_eventually!` tick budget, so this wait can't reintroduce a fixed-window race of
+/// its own.
+async fn wait_for_bootstrapped(network: &ModelHandle<Network>, app: &App) {
+    assert_eventually!(
+        400 =>
+        network.read(app, |network, _ctx| network
+            .model
+            .lock()
+            .is_active_block_bootstrapped()),
+        "Mock terminal model should report the active block as bootstrapped"
+    );
 }
 
 #[test]
@@ -429,6 +447,8 @@ fn test_handle_non_pty_read_event_while_batching() {
             };
         });
 
+        wait_for_bootstrapped(&network, &app).await;
+
         // Send a non PtyBytesRead event to the Network model.
         let event = OrderedTerminalEventType::CommandExecutionStarted {
             participant_id: Default::default(),
@@ -438,14 +458,14 @@ fn test_handle_non_pty_read_event_while_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
-            "Two messages should be sent to the server; got {}",
-            ws_proxy_rx.len()
-        );
-
+        // Await each flush directly rather than polling a fixed tick budget, so a scheduling
+        // delay under load can't race a fixed timeout window (which flaked on Windows CI).
         // Make sure that we flush the PtyBytesRead message first.
-        let item = ws_proxy_rx.recv().await;
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("PtyBytesRead flush message should be sent before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -453,8 +473,14 @@ fn test_handle_non_pty_read_event_while_batching() {
         ));
 
         // And that the non PtyBytesRead message follows suit.
-        let item = ws_proxy_rx.recv().await;
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Non-PtyBytesRead message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 1));
+
+        assert_eq!(ws_proxy_rx.len(), 0);
 
         // The batching status should be reset.
         network.read(&app, |network, _ctx| {
@@ -477,6 +503,8 @@ fn test_handle_non_pty_read_event_while_not_batching() {
             }
         });
 
+        wait_for_bootstrapped(&network, &app).await;
+
         // Send a non PtyBytesRead event to the Network model.
         let event = OrderedTerminalEventType::CommandExecutionStarted {
             participant_id: Default::default(),
@@ -486,13 +514,13 @@ fn test_handle_non_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        assert_eventually!(
-            ws_proxy_rx.len() == 1,
-            "One message should be sent to the server; got {}",
-            ws_proxy_rx.len()
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // Await the flush directly rather than polling a fixed tick budget; see
+        // test_handle_non_pty_read_event_while_batching for why.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 0));
 
         // The batching status should be unchanged.
@@ -661,6 +689,7 @@ fn test_messages_are_buffered_while_reconnecting() {
             IapManager::new(
                 None,
                 Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+                None,
                 ctx,
             )
         });

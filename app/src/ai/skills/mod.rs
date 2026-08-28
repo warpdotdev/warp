@@ -23,9 +23,10 @@ cfg_if::cfg_if! {
 
 pub use ai::skills::SkillReference;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub enum SkillManagerEvent {
-    HomeSkillsChanged,
+    SkillsChanged { home_skills_changed: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -52,11 +53,9 @@ impl ActiveSkillLookupError {
 
 #[cfg(not(target_family = "wasm"))]
 mod global_skills;
+pub use ai::skills::SkillDescriptor;
 #[cfg(not(target_family = "wasm"))]
 pub use global_skills::{filter_skills_by_spec, resolve_skill_repos};
-
-mod listed_skill;
-pub use listed_skill::SkillDescriptor;
 
 mod skill_utils;
 pub use skill_utils::{
@@ -89,7 +88,7 @@ impl SkillPathQuery for PathBuf {
 mod resolve_skill_spec;
 #[cfg(not(target_family = "wasm"))]
 pub use resolve_skill_spec::{
-    clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
+    ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
 };
 
 cfg_if::cfg_if! {

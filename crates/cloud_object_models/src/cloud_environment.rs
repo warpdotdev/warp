@@ -9,20 +9,33 @@ use serde::{Deserialize, Serialize};
 use crate::{JsonModel, JsonSerializer};
 
 /// Source-control provider hosting an environment's repositories.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum CodeForge {
     #[default]
     #[serde(rename = "GITHUB")]
     GitHub,
     #[serde(rename = "GITLAB")]
     GitLab,
+    /// Explicit "no code forge" container value: a repo-less environment
+    /// that clones nothing and relies entirely on `setup_commands`.
+    #[serde(rename = "NONE")]
+    None,
+    // Catches a forge value this client build doesn't recognize yet (e.g. the
+    // server adds one before this client updates), so the rest of the
+    // environment still deserializes instead of the whole object failing.
+    #[serde(other)]
+    Unknown,
 }
 
 impl CodeForge {
+    /// The clonable host for this forge, empty for `None`/`Unknown` since
+    /// neither identifies one; callers must not fall back to `github.com`
+    /// for either, which would authenticate against the wrong host.
     pub const fn host(self) -> &'static str {
         match self {
             CodeForge::GitHub => "github.com",
             CodeForge::GitLab => "gitlab.com",
+            CodeForge::None | CodeForge::Unknown => "",
         }
     }
 }
@@ -32,6 +45,8 @@ impl fmt::Display for CodeForge {
         match self {
             CodeForge::GitHub => write!(f, "GitHub"),
             CodeForge::GitLab => write!(f, "GitLab"),
+            CodeForge::None => write!(f, "None"),
+            CodeForge::Unknown => write!(f, "Unknown"),
         }
     }
 }
@@ -68,6 +83,11 @@ pub struct SourceRepo {
     pub code_forge: Option<CodeForge>,
     pub owner: String,
     pub repo: String,
+    /// Ref to check out after cloning this repository (commit SHA, branch, or
+    /// tag). Absent leaves the clone on the default branch. Benchmark trials
+    /// use it to start from a pinned base commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout_ref: Option<String>,
 }
 
 impl SourceRepo {
@@ -76,14 +96,21 @@ impl SourceRepo {
             code_forge: Some(code_forge),
             owner,
             repo,
+            checkout_ref: None,
         }
     }
     pub fn with_default_code_forge(&self, code_forge: CodeForge) -> Self {
-        Self::new(
-            self.code_forge.unwrap_or(code_forge),
-            self.owner.clone(),
-            self.repo.clone(),
-        )
+        Self {
+            code_forge: Some(self.code_forge.unwrap_or(code_forge)),
+            owner: self.owner.clone(),
+            repo: self.repo.clone(),
+            checkout_ref: self.checkout_ref.clone(),
+        }
+    }
+    /// Returns a copy of this repository pinned to `checkout_ref`.
+    pub fn with_checkout_ref(mut self, checkout_ref: Option<String>) -> Self {
+        self.checkout_ref = checkout_ref;
+        self
     }
 
     pub fn https_clone_url(&self) -> String {
@@ -200,6 +227,9 @@ pub struct AmbientAgentEnvironment {
     ///   - `Some([...])`: these specific secrets are the default
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets: Option<Vec<EnvironmentSecretRef>>,
+    /// Runner supplying compute for runs that do not name one themselves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_runner_uid: Option<String>,
 }
 
 impl AmbientAgentEnvironment {
@@ -220,6 +250,7 @@ impl AmbientAgentEnvironment {
             setup_commands,
             providers: ProvidersConfig::default(),
             secrets: None,
+            default_runner_uid: None,
         }
     }
 

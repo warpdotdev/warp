@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use itertools::Itertools;
 
 use crate::elements::{
-    Container, Element, Highlight, HighlightedRange, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Container, DEFAULT_UI_LINE_HEIGHT_RATIO, Element, Highlight, HighlightedRange, Text,
 };
 use crate::fonts::Properties;
 use crate::ui_components::components::{UiComponent, UiComponentStyles};

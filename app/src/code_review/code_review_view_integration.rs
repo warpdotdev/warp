@@ -7,7 +7,7 @@ use warp_editor::render::model::{
 use warpui::units::Pixels;
 use warpui::{AppContext, ViewContext};
 
-use super::{CodeReviewView, CodeReviewViewState, ImagePreviewSideState, FILE_HEADER_HEIGHT};
+use super::{CodeReviewView, CodeReviewViewState, FILE_HEADER_HEIGHT, ImagePreviewSideState};
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::line::EditorLineLocation;
 

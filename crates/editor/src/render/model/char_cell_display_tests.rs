@@ -1,8 +1,10 @@
+use std::num::NonZeroU8;
 use std::ops::Range;
 
 use string_offset::CharOffset;
 use warpui_core::text::TuiGridPoint;
 
+use super::super::test_utils::TEST_STYLES;
 use super::super::{CharCellState, CharCellTemporaryBlock, LineCount};
 use super::{DisplayRow, DisplayRowKind};
 
@@ -14,13 +16,23 @@ fn state(text: &str, terminal_width: u16) -> CharCellState {
     state
 }
 
-fn ghost(content: &str, insert_before: usize) -> CharCellTemporaryBlock {
-    CharCellTemporaryBlock {
-        content: content.to_string(),
-        insert_before: LineCount::from(insert_before),
-        line_decoration: None,
-        inline_decorations: Vec::new(),
-    }
+fn state_with_tab_size(text: &str, terminal_width: u16, tab_size: NonZeroU8) -> CharCellState {
+    let mut styles = TEST_STYLES.clone();
+    styles.base_text.fixed_width_tab_size = Some(tab_size.get());
+    let state = CharCellState::new_with_styles(terminal_width, &styles, None);
+    state.update_text(text);
+    state
+}
+
+fn ghost(state: &CharCellState, content: &str, insert_before: usize) -> CharCellTemporaryBlock {
+    let text_index = state.text_index.borrow();
+    CharCellTemporaryBlock::new(
+        content.to_string(),
+        LineCount::from(insert_before),
+        None,
+        Vec::new(),
+        &text_index,
+    )
 }
 
 /// The lattice's rows at `hidden`, for row-structure assertions.
@@ -69,6 +81,76 @@ fn char_range(range: Range<usize>) -> Range<CharOffset> {
 }
 
 #[test]
+fn row_text_expands_tabs_from_retained_layout_widths() {
+    let text = "\tfoo\n你\tbar";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state(text, 20);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("    foo")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("你  bar")
+    );
+}
+
+#[test]
+fn continuation_row_text_uses_the_tabs_retained_logical_width() {
+    let text = "abcde\tXY";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state(text, 6);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("abcde")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("   XY")
+    );
+}
+
+#[test]
+fn ghost_row_text_expands_tabs_from_the_ghosts_retained_widths() {
+    let text = "context";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state(text, 20);
+    state.set_temporary_blocks(vec![ghost(&state, "\tremoved\n", 0)]);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("    removed")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("context")
+    );
+}
+
+#[test]
+fn configured_tab_size_drives_buffer_and_ghost_text() {
+    let text = "\tcontext";
+    let chars: Vec<char> = text.chars().collect();
+    let state = state_with_tab_size(text, 20, NonZeroU8::new(2).unwrap());
+    state.set_temporary_blocks(vec![ghost(&state, "\tremoved\n", 0)]);
+    let lattice = state.display_lattice(&[]);
+
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[0], &chars).as_deref(),
+        Some("  removed")
+    );
+    assert_eq!(
+        lattice.row_text(&lattice.rows()[1], &chars).as_deref(),
+        Some("  context")
+    );
+}
+
+#[test]
 fn plain_text_wraps_with_char_ranges() {
     // Width 4: "abcdef" wraps into chars 0..4 + 4..6; "gh" starts at char 7.
     let state = state("abcdef\ngh", 4);
@@ -88,7 +170,10 @@ fn ghosts_interleave_before_their_line_and_wrap() {
     // The first ghost's trailing '\n' is a line separator (removed-line
     // blocks conventionally carry one), not content: it must not add a
     // column or an extra wrapped row.
-    state.set_temporary_blocks(vec![ghost("removed a\n", 1), ghost("removed b!!", 1)]);
+    state.set_temporary_blocks(vec![
+        ghost(&state, "removed a\n", 1),
+        ghost(&state, "removed b!!", 1),
+    ]);
     assert_eq!(
         summarize(&rows(&state, &[])),
         vec![
@@ -98,15 +183,17 @@ fn ghosts_interleave_before_their_line_and_wrap() {
                 char_range(0..9),
                 false,
             ),
-            // The second ghost is 11 chars: wraps at width 9.
+            // The second ghost is 11 chars and wraps at width 9. Word-boundary
+            // wrapping breaks at the space (index 7), so "removed " (0..8) fits
+            // on row 0 and "b!!" (8..11) continues on row 1.
             (
                 DisplayRowKind::Ghost { ghost_index: 1 },
-                char_range(0..9),
+                char_range(0..8),
                 false,
             ),
             (
                 DisplayRowKind::Ghost { ghost_index: 1 },
-                char_range(9..11),
+                char_range(8..11),
                 true,
             ),
             (buffer(1), char_range(6..11), false),
@@ -114,6 +201,61 @@ fn ghosts_interleave_before_their_line_and_wrap() {
     );
 }
 
+#[test]
+fn ghost_graphemes_wrap_by_cluster_width() {
+    let state = state("abc", 3);
+    state.set_temporary_blocks(vec![ghost(&state, "x\u{2328}\u{fe0f}y", 0)]);
+    assert_eq!(
+        summarize(&rows(&state, &[])),
+        vec![
+            (
+                DisplayRowKind::Ghost { ghost_index: 0 },
+                char_range(0..3),
+                false,
+            ),
+            (
+                DisplayRowKind::Ghost { ghost_index: 0 },
+                char_range(3..4),
+                true,
+            ),
+            (buffer(0), char_range(0..3), false),
+        ]
+    );
+}
+
+/// Keeps an oversized multi-character grapheme within one display row.
+#[test]
+fn oversized_grapheme_does_not_wrap_at_zero_width_continuation() {
+    let state = state("\u{2328}\u{fe0f}x", 1);
+    assert_eq!(
+        summarize(&rows(&state, &[])),
+        vec![
+            (buffer(0), char_range(0..2), false),
+            (buffer(0), char_range(2..3), true),
+        ]
+    );
+    assert_eq!(point(&state, 1, &[]), Some((0, 2)));
+    assert_eq!(point(&state, 2, &[]), Some((1, 0)));
+}
+#[test]
+fn ghosts_are_stably_sorted_by_insertion_line() {
+    let state = state("l0\nl1\nl2", 20);
+    state.set_temporary_blocks(vec![
+        ghost(&state, "last", 2),
+        ghost(&state, "same-a", 1),
+        ghost(&state, "first", 0),
+        ghost(&state, "same-b", 1),
+    ]);
+    let lattice = state.display_lattice(&[]);
+    assert_eq!(
+        lattice
+            .ghosts()
+            .iter()
+            .map(|ghost| ghost.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "same-a", "same-b", "last"]
+    );
+}
 #[test]
 fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
     // Lines 0-1 hidden (leading), 3-5 hidden (interior), 7 hidden (trailing).
@@ -133,10 +275,26 @@ fn interior_hidden_ranges_become_gaps_edges_render_nothing() {
 }
 
 #[test]
+fn hidden_ranges_are_sorted_and_merged_before_projection() {
+    let state = state("l0\nl1\nl2\nl3\nl4\nl5", 20);
+    assert_eq!(
+        summarize(&rows(&state, &[3..5, 1..3, 2..4])),
+        vec![
+            (buffer(0), char_range(0..2), false),
+            (
+                DisplayRowKind::Gap { line_range: 1..5 },
+                CharOffset::zero().empty_range(),
+                false,
+            ),
+            (buffer(5), char_range(15..17), false),
+        ]
+    );
+}
+#[test]
 fn ghost_inside_hidden_region_still_renders_and_splits_the_gap() {
     // Lines 1-4 hidden; a ghost inserts before line 3 (inside the hidden run).
     let state = state("l0\nl1\nl2\nl3\nl4\nl5", 20);
-    state.set_temporary_blocks(vec![ghost("removed", 3)]);
+    state.set_temporary_blocks(vec![ghost(&state, "removed", 3)]);
     // One hidden *range*, not a range of values.
     #[allow(clippy::single_range_in_vec_init)]
     let hidden = [1..5];
@@ -171,7 +329,7 @@ mod geometry {
     fn offset_round_trips_through_display_point_with_overlays() {
         // Rows: line0 | ghost | gap(1..3) | line3.
         let state = state("l0\nl1\nl2\nl3", 20);
-        state.set_temporary_blocks(vec![ghost("removed", 1)]);
+        state.set_temporary_blocks(vec![ghost(&state, "removed", 1)]);
         // One hidden *range*, not a range of values.
         #[allow(clippy::single_range_in_vec_init)]
         let hidden = [1..3];
@@ -197,6 +355,14 @@ mod geometry {
         // Points past the display have no corresponding buffer offset.
         assert_eq!(offset(&state, 99, 0, &hidden), None);
     }
+    #[test]
+    fn display_width_uses_retained_grapheme_metadata() {
+        let state = state("a\u{2328}\u{fe0f}b", 20);
+        let lattice = state.display_lattice(&[]);
+        assert_eq!(lattice.display_width(char_range(0..1)), 1);
+        assert_eq!(lattice.display_width(char_range(1..3)), 2);
+        assert_eq!(lattice.display_width(char_range(0..4)), 4);
+    }
 
     #[test]
     fn deferred_wrap_cursor_skips_non_buffer_rows() {
@@ -209,7 +375,7 @@ mod geometry {
         // With a ghost at EOF the cursor cannot sit on the ghost row; it
         // lands one past the entire display (which also pins that EOF ghosts
         // render at all — the post-loop flush).
-        state.set_temporary_blocks(vec![ghost("rm", 1)]);
+        state.set_temporary_blocks(vec![ghost(&state, "rm", 1)]);
         assert_eq!(rows(&state, &[]).len(), 2);
         assert_eq!(point(&state, 4, &[]), Some((2, 0)));
 

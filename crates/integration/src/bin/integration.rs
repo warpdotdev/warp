@@ -3,11 +3,11 @@ use std::env;
 
 use anyhow::Result;
 use clap::Parser;
-use integration::test::*;
 use integration::Builder;
+use integration::test::*;
 use warp_cli::WorkerCommand;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
+use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 
 /// The Warp integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
@@ -69,7 +69,7 @@ pub fn main() -> Result<()> {
                 // GUI application), do so.  This must occur before init_logging, as the
                 // terminal server sets up its own logger, and attempting to set a second
                 // logger leads to a panic.
-                warp::terminal::local_tty::server::run_terminal_server(args);
+                warp::terminal::local_tty::run_terminal_server(args);
                 return Ok(());
             }
             // This is a catch-all to handle the plugin host, which the integration test crate doesn't have a feature flag for.
@@ -215,6 +215,12 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_function_completions);
     register_test!(test_builtin_completions);
     register_test!(test_keyword_completions);
+    register_test!(test_native_shell_completions_menu);
+    register_test!(test_command_runs_cleanly_after_native_shell_completion);
+    register_test!(test_native_shell_completions_used_when_no_bundled_spec);
+    register_test!(test_native_shell_completions_skipped_when_a_bundled_spec_answers);
+    register_test!(test_native_shell_completions_reach_a_spec_command_native_only);
+    register_test!(test_native_shell_completions_powershell_member_access);
     register_test!(test_with_launch_config);
     register_test!(test_command_xray_hover);
     register_test!(test_command_xray_for_partial_command);
@@ -258,6 +264,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_bash_bootstraps_with_prompt_command_array);
     register_test!(test_bash_bootstraps_with_prompt_command_array_that_sets_ps1);
     register_test!(test_zsh_bootstraps_with_nounset_option);
+    register_test!(test_zsh_cursor_mode_vi_bindings_do_not_corrupt_commands);
+    register_test!(test_pwsh_vi_edit_mode_does_not_corrupt_commands);
     register_test!(test_ssh_wrapper_into_bash);
     register_test!(test_ssh_wrapper_into_zsh);
     register_test!(test_ssh_into_fish);
@@ -351,8 +359,16 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_secret_case_sensitivity);
     register_test!(test_secrets_are_always_redacted_in_ai_inputs);
 
+    // OSC 8 hyperlink tests (GH6393)
+    register_test!(test_osc8_open_close_renders_visible_text);
+    register_test!(test_osc8_copy_block_yields_visible_text_only);
+    register_test!(test_osc8_open_link_action_opens_url);
+    register_test!(test_osc8_file_scheme_opens_url);
+    register_test!(test_osc8_no_regression_on_url_autodetect);
+
     register_test!(test_context_chips_prompt_at_bootstrap);
 
+    register_test!(test_cycle_active_tab_color_with_keybinding);
     register_test!(test_active_session_follows_focus);
     register_test!(test_tab_context_menu_copies_metadata);
     register_test!(test_vertical_tab_context_menu_copies_metadata);
@@ -399,6 +415,8 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_latest_buffer_operations);
 
     register_test!(test_pass_control_sequences_to_long_running_block);
+    register_test!(test_execution_profiles_load_from_settings_file);
+    register_test!(test_execution_profile_model_persists_and_hot_reloads_settings_file);
     register_test!(test_settings_file_migration_from_native_store);
     register_test!(test_settings_file_hot_reload_applies_new_values);
 
@@ -406,6 +424,18 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_settings_error_banner_on_startup_with_invalid_value);
     register_test!(test_settings_error_banner_on_reload_with_invalid_toml);
     register_test!(test_settings_error_banner_on_reload_with_invalid_value);
+
+    // Settings sidebar navigation and search
+    register_test!(test_settings_mouse_navigation_through_umbrella);
+    register_test!(test_settings_keyboard_navigation_down_into_collapsed_umbrella);
+    register_test!(test_settings_keyboard_navigation_up_into_collapsed_umbrella);
+    register_test!(test_settings_keyboard_navigation_after_manual_collapse);
+    register_test!(test_settings_search_filters_top_level_pages);
+    register_test!(test_settings_search_filters_subpages);
+    register_test!(test_settings_search_subpage_still_renders_content);
+    register_test!(test_settings_search_clear_restores_umbrella_state);
+    register_test!(test_settings_search_preserved_on_sidebar_click);
+    register_test!(test_settings_agent_mcp_servers_renders_standalone_page);
 
     register_test!(test_middle_click_paste);
 
@@ -430,6 +460,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_selection_last_to_ai_semantic);
     register_test!(test_selection_last_to_ai_lines);
     register_test!(test_restored_ai_block_renders_mermaid_and_local_images);
+    register_test!(test_cancelled_run_agents_card_renders_cancelled_state);
 
     register_test!(test_agent_mode_pane_minimum_size);
     register_test!(test_git_prompt_chips);
@@ -455,6 +486,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // Copy current path command-palette action
     register_test!(test_copy_current_path_copies_terminal_pwd);
+    register_test!(test_copy_current_path_copies_code_editor_file_path);
 
     // Go to Line tests
     register_test!(test_goto_line_dialog_open_close);

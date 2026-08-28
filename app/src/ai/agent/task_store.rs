@@ -1,7 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
+use hashbrown::HashMap;
 use indexmap::IndexMap;
 use warp_multi_agent_api as api;
+use warp_util::hashed::Hashed;
 
 use super::task::helper::{MessageExt, ToolCallExt};
 use super::task::{Task, TaskId};
@@ -18,7 +20,8 @@ struct ExchangeRef {
 /// Task storage with a linearized exchange index for O(1) first/last access.
 #[derive(Debug, Clone)]
 pub struct TaskStore {
-    root_task_id: TaskId,
+    /// Carries the hash of the root task ID so root lookups skip rehashing it.
+    root_task_id: Hashed<TaskId>,
     tasks: HashMap<TaskId, Task>,
     exchanges: IndexMap<AIAgentExchangeId, ExchangeRef>,
     /// If the root task was upgraded from an optimistic (client-generated) ID
@@ -30,11 +33,13 @@ pub struct TaskStore {
 
 impl TaskStore {
     pub fn with_root_task(root_task: Task) -> Self {
+        let tasks = HashMap::new();
         let root_task_id = root_task.id().clone();
+        let hashed_root_task_id = Hashed::new(root_task_id.clone(), tasks.hasher());
         let mut store = Self {
-            tasks: HashMap::new(),
+            tasks,
             exchanges: Default::default(),
-            root_task_id: root_task_id.clone(),
+            root_task_id: hashed_root_task_id,
             optimistic_root_task_id: None,
         };
         store.tasks.insert(root_task_id, root_task);
@@ -45,6 +50,7 @@ impl TaskStore {
     /// Creates a TaskStore from an existing HashMap of tasks.
     /// Rebuilds the linearized index after construction.
     pub fn from_tasks(tasks: HashMap<TaskId, Task>, root_task_id: TaskId) -> Self {
+        let root_task_id = Hashed::new(root_task_id, tasks.hasher());
         let mut store = Self {
             tasks,
             exchanges: Default::default(),
@@ -56,13 +62,13 @@ impl TaskStore {
     }
 
     pub fn root_task_id(&self) -> &TaskId {
-        &self.root_task_id
+        self.root_task_id.key()
     }
 
     pub fn get(&self, task_id: &TaskId) -> Option<&Task> {
         self.tasks.get(task_id).or_else(|| {
             let old_id = self.optimistic_root_task_id.as_ref()?;
-            (old_id == task_id).then(|| self.tasks.get(&self.root_task_id))?
+            (old_id == task_id).then(|| self.root_task())?
         })
     }
 
@@ -156,31 +162,44 @@ impl TaskStore {
 
     /// Modifies the root task via the provided closure and rebuilds the exchange index if exchanges changed.
     pub fn modify_root_task<R>(&mut self, f: impl FnOnce(&mut Task) -> R) -> Option<R> {
-        let root_task_id = self.root_task_id.clone();
+        let root_task_id = self.root_task_id().clone();
         self.modify_task(&root_task_id, f)
     }
 
     pub fn root_task(&self) -> Option<&Task> {
-        self.tasks.get(&self.root_task_id)
+        self.tasks
+            .raw_entry()
+            .from_hash(self.root_task_id.hash(), |task_id| {
+                task_id == self.root_task_id()
+            })
+            .map(|(_, task)| task)
     }
 
     /// Sets or replaces the root task, removing any previous root if it exists.
     pub fn set_root_task(&mut self, root_task: Task) {
         // Remove the old root task and its exchange refs
-        let old_root_id = self.root_task_id.clone();
+        let old_root_id = self.root_task_id().clone();
         self.remove(&old_root_id);
 
         let new_root_id = root_task.id().clone();
         if old_root_id != new_root_id {
             self.optimistic_root_task_id = Some(old_root_id);
         }
-        self.root_task_id = new_root_id;
+        self.root_task_id = Hashed::new(new_root_id, self.tasks.hasher());
         self.insert(root_task);
     }
 
     pub fn exchange_by_id(&self, exchange_id: AIAgentExchangeId) -> Option<&AIAgentExchange> {
-        let exchange_ref = self.exchanges.get(&exchange_id)?;
-        self.lookup_exchange(exchange_ref)
+        if let Some(exchange) = self
+            .exchanges
+            .get(&exchange_id)
+            .and_then(|exchange_ref| self.lookup_exchange(exchange_ref))
+        {
+            return Some(exchange);
+        }
+        self.tasks
+            .values()
+            .find_map(|task| task.exchange(exchange_id))
     }
 
     pub fn first_exchange(&self) -> Option<&AIAgentExchange> {
@@ -221,11 +240,11 @@ impl TaskStore {
             };
 
             // Check if we should append to the last group or start a new one
-            if let Some((last_task_id, exchanges)) = result.last_mut() {
-                if last_task_id == &exchange_ref.task_id {
-                    exchanges.push(exchange);
-                    continue;
-                }
+            if let Some((last_task_id, exchanges)) = result.last_mut()
+                && last_task_id == &exchange_ref.task_id
+            {
+                exchanges.push(exchange);
+                continue;
             }
 
             // Start a new group
@@ -281,10 +300,9 @@ impl TaskStore {
                 if let Some(subagent_call) = message
                     .tool_call()
                     .and_then(|tc: &api::message::ToolCall| tc.subagent())
+                    && let Some(subtask) = me.get(&TaskId::new(subagent_call.task_id.clone()))
                 {
-                    if let Some(subtask) = me.get(&TaskId::new(subagent_call.task_id.clone())) {
-                        collect_messages_dfs(me, messages, subtask);
-                    }
+                    collect_messages_dfs(me, messages, subtask);
                 }
             }
         }
@@ -318,7 +336,7 @@ impl TaskStore {
         if message_ids.is_empty() {
             return;
         }
-        let root_task_id = self.root_task_id.clone();
+        let root_task_id = self.root_task_id().clone();
         for (task_id, task) in self.tasks.iter_mut() {
             if *task_id == root_task_id {
                 continue;
@@ -339,7 +357,7 @@ impl TaskStore {
         let to_remove: Vec<TaskId> = self
             .tasks
             .keys()
-            .filter(|id| **id != self.root_task_id && !reachable.contains(*id))
+            .filter(|id| **id != *self.root_task_id() && !reachable.contains(*id))
             .cloned()
             .collect();
         if to_remove.is_empty() {
@@ -358,7 +376,7 @@ impl TaskStore {
     /// after its result arrives, so finished sub-agents remain part of history.
     fn reachable_task_ids(&self) -> HashSet<TaskId> {
         let mut reachable: HashSet<TaskId> = HashSet::new();
-        let mut queue = vec![self.root_task_id.clone()];
+        let mut queue = vec![self.root_task_id().clone()];
         while let Some(task_id) = queue.pop() {
             if !reachable.insert(task_id.clone()) {
                 continue;
@@ -367,10 +385,10 @@ impl TaskStore {
                 continue;
             };
             for message in task.messages() {
-                if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent()) {
-                    if !subagent.task_id.is_empty() {
-                        queue.push(TaskId::new(subagent.task_id.clone()));
-                    }
+                if let Some(subagent) = message.tool_call().and_then(|tc| tc.subagent())
+                    && !subagent.task_id.is_empty()
+                {
+                    queue.push(TaskId::new(subagent.task_id.clone()));
                 }
             }
         }
@@ -386,7 +404,7 @@ impl TaskStore {
 
     /// Rebuilds the linearized index from scratch using DFS traversal.
     pub(super) fn rebuild_exchange_index(&mut self) {
-        self.exchanges = Self::build_exchange_index(&self.tasks, &self.root_task_id);
+        self.exchanges = Self::build_exchange_index(&self.tasks, self.root_task_id.key());
     }
 
     /// Builds linearized exchange refs via DFS traversal without mutating self.
@@ -418,12 +436,10 @@ impl TaskStore {
                     for output_message in output.get().messages.iter() {
                         if let AIAgentOutputMessageType::Subagent(subagent_call) =
                             &output_message.message
-                        {
-                            if let Some(subtask) =
+                            && let Some(subtask) =
                                 tasks.get(&TaskId::new(subagent_call.task_id.clone()))
-                            {
-                                append_refs_for_task(tasks, refs, subtask);
-                            }
+                        {
+                            append_refs_for_task(tasks, refs, subtask);
                         }
                     }
                 }

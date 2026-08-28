@@ -1,7 +1,6 @@
 use std::cell::RefCell;
 
 use pathfinder_geometry::vector::Vector2F;
-use warp_errors::report_error;
 
 use super::{
     AfterLayoutContext, AppContext, DispatchEventResult, Element, Event, EventContext,
@@ -12,10 +11,10 @@ use crate::keymap::Keystroke;
 use crate::platform::keyboard::KeyCode;
 
 type Handler = Box<dyn FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult>;
-type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
-type ScrollHandler = Box<
-    dyn FnMut(&mut EventContext, &AppContext, &Vector2F, &ModifiersState) -> DispatchEventResult,
+type HandlerWithModifiers = Box<
+    dyn FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
 >;
+type KeyHandler = Box<dyn FnMut(&mut EventContext, &AppContext, &Keystroke) -> DispatchEventResult>;
 type ModifierStateChangedHandler =
     Box<dyn FnMut(&mut EventContext, &AppContext, &KeyCode, &KeyState) -> DispatchEventResult>;
 
@@ -47,14 +46,14 @@ pub struct EventHandler {
     left_mouse_down: Option<RefCell<Handler>>,
     left_mouse_up: Option<RefCell<Handler>>,
     middle_mouse_down: Option<RefCell<Handler>>,
-    right_mouse_down: Option<RefCell<Handler>>,
+    right_mouse_down: Option<RefCell<HandlerWithModifiers>>,
     forward_mouse_down: Option<RefCell<Handler>>,
     back_mouse_down: Option<RefCell<Handler>>,
     mouse_in: Option<RefCell<Handler>>,
     mouse_in_behavior: MouseInBehavior,
     mouse_out: Option<RefCell<Handler>>,
     mouse_dragged: Option<RefCell<Handler>>,
-    scroll_wheel: Option<RefCell<ScrollHandler>>,
+    scroll_wheel: Option<RefCell<HandlerWithModifiers>>,
     keydown: Option<RefCell<KeyHandler>>,
     modifier_state_changed: Option<RefCell<ModifierStateChangedHandler>>,
     origin: Option<Point>,
@@ -130,7 +129,8 @@ impl EventHandler {
 
     pub fn on_right_mouse_down<F>(mut self, callback: F) -> Self
     where
-        F: 'static + FnMut(&mut EventContext, &AppContext, Vector2F) -> DispatchEventResult,
+        F: 'static
+            + FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
     {
         self.right_mouse_down = Some(RefCell::new(Box::new(callback)));
         self
@@ -188,7 +188,7 @@ impl EventHandler {
     pub fn on_scroll_wheel<F>(mut self, callback: F) -> Self
     where
         F: 'static
-            + FnMut(&mut EventContext, &AppContext, &Vector2F, &ModifiersState) -> DispatchEventResult,
+            + FnMut(&mut EventContext, &AppContext, Vector2F, &ModifiersState) -> DispatchEventResult,
     {
         self.scroll_wheel = Some(RefCell::new(Box::new(callback)));
         self
@@ -201,15 +201,14 @@ impl EventHandler {
         position: Vector2F,
         app: &AppContext,
     ) -> bool {
-        if let Some(callback) = callback.as_ref() {
-            if let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap()) {
-                if rect.contains_point(position) {
-                    return match callback.borrow_mut()(ctx, app, position) {
-                        DispatchEventResult::PropagateToParent => false,
-                        DispatchEventResult::StopPropagation => true,
-                    };
-                }
-            }
+        if let Some(callback) = callback.as_ref()
+            && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
+            && rect.contains_point(position)
+        {
+            return match callback.borrow_mut()(ctx, app, position) {
+                DispatchEventResult::PropagateToParent => false,
+                DispatchEventResult::StopPropagation => true,
+            };
         }
         false
     }
@@ -251,9 +250,9 @@ impl Element for EventHandler {
         }
 
         let Some(z_index) = self.child_max_z_index else {
-            report_error!(
-                "Dispatching event on EventHandler element which was never painted",
-                extra: { "event" => ?EventDiscriminants::from(event.raw_event()) }
+            log::error!(
+                "Dispatching event on EventHandler element which was never painted: event={:?}",
+                EventDiscriminants::from(event.raw_event())
             );
             return false;
         };
@@ -308,9 +307,25 @@ impl Element for EventHandler {
                     return true;
                 }
             }
-            Some(Event::RightMouseDown { position, .. }) => {
-                if self.dispatch_callback(self.right_mouse_down.as_ref(), ctx, *position, app) {
-                    return true;
+            Some(Event::RightMouseDown {
+                position,
+                cmd,
+                shift,
+                ..
+            }) => {
+                if let Some(callback) = self.right_mouse_down.as_ref()
+                    && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
+                    && rect.contains_point(*position)
+                {
+                    let modifiers = ModifiersState {
+                        cmd: *cmd,
+                        shift: *shift,
+                        ..Default::default()
+                    };
+                    return match callback.borrow_mut()(ctx, app, *position, &modifiers) {
+                        DispatchEventResult::PropagateToParent => false,
+                        DispatchEventResult::StopPropagation => true,
+                    };
                 }
             }
             Some(Event::BackMouseDown { position, .. }) => {
@@ -345,16 +360,14 @@ impl Element for EventHandler {
                 precise: _,
                 modifiers,
             }) => {
-                if let Some(callback) = self.scroll_wheel.as_ref() {
-                    if let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
-                    {
-                        if rect.contains_point(*position) {
-                            return match callback.borrow_mut()(ctx, app, delta, modifiers) {
-                                DispatchEventResult::PropagateToParent => false,
-                                DispatchEventResult::StopPropagation => true,
-                            };
-                        }
-                    }
+                if let Some(callback) = self.scroll_wheel.as_ref()
+                    && let Some(rect) = ctx.visible_rect(self.origin.unwrap(), self.size().unwrap())
+                    && rect.contains_point(*position)
+                {
+                    return match callback.borrow_mut()(ctx, app, *delta, modifiers) {
+                        DispatchEventResult::PropagateToParent => false,
+                        DispatchEventResult::StopPropagation => true,
+                    };
                 }
             }
             _ => {}

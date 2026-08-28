@@ -18,12 +18,13 @@ use crate::ai::agent::{
 use crate::ai::block_context::BlockContext;
 use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::{
-    apply_edits, BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind,
-    SessionContext,
+    BlocklistAIHistoryModel, FileReadResult, RequestFileEditsFormatKind, SessionContext,
+    apply_edits,
 };
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -36,6 +37,7 @@ cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use std::{path::PathBuf, time::Duration};
         use crate::ai::blocklist::{read_local_file_context, BlocklistAIPermissions};
+        use crate::workspaces::user_workspaces::TeamScope;
         use warp_terminal::shell::ShellLaunchData;
         use crate::util::link_detection::{detect_file_paths, DetectedLinkType};
         use crate::util::openable_file_type::is_binary_file;
@@ -196,10 +198,19 @@ impl PassiveSuggestionsModel {
         let server_api = ServerApiProvider::as_ref(ctx).get();
         let (cancellation_tx, cancellation_rx) = futures::channel::oneshot::channel();
 
+        // Resolved before spawning, so a mid-flight team switch cannot re-attribute the request.
+        let team_scope =
+            RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
+
         let stream_handle = ctx.spawn(
             async move {
-                let stream_result =
-                    generate_multi_agent_output(server_api, request_params, cancellation_rx).await;
+                let stream_result = generate_multi_agent_output(
+                    server_api,
+                    request_params,
+                    team_scope,
+                    cancellation_rx,
+                )
+                .await;
                 extract_suggestion_from_stream(stream_result).await
             },
             move |me, result, ctx| {
@@ -374,10 +385,10 @@ impl PassiveSuggestionsModel {
                     self.abort_pending_requests(ctx);
                     return;
                 }
-                if let BlockType::User(block_completed) = &after_block_completed_event.block_type {
-                    if !block_completed.was_part_of_agent_interaction {
-                        self.handle_user_block_completed(block_completed, ctx);
-                    }
+                if let BlockType::User(block_completed) = &after_block_completed_event.block_type
+                    && !block_completed.was_part_of_agent_interaction
+                {
+                    self.handle_user_block_completed(block_completed, ctx);
                 }
             }
             _ => {}
@@ -495,82 +506,94 @@ impl PassiveSuggestionsModel {
             supported_tools.push(warp_multi_agent_api::ToolType::SuggestPrompt);
         }
 
-        let block_context = BlockContext::from_completed_block(block_completed);
-        let (conversation_id, block_context) = {
+        // Note: the lock is dropped before calling `BlockContext::from_completed_block` below,
+        // since that (like `UserBlockCompleted`'s other accessors) locks `self.terminal_model`
+        // itself if needed, and `FairMutex` isn't reentrant.
+        let conversation_id = {
             let model = self.terminal_model.lock();
             let Some(block) = model.block_list().block_at(block_completed.index) else {
                 return;
             };
-
-            let conversation_id = block.agent_view_visibility().agent_view_conversation_id();
-            (conversation_id, block_context)
+            block.agent_view_visibility().agent_view_conversation_id()
         };
+        let block_context =
+            BlockContext::from_completed_block(block_completed, &self.terminal_model);
 
         // If passive code diffs are enabled, check for any files that were read.
         #[cfg(feature = "local_fs")]
-        if is_passive_code_diffs_enabled {
-            if let Some(current_working_directory) = block_completed.serialized_block.pwd.clone() {
-                let block_contents =
-                    format!("{}\n{}", &block_context.command, &block_context.output);
-                let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
-                let shell_for_detection = shell.clone();
-                let current_working_directory_for_detection = current_working_directory.clone();
-                let terminal_view_id = self.terminal_view_id;
+        if is_passive_code_diffs_enabled
+            && let Some(current_working_directory) = block_completed
+                .serialized_block
+                .get_with(|compute| {
+                    let model = self.terminal_model.lock();
+                    compute(model.block_list())
+                })
+                .pwd
+                .clone()
+        {
+            let block_contents = format!("{}\n{}", &block_context.command, &block_context.output);
+            let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
+            let shell_for_detection = shell.clone();
+            let current_working_directory_for_detection = current_working_directory.clone();
+            let terminal_view_id = self.terminal_view_id;
 
-                self.pending_file_read_handle = Some(ctx.spawn(
-                    async move {
-                        match tokio::task::spawn_blocking(move || {
-                            detect_relevant_file_paths_for_block(
-                                &block_contents,
-                                &current_working_directory_for_detection,
-                                shell_for_detection.as_ref(),
-                            )
-                        })
-                        .await
-                        {
-                            Ok(paths) => paths,
-                            Err(err) => {
-                                log::warn!(
-                                    "[passive-suggestions] failed to detect relevant file paths: {err}"
-                                );
-                                vec![]
-                            }
+            self.pending_file_read_handle = Some(ctx.spawn(
+                async move {
+                    match tokio::task::spawn_blocking(move || {
+                        detect_relevant_file_paths_for_block(
+                            &block_contents,
+                            &current_working_directory_for_detection,
+                            shell_for_detection.as_ref(),
+                        )
+                    })
+                    .await
+                    {
+                        Ok(paths) => paths,
+                        Err(err) => {
+                            log::warn!(
+                                "[passive-suggestions] failed to detect relevant file paths: {err}"
+                            );
+                            vec![]
                         }
-                    },
-                    move |me, candidate_paths, ctx| {
-                        let Some(file_locations) = get_allowed_file_locations_for_paths(
-                            candidate_paths,
-                            conversation_id.as_ref(),
-                            terminal_view_id,
+                    }
+                },
+                move |me, candidate_paths, ctx| {
+                    let scope = me.ai_controller.as_ref(ctx).team_context(ctx);
+                    let Some(file_locations) = get_allowed_file_locations_for_paths(
+                        candidate_paths,
+                        conversation_id.as_ref(),
+                        terminal_view_id,
+                        &scope,
+                        ctx,
+                    ) else {
+                        me.pending_file_read_handle = None;
+                        me.send_shell_command_completed_request(
+                            conversation_id,
+                            block_context,
+                            vec![],
+                            supported_tools,
                             ctx,
-                        ) else {
+                        );
+                        return;
+                    };
+
+                    me.pending_file_read_handle = Some(ctx.spawn(
+                        read_files(file_locations, current_working_directory, shell),
+                        move |me, relevant_files, ctx| {
                             me.pending_file_read_handle = None;
+                            supported_tools.push(warp_multi_agent_api::ToolType::ApplyFileDiffs);
                             me.send_shell_command_completed_request(
                                 conversation_id,
                                 block_context,
-                                vec![],
+                                relevant_files,
                                 supported_tools,
                                 ctx,
                             );
-                            return;
-                        };
-
-                        me.pending_file_read_handle =
-                            Some(ctx.spawn(read_files(file_locations, current_working_directory, shell), move |me, relevant_files, ctx| {
-                                me.pending_file_read_handle = None;
-                                supported_tools.push(warp_multi_agent_api::ToolType::ApplyFileDiffs);
-                                me.send_shell_command_completed_request(
-                                    conversation_id,
-                                    block_context,
-                                    relevant_files,
-                                    supported_tools,
-                                    ctx,
-                                );
-                            }));
-                    },
-                ));
-                return;
-            }
+                        },
+                    ));
+                },
+            ));
+            return;
         }
 
         if !supported_tools.is_empty() {
@@ -852,15 +875,55 @@ fn is_prompt_suggestions_enabled(ctx: &ModelContext<PassiveSuggestionsModel>) ->
         && UserWorkspaces::as_ref(ctx).is_prompt_suggestions_toggleable()
 }
 
+/// Maximum total byte length of block text to scan for file paths when building passive
+/// code-diff context. Caps CPU and memory usage for large shell outputs (e.g. a Rails
+/// console session that emits thousands of lines) by bounding the per-block token scan +
+/// filesystem-stat loop to a fixed amount of work regardless of output size.
+///
+/// The budget is split between the start and end of the text: relevant paths cluster both
+/// near the beginning of output (the command itself, early compiler/build errors) and near
+/// the end (stack traces and test failures printed right before the prompt returns).
+#[cfg(feature = "local_fs")]
+const MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION: usize = 100_000;
+
+/// Splits `text` into a head slice and an optional tail slice whose combined length is at
+/// most `max_bytes`, cutting at UTF-8 char boundaries. The tail is `None` when `text`
+/// already fits within the budget.
+#[cfg(feature = "local_fs")]
+fn head_and_tail_within_budget(text: &str, max_bytes: usize) -> (&str, Option<&str>) {
+    if text.len() <= max_bytes {
+        return (text, None);
+    }
+    let mut head_end = max_bytes / 2;
+    while !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len() - max_bytes / 2;
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    (&text[..head_end], Some(&text[tail_start..]))
+}
+
 #[cfg(feature = "local_fs")]
 fn detect_relevant_file_paths_for_block(
     block_contents: &str,
     current_working_directory: &str,
     shell: Option<&ShellLaunchData>,
 ) -> Vec<PathBuf> {
+    // Cap how much text is scanned so huge outputs can't pin a CPU core; the middle of the
+    // output is the least likely place for paths relevant to code suggestions.
+    let (head, tail) =
+        head_and_tail_within_budget(block_contents, MAX_BLOCK_CONTENTS_BYTES_FOR_PATH_DETECTION);
     // TODO (suraj): use line num hint to limit the line range to read.
-    detect_file_paths(current_working_directory, block_contents, shell)
+    let mut links: Vec<_> = detect_file_paths(current_working_directory, head, shell)
         .into_values()
+        .collect();
+    if let Some(tail) = tail {
+        links.extend(detect_file_paths(current_working_directory, tail, shell).into_values());
+    }
+    links
+        .into_iter()
         .filter_map(|link| match link {
             DetectedLinkType::FilePath { absolute_path, .. } => Some(absolute_path),
             DetectedLinkType::Url(_) => None,
@@ -876,6 +939,7 @@ fn get_allowed_file_locations_for_paths(
     paths: Vec<PathBuf>,
     conversation_id: Option<&AIConversationId>,
     terminal_view_id: EntityId,
+    scope: &impl TeamScope,
     ctx: &AppContext,
 ) -> Option<Vec<FileLocations>> {
     if paths.is_empty() {
@@ -883,7 +947,13 @@ fn get_allowed_file_locations_for_paths(
     }
 
     if !BlocklistAIPermissions::as_ref(ctx)
-        .can_read_files(conversation_id, paths.clone(), Some(terminal_view_id), ctx)
+        .can_read_files(
+            conversation_id,
+            paths.clone(),
+            Some(terminal_view_id),
+            scope,
+            ctx,
+        )
         .is_allowed()
     {
         return None;
@@ -926,3 +996,7 @@ async fn read_files(
         }
     }
 }
+
+#[cfg(all(test, feature = "local_fs"))]
+#[path = "maa_tests.rs"]
+mod tests;

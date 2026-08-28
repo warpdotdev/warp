@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Not as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -37,21 +38,21 @@ use super::keybindings::KeyBindingModifyingState;
 #[cfg(feature = "local_tty")]
 use super::settings_page::render_sub_sub_header;
 use super::settings_page::{
-    add_setting, build_reset_button, build_toggle_element, render_body_item,
-    render_body_item_label, render_dropdown_item, render_dropdown_item_label,
-    render_local_only_icon, AdditionalInfo, Category, LocalOnlyIconState, MatchData, PageType,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, CONTENT_FONT_SIZE,
-    HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
+    AdditionalInfo, CONTENT_FONT_SIZE, Category, HEADER_PADDING, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    TOGGLE_BUTTON_RIGHT_PADDING, ToggleState, add_setting, build_reset_button,
+    build_toggle_element, render_body_item, render_body_item_label, render_dropdown_item,
+    render_dropdown_item_label, render_local_only_icon,
 };
 use super::{
-    features, flags, render_beta_chip, DisplayCount, SettingsAction, SettingsSection,
-    ToggleSettingActionPair,
+    DisplayCount, SettingsAction, SettingsSection, ToggleSettingActionPair, features, flags,
+    render_beta_chip,
 };
 use crate::appearance::Appearance;
 use crate::default_terminal::DefaultTerminal;
 use crate::editor::{
-    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions,
-    ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME,
+    ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME, EditorView, Event as EditorEvent,
+    SingleLineEditorOptions, TextOptions,
 };
 use crate::features::FeatureFlag;
 use crate::gpu_state::{GPUState, GPUStateEvent};
@@ -65,24 +66,25 @@ use crate::settings::native_preference::{NativePreferenceSettings, UserNativePre
 use crate::settings::{
     AISettingsChangedEvent, AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings,
     AtContextMenuInTerminalMode, AutocompleteSymbols, AutosuggestionKeybindingHint,
-    ChangelogSettings, CloudPreferencesSettings, CodeEditorLineNumberMode,
-    CodeEditorLineNumberModeSetting, CodeSettings, CommandCorrections, CompletionsOpenWhileTyping,
-    CopyOnSelect, CtrlTabBehavior, DefaultSessionMode, EnableSlashCommandsInTerminal,
-    ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings,
-    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
-    MouseScrollMultiplier, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
-    PreferredGraphicsBackend, QuakeModeSettings, ScrollSettings, ScrollSettingsChangedEvent,
-    SelectionSettings, ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate,
-    ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting, TabBehavior,
-    UserNativeRedirectPreference, VimModeEnabled, VimStatusBar, VimUnnamedSystemClipboard,
-    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    ChangelogSettings, CloudPreferencesSettings, CodeSettings, CommandCorrections,
+    CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
+    DefaultSessionMode, EnableSlashCommandsInTerminal, ErrorUnderliningEnabled, ExtraMetaKeys,
+    GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
+    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
+    NativeShellCompletionsEnabled, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
+    PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED, QuakeModeSettings,
+    RightClickBehavior, RightClickBehaviorSetting, ScrollSettings, ScrollSettingsChangedEvent,
+    SelectionSettings, SelectionSettingsChangedEvent, ShowAutosuggestionIgnoreButton,
+    ShowChangelogAfterUpdate, ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting,
+    TabBehavior, UserNativeRedirectPreference, VimModeEnabled, VimStatusBar,
+    VimUnnamedSystemClipboard, WarpCompletionsEnabled,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
 };
 use crate::terminal::general_settings::{
-    AutoOpenCodeReviewPaneOnFirstAgentChange, GeneralSettings, LinkTooltip, LoginItem,
-    QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
+    GeneralSettings, LinkTooltip, LoginItem, QuitOnLastWindowClosed, RestoreSession,
+    ShowWarningBeforeQuitting,
 };
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 use crate::terminal::keys_settings::{
@@ -107,9 +109,9 @@ use crate::util::bindings::{
     keybinding_name_to_display_string, reset_keybinding_to_default, set_custom_keybinding,
 };
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
-use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
 use crate::workspace::WorkspaceAction;
-use crate::{send_telemetry_from_ctx, themes, GlobalResourceHandles};
+use crate::workspace::tab_settings::{NewTabPlacement, TabSettings, TabSettingsChangedEvent};
+use crate::{GlobalResourceHandles, send_telemetry_from_ctx, themes};
 
 cfg_if::cfg_if! {
     if #[cfg(target_os = "macos")] {
@@ -224,6 +226,24 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .completions_open_while_typing
                 .is_supported_on_current_platform(),
         ),
+        ToggleSettingActionPair::new(
+            "warp completions",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleWarpCompletions,
+            )),
+            context,
+            flags::WARP_COMPLETIONS_CONTEXT_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::NativeShellCompletions.is_enabled()),
+        ToggleSettingActionPair::new(
+            "native shell completions",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleNativeShellCompletions,
+            )),
+            context,
+            flags::NATIVE_SHELL_COMPLETIONS_CONTEXT_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::NativeShellCompletions.is_enabled()),
         ToggleSettingActionPair::new(
             "command corrections",
             builder(SettingsAction::FeaturesPageToggle(
@@ -737,6 +757,8 @@ pub enum FeaturesPageAction {
     ToggleSnackbar,
     ToggleLinkTooltip,
     ToggleCompletionsOpenWhileTyping,
+    ToggleWarpCompletions,
+    ToggleNativeShellCompletions,
     ToggleCommandCorrections,
     ToggleErrorUnderlining,
     ToggleSyntaxHighlighting,
@@ -789,6 +811,7 @@ pub enum FeaturesPageAction {
     SetGlobalHotkeyMode(GlobalHotkeyMode),
     SetTabBehavior(TabBehavior),
     SetCtrlTabBehavior(CtrlTabBehavior),
+    SetRightClickBehavior(RightClickBehavior),
     SetPreferredGraphicsBackend(Option<GraphicsBackend>),
     SetNewTabPlacement(NewTabPlacement),
     SetOsc52ClipboardAccess(Osc52ClipboardAccess),
@@ -810,7 +833,6 @@ pub enum FeaturesPageAction {
     TogglePreserveInputFocusOnBlockSelection,
     ToggleAgentInAppNotifications,
     MakeWarpDefaultTerminal,
-    SetCodeEditorLineNumberMode(CodeEditorLineNumberMode),
 }
 
 lazy_static! {
@@ -941,6 +963,14 @@ impl FeaturesPageAction {
             Self::ToggleCompletionsOpenWhileTyping => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCompletionsOpenWhileTyping".to_string(),
                 value: to_string(*input_settings.completions_open_while_typing.value()),
+            },
+            Self::ToggleWarpCompletions => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleWarpCompletions".to_string(),
+                value: to_string(*input_settings.warp_completions_enabled.value()),
+            },
+            Self::ToggleNativeShellCompletions => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleNativeShellCompletions".to_string(),
+                value: to_string(*input_settings.native_shell_completions_enabled.value()),
             },
             Self::ToggleCommandCorrections => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCommandCorrections".to_string(),
@@ -1190,10 +1220,6 @@ impl FeaturesPageAction {
                 action: "ToggleVimStatusBar".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).vim_status_bar.value()),
             },
-            Self::SetCodeEditorLineNumberMode(mode) => TelemetryEvent::FeaturesPageAction {
-                action: "SetCodeEditorLineNumberMode".to_string(),
-                value: format!("{mode:?}"),
-            },
             Self::SetTabBehavior(tab_behavior) => TelemetryEvent::FeaturesPageAction {
                 action: "SetTabBehavior".to_string(),
                 value: format!("{tab_behavior:?}"),
@@ -1202,6 +1228,12 @@ impl FeaturesPageAction {
                 action: "SetCtrlTabBehavior".to_string(),
                 value: format!("{ctrl_tab_behavior:?}"),
             },
+            Self::SetRightClickBehavior(right_click_behavior) => {
+                TelemetryEvent::FeaturesPageAction {
+                    action: "SetRightClickBehavior".to_string(),
+                    value: format!("{right_click_behavior:?}"),
+                }
+            }
             Self::SetNewTabPlacement(new_tab_placement) => TelemetryEvent::FeaturesPageAction {
                 action: "SetNewTabPlacement".to_string(),
                 value: format!("{new_tab_placement:?}"),
@@ -1383,7 +1415,7 @@ pub struct FeaturesPageView {
 
     button_mouse_states: MouseStateHandles,
     ctrl_tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
-    code_editor_line_number_mode_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+    right_click_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
 
     global_hotkey_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
     activation_hotkey_keybinding_editor_state: KeybindingEditorState,
@@ -1410,8 +1442,6 @@ pub struct FeaturesPageView {
     mouse_scroll_input_editor: ViewHandle<EditorView>,
     valid_mouse_scroll_multiplier: bool,
 
-    #[cfg(feature = "local_fs")]
-    external_editor_view: ViewHandle<features::ExternalEditorView>,
     word_boundary_editor: ViewHandle<EditorView>,
 
     tab_behavior_dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
@@ -1449,9 +1479,20 @@ impl TypedActionView for FeaturesPageView {
         match action {
             SetCtrlTabBehavior(ctrl_tab_behavior) => {
                 KeysSettings::handle(ctx).update(ctx, |keys_settings, ctx| {
-                    report_if_error!(keys_settings
-                        .ctrl_tab_behavior
-                        .set_value(*ctrl_tab_behavior, ctx));
+                    report_if_error!(
+                        keys_settings
+                            .ctrl_tab_behavior
+                            .set_value(*ctrl_tab_behavior, ctx)
+                    );
+                });
+            }
+            SetRightClickBehavior(right_click_behavior) => {
+                SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
+                    report_if_error!(
+                        selection_settings
+                            .right_click_behavior
+                            .set_value(*right_click_behavior, ctx)
+                    );
                 });
             }
             ToggleCopyOnSelect => {
@@ -1461,23 +1502,29 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleSnackbar => {
                 BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-                    report_if_error!(blocklist_settings
-                        .snackbar_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        blocklist_settings
+                            .snackbar_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleGlobalWorkflowsInUniversalSearch => {
                 CommandSearchSettings::handle(ctx).update(ctx, |workflow_settings, ctx| {
-                    report_if_error!(workflow_settings
-                        .show_global_workflows_in_universal_search
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        workflow_settings
+                            .show_global_workflows_in_universal_search
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleCodeAsDefaultEditor => {
                 CodeSettings::handle(ctx).update(ctx, |code_settings, ctx| {
-                    report_if_error!(code_settings
-                        .code_as_default_editor
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        code_settings
+                            .code_as_default_editor
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             ToggleOpenLinksInDesktopApp => {
@@ -1493,9 +1540,11 @@ impl TypedActionView for FeaturesPageView {
                                 UserNativePreference::Desktop
                             }
                         };
-                        report_if_error!(native_preference_settings
-                            .user_native_redirect_preference
-                            .set_value(new_value, ctx));
+                        report_if_error!(
+                            native_preference_settings
+                                .user_native_redirect_preference
+                                .set_value(new_value, ctx)
+                        );
                     },
                 );
             }
@@ -1509,16 +1558,20 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleAutocompleteSymbols => {
                 AppEditorSettings::handle(ctx).update(ctx, |editor_settings, ctx| {
-                    report_if_error!(editor_settings
-                        .autocomplete_symbols
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        editor_settings
+                            .autocomplete_symbols
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             ToggleSshReuseControlMaster => {
                 SshSettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
-                    report_if_error!(ssh_settings
-                        .reuse_existing_control_master
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        ssh_settings
+                            .reuse_existing_control_master
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             OpenUrl(url) => {
@@ -1645,25 +1698,31 @@ impl TypedActionView for FeaturesPageView {
             }
             SetExtraMetaKeys(extra_meta_keys) => {
                 KeysSettings::handle(ctx).update(ctx, |keys_settings, ctx| {
-                    report_if_error!(keys_settings
-                        .extra_meta_keys
-                        .set_value(*extra_meta_keys, ctx))
+                    report_if_error!(
+                        keys_settings
+                            .extra_meta_keys
+                            .set_value(*extra_meta_keys, ctx)
+                    )
                 });
             }
             ToggleLeftMetaKey => {
                 let current_meta_keys = *KeysSettings::as_ref(ctx).extra_meta_keys;
                 KeysSettings::handle(ctx).update(ctx, |keys_settings, ctx| {
-                    report_if_error!(keys_settings
-                        .extra_meta_keys
-                        .set_value(current_meta_keys.toggle_left_key(), ctx))
+                    report_if_error!(
+                        keys_settings
+                            .extra_meta_keys
+                            .set_value(current_meta_keys.toggle_left_key(), ctx)
+                    )
                 });
             }
             ToggleRightMetaKey => {
                 let current_meta_keys = *KeysSettings::as_ref(ctx).extra_meta_keys;
                 KeysSettings::handle(ctx).update(ctx, |keys_settings, ctx| {
-                    report_if_error!(keys_settings
-                        .extra_meta_keys
-                        .set_value(current_meta_keys.toggle_right_key(), ctx))
+                    report_if_error!(
+                        keys_settings
+                            .extra_meta_keys
+                            .set_value(current_meta_keys.toggle_right_key(), ctx)
+                    )
                 });
             }
             ToggleMouseReporting => {
@@ -1716,23 +1775,21 @@ impl TypedActionView for FeaturesPageView {
                     .as_ref(ctx)
                     .buffer_text(ctx);
 
-                if let Ok(long_running_threshold) = user_input.parse::<f32>() {
-                    if long_running_threshold > 0.0 {
-                        // TODO: use try_from_secs_32 in the future to avoid previous cmp
-                        let current_settings =
-                            SessionSettings::as_ref(ctx).notifications.value().clone();
-                        SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                            let new_settings = NotificationsSettings {
-                                long_running_threshold: Duration::from_secs_f32(
-                                    long_running_threshold,
-                                ),
-                                ..current_settings
-                            };
-                            if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
-                                report_error!(e.context("Error persisting notifications setting"));
-                            }
-                        });
-                    }
+                if let Ok(long_running_threshold) = user_input.parse::<f32>()
+                    && long_running_threshold > 0.0
+                {
+                    // TODO: use try_from_secs_32 in the future to avoid previous cmp
+                    let current_settings =
+                        SessionSettings::as_ref(ctx).notifications.value().clone();
+                    SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                        let new_settings = NotificationsSettings {
+                            long_running_threshold: Duration::from_secs_f32(long_running_threshold),
+                            ..current_settings
+                        };
+                        if let Err(e) = settings.notifications.set_value(new_settings, ctx) {
+                            report_error!(e.context("Error persisting notifications setting"));
+                        }
+                    });
                 }
             }
             TogglePasswordPromptNotifications => {
@@ -1804,16 +1861,38 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleCompletionsOpenWhileTyping => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .completions_open_while_typing
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .completions_open_while_typing
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
+            ToggleWarpCompletions => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .warp_completions_enabled
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
+            ToggleNativeShellCompletions => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .native_shell_completions_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleCommandCorrections => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .command_corrections
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .command_corrections
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleErrorUnderlining => {
@@ -1823,23 +1902,29 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleSyntaxHighlighting => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .syntax_highlighting
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .syntax_highlighting
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleAliasExpansion => {
                 AliasExpansionSettings::handle(ctx).update(ctx, |alias_expansion_settings, ctx| {
-                    report_if_error!(alias_expansion_settings
-                        .alias_expansion_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        alias_expansion_settings
+                            .alias_expansion_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleMiddleClickPaste => {
                 SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
-                    report_if_error!(selection_settings
-                        .middle_click_paste_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        selection_settings
+                            .middle_click_paste_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleShowInputHintText => {
@@ -1849,9 +1934,11 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleShowTerminalInputMessageLine => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .show_terminal_input_message_bar
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .show_terminal_input_message_bar
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleLinkTooltip => {
@@ -1861,9 +1948,11 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleShowWarningBeforeQuitting => {
                 GeneralSettings::handle(ctx).update(ctx, |warning_settings, ctx| {
-                    report_if_error!(warning_settings
-                        .show_warning_before_quitting
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        warning_settings
+                            .show_warning_before_quitting
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             ToggleSmartSelection => {
@@ -1877,9 +1966,11 @@ impl TypedActionView for FeaturesPageView {
                     .read(ctx, |editor, ctx| editor.buffer_text(ctx));
 
                 SemanticSelection::handle(ctx).update(ctx, |selection, ctx| {
-                    report_if_error!(selection
-                        .word_char_allowlist
-                        .set_value(word_boundary_allowlist, ctx));
+                    report_if_error!(
+                        selection
+                            .word_char_allowlist
+                            .set_value(word_boundary_allowlist, ctx)
+                    );
                 });
             }
             ResetWordCharAllowlist => {
@@ -1889,9 +1980,11 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleUseAudibleBell => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
-                    report_if_error!(terminal_settings
-                        .use_audible_bell
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        terminal_settings
+                            .use_audible_bell
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             ToggleVimMode => AppEditorSettings::handle(ctx).update(ctx, |editor_settings, ctx| {
@@ -1925,20 +2018,26 @@ impl TypedActionView for FeaturesPageView {
             }
             SetOsc52ClipboardAccess(access) => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
-                    report_if_error!(terminal_settings
-                        .osc52_clipboard_access
-                        .set_value(*access, ctx));
+                    report_if_error!(
+                        terminal_settings
+                            .osc52_clipboard_access
+                            .set_value(*access, ctx)
+                    );
                 });
             }
             SetDefaultSessionMode(mode) => self.set_default_session_mode(mode, ctx),
             SetDefaultTabConfig(path) => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    report_if_error!(ai_settings
-                        .default_session_mode_internal
-                        .set_value(DefaultSessionMode::TabConfig, ctx));
-                    report_if_error!(ai_settings
-                        .default_tab_config_path
-                        .set_value(path.clone(), ctx));
+                    report_if_error!(
+                        ai_settings
+                            .default_session_mode_internal
+                            .set_value(DefaultSessionMode::TabConfig, ctx)
+                    );
+                    report_if_error!(
+                        ai_settings
+                            .default_tab_config_path
+                            .set_value(path.clone(), ctx)
+                    );
                 });
             }
             SearchForKeybinding(query) => {
@@ -1990,9 +2089,11 @@ impl TypedActionView for FeaturesPageView {
             }
             SetPreferredGraphicsBackend(graphics_backend) => {
                 GPUSettings::handle(ctx).update(ctx, |gpu_settings, ctx| {
-                    report_if_error!(gpu_settings
-                        .preferred_backend
-                        .set_value(*graphics_backend, ctx));
+                    report_if_error!(
+                        gpu_settings
+                            .preferred_backend
+                            .set_value(*graphics_backend, ctx)
+                    );
                 });
                 ctx.update_rendering_config(|config| config.backend_preference = *graphics_backend);
                 self.graphics_backend_preference_changed = true;
@@ -2008,23 +2109,29 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleShowTerminalZeroStateBlock => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
-                    report_if_error!(terminal_settings
-                        .show_terminal_zero_state_block
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        terminal_settings
+                            .show_terminal_zero_state_block
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleShowChangelogAfterUpdate => {
                 ChangelogSettings::handle(ctx).update(ctx, |changelog_settings, ctx| {
-                    report_if_error!(changelog_settings
-                        .show_changelog_after_update
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        changelog_settings
+                            .show_changelog_after_update
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             ToggleLinuxClipboardSelection => {
                 SelectionSettings::handle(ctx).update(ctx, |selection_settings, ctx| {
-                    report_if_error!(selection_settings
-                        .linux_selection_clipboard
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        selection_settings
+                            .linux_selection_clipboard
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -2040,9 +2147,11 @@ impl TypedActionView for FeaturesPageView {
             }
             ToggleQuitOnLastWindowClosed => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .quit_on_last_window_closed
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .quit_on_last_window_closed
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             ToggleLoginItem => GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -2050,37 +2159,47 @@ impl TypedActionView for FeaturesPageView {
             }),
             ToggleAtContextMenuInTerminalMode => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .at_context_menu_in_terminal_mode
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .at_context_menu_in_terminal_mode
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleSlashCommandsInTerminalMode => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .enable_slash_commands_in_terminal
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .enable_slash_commands_in_terminal
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleOutlineCodebaseSymbolsForAtContextMenu => {
                 InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-                    report_if_error!(input_settings
-                        .outline_codebase_symbols_for_at_context_menu
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        input_settings
+                            .outline_codebase_symbols_for_at_context_menu
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleAutoOpenCodeReviewPane => {
                 GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .auto_open_code_review_pane_on_first_agent_change
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .auto_open_code_review_pane_on_first_agent_change
+                            .toggle_and_save_value(ctx)
+                    );
                 })
             }
             TogglePreserveInputFocusOnBlockSelection => {
                 BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-                    report_if_error!(blocklist_settings
-                        .preserve_input_focus_on_block_selection
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        blocklist_settings
+                            .preserve_input_focus_on_block_selection
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             SetNotificationToastDuration => {
@@ -2089,19 +2208,19 @@ impl TypedActionView for FeaturesPageView {
                     .as_ref(ctx)
                     .buffer_text(ctx);
 
-                if let Ok(duration_secs) = user_input.parse::<u64>() {
-                    if duration_secs > 0 {
-                        SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
-                            if let Err(e) = settings
-                                .notification_toast_duration_secs
-                                .set_value(duration_secs, ctx)
-                            {
-                                report_error!(
-                                    e.context("Error persisting notification toast duration")
-                                );
-                            }
-                        });
-                    }
+                if let Ok(duration_secs) = user_input.parse::<u64>()
+                    && duration_secs > 0
+                {
+                    SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                        if let Err(e) = settings
+                            .notification_toast_duration_secs
+                            .set_value(duration_secs, ctx)
+                        {
+                            report_error!(
+                                e.context("Error persisting notification toast duration")
+                            );
+                        }
+                    });
                 }
             }
             MakeWarpDefaultTerminal => {
@@ -2109,19 +2228,13 @@ impl TypedActionView for FeaturesPageView {
                     default_terminal.make_warp_default(ctx);
                 });
             }
-            SetCodeEditorLineNumberMode(mode) => {
-                AppEditorSettings::handle(ctx).update(ctx, |editor_settings, ctx| {
-                    report_if_error!(editor_settings
-                        .code_editor_line_number_mode
-                        .set_value(*mode, ctx));
-                    ctx.notify();
-                });
-            }
             ToggleAsyncFind => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
-                    report_if_error!(terminal_settings
-                        .async_find_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        terminal_settings
+                            .async_find_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
         }
@@ -2151,13 +2264,7 @@ impl FeaturesPageView {
         );
 
         // Listen for model changes on all the settings that are used in this view.
-        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |me, _, _, ctx| {
-            Self::update_code_editor_line_number_mode_dropdown(
-                me.code_editor_line_number_mode_dropdown.clone(),
-                ctx,
-            );
-            ctx.notify();
-        });
+        ctx.subscribe_to_model(&AppEditorSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
 
         ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         ctx.subscribe_to_model(&AltScreenReporting::handle(ctx), |_, _, _, ctx| {
@@ -2382,9 +2489,6 @@ impl FeaturesPageView {
             }
         });
 
-        #[cfg(feature = "local_fs")]
-        let external_editor_view = ctx.add_typed_action_view(features::ExternalEditorView::new);
-
         let global_hotkey_mode =
             KeysSettings::handle(ctx).read(ctx, |settings, ctx| settings.global_hotkey_mode(ctx));
         let global_hotkey_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -2399,11 +2503,8 @@ impl FeaturesPageView {
         let ctrl_tab_behavior_dropdown = ctx.add_typed_action_view(Dropdown::new);
         Self::update_ctrl_tab_behavior_dropdown(ctrl_tab_behavior_dropdown.clone(), ctx);
 
-        let code_editor_line_number_mode_dropdown = ctx.add_typed_action_view(Dropdown::new);
-        Self::update_code_editor_line_number_mode_dropdown(
-            code_editor_line_number_mode_dropdown.clone(),
-            ctx,
-        );
+        let right_click_behavior_dropdown = ctx.add_typed_action_view(Dropdown::new);
+        Self::update_right_click_behavior_dropdown(right_click_behavior_dropdown.clone(), ctx);
 
         ctx.subscribe_to_model(&KeysSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
@@ -2411,6 +2512,16 @@ impl FeaturesPageView {
                 KeysSettingsChangedEvent::CtrlTabBehaviorSetting { .. }
             ) {
                 Self::update_ctrl_tab_behavior_dropdown(me.ctrl_tab_behavior_dropdown.clone(), ctx);
+            }
+            ctx.notify();
+        });
+
+        ctx.subscribe_to_model(&SelectionSettings::handle(ctx), |me, _, event, ctx| {
+            if let SelectionSettingsChangedEvent::RightClickBehaviorSetting { .. } = event {
+                Self::update_right_click_behavior_dropdown(
+                    me.right_click_behavior_dropdown.clone(),
+                    ctx,
+                );
             }
             ctx.notify();
         });
@@ -2633,14 +2744,12 @@ impl FeaturesPageView {
             max_block_size_input_editor: block_size_editor,
             valid_max_block_size: true,
 
-            #[cfg(feature = "local_fs")]
-            external_editor_view,
             word_boundary_editor,
             global_hotkey_dropdown,
 
             tab_behavior_dropdown,
             ctrl_tab_behavior_dropdown,
-            code_editor_line_number_mode_dropdown,
+            right_click_behavior_dropdown,
             graphics_backend_dropdown,
             new_tab_placement_dropdown,
             osc52_clipboard_access_dropdown,
@@ -2687,20 +2796,6 @@ impl FeaturesPageView {
         general_widgets.push(Box::new(SnackbarHeaderWidget::default()));
         general_widgets.push(Box::new(LinkTooltipWidget::default()));
 
-        #[cfg(feature = "local_fs")]
-        {
-            if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                let external_editor_settings =
-                    crate::util::file::external_editor::EditorSettings::as_ref(ctx);
-                if external_editor_settings
-                    .open_file_editor
-                    .is_supported_on_current_platform()
-                {
-                    general_widgets.push(Box::new(ExternalEditorWidget::default()));
-                }
-            }
-        }
-
         if general_settings
             .show_warning_before_quitting
             .is_supported_on_current_platform()
@@ -2736,12 +2831,6 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             general_widgets.push(Box::new(MouseScrollMultiplierWidget::default()));
-        }
-
-        if FeatureFlag::AutoOpenCodeReviewPane.is_enabled()
-            && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            general_widgets.push(Box::new(AutoOpenCodeReviewPaneWidget::default()));
         }
 
         if DefaultTerminal::can_warp_become_default() {
@@ -2823,13 +2912,6 @@ impl FeaturesPageView {
         let mut text_editing_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(AutocompleteSymbolsWidget::default())];
         if app_editor_settings
-            .code_editor_line_number_mode
-            .is_supported_on_current_platform()
-        {
-            text_editing_widgets.push(Box::new(CodeEditorLineNumberModeWidget::default()));
-        }
-
-        if app_editor_settings
             .vim_mode
             .is_supported_on_current_platform()
         {
@@ -2851,7 +2933,10 @@ impl FeaturesPageView {
         {
             editor_widgets.push(Box::new(SyntaxHighlightingWidget::default()))
         }
-        if input_settings
+        if FeatureFlag::NativeShellCompletions.is_enabled() {
+            editor_widgets.push(Box::new(WarpCompletionsWidget::default()));
+            editor_widgets.push(Box::new(NativeShellCompletionsWidget::default()));
+        } else if input_settings
             .completions_open_while_typing
             .is_supported_on_current_platform()
         {
@@ -2878,6 +2963,13 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             editor_widgets.push(Box::new(MiddleClickPasteWidget::default()));
+        }
+
+        if selection_settings
+            .right_click_behavior
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(RightClickBehaviorWidget::default()));
         }
 
         editor_widgets.push(Box::new(AutosuggestionKeybindingHintWidget::default()));
@@ -3014,41 +3106,6 @@ impl FeaturesPageView {
         PageType::new_categorized(categories, None)
     }
 
-    fn update_code_editor_line_number_mode_dropdown(
-        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        dropdown.update(ctx, |dropdown, ctx| {
-            let values = [
-                CodeEditorLineNumberMode::Absolute,
-                CodeEditorLineNumberMode::Relative,
-            ];
-
-            let current_value = *AppEditorSettings::as_ref(ctx)
-                .code_editor_line_number_mode
-                .value();
-
-            let selected_index = values
-                .iter()
-                .position(|val| *val == current_value)
-                .unwrap_or(0);
-
-            dropdown.set_items(
-                values
-                    .into_iter()
-                    .map(|val| {
-                        DropdownItem::new(
-                            val.dropdown_item_label(),
-                            FeaturesPageAction::SetCodeEditorLineNumberMode(val),
-                        )
-                    })
-                    .collect(),
-                ctx,
-            );
-            dropdown.set_selected_by_index(selected_index, ctx);
-        });
-    }
-
     fn update_ctrl_tab_behavior_dropdown(
         dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
         ctx: &mut ViewContext<Self>,
@@ -3079,6 +3136,41 @@ impl FeaturesPageView {
                         DropdownItem::new(
                             val.as_dropdown_label(),
                             FeaturesPageAction::SetCtrlTabBehavior(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+        });
+    }
+
+    fn update_right_click_behavior_dropdown(
+        dropdown: ViewHandle<Dropdown<FeaturesPageAction>>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        dropdown.update(ctx, |dropdown, ctx| {
+            let values = vec![RightClickBehavior::ContextMenu, RightClickBehavior::Paste];
+
+            let current_value = *SelectionSettings::as_ref(ctx).right_click_behavior;
+
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or_else(|| {
+                    report_error!(
+                        "Could not find current right-click behavior value in dropdown option list"
+                    );
+                    0
+                });
+
+            dropdown.set_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.as_dropdown_label(),
+                            FeaturesPageAction::SetRightClickBehavior(val),
                         )
                     })
                     .collect(),
@@ -3200,12 +3292,12 @@ impl FeaturesPageView {
                     .as_ref(ctx)
                     .buffer_text(ctx);
 
-                if let Ok(input) = buffer_text.parse::<usize>() {
-                    if (MIN_MAX_GRID_SIZE..=max_max_grid_size()).contains(&input) {
-                        self.valid_max_block_size = true;
-                        ctx.notify();
-                        return;
-                    }
+                if let Ok(input) = buffer_text.parse::<usize>()
+                    && (MIN_MAX_GRID_SIZE..=max_max_grid_size()).contains(&input)
+                {
+                    self.valid_max_block_size = true;
+                    ctx.notify();
+                    return;
                 }
                 self.valid_max_block_size = false;
                 ctx.notify();
@@ -3695,9 +3787,11 @@ impl FeaturesPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-            report_if_error!(ai_settings
-                .default_session_mode_internal
-                .set_value(*value, ctx));
+            report_if_error!(
+                ai_settings
+                    .default_session_mode_internal
+                    .set_value(*value, ctx)
+            );
         });
     }
 
@@ -4735,28 +4829,6 @@ impl SettingsWidget for LinkTooltipWidget {
     }
 }
 
-#[cfg(feature = "local_fs")]
-#[derive(Default)]
-struct ExternalEditorWidget {}
-
-#[cfg(feature = "local_fs")]
-impl SettingsWidget for ExternalEditorWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "editor open files markdown AI conversations layout pane tab"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        _appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
-        ChildView::new(&view.external_editor_view).finish()
-    }
-}
-
 #[derive(Default)]
 struct QuitWarningModalWidget {
     switch_state: SwitchStateHandle,
@@ -5031,53 +5103,6 @@ impl SettingsWidget for MouseScrollMultiplierWidget {
             appearance,
             input_column,
             None,
-        )
-    }
-}
-
-#[derive(Default)]
-struct AutoOpenCodeReviewPaneWidget {
-    switch_state: SwitchStateHandle,
-}
-
-impl SettingsWidget for AutoOpenCodeReviewPaneWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "oz auto open code review pane panel agent mode change first time accepted diff view conversation"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let general_settings = GeneralSettings::as_ref(app);
-        let ui_builder = appearance.ui_builder();
-        render_body_item::<FeaturesPageAction>(
-            "Auto open code review panel".into(),
-            None,
-            LocalOnlyIconState::for_setting(
-                AutoOpenCodeReviewPaneOnFirstAgentChange::storage_key(),
-                AutoOpenCodeReviewPaneOnFirstAgentChange::sync_to_cloud(),
-                &mut view
-                    .button_mouse_states
-                    .local_only_icon_tooltip_states
-                    .borrow_mut(),
-                app,
-            ),
-            ToggleState::Enabled,
-            appearance,
-            ui_builder
-                .switch(self.switch_state.clone())
-                .check(*general_settings.auto_open_code_review_pane_on_first_agent_change)
-                .build()
-                .on_click(move |ctx, _, _| {
-                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleAutoOpenCodeReviewPane);
-                })
-                .finish(),
-            Some("When this setting is on, the code review panel will open on the first accepted diff of a conversation".into()),
         )
     }
 }
@@ -5787,49 +5812,6 @@ impl SettingsWidget for AutocompleteSymbolsWidget {
 }
 
 #[derive(Default)]
-struct CodeEditorLineNumberModeWidget {}
-
-impl SettingsWidget for CodeEditorLineNumberModeWidget {
-    type View = FeaturesPageView;
-
-    fn search_terms(&self) -> &str {
-        "line number relative line vim gutter code editor"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        app: &AppContext,
-    ) -> Box<dyn Element> {
-        let mut column = Flex::column();
-        add_setting(
-            &mut column,
-            &AppEditorSettings::as_ref(app).code_editor_line_number_mode,
-            || {
-                render_dropdown_item(
-                    appearance,
-                    "Code editor line numbers:",
-                    None,
-                    None,
-                    LocalOnlyIconState::for_setting(
-                        CodeEditorLineNumberModeSetting::storage_key(),
-                        CodeEditorLineNumberModeSetting::sync_to_cloud(),
-                        &mut view
-                            .button_mouse_states
-                            .local_only_icon_tooltip_states
-                            .borrow_mut(),
-                        app,
-                    ),
-                    None,
-                    &view.code_editor_line_number_mode_dropdown,
-                )
-            },
-        );
-        column.finish()
-    }
-}
-#[derive(Default)]
 struct ErrorUnderliningWidget {
     switch_state: SwitchStateHandle,
 }
@@ -5972,6 +5954,148 @@ impl SettingsWidget for CompletionsMenuWhileTypingWidget {
 }
 
 #[derive(Default)]
+struct WarpCompletionsWidget {
+    switch_state: SwitchStateHandle,
+    as_you_type_switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for WarpCompletionsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "warp completions built-in shell command suggestions open completions menu as you type typing"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        let warp_completions_enabled = *InputSettings::as_ref(app).warp_completions_enabled.value();
+
+        let mut column = Flex::column();
+        column.add_child(render_body_item::<FeaturesPageAction>(
+            "Warp completions".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                WarpCompletionsEnabled::storage_key(),
+                WarpCompletionsEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(warp_completions_enabled)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleWarpCompletions);
+                })
+                .finish(),
+            None,
+        ));
+
+        if warp_completions_enabled {
+            let as_you_type_switch = ui_builder
+                .switch(self.as_you_type_switch_state.clone())
+                .check(
+                    *InputSettings::as_ref(app)
+                        .completions_open_while_typing
+                        .value(),
+                )
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleCompletionsOpenWhileTyping);
+                })
+                .finish();
+            let as_you_type_item = view.render_setting_subgroup_item(
+                appearance,
+                LocalOnlyIconState::for_setting(
+                    CompletionsOpenWhileTyping::storage_key(),
+                    CompletionsOpenWhileTyping::sync_to_cloud(),
+                    &mut view
+                        .button_mouse_states
+                        .local_only_icon_tooltip_states
+                        .borrow_mut(),
+                    app,
+                ),
+                as_you_type_switch,
+                "Open completions menu as you type".into(),
+            );
+            column.add_child(render_group([as_you_type_item], appearance));
+        }
+
+        column.finish()
+    }
+}
+
+#[derive(Default)]
+struct NativeShellCompletionsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for NativeShellCompletionsWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "native shell completions your shell command suggestions"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let input_settings = InputSettings::as_ref(app);
+        let native_on = *input_settings.native_shell_completions_enabled.value();
+        let warp_on = *input_settings.warp_completions_enabled.value();
+        let as_you_type_on = *input_settings.completions_open_while_typing.value();
+
+        let description = if warp_on && as_you_type_on && native_on {
+            let keystroke = &*view.completions_keystroke;
+            keystroke.is_empty().not().then_some(format!(
+                "Native shell completions aren't generated as you type; press {keystroke} to fetch them."
+            ))
+        } else {
+            None
+        };
+
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Native shell completions".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                NativeShellCompletionsEnabled::storage_key(),
+                NativeShellCompletionsEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(native_on)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleNativeShellCompletions);
+                })
+                .finish(),
+            description,
+        )
+    }
+}
+
+#[derive(Default)]
 struct CommandCorrectionsWidget {
     switch_state: SwitchStateHandle,
 }
@@ -6108,6 +6232,53 @@ impl SettingsWidget for MiddleClickPasteWidget {
                 .finish(),
             None,
         )
+    }
+}
+
+#[derive(Default)]
+struct RightClickBehaviorWidget {}
+
+impl SettingsWidget for RightClickBehaviorWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "right click behavior paste context menu shift"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let mut column = Flex::column();
+        let selection_settings = SelectionSettings::as_ref(app);
+        add_setting(
+            &mut column,
+            &selection_settings.right_click_behavior,
+            || {
+                render_dropdown_item(
+                    appearance,
+                    "Right-click:",
+                    selection_settings
+                        .right_click_pastes()
+                        .then_some("Shift+right-click to open the context menu."),
+                    None,
+                    LocalOnlyIconState::for_setting(
+                        RightClickBehaviorSetting::storage_key(),
+                        RightClickBehaviorSetting::sync_to_cloud(),
+                        &mut view
+                            .button_mouse_states
+                            .local_only_icon_tooltip_states
+                            .borrow_mut(),
+                        app,
+                    ),
+                    None,
+                    &view.right_click_behavior_dropdown,
+                )
+            },
+        );
+        column.finish()
     }
 }
 
@@ -7217,7 +7388,9 @@ impl SettingsWidget for Osc52ClipboardAccessWidget {
         render_dropdown_item(
             appearance,
             "Clipboard access (OSC 52)",
-            Some("Controls whether programs running in the terminal can read or write your system clipboard."),
+            Some(
+                "Controls whether programs running in the terminal can read or write your system clipboard.",
+            ),
             None,
             LocalOnlyIconState::for_setting(
                 Osc52ClipboardAccessSetting::storage_key(),

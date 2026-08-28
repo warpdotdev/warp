@@ -1,8 +1,8 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
 use super::classify_driver_error;
-use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 
 fn assert_state_and_code(
     error: AgentDriverError,
@@ -142,12 +142,16 @@ fn mcp_startup_failed_is_failed_with_env_setup_and_per_server_details() {
         Some(PlatformErrorCode::EnvironmentSetupFailed)
     );
     // Each unavailable server is rendered as its own bullet line.
-    assert!(update
-        .message
-        .contains("- 'devin' failed to start: connection refused"));
-    assert!(update
-        .message
-        .contains("- 'datadog' did not start within 20s"));
+    assert!(
+        update
+            .message
+            .contains("- 'devin' failed to start: connection refused")
+    );
+    assert!(
+        update
+            .message
+            .contains("- 'datadog' did not start within 20s")
+    );
 }
 
 #[test]
@@ -156,6 +160,28 @@ fn environment_setup_failed_is_failed() {
         AgentDriverError::EnvironmentSetupFailed("bad repo".into()),
         AgentTaskState::Failed,
         Some(PlatformErrorCode::EnvironmentSetupFailed),
+    );
+}
+
+#[test]
+fn setup_command_exited_shell_is_failed_with_env_setup_and_names_command() {
+    let (state, update) = classify_driver_error(&AgentDriverError::SetupCommandExitedShell {
+        command: "./setup.sh".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::EnvironmentSetupFailed)
+    );
+    // The message must name the setup command that exited the shell and
+    // point the user at the environment's setup commands.
+    assert!(update.message.contains("./setup.sh"), "{}", update.message);
+    assert!(
+        update
+            .message
+            .contains("Check the setup commands for this environment"),
+        "{}",
+        update.message
     );
 }
 
@@ -297,4 +323,44 @@ fn harness_runtime_failure_detected_is_failed_with_auth_required() {
     assert!(update.message.contains("claude"));
     assert!(update.message.contains("credit balance is too low"));
     assert!(update.message.contains("Your credit balance is too low"));
+}
+
+// --- Sandbox runtime limit (QUALITY-1759) ---
+
+#[test]
+fn sandbox_deadline_reached_is_failed_with_exact_message_and_no_error_code() {
+    let (state, update) = classify_driver_error(&AgentDriverError::SandboxDeadlineReached {
+        on_free_plan: false,
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert!(update.error_code.is_none());
+    assert_eq!(update.message, "Sandbox maximum runtime reached.");
+}
+
+/// The limit is only fixed on the free plan, so the upgrade hint must be
+/// scoped to it — paid plans can configure the limit instead.
+#[test]
+fn sandbox_deadline_reached_on_free_plan_suggests_upgrading() {
+    let (state, update) =
+        classify_driver_error(&AgentDriverError::SandboxDeadlineReached { on_free_plan: true });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert!(update.error_code.is_none());
+    assert_eq!(
+        update.message,
+        "Sandbox maximum runtime reached. Upgrade to a paid plan to remove this limit."
+    );
+}
+
+// --- SIGTERM abort ---
+
+#[test]
+fn terminated_by_signal_is_failed_with_no_error_code() {
+    let (state, update) = classify_driver_error(&AgentDriverError::TerminatedBySignal);
+    assert_eq!(state, AgentTaskState::Failed);
+    assert!(update.error_code.is_none());
+    assert_eq!(
+        update.message,
+        "The agent process was terminated (SIGTERM) before the run completed, most likely \
+         because the instance or worker hosting the run was shut down."
+    );
 }

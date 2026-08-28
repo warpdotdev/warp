@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use async_channel::Sender;
+use warp_completer::meta::Span;
 #[cfg(unix)]
 use warpui::AppContext;
 use warpui::{Entity, ViewContext};
@@ -22,6 +23,8 @@ use crate::terminal::{ShellLaunchData, SizeUpdate};
 /// resizing, command execution, and native shell completions.
 pub enum PtyIntent {
     CtrlD,
+    #[cfg(not(target_family = "wasm"))]
+    Interrupt,
     ShutdownPty,
     WriteBytes(Cow<'static, [u8]>),
     WriteAgentInput {
@@ -32,7 +35,7 @@ pub enum PtyIntent {
     ExecuteCommand(ExecuteCommandEvent),
     RunNativeShellCompletions {
         buffer_text: String,
-        results_tx: Sender<Vec<ShellCompletion>>,
+        results_tx: Sender<(Vec<ShellCompletion>, Option<Span>)>,
     },
 }
 

@@ -1,7 +1,7 @@
 pub use cloud_object_models::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, CloudAIExecutionProfile,
-    CloudAIExecutionProfileModel, ComputerUsePermission, RunAgentsPermission, WriteToPtyPermission,
-    PROFILE_NAME_MAX_LENGTH,
+    CloudAIExecutionProfileModel, ComputerUsePermission, PROFILE_NAME_MAX_LENGTH,
+    RunAgentsPermission, WriteToPtyPermission,
 };
 use markdown_parser::{FormattedTextFragment, FormattedTextInline};
 use warp_core::features::FeatureFlag;
@@ -15,7 +15,7 @@ use crate::cloud_object::{
 };
 use crate::server::sync_queue::QueueItem;
 use crate::settings::AISettings;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 /// This threshold currently only applies to GPT 5.4 and GPT 5.5 models
 pub const LONG_CONTEXT_WARNING_THRESHOLD: u32 = 272_000;
 pub(crate) const LONG_CONTEXT_PRICING_WARNING_URL: &str =
@@ -29,9 +29,11 @@ pub(crate) fn long_context_pricing_warning_title() -> FormattedTextInline {
     ]
 }
 
+mod config;
 pub mod editor;
 pub mod model_menu_items;
 pub mod profiles;
+pub use config::{ExecutionProfileId, ExecutionProfilesConfig};
 
 /// Result of resolving the cloud agent computer use setting.
 /// Contains both the effective value and whether it's forced by organization policy.
@@ -43,16 +45,20 @@ pub struct CloudAgentComputerUseState {
 }
 fn effective_base_model<'a>(profile: &AIExecutionProfile, app: &'a AppContext) -> &'a LLMInfo {
     let prefs = LLMPreferences::as_ref(app);
+    let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
     profile
         .base_model
         .as_ref()
-        .and_then(|id| prefs.get_llm_info(id))
-        .unwrap_or_else(|| prefs.get_default_base_model(app))
+        .and_then(|id| prefs.get_llm_info(id, app))
+        .unwrap_or_else(|| prefs.get_default_base_model_for_team_uid(team_uid, app))
 }
 
 /// Resolves the effective cloud agent computer use state by reading the workspace
 /// autonomy setting and user's local preference from their respective singletons.
-pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentComputerUseState {
+pub fn resolve_cloud_agent_computer_use_state(
+    scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> CloudAgentComputerUseState {
     if !FeatureFlag::AgentModeComputerUse.is_enabled() {
         return CloudAgentComputerUseState {
             enabled: false,
@@ -61,7 +67,7 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
     }
 
     let autonomy_setting = UserWorkspaces::as_ref(ctx)
-        .ai_autonomy_settings()
+        .ai_autonomy_settings(scope)
         .computer_use_setting;
     let user_preference = *AISettings::as_ref(ctx).cloud_agent_computer_use_enabled;
 
@@ -89,8 +95,26 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
     }
 }
 
+// Eval builds always use the hard-coded eval profile, so every caller of these helpers is
+// compiled out there (see `AIExecutionProfilesModel::new` and `migrate_settings_profiles`).
 #[cfg(not(feature = "agent_mode_evals"))]
 pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfile {
+    create_default_from_legacy_settings_with_profile(AIExecutionProfile::default(), app)
+}
+
+#[cfg(not(feature = "agent_mode_evals"))]
+fn create_default_for_tui_from_legacy_settings(app: &AppContext) -> AIExecutionProfile {
+    create_default_from_legacy_settings_with_profile(
+        AIExecutionProfile::default_profile_for_tui(),
+        app,
+    )
+}
+
+#[cfg(not(feature = "agent_mode_evals"))]
+fn create_default_from_legacy_settings_with_profile(
+    default_profile: AIExecutionProfile,
+    app: &AppContext,
+) -> AIExecutionProfile {
     // Note that the legacy "Autonomy" and "Code Access" settings are not imported here.
     // The "Code Access" setting defaulted to "Always Ask", which is the most restrictive, so
     // it's impossible for us to infer some hesitancy about autonomy from the setting and we should
@@ -109,7 +133,7 @@ pub fn create_default_from_legacy_settings(app: &AppContext) -> AIExecutionProfi
             .cloned()
             .collect(),
         directory_allowlist: ai_settings.agent_mode_coding_file_read_allowlist.clone(),
-        ..Default::default()
+        ..default_profile
     }
 }
 
@@ -236,7 +260,7 @@ impl StringModel for AIExecutionProfile {
         QueueItem::UpdateAIExecutionProfile {
             model: object.model().clone().into(),
             id: object.id,
-            revision: revision_ts.or_else(|| object.metadata.revision.clone()),
+            revision: revision_ts.or(object.metadata.revision),
         }
     }
 

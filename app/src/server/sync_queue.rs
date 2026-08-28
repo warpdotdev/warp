@@ -24,8 +24,8 @@ use crate::ai::cloud_agent_config::CloudAgentConfigModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironmentModel;
 use crate::ai::execution_profiles::CloudAIExecutionProfileModel;
 use crate::ai::facts::CloudAIFactModel;
-use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
 use crate::ai::mcp::CloudMCPServerModel;
+use crate::ai::mcp::templatable::CloudTemplatableMCPServerModel;
 use crate::cloud_object::model::actions::{
     ObjectAction, ObjectActionHistory, ObjectActionSubtype, ObjectActionType,
 };
@@ -37,14 +37,14 @@ use crate::cloud_object::{
     ObjectType, Owner, Revision, RevisionAndLastEditor, ServerCloudObject, ServerCreationInfo,
     UpdateCloudObjectResult,
 };
-use crate::drive::folders::CloudFolderModel;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::folders::CloudFolderModel;
 use crate::env_vars::CloudEnvVarCollectionModel;
 use crate::notebooks::CloudNotebookModel;
 use crate::server::cloud_objects::update_manager::InitiatedBy;
 use crate::settings::cloud_preferences::CloudPreferenceModel;
-use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
 use crate::workflows::CloudWorkflowModel;
+use crate::workflows::workflow_enum::CloudWorkflowEnumModel;
 
 lazy_static! {
     static ref DEFAULT_RETRY_OPTION: RetryOption =
@@ -233,16 +233,15 @@ impl QueueItem {
     ) -> Vec<QueueItem> {
         objects
             .map(|object| {
-                if let Some(create_object_queue_item) = object.create_object_queue_item(
+                match object.create_object_queue_item(
                     CloudObjectEventEntrypoint::default(),
                     // InitiatedBy::User was added as a default value since we do not save the initiated_by values in the Sqlite cache.
                     // InitiatedBy::User is a safer default option because it will show toasts.
                     // In the future, if System events are common, we may want to save the initiated_by field in Sqlite.
                     InitiatedBy::User,
                 ) {
-                    create_object_queue_item
-                } else {
-                    object.update_object_queue_item(None)
+                    Some(create_object_queue_item) => create_object_queue_item,
+                    _ => object.update_object_queue_item(None),
                 }
             })
             .collect::<Vec<_>>()
@@ -356,7 +355,7 @@ pub struct SyncQueue {
 }
 
 impl SyncQueue {
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn mock(ctx: &mut ModelContext<Self>) -> Self {
         use super::server_api::ServerApiProvider;
 
@@ -585,17 +584,16 @@ impl SyncQueue {
         queue_item_id: QueueItemId,
         item_id: &str,
     ) -> QueueDependency {
-        if let Some(client_id) = ClientId::from_hash(item_id) {
-            if self
+        if let Some(client_id) = ClientId::from_hash(item_id)
+            && self
                 .in_flight_bulk_create_objects
                 .get(&queue_item_id)
                 .is_some_and(|client_ids| client_ids.contains(&client_id))
-            {
-                return QueueDependency::BulkCreateGenericStringObject {
-                    queue_item_id,
-                    client_id,
-                };
-            }
+        {
+            return QueueDependency::BulkCreateGenericStringObject {
+                queue_item_id,
+                client_id,
+            };
         }
 
         QueueDependency::QueueItem(queue_item_id)
@@ -707,7 +705,7 @@ impl SyncQueue {
             SyncId::ServerId(server_id) => Some(Cow::Owned(server_id.uid())),
         };
         if sync_id.as_ref().map(|id| id.as_str()) == Some(server_id) {
-            *current_revision = Some(new_revision.clone())
+            *current_revision = Some(*new_revision)
         }
     }
 
@@ -1456,7 +1454,7 @@ impl SyncQueue {
         let future = ctx.spawn_with_retry_on_error(
             move || {
                 let model_clone = model.clone();
-                let revision_clone = revision.clone();
+                let revision_clone = revision;
                 let object_client_clone = object_client.clone();
                 async move {
                     model_clone
@@ -1539,7 +1537,7 @@ impl SyncQueue {
 
                 self.handle_dependency_success(&QueueDependency::QueueItem(queue_item_id));
 
-                self.update_items_with_new_revision(uid, revision_and_editor.revision.clone());
+                self.update_items_with_new_revision(uid, revision_and_editor.revision);
 
                 ctx.emit(SyncQueueEvent::ObjectUpdateSuccessful {
                     server_id: ServerId::from_string_lossy(uid),
@@ -1582,7 +1580,7 @@ impl SyncQueue {
 
                 self.update_items_with_new_revision(
                     &server_creation_info.server_id_and_type.id.uid(),
-                    revision_and_editor.revision.clone(),
+                    revision_and_editor.revision,
                 );
                 ctx.emit(SyncQueueEvent::ObjectCreationSuccessful {
                     client_id,

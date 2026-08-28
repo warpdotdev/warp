@@ -21,12 +21,12 @@ use warpui::{
 };
 
 use super::settings_page::{
-    add_setting, render_alternating_color_list, render_body_item, render_dropdown_item,
-    render_page_title, Category, LocalOnlyIconState, MatchData, PageType, SettingsPageEvent,
-    SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, ToggleState, HEADER_FONT_SIZE,
-    HEADER_PADDING,
+    Category, CategoryHeader, HEADER_FONT_SIZE, HEADER_PADDING, LocalOnlyIconState, MatchData,
+    PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
+    ToggleState, add_setting, render_alternating_color_list, render_body_item,
+    render_dropdown_item, render_page_title,
 };
-use super::{flags, SettingsAction, SettingsSection, ToggleSettingActionPair};
+use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::appearance::Appearance;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
@@ -71,8 +71,7 @@ const SPACE_AFTER_TEXT_INPUT: f32 = ITEM_VERTICAL_SPACING - BUILT_IN_TEXT_INPUT_
 
 const SSH_REUSE_CONTROL_MASTER_DESCRIPTION: &str = "Attach to a live SSH ControlMaster you already have configured for the destination host instead of creating a Warp-owned one. Takes effect in new tabs.";
 
-const SSH_EXTENSION_INSTALL_MODE_DESCRIPTION: &str =
-    "Controls the installation behavior for Warp's SSH extension when a remote host doesn't have it installed.";
+const SSH_EXTENSION_INSTALL_MODE_DESCRIPTION: &str = "Controls the installation behavior for Warp's SSH extension when a remote host doesn't have it installed.";
 
 /// This page lets users configure when they get asked to warpify a session. Some shell commands
 /// are recognized by default. Users can add new shell commands, or prevent the default ones from
@@ -151,8 +150,11 @@ impl WarpifyPageView {
     fn build_page(ctx: &mut ViewContext<Self>) -> PageType<Self> {
         let mut categories = vec![
             Category::new("", vec![Box::new(TitleWidget::default())]),
-            Category::new("Subshells", vec![Box::new(SubshellsWidget::default())])
-                .with_subtitle("Subshells supported: bash, zsh, and fish."),
+            Category::with_header(
+                CategoryHeader::new("Subshells")
+                    .with_subtitle("Subshells supported: bash, zsh, and fish."),
+                vec![Box::new(SubshellsWidget::default())],
+            ),
         ];
 
         let warpify_settings = WarpifySettings::as_ref(ctx);
@@ -160,10 +162,10 @@ impl WarpifyPageView {
             .enable_ssh_warpification
             .is_supported_on_current_platform()
         {
-            categories.push(
-                Category::new("SSH", vec![Box::new(SSHWidget::default())])
-                    .with_subtitle("Warpify your interactive SSH sessions."),
-            );
+            categories.push(Category::with_header(
+                CategoryHeader::new("SSH").with_subtitle("Warpify your interactive SSH sessions."),
+                vec![Box::new(SSHWidget::default())],
+            ));
         }
         PageType::new_categorized(categories, None)
     }
@@ -386,9 +388,11 @@ impl TypedActionView for WarpifyPageView {
             RemoveAddedCommand(index) => self.remove_added_command(*index, ctx),
             ToggleSshWarpification => {
                 WarpifySettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
-                    report_if_error!(ssh_settings
-                        .enable_ssh_warpification
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        ssh_settings
+                            .enable_ssh_warpification
+                            .toggle_and_save_value(ctx)
+                    );
                     send_telemetry_from_ctx!(
                         TelemetryEvent::ToggleSshWarpification {
                             enabled: *ssh_settings.enable_ssh_warpification.value(),
@@ -410,9 +414,11 @@ impl TypedActionView for WarpifyPageView {
             }
             ToggleReuseSshControlMaster => {
                 SshSettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
-                    report_if_error!(ssh_settings
-                        .reuse_existing_control_master
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        ssh_settings
+                            .reuse_existing_control_master
+                            .toggle_and_save_value(ctx)
+                    );
                     send_telemetry_from_ctx!(
                         TelemetryEvent::FeaturesPageAction {
                             action: "ToggleSshReuseControlMaster".to_string(),
@@ -427,9 +433,11 @@ impl TypedActionView for WarpifyPageView {
             }
             SetSshExtensionInstallMode(mode) => {
                 WarpifySettings::handle(ctx).update(ctx, |warpify_settings, ctx| {
-                    report_if_error!(warpify_settings
-                        .ssh_extension_install_mode
-                        .set_value(*mode, ctx));
+                    report_if_error!(
+                        warpify_settings
+                            .ssh_extension_install_mode
+                            .set_value(*mode, ctx)
+                    );
                     send_telemetry_from_ctx!(
                         TelemetryEvent::SetSshExtensionInstallMode {
                             mode: mode.display_name(),

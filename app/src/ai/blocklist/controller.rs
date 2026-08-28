@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ai::skills::SkillPathOrigin;
+use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference};
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use input_context::{input_context_for_request, parse_context_attachments};
@@ -25,11 +25,13 @@ use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
-use warp_multi_agent_api::{message, Task, ToolType};
+use warp_multi_agent_api::{Task, ToolType, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
+};
 
-use self::response_stream::{ResponseStream, ResponseStreamEvent};
+use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
@@ -40,16 +42,17 @@ use super::orchestration_event_streamer::{
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
 use super::queued_query::{QueuedQueryId, QueuedQueryModel};
 use super::{BlocklistAIInputModel, ResponseStreamId};
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    extract_user_query_mode, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment,
-    AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers,
-    CancellationOutcome, CancellationReason, DocumentContentAttachmentSource, EntrypointType,
-    FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, CancellationOutcome,
+    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
+    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
-    StaticQueryType, TransientNetworkErrorKind, UserQueryMode,
+    StaticQueryType, TransientNetworkErrorKind, UserQueryMode, extract_user_query_mode,
 };
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
@@ -59,7 +62,7 @@ use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::ai::AIRequestUsageModel;
+use crate::ai::skills::{ActiveSkillLookupError, SkillManager};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
@@ -70,18 +73,21 @@ use crate::send_telemetry_from_ctx;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryEvent;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::model::block::{
-    formatted_terminal_contents_for_input, BlockId, CURSOR_MARKER,
+    BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
 };
-use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
-use crate::terminal::ShellLaunchData;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -206,6 +212,7 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    #[allow(clippy::too_many_arguments)]
     fn for_task(
         inputs: Vec<AIAgentInput>,
         task_id: TaskId,
@@ -213,6 +220,7 @@ impl RequestInput {
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
@@ -220,12 +228,14 @@ impl RequestInput {
             active_session,
             shared_session_response_initiator,
             terminal_surface_id,
+            scope,
             app,
         );
         me.input_messages.insert(task_id, inputs);
         me
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn for_actions_results(
         action_results: Vec<AIAgentActionResult>,
         context: Arc<[AIAgentContext]>,
@@ -233,6 +243,7 @@ impl RequestInput {
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
@@ -240,6 +251,7 @@ impl RequestInput {
             active_session,
             shared_session_response_initiator,
             terminal_surface_id,
+            scope,
             app,
         );
         for result in action_results.into_iter() {
@@ -268,23 +280,24 @@ impl RequestInput {
         active_session: &ModelHandle<ActiveSession>,
         shared_session_response_initiator: Option<ParticipantId>,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
         let model_id = llm_prefs
-            .get_active_base_model(app, Some(terminal_surface_id))
+            .get_active_base_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let coding_model_id = llm_prefs
-            .get_active_coding_model(app, Some(terminal_surface_id))
+            .get_active_coding_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let cli_agent_model_id = llm_prefs
-            .get_active_cli_agent_model(app, Some(terminal_surface_id))
+            .get_active_cli_agent_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let computer_use_model_id = llm_prefs
-            .get_active_computer_use_model(app, Some(terminal_surface_id))
+            .get_active_computer_use_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let working_directory = active_session
@@ -321,6 +334,7 @@ pub struct BlocklistAIController {
 
     /// The ID of the terminal surface this controller is associated with.
     terminal_surface_id: EntityId,
+    team_context_resolver: TeamContextResolver,
 
     should_refresh_available_llms_on_stream_finish: bool,
 
@@ -421,9 +435,13 @@ impl BlocklistAIController {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
     }
 
+    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        (self.team_context_resolver)(app)
+    }
+
     /// Creates a controller for a terminal surface.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new<T: Entity>(
         input_model: ModelHandle<BlocklistAIInputModel>,
         context_model: ModelHandle<BlocklistAIContextModel>,
         conversation_selection: ConversationSelectionHandle,
@@ -431,8 +449,10 @@ impl BlocklistAIController {
         active_session: ModelHandle<ActiveSession>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,
+        terminal_surface: WeakViewHandle<T>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_surface);
         ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction {
                 conversation_id,
@@ -614,7 +634,8 @@ impl BlocklistAIController {
             }
             // Viewer-mode events are handled by `OrchestrationViewerModel`.
             OrchestrationEventStreamerEvent::ChildSpawned { .. }
-            | OrchestrationEventStreamerEvent::ChildStatusChanged { .. } => {}
+            | OrchestrationEventStreamerEvent::ChildStatusChanged { .. }
+            | OrchestrationEventStreamerEvent::WatchedRunStatusChanged { .. } => {}
         });
         Self {
             input_model,
@@ -624,6 +645,7 @@ impl BlocklistAIController {
             terminal_model,
             in_flight_response_streams: PendingResponseStreams::new(),
             terminal_surface_id,
+            team_context_resolver,
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
             ambient_agent_task_id: None,
@@ -754,9 +776,8 @@ impl BlocklistAIController {
                 })
                 .collect_vec()
         } else {
-            // Custom AI inputs like CodeReview and FetchReviewComments are encoded as
-            // top-level request variants (`request::input::Type::CodeReview`,
-            // `request::input::Type::FetchReviewComments`, etc.), and `convert_input`
+            // Custom AI inputs like CodeReview are encoded as top-level request
+            // variants (`request::input::Type::CodeReview`, etc.), and `convert_input`
             // only emits those variants in the single-input path.
             //
             // Tool call results are encoded differently: they only exist inside
@@ -765,9 +786,9 @@ impl BlocklistAIController {
             // CodeReview-style input and a ToolCallResult in the same request.
             //
             // So if we prepend an ActionResult here, `convert_input` has to fall back
-            // to the multi-input `UserInputs` path, where CodeReview / FetchReviewComments
-            // are ignored entirely. The stale tool result is preserved, but the custom
-            // AI input disappears from the request.
+            // to the multi-input `UserInputs` path, where CodeReview is ignored
+            // entirely. The stale tool result is preserved, but the custom AI input
+            // disappears from the request.
             vec![]
         };
 
@@ -833,6 +854,7 @@ impl BlocklistAIController {
             });
         }
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let send_result = self.send_request_input(
             RequestInput::for_task(
                 inputs,
@@ -841,6 +863,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 conversation_id,
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -848,7 +871,7 @@ impl BlocklistAIController {
                 entrypoint: entrypoint_type,
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             is_queued_prompt,
             ctx,
         );
@@ -1012,8 +1035,10 @@ impl BlocklistAIController {
             }) {
                 Ok(task_id) => task_id,
                 Err(e) => {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Could not create CLI subagent task optimistically"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Could not create CLI subagent task optimistically")
+                    );
                     return;
                 }
             };
@@ -1077,14 +1102,15 @@ impl BlocklistAIController {
         );
     }
 
-    /// Sends the given user query to the AI model.
+    /// Sends the given user query to the AI model, returning whether it
+    /// reached the shared request dispatch path.
     pub fn send_user_query_in_conversation(
         &mut self,
         query: String,
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
         self.send_user_query_in_conversation_internal(
             query,
             conversation_id,
@@ -1095,7 +1121,7 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             ctx,
-        );
+        )
     }
 
     /// Sends the first submission of a previously queued user prompt into an existing conversation.
@@ -1181,7 +1207,7 @@ impl BlocklistAIController {
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> bool {
         let is_viewer = self
             .terminal_model
             .lock()
@@ -1229,9 +1255,11 @@ impl BlocklistAIController {
                 }) {
                     Ok(task_id) => (task_id, Some(running_command)),
                     Err(e) => {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Could not create CLI subagent task optimistically"));
-                        return;
+                        report_error!(
+                            anyhow::Error::new(e)
+                                .context("Could not create CLI subagent task optimistically")
+                        );
+                        return false;
                     }
                 }
             } else if let Some(task_id) = active_block
@@ -1249,7 +1277,7 @@ impl BlocklistAIController {
                         "Tried to send follow-up query for non-existent conversation",
                         extra: { "conversation_id" => ?conversation_id }
                     );
-                    return;
+                    return false;
                 };
 
                 (conversation.get_root_task_id().clone(), None)
@@ -1259,20 +1287,21 @@ impl BlocklistAIController {
         };
 
         // Persist the updated visibility for each promoted block
-        if !promoted_blocks.is_empty() {
-            if let Some(sender) = GlobalResourceHandlesProvider::as_ref(ctx)
+        if !promoted_blocks.is_empty()
+            && let Some(sender) = GlobalResourceHandlesProvider::as_ref(ctx)
                 .get()
                 .model_event_sender
                 .as_ref()
-            {
-                for (block_id, agent_view_visibility) in promoted_blocks {
-                    if let Err(e) = sender.send(ModelEvent::UpdateBlockAgentViewVisibility {
-                        block_id: block_id.to_string(),
-                        agent_view_visibility: agent_view_visibility.into(),
-                    }) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Error sending UpdateBlockAgentViewVisibility event"));
-                    }
+        {
+            for (block_id, agent_view_visibility) in promoted_blocks {
+                if let Err(e) = sender.send(ModelEvent::UpdateBlockAgentViewVisibility {
+                    block_id: block_id.to_string(),
+                    agent_view_visibility: agent_view_visibility.into(),
+                }) {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Error sending UpdateBlockAgentViewVisibility event")
+                    );
                 }
             }
         }
@@ -1297,6 +1326,7 @@ impl BlocklistAIController {
             is_queued_prompt,
             ctx,
         );
+        true
     }
 
     /// Sends a request triggered by a zero-state prompt suggestion.
@@ -1367,6 +1397,52 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         slash_command.send_request(self, None, None, ctx);
+    }
+    /// Starts the create-project agent flow with the supplied project description.
+    pub fn send_create_new_project_request(&mut self, query: String, ctx: &mut ModelContext<Self>) {
+        self.send_slash_command_request(SlashCommandRequest::CreateNewProject { query }, ctx);
+    }
+
+    /// Resolves a skill reference against this controller's active execution host.
+    pub(crate) fn resolve_skill_for_invocation(
+        &self,
+        reference: &SkillReference,
+        ctx: &AppContext,
+    ) -> Result<ParsedSkill, ActiveSkillLookupError> {
+        let path_origin = self.skill_path_origin(ctx);
+        SkillManager::handle(ctx)
+            .as_ref(ctx)
+            .active_skill_by_reference_with_origin(reference, &path_origin, ctx)
+            .cloned()
+    }
+
+    /// Sends an already-resolved skill invocation through the shared slash-command request path.
+    pub(crate) fn send_resolved_skill_invocation(
+        &mut self,
+        skill: ParsedSkill,
+        user_query: Option<String>,
+        queued_query_id: Option<QueuedQueryId>,
+        conversation_id: Option<AIConversationId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let request = SlashCommandRequest::InvokeSkill { skill, user_query };
+        if let Some(query_id) = queued_query_id {
+            self.send_queued_slash_command_request(request, query_id, conversation_id, ctx);
+        } else {
+            self.send_slash_command_request(request, ctx);
+        }
+    }
+
+    /// Resolves and sends a skill invocation for surfaces that do not need intermediate UI work.
+    pub fn send_invoke_skill_request(
+        &mut self,
+        reference: SkillReference,
+        user_query: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), ActiveSkillLookupError> {
+        let skill = self.resolve_skill_for_invocation(&reference, ctx)?;
+        self.send_resolved_skill_invocation(skill, user_query, None, None, ctx);
+        Ok(())
     }
 
     /// Same as [`Self::send_slash_command_request`] but marks the emitted `SentRequest`
@@ -1557,6 +1633,7 @@ impl BlocklistAIController {
             vec![],
             ctx,
         );
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let mut request_input = RequestInput::for_actions_results(
             finished_results,
             context,
@@ -1564,6 +1641,7 @@ impl BlocklistAIController {
             self.get_current_response_initiator(),
             conversation_id,
             self.terminal_surface_id,
+            &scope,
             ctx,
         );
 
@@ -1598,7 +1676,7 @@ impl BlocklistAIController {
         let result = self.send_request_input(
             request_input,
             None,
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
             ctx,
         );
@@ -1623,11 +1701,16 @@ impl BlocklistAIController {
         let has_active_stream = self
             .in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, ctx);
+        // Once the conversation's ambient run has begun a terminal exit with no idle
+        // window left to cancel it, starting a new request here would only race that
+        // teardown and get cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
+        let is_exiting =
+            OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id);
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream}"
+                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream} is_exiting={is_exiting}"
             );
             return false;
         };
@@ -1638,9 +1721,9 @@ impl BlocklistAIController {
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
         );
-        if !owns || has_active_stream || !is_ready_status {
+        if !owns || has_active_stream || !is_ready_status || is_exiting {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?}",
+                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting}",
                 conversation.status()
             );
             return false;
@@ -1856,6 +1939,7 @@ impl BlocklistAIController {
             action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
         });
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         if self
             .send_request_input(
                 RequestInput::for_task(
@@ -1865,10 +1949,11 @@ impl BlocklistAIController {
                     self.get_current_response_initiator(),
                     conversation_id,
                     self.terminal_surface_id,
+                    &scope,
                     ctx,
                 ),
                 None,
-                /*can_attempt_resume_on_error*/ true,
+                RecoveryBudget::fresh(),
                 /*is_queued_prompt*/ false,
                 ctx,
             )
@@ -1927,10 +2012,33 @@ impl BlocklistAIController {
         }
     }
 
+    /// Resumes the conversation with a request that is not itself recovering another, so it
+    /// starts with a full recovery budget. Automatic resumes go through
+    /// [`Self::resume_conversation_with_recovery_budget`] instead, to inherit the failed
+    /// request's remaining budget.
     pub fn resume_conversation(
         &mut self,
         conversation_id: AIConversationId,
-        can_attempt_resume_on_error: bool,
+        additional_context: Vec<AIAgentContext>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.resume_conversation_with_recovery_budget(
+            conversation_id,
+            RecoveryBudget::fresh(),
+            /*is_auto_resume_after_error*/ false,
+            additional_context,
+            ctx,
+        );
+    }
+
+    /// Resumes the conversation with `recovery` as the new request's retry/resume budget.
+    ///
+    /// An automatic resume passes the failed request's remaining budget so the recovery
+    /// chain stays bounded; see [`RecoveryBudget`].
+    fn resume_conversation_with_recovery_budget(
+        &mut self,
+        conversation_id: AIConversationId,
+        recovery: RecoveryBudget,
         is_auto_resume_after_error: bool,
         additional_context: Vec<AIAgentContext>,
         ctx: &mut ModelContext<Self>,
@@ -1981,6 +2089,7 @@ impl BlocklistAIController {
         } else {
             None
         };
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let _ = self.send_request_input(
             RequestInput::for_task(
                 inputs,
@@ -1989,27 +2098,39 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 conversation_id,
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             metadata,
-            can_attempt_resume_on_error,
+            recovery,
             /*is_queued_prompt*/ false,
             ctx,
         );
     }
 
-    /// Schedules an auto-resume-after-error for the conversation once the network is online
-    /// and the auto-handoff sleep modal is closed, so the resume doesn't race the user's
-    /// enable/dismiss decision on wake.
+    /// Schedules an auto-resume-after-error for the conversation, once the recovery backoff
+    /// carried by `resume` has elapsed, the network is online, and the auto-handoff sleep
+    /// modal is closed, so the resume doesn't race the user's enable/dismiss decision on
+    /// wake.
+    ///
+    /// `resume` carries the failed request's budget with this resume already charged against
+    /// it, so the resumed request continues the same bounded chain instead of getting a
+    /// fresh budget. The backoff matters as much as the extra attempts: without it, a
+    /// resume fires ~1s after the reset and lands right back in the rolling deploy that
+    /// caused it.
     fn schedule_auto_resume_after_error(
         &mut self,
         conversation_id: AIConversationId,
+        resume: PendingResume,
         ctx: &mut ModelContext<Self>,
     ) {
+        let backoff = resume.backoff();
+        let recovery = resume.recovery();
         let wait_for_online = NetworkStatus::as_ref(ctx).wait_until_online();
         let wait_for_modal_closed =
             OneTimeModalModel::as_ref(ctx).wait_until_auto_handoff_sleep_modal_closed();
         let wait = async move {
+            Timer::after(backoff).await;
             wait_for_online.await;
             // Await the modal second: the future reads live modal state at
             // poll time, so a modal surfaced on wake (after connectivity
@@ -2019,11 +2140,9 @@ impl BlocklistAIController {
         let handle = ctx.spawn(wait, move |me, _, ctx| {
             // Clean up the pending handle now that the resume is executing.
             me.pending_auto_resume_handles.remove(&conversation_id);
-            me.resume_conversation(
+            me.resume_conversation_with_recovery_budget(
                 conversation_id,
-                // Don't allow a second resume-on-error to prevent a persistent loop.
-                /*can_attempt_resume_on_error*/
-                false,
+                recovery,
                 /*is_auto_resume_after_error*/ true,
                 vec![],
                 ctx,
@@ -2052,6 +2171,7 @@ impl BlocklistAIController {
             input_context.push(block_context);
         }
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let new_conversation = self.start_new_conversation_for_request(ctx);
         self.send_request_input(
             RequestInput::for_task(
@@ -2064,6 +2184,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 new_conversation.id(),
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -2074,7 +2195,7 @@ impl BlocklistAIController {
                 },
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
             ctx,
         )
@@ -2115,8 +2236,8 @@ impl BlocklistAIController {
         {
             let Some(conversation) = history_model.conversation(&conversation_id) else {
                 return Err(anyhow!(
-                        "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
-                    ));
+                    "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
+                ));
             };
             let task_id = conversation.get_root_task_id().clone();
             let conversation_data = api::ConversationData {
@@ -2152,8 +2273,8 @@ impl BlocklistAIController {
             (conversation_id, task_id, conversation_data)
         } else {
             return Err(anyhow!(
-                    "Tried to use agent response completed trigger to generate passive suggestions without a conversation ID"
-                ));
+                "Tried to use agent response completed trigger to generate passive suggestions without a conversation ID"
+            ));
         };
 
         let inputs = vec![AIAgentInput::TriggerPassiveSuggestion {
@@ -2169,6 +2290,7 @@ impl BlocklistAIController {
             trigger: trigger.clone(),
         }];
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let request_input = RequestInput::for_task(
             inputs,
             task_id,
@@ -2176,6 +2298,7 @@ impl BlocklistAIController {
             self.get_current_response_initiator(),
             conversation_id,
             self.terminal_surface_id,
+            &scope,
             ctx,
         )
         .with_supported_tools(supported_tools);
@@ -2188,12 +2311,14 @@ impl BlocklistAIController {
             is_auto_resume_after_error: false,
         });
 
+        let scope = self.team_context(ctx);
         let request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data,
             metadata,
+            &scope,
             ctx,
         );
 
@@ -2221,6 +2346,7 @@ impl BlocklistAIController {
             trigger,
         }];
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let new_conversation = self.start_new_conversation_for_request(ctx);
         self.send_request_input(
             RequestInput::for_task(
@@ -2230,6 +2356,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 new_conversation.id(),
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -2239,7 +2366,7 @@ impl BlocklistAIController {
                 },
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
             ctx,
         )
@@ -2308,7 +2435,7 @@ impl BlocklistAIController {
         &mut self,
         request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
-        can_attempt_resume_on_error: bool,
+        recovery: RecoveryBudget,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
@@ -2359,7 +2486,11 @@ impl BlocklistAIController {
         let is_passive_request = request_input
             .all_inputs()
             .any(|input| input.is_passive_request());
-        let can_attempt_resume_on_error = can_attempt_resume_on_error && !is_passive_request;
+        let recovery = if is_passive_request {
+            recovery.without_resume()
+        } else {
+            recovery
+        };
 
         // Make sure there's no existing response stream for the conversation. If
         // there is, something has gone wrong.
@@ -2419,12 +2550,16 @@ impl BlocklistAIController {
             });
         }
 
+        let scope = self.team_context(ctx);
+        // Pinned at send, so the request keeps the team the surface was on when the user sent it.
+        let team_scope = RequestTeamScope::from_scope(&scope);
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data.clone(),
             query_metadata,
+            &scope,
             ctx,
         );
         request_params.parent_agent_id = parent_agent_id;
@@ -2445,7 +2580,8 @@ impl BlocklistAIController {
             ResponseStream::new(
                 request_params.clone(),
                 ai_identifiers,
-                can_attempt_resume_on_error,
+                recovery,
+                team_scope,
                 ctx,
             )
         });
@@ -2604,6 +2740,14 @@ impl BlocklistAIController {
         reason: CancellationReason,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Restore the user's keyboard focus if a background computer-use session is still active
+        // for this conversation. ctrl-c / stop / pane-close all funnel through here, and on
+        // cancellation the computer-use subagent never produces a normal SubagentResult, so the
+        // normal-completion teardown in `Conversation` is skipped. Scoped to this conversation so a
+        // concurrent background session in another conversation is left intact; idempotent and a
+        // no-op when this conversation has no active background session.
+        computer_use::end_background_session(&conversation_id.to_string());
+
         // Cancel any pending auto-resume for this conversation.
         if let Some(handle) = self.pending_auto_resume_handles.remove(&conversation_id) {
             handle.abort();
@@ -2663,17 +2807,20 @@ impl BlocklistAIController {
     ///
     /// Invoked from the terminal view's shell-exit handler before the pane is
     /// torn down. The conversation is moved into a terminal `Error` state with a
-    /// shell-exit message so that the Oz run reports `FAILED` (with an
-    /// explanation) instead of "Cancelled by user", and so the subsequent
-    /// pane-close cancellation — which is guarded by `is_in_progress` — becomes a
-    /// no-op and cannot overwrite the failure.
+    /// shell-exit message (naming the secret-redacted `command` that exited the
+    /// shell) so that the Oz run reports `FAILED` (with an explanation) instead
+    /// of "Cancelled by user", and so the subsequent pane-close cancellation —
+    /// which is guarded by `is_in_progress` — becomes a no-op and cannot
+    /// overwrite the failure.
     pub fn fail_conversation_due_to_shell_exit(
         &mut self,
         conversation_id: AIConversationId,
+        command: String,
         ctx: &mut ModelContext<Self>,
     ) {
         let terminal_surface_id = self.terminal_surface_id;
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let shell_exit_error = RenderableAIError::AgentExitedShell { command };
 
         // Only act on conversations that are still running. A finished
         // conversation (e.g. the agent already completed) must not be
@@ -2697,9 +2844,10 @@ impl BlocklistAIController {
             .stream_ids_for_conversation(conversation_id, ctx);
         let had_in_flight_stream = !stream_ids.is_empty();
         for stream_id in &stream_ids {
+            let error = shell_exit_error.clone();
             history_model.update(ctx, |history_model, ctx| {
                 history_model.mark_response_stream_completed_with_error(
-                    RenderableAIError::AgentExitedShell,
+                    error,
                     /* recovery_pending */ false,
                     stream_id,
                     conversation_id,
@@ -2735,7 +2883,7 @@ impl BlocklistAIController {
                     terminal_surface_id,
                     conversation_id,
                     ConversationStatus::Error,
-                    Some(RenderableAIError::AgentExitedShell),
+                    Some(shell_exit_error),
                     ctx,
                 );
             });
@@ -2879,8 +3027,11 @@ impl BlocklistAIController {
                                         )
                                     });
                                 if let Err(e) = apply_result {
-                                    report_error!(anyhow::Error::new(e)
-                                        .context("Failed to apply client actions to conversation"));
+                                    report_error!(
+                                        anyhow::Error::new(e).context(
+                                            "Failed to apply client actions to conversation"
+                                        )
+                                    );
                                 }
                             }
                         }
@@ -3082,11 +3233,11 @@ impl BlocklistAIController {
                 }
 
                 // Before cleaning up the response stream, check if we should attempt to resume.
-                if response_stream
-                    .as_ref(ctx)
-                    .should_resume_conversation_after_stream_finished()
-                {
-                    self.schedule_auto_resume_after_error(conversation_id, ctx);
+                // The resume inherits the failed request's remaining recovery budget, so
+                // retries and resumes stay bounded by one shared counter.
+                let pending_resume = response_stream.as_ref(ctx).pending_resume();
+                if let Some(resume) = pending_resume {
+                    self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
                 }
 
                 // Clean up the response stream tracking entry now that the stream is complete.
@@ -3099,8 +3250,8 @@ impl BlocklistAIController {
 
                 if self.should_refresh_available_llms_on_stream_finish {
                     self.should_refresh_available_llms_on_stream_finish = false;
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences.refresh_authed_models(ctx);
+                    TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                        drop(manager.refresh_workspace_metadata(ctx));
                     });
                 }
                 ctx.emit(BlocklistAIControllerEvent::FinishedReceivingOutput {
@@ -3148,11 +3299,12 @@ impl BlocklistAIController {
 
         // If a user is below their personal limits, then we know that they won't eat into overages,
         // so we don't need to refresh.
-        let has_no_requests_remaining = !AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
+        let has_no_base_plan_requests_remaining =
+            !AIRequestUsageModel::as_ref(ctx).has_base_plan_requests_remaining();
         // If overages aren't enabled, we're not going to reap the benefit of refreshing at all anyway.
         let are_overages_enabled = workspace.are_overages_enabled();
 
-        if are_overages_enabled && has_no_requests_remaining {
+        if are_overages_enabled && has_no_base_plan_requests_remaining {
             // Give a one second delay to ensure that Stripe has been charged and the database is completely updated,
             // before syncing new AI overages data.
             ctx.spawn(
@@ -3178,12 +3330,15 @@ impl BlocklistAIController {
         history_model.update(ctx, |history_model, ctx| {
             // Update conversation cost and usage information before updating and
             // persisting the conversation.
+            #[allow(deprecated)]
+            let request_cost = finished_event.request_cost.map(|cost| {
+                // Total credits charged for this request = inference (`exact`) + platform.
+                RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
+            });
             history_model.update_conversation_cost_and_usage_for_request(
                 conversation_id,
-                finished_event.request_cost.map(|cost| {
-                    // Total credits charged for this request = inference (`exact`) + platform.
-                    RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
-                }),
+                request_cost,
+                finished_event.request_charges.take(),
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),
                 did_request_contain_user_query,
@@ -3273,19 +3428,28 @@ impl BlocklistAIController {
                     .try_into()
                     .ok()
                     .is_some_and(|p: LlmProvider| p == LlmProvider::AwsBedrock);
+                let is_gemini_enterprise = details
+                    .provider
+                    .try_into()
+                    .ok()
+                    .is_some_and(|p: LlmProvider| p == LlmProvider::GeminiEnterprise);
 
                 let error = if is_aws_bedrock {
                     RenderableAIError::AwsBedrockCredentialsExpiredOrInvalid {
                         model_name: details.model_name,
                     }
+                } else if is_gemini_enterprise {
+                    RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
                 } else {
-                    let provider = details.provider.try_into().ok().and_then(|p| match p {
+                    let provider = details.provider.try_into().ok().and_then(|provider| match provider {
                         LlmProvider::Google => Some("Google"),
                         LlmProvider::Anthropic => Some("Anthropic"),
                         LlmProvider::Openai => Some("OpenAI"),
                         LlmProvider::Xai => Some("xAI"),
                         LlmProvider::Openrouter => Some("OpenRouter"),
-                        LlmProvider::AwsBedrock | LlmProvider::Unknown => None,
+                        LlmProvider::AwsBedrock
+                        | LlmProvider::GeminiEnterprise
+                        | LlmProvider::Unknown => None,
                     });
                     RenderableAIError::InvalidApiKey {
                         provider: provider.unwrap_or("Unknown").to_string(),
@@ -3341,8 +3505,8 @@ impl BlocklistAIController {
         }
 
         if finished_event.should_refresh_model_config {
-            LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                llm_preferences.refresh_authed_models(ctx);
+            TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                drop(manager.refresh_workspace_metadata(ctx));
             });
         }
     }

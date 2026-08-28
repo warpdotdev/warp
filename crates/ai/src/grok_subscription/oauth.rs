@@ -24,11 +24,13 @@
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context as _, bail};
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 // `std::time::Instant` is disallowed (no wasm support); `instant::Instant` is a
 // drop-in that re-exports the std type on native targets.
 use instant::Instant;
@@ -70,6 +72,19 @@ fn redirect_uri() -> String {
 pub struct OauthAttempt {
     listener: TcpListener,
     pkce: PkceParams,
+    cancellation: OauthCancellationHandle,
+}
+
+/// Cancels an in-flight loopback callback wait.
+#[derive(Clone)]
+pub struct OauthCancellationHandle {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl OauthCancellationHandle {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
 }
 
 impl OauthAttempt {
@@ -81,6 +96,9 @@ impl OauthAttempt {
         Ok(Self {
             listener: bind_callback_listener()?,
             pkce: PkceParams::generate(),
+            cancellation: OauthCancellationHandle {
+                cancelled: Arc::new(AtomicBool::new(false)),
+            },
         })
     }
 
@@ -93,7 +111,7 @@ impl OauthAttempt {
     /// callback, validates the CSRF state, and exchanges the authorization
     /// code for tokens. Consumes the attempt so its secrets can't be reused.
     pub async fn finish(self) -> anyhow::Result<TokenResponse> {
-        run_oauth_flow(self.listener, self.pkce).await
+        run_oauth_flow(self.listener, self.pkce, self.cancellation).await
     }
 
     /// Clones the PKCE verifier for the pasted-code fallback while the
@@ -102,6 +120,10 @@ impl OauthAttempt {
         ManualCodeExchange {
             verifier: self.pkce.verifier.clone(),
         }
+    }
+
+    pub fn cancellation_handle(&self) -> OauthCancellationHandle {
+        self.cancellation.clone()
     }
 }
 
@@ -216,25 +238,41 @@ fn bind_callback_listener() -> anyhow::Result<TcpListener> {
 /// Runs the full browser-based PKCE flow: waits for the loopback callback on a
 /// dedicated thread, validates the CSRF state, and exchanges the authorization
 /// code for tokens.
-async fn run_oauth_flow(listener: TcpListener, pkce: PkceParams) -> anyhow::Result<TokenResponse> {
+async fn run_oauth_flow(
+    listener: TcpListener,
+    pkce: PkceParams,
+    cancellation: OauthCancellationHandle,
+) -> anyhow::Result<TokenResponse> {
     // The loopback accept loop is blocking, so run it on a dedicated OS thread
     // and bridge the result back through a runtime-agnostic async channel.
     let (tx, rx) = async_channel::bounded(1);
-    std::thread::Builder::new()
+    let callback_thread = std::thread::Builder::new()
         .name("grok-oauth-callback".to_owned())
         .spawn(move || {
+            let callback = wait_for_callback(&listener, CALLBACK_TIMEOUT, &cancellation);
+            // Close the loopback socket *before* publishing the result. Whoever
+            // observes the result may immediately rebind the redirect port (a
+            // retried login, or Grok CLI), and that bind fails with "address in
+            // use" while this listener is still open.
+            drop(listener);
             // `send_blocking` is disallowed (no wasm support); block this
             // dedicated thread on the async `send` instead.
-            let _ = warpui_core::r#async::block_on(
-                tx.send(wait_for_callback(&listener, CALLBACK_TIMEOUT)),
-            );
+            let _ = warpui_core::r#async::block_on(tx.send(callback));
         })
         .context("failed to spawn the Grok OAuth callback server thread")?;
 
     let callback = rx
         .recv()
         .await
-        .context("the Grok OAuth callback server stopped unexpectedly")??;
+        .context("the Grok OAuth callback server stopped unexpectedly");
+
+    // Publishing the result is the callback thread's last act, so this join
+    // returns immediately; it guarantees the thread — and every resource it
+    // owned — is fully torn down before this flow hands control back, on the
+    // cancelled, timed-out, and completed paths alike.
+    let _ = callback_thread.join();
+
+    let callback = callback??;
 
     if callback.state != pkce.state {
         bail!("the authorization response state did not match — aborting to prevent CSRF");
@@ -245,9 +283,16 @@ async fn run_oauth_flow(listener: TcpListener, pkce: PkceParams) -> anyhow::Resu
 
 /// Blocks (on a non-blocking listener with polling) until the browser hits the
 /// redirect URI, returning the captured code and state, or an error on timeout.
-fn wait_for_callback(listener: &TcpListener, timeout: Duration) -> anyhow::Result<CallbackData> {
+fn wait_for_callback(
+    listener: &TcpListener,
+    timeout: Duration,
+    cancellation: &OauthCancellationHandle,
+) -> anyhow::Result<CallbackData> {
     let deadline = Instant::now() + timeout;
     loop {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            bail!("Grok authorization was cancelled");
+        }
         if Instant::now() >= deadline {
             bail!("timed out waiting for the Grok authorization callback");
         }
@@ -261,7 +306,7 @@ fn wait_for_callback(listener: &TcpListener, timeout: Duration) -> anyhow::Resul
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(e) => {
-                return Err(anyhow::Error::new(e).context("Grok OAuth callback accept failed"))
+                return Err(anyhow::Error::new(e).context("Grok OAuth callback accept failed"));
             }
         }
     }

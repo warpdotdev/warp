@@ -39,7 +39,10 @@ fn create_conversation_metadata(
             context_window_usage: 0.0,
             credits_spent: 0.0,
             platform_credits_spent: 0.0,
+            total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -133,9 +136,10 @@ fn ambient_task_id_from_conversation_metadata_requires_cloud_task_metadata() {
     )
     .unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("Conversation 'conversation-123' is not backed by a cloud agent task"));
+    assert!(
+        err.to_string()
+            .contains("Conversation 'conversation-123' is not backed by a cloud agent task")
+    );
 }
 
 #[test]
@@ -237,9 +241,10 @@ fn missing_args_fall_back_to_env_run_id_for_request_association() {
 fn missing_args_and_missing_env_return_clear_error() {
     let err = resolve_upload_association_from_sources(None, None, None, None).unwrap_err();
 
-    assert!(err
-        .to_string()
-        .contains("no usable --run-id or --conversation-id was provided"));
+    assert!(
+        err.to_string()
+            .contains("no usable --run-id or --conversation-id was provided")
+    );
     assert!(err.to_string().contains("OZ_RUN_ID"));
 }
 
@@ -255,13 +260,16 @@ fn invalid_env_run_id_returns_clear_error() {
 #[test]
 fn load_env_run_id_reads_variable() {
     let previous = env::var_os(OZ_RUN_ID_ENV_VAR);
-    env::set_var(OZ_RUN_ID_ENV_VAR, "550e8400-e29b-41d4-a716-446655440000");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var(OZ_RUN_ID_ENV_VAR, "550e8400-e29b-41d4-a716-446655440000") };
 
     let loaded = load_env_run_id().unwrap();
 
     match previous {
-        Some(value) => env::set_var(OZ_RUN_ID_ENV_VAR, value),
-        None => env::remove_var(OZ_RUN_ID_ENV_VAR),
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(value) => unsafe { env::set_var(OZ_RUN_ID_ENV_VAR, value) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { env::remove_var(OZ_RUN_ID_ENV_VAR) },
     }
 
     assert_eq!(

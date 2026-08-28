@@ -6,10 +6,10 @@ use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
 use warpui::elements::{
-    resizable_state_handle, Align, Border, ChildView, ConstrainedBox, Container,
-    CrossAxisAlignment, DragBarSide, Element, Empty, Expanded, Flex, FormattedTextElement,
-    HighlightedHyperlink, MainAxisSize, MouseStateHandle, Padding, ParentElement, Resizable,
-    ResizableStateHandle, Shrinkable, Text,
+    Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide, Element,
+    Empty, Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisSize,
+    MouseStateHandle, Padding, ParentElement, Resizable, ResizableStateHandle, Shrinkable, Text,
+    resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::text_layout::ClipConfig;
@@ -17,15 +17,15 @@ use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
+use super::SettingsSection;
 use super::platform::{
     CreateApiKeyModal, CreateApiKeyModalEvent, CreateApiKeyModalViewState, ExpireApiKeyButton,
     ExpireApiKeyButtonEvent,
 };
 use super::settings_page::{
-    MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget,
-    CONTENT_FONT_SIZE, SUBHEADER_FONT_SIZE,
+    CONTENT_FONT_SIZE, MatchData, PageType, SUBHEADER_FONT_SIZE, SettingsPageMeta,
+    SettingsPageViewHandle, SettingsWidget,
 };
-use super::SettingsSection;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::editor::{
@@ -466,7 +466,7 @@ impl SettingsWidget for PlatformPageWidget {
     type View = PlatformPageView;
 
     fn search_terms(&self) -> &str {
-        "oz cloud platform api keys authentication"
+        "cloud agents platform api keys authentication"
     }
 
     fn render(
@@ -489,7 +489,9 @@ impl PlatformPageWidget {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let text = vec![
-            FormattedTextFragment::plain_text("Create and manage API keys to allow other Oz cloud agents to access your Warp account.\nFor more information, visit the "),
+            FormattedTextFragment::plain_text(
+                "Create and manage API keys to allow cloud agents to access your Warp account.\nFor more information, visit the ",
+            ),
             FormattedTextFragment::hyperlink("Documentation.", API_KEY_DOCS_URL),
         ];
 
@@ -524,7 +526,7 @@ impl PlatformPageWidget {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
-                    Text::new_inline("Oz Cloud API Keys", appearance.ui_font_family(), 16.)
+                    Text::new_inline("API keys", appearance.ui_font_family(), 16.)
                         .with_style(Properties::default().weight(Weight::Bold))
                         .with_color(appearance.theme().active_ui_text_color().into())
                         .with_clip(ClipConfig::end())
@@ -906,7 +908,7 @@ impl PlatformPageWidget {
 
 impl SettingsPageMeta for PlatformPageView {
     fn section() -> SettingsSection {
-        SettingsSection::OzCloudAPIKeys
+        SettingsSection::WarpCloudAgentAPIKeys
     }
 
     fn should_render(&self, ctx: &AppContext) -> bool {
@@ -937,7 +939,7 @@ impl SettingsPageMeta for PlatformPageView {
 
 impl From<ViewHandle<PlatformPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<PlatformPageView>) -> Self {
-        SettingsPageViewHandle::OzCloudAPIKeys(view_handle)
+        SettingsPageViewHandle::WarpCloudAgentAPIKeys(view_handle)
     }
 }
 

@@ -26,9 +26,9 @@ use warpui::elements::{
 use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
-use warpui::platform::keyboard::KeyCode;
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::Cursor;
+use warpui::platform::keyboard::KeyCode;
 use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
@@ -38,30 +38,30 @@ use warpui::{
 };
 
 use super::block_list_viewport::{ClampingMode, InputMode, ScrollPosition, ViewportState};
-use super::blockgrid_renderer::GridRenderParams;
+use super::blockgrid_renderer::{BlockGridRenderer, GridRenderParams};
 use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 use super::meta_shortcuts::handle_keystroke_despite_composing;
+use super::model::SecretHandle;
+use super::model::ansi::CursorShape;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
-use super::model::grid::grid_handler::{Link, TermMode};
+use super::model::grid::grid_handler::Link;
 use super::model::image_map::StoredImageMetadata;
 use super::model::mouse::{MouseAction, MouseButton, MouseState};
 use super::model::session::SessionId;
 use super::model::terminal_model::{SelectedBlocks, WithinBlock, WithinModel};
-use super::model::SecretHandle;
 use super::shared_session::presence_manager::{
-    text_selection_color, PresenceManager, MUTED_PARTICIPANT_COLOR,
+    MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
 };
 use super::shared_session::render_util::SHARED_SESSION_AVATAR_DIAMETER;
 use super::view::{
-    BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
-    SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
+    BLOCK_BANNER_HEIGHT, BlocklistAIRenderContext, InlineBannerId, RichContentMetadata,
+    SeparatorId, SharedSessionBanners, TerminalEditor, TerminalViewRenderContext,
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
-use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
-use crate::ai::blocklist::agent_view::AgentViewState;
-use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
+use super::{HEIGHT_FUDGE_FACTOR_LINES, TerminalModel, heights_approx_eq};
+use crate::ai::blocklist::{ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, ai_brand_color};
 use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
@@ -74,12 +74,12 @@ use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scrol
 use crate::terminal::block_list_viewport::AutoscrollBehavior;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
-use crate::terminal::model::block::{Block, BlockSection};
+use crate::terminal::model::block::{Block, BlockSection, TranscriptScope};
 use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, TotalIndex,
 };
 use crate::terminal::model::escape_sequences::{
-    maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
+    KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
 use crate::terminal::model::index::Point as IndexPoint;
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
@@ -87,7 +87,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
 use crate::terminal::warpify::SubshellSource;
-use crate::terminal::{grid_renderer, SizeInfo};
+use crate::terminal::{SizeInfo, grid_renderer, should_right_click_paste};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;
@@ -1357,34 +1357,34 @@ impl BlockListElement {
             let model = self.model.lock();
             let viewport = self.viewport_state_after_layout(model.block_list());
 
-            if let Some(blocklist_point) = blocklist_point {
-                if let Some(block_index) = viewport.block_index_from_point(blocklist_point) {
-                    let on_long_running_block = model
-                        .block_list()
-                        .block_at(block_index)
-                        .is_some_and(|block| block.is_active_and_long_running());
+            if let Some(blocklist_point) = blocklist_point
+                && let Some(block_index) = viewport.block_index_from_point(blocklist_point)
+            {
+                let on_long_running_block = model
+                    .block_list()
+                    .block_at(block_index)
+                    .is_some_and(|block| block.is_active_and_long_running());
 
-                    if on_long_running_block && !should_intercept_scroll(&model, app) {
-                        // Send scroll event to PTY as mouse wheel action.
-                        // Convert Lines to i32 by rounding to nearest non-zero integer.
-                        let delta = round_nonzero(delta_lines.as_f64());
-                        if delta != 0 {
-                            let mouse_state = MouseState::new(
-                                MouseButton::Wheel,
-                                MouseAction::Scrolled { delta },
-                                Default::default(),
-                            );
-                            let grid_point = IndexPoint::new(
-                                blocklist_point.row.as_f64().round() as usize,
-                                blocklist_point.column,
-                            );
+                if on_long_running_block && !should_intercept_scroll(&model, app) {
+                    // Send scroll event to PTY as mouse wheel action.
+                    // Convert Lines to i32 by rounding to nearest non-zero integer.
+                    let delta = round_nonzero(delta_lines.as_f64());
+                    if delta != 0 {
+                        let mouse_state = MouseState::new(
+                            MouseButton::Wheel,
+                            MouseAction::Scrolled { delta },
+                            Default::default(),
+                        );
+                        let grid_point = IndexPoint::new(
+                            blocklist_point.row.as_f64().round() as usize,
+                            blocklist_point.column,
+                        );
 
-                            drop(model);
-                            ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
-                                mouse_state.set_point(grid_point),
-                            ));
-                            return true;
-                        }
+                        drop(model);
+                        ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                            mouse_state.set_point(grid_point),
+                        ));
+                        return true;
                     }
                 }
             }
@@ -1410,63 +1410,104 @@ impl BlockListElement {
         )
     }
 
-    fn right_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
-        if self.is_mouse_position_within_bounds(position) {
-            let position_in_terminal_view = self.position_in_terminal_view(position);
+    fn right_mouse_down(
+        &self,
+        position: Vector2F,
+        modifiers: &ModifiersState,
+        ctx: &mut EventContext,
+        app: &AppContext,
+    ) -> bool {
+        if !self.is_mouse_position_within_bounds(position) {
+            return false;
+        }
 
-            if self.is_mouse_position_within_selection(position) {
-                ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
-                    BlockListMenuSource::RegularTextRightClick {
-                        position_in_terminal_view,
-                    },
+        let shift = modifiers.shift;
+        let position_in_terminal_view = self.position_in_terminal_view(position);
+
+        let blocklist_point = self.coord_to_point(
+            SnackbarPoint::within_snackbar(position),
+            ClampingMode::ClampToGridIfWithinBlock,
+        );
+
+        let (block_index, mouse_owned_by_running_app) = {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let block_index =
+                blocklist_point.and_then(|point| viewport.block_index_from_point(point));
+            let on_long_running_block = block_index
+                .and_then(|index| model.block_list().block_at(index))
+                .is_some_and(|block| block.is_active_and_long_running());
+            let mouse_owned_by_running_app =
+                on_long_running_block && !should_intercept_mouse(&model, shift, app);
+            (block_index, mouse_owned_by_running_app)
+        };
+
+        // When a long-running app underneath owns the mouse (mouse reporting enabled), forward
+        // the raw right-click to it instead of pasting or showing our own context menu, the same
+        // way left mouse down/up/drag/scroll do for this block under the same condition.
+        if mouse_owned_by_running_app {
+            let model = self.model.lock();
+            let viewport = self.viewport_state_after_layout(model.block_list());
+            let within_block = blocklist_point.and_then(|point| {
+                viewport
+                    .block_list_point_to_grid_point(point)
+                    .map(|within_block| point_from_first_visible_row(&viewport, within_block))
+            });
+            drop(model);
+
+            if let Some(grid_point) = within_block {
+                let mouse_state =
+                    MouseState::new(MouseButton::Right, MouseAction::Pressed, *modifiers);
+                ctx.dispatch_typed_action(TerminalAction::AltMouseAction(
+                    mouse_state.set_point(grid_point),
                 ));
                 return true;
             }
+        }
 
-            let blocklist_point = self.coord_to_point(
-                SnackbarPoint::within_snackbar(position),
-                ClampingMode::ClampToGridIfWithinBlock,
-            );
+        // A bare right-click pastes when the setting is enabled.
+        if should_right_click_paste(shift, app) {
+            ctx.dispatch_typed_action(TerminalAction::Paste);
+            return true;
+        }
 
-            let block_index = blocklist_point.and_then(|point| {
-                let model = self.model.lock();
-                let viewport = self.viewport_state_after_layout(model.block_list());
-                viewport.block_index_from_point(point)
-            });
-
-            let source = match block_index {
-                Some(index) => BlockListMenuSource::RegularBlockRightClick {
-                    block_index: index,
+        if self.is_mouse_position_within_selection(position) {
+            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(
+                BlockListMenuSource::RegularTextRightClick {
                     position_in_terminal_view,
                 },
-                None => {
-                    let rich_content_view_id = blocklist_point.and_then(|point| {
-                        let model = self.model.lock();
-                        let viewport = self.viewport_state_after_layout(model.block_list());
-                        match viewport.block_height_item_from_point(point) {
-                            Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
-                            _ => None,
-                        }
-                    });
-                    match rich_content_view_id {
-                        Some(rich_content_view_id) => {
-                            BlockListMenuSource::RichContentBlockRightClick {
-                                rich_content_view_id,
-                                position_in_terminal_view,
-                            }
-                        }
-                        None => BlockListMenuSource::OutsideBlockRightClick {
-                            position_in_terminal_view,
-                        },
-                    }
-                }
-            };
-
-            ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
-            true
-        } else {
-            false
+            ));
+            return true;
         }
+
+        let source = match block_index {
+            Some(index) => BlockListMenuSource::RegularBlockRightClick {
+                block_index: index,
+                position_in_terminal_view,
+            },
+            None => {
+                let rich_content_view_id = blocklist_point.and_then(|point| {
+                    let model = self.model.lock();
+                    let viewport = self.viewport_state_after_layout(model.block_list());
+                    match viewport.block_height_item_from_point(point) {
+                        Some(BlockHeightItem::RichContent(item)) => Some(item.view_id),
+                        _ => None,
+                    }
+                });
+                match rich_content_view_id {
+                    Some(rich_content_view_id) => BlockListMenuSource::RichContentBlockRightClick {
+                        rich_content_view_id,
+                        position_in_terminal_view,
+                    },
+                    None => BlockListMenuSource::OutsideBlockRightClick {
+                        position_in_terminal_view,
+                    },
+                }
+            }
+        };
+
+        ctx.dispatch_typed_action(TerminalAction::BlockListContextMenu(source));
+        true
     }
 
     fn middle_mouse_down(&self, position: Vector2F, ctx: &mut EventContext) -> bool {
@@ -1712,7 +1753,7 @@ impl BlockListElement {
             ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(BlockTextSelectAction::End));
         }
 
-        let handled = if self.is_mouse_position_within_bounds(position) {
+        if self.is_mouse_position_within_bounds(position) {
             if let Some(point) = self.coord_to_point(
                 SnackbarPoint::within_snackbar(position),
                 ClampingMode::ReturnNoneIfNotInGrid,
@@ -1779,9 +1820,7 @@ impl BlockListElement {
             true
         } else {
             false
-        };
-
-        handled
+        }
     }
 
     /// Handle a mouse move event when we've determined the mouse is over the block list (and not
@@ -1972,20 +2011,20 @@ impl BlockListElement {
             let side = self
                 .size_info
                 .get_mouse_side(position - vec2f(bounds.origin().x(), snackbar_bottom));
-            if !is_selecting_blocks {
-                if let Some(point) = self.coord_to_point(
+            if !is_selecting_blocks
+                && let Some(point) = self.coord_to_point(
                     SnackbarPoint::underneath_snackbar(position),
                     ClampingMode::ClampToGrid,
-                ) {
-                    ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
-                        BlockTextSelectAction::Update {
-                            point,
-                            delta: delta_y.into_lines(),
-                            side,
-                            position,
-                        },
-                    ));
-                }
+                )
+            {
+                ctx.dispatch_typed_action(TerminalAction::BlockTextSelect(
+                    BlockTextSelectAction::Update {
+                        point,
+                        delta: delta_y.into_lines(),
+                        side,
+                        position,
+                    },
+                ));
             }
 
             if let Some(point) = self.coord_to_point(
@@ -2159,7 +2198,7 @@ impl BlockListElement {
                 {
                     if block_list
                         .block_at(block_index)
-                        .map(|block| block.should_hide_block(block_list.agent_view_state()))
+                        .map(|block| block.should_hide_block(block_list.transcript_scope()))
                         .unwrap_or(true)
                     {
                         any_hidden = true;
@@ -2365,12 +2404,12 @@ impl BlockListElement {
         block_borders_enabled: bool,
         snackbar_header: &Option<SnackbarHeader>,
         ai_render_context: &BlocklistAIRenderContext,
-        agent_view_state: &AgentViewState,
+        transcript_scope: &TranscriptScope,
         ctx: &mut PaintContext,
     ) {
-        let block_height = block.height(agent_view_state).as_f64() as f32 * cell_size.y();
+        let block_height = block.height(transcript_scope).as_f64() as f32 * cell_size.y();
         if block.is_restored()
-            && (!FeatureFlag::AgentView.is_enabled() || !agent_view_state.is_fullscreen())
+            && (!FeatureFlag::AgentView.is_enabled() || !transcript_scope.is_conversation())
         {
             ctx.scene
                 .draw_rect_with_hit_recording(RectF::new(
@@ -2381,13 +2420,12 @@ impl BlockListElement {
         }
 
         let mut did_render_ai_stripe = false;
-        if !FeatureFlag::AgentView.is_enabled() {
-            if let Some(ai_context_stripe_color) =
+        if !FeatureFlag::AgentView.is_enabled()
+            && let Some(ai_context_stripe_color) =
                 ai_render_context.context_color_for_block(block, warp_theme)
-            {
-                draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
-                did_render_ai_stripe = true;
-            }
+        {
+            draw_flag_pole(grid_origin, block_height, ai_context_stripe_color, ctx);
+            did_render_ai_stripe = true;
         }
 
         if block.has_failed() {
@@ -2471,7 +2509,7 @@ impl BlockListElement {
         ai_render_context: &BlocklistAIRenderContext,
         cursor_hint_text: Option<&mut Box<dyn Element>>,
         image_metadata: &HashMap<u32, StoredImageMetadata>,
-        agent_view_state: &AgentViewState,
+        transcript_scope: &TranscriptScope,
         ctx: &mut PaintContext,
         app: &AppContext,
     ) {
@@ -2485,7 +2523,7 @@ impl BlockListElement {
             block_borders_enabled,
             snackbar_header,
             ai_render_context,
-            agent_view_state,
+            transcript_scope,
             ctx,
         );
 
@@ -2500,7 +2538,6 @@ impl BlockListElement {
             Self::draw_border_between_blocks(border_origin, block_grid_params, ctx);
         }
 
-        let cursor_visible = block.is_mode_set(TermMode::SHOW_CURSOR);
         let command_origin = if !block.should_hide_command_grid() {
             let prompt_height_offset = cell_size_height * block.padding_top().as_f64() as f32;
 
@@ -2586,7 +2623,7 @@ impl BlockListElement {
                 command_focused_range.as_ref(),
                 command_grid_properties,
                 block_grid_params,
-                cursor_visible.then(|| block.prompt_and_command_grid().cursor_style().shape),
+                command_grid_visible_cursor_shape(block),
                 image_metadata,
                 ctx,
                 app,
@@ -2595,11 +2632,7 @@ impl BlockListElement {
             // Only render the cursor in the command grid if the command grid is active and if it's
             // long running. This is to avoid jitter where a cursor just flickers while the pty is
             // initializing.
-            if block.is_active_and_long_running()
-                && block.is_command_grid_active()
-                // Check if the "hide cursor" escape sequence is present.
-                && block.is_mode_set(TermMode::SHOW_CURSOR)
-            {
+            if block.is_command_cursor_visible() {
                 block.prompt_and_command_grid().draw_cursor(
                     command_origin,
                     &block_grid_params.grid_render_params,
@@ -2689,15 +2722,13 @@ impl BlockListElement {
                 output_focused_range.as_ref(),
                 output_grid_properties,
                 block_grid_params,
-                cursor_visible.then(|| block.output_grid().cursor_style().shape),
+                output_grid_visible_cursor_shape(block),
                 image_metadata,
                 ctx,
                 app,
             );
 
-            if block.is_active_and_long_running()
-            // Check if the "hide cursor" escape sequence is present.
-            && block.is_mode_set(TermMode::SHOW_CURSOR)
+            if block.is_output_cursor_visible()
             // Don't draw the Warp cursor when rich input is hiding
             // the CLI agent's cursor cell — agents like OpenCode and Codex
             // rely on Warp's cursor, so we suppress it here too.
@@ -3059,13 +3090,13 @@ impl BlockListElement {
     ) -> bool {
         use crate::terminal::view::TerminalAction;
 
-        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code {
-            if *key_code == voice_input_toggle_key_code {
-                ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
-                    voice_input::VoiceInputToggledFrom::Key { state: *state },
-                ));
-                return true;
-            }
+        if let Some(voice_input_toggle_key_code) = self.voice_input_toggle_key_code
+            && *key_code == voice_input_toggle_key_code
+        {
+            ctx.dispatch_typed_action(TerminalAction::ToggleCLIAgentVoiceInput(
+                voice_input::VoiceInputToggledFrom::Key { state: *state },
+            ));
+            return true;
         }
         false
     }
@@ -3079,6 +3110,18 @@ impl BlockListElement {
     ) -> bool {
         false
     }
+}
+
+fn command_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
+    block
+        .is_command_cursor_visible()
+        .then(|| block.prompt_and_command_grid().cursor_style().shape)
+}
+
+fn output_grid_visible_cursor_shape(block: &Block) -> Option<CursorShape> {
+    block
+        .is_output_cursor_visible()
+        .then(|| block.output_grid().cursor_style().shape)
 }
 
 /// With a `WithinBlock<IndexPoint>`, the point will count rows with 0 starting with the beginning
@@ -3186,7 +3229,7 @@ impl Element for BlockListElement {
 
         // Use a macro for creating a viewport, to ensure that callers use consistent parameters
         macro_rules! create_viewport {
-            ($block_list:expr) => {
+            ($block_list:expr_2021) => {
                 ViewportState::new(
                     $block_list,
                     self.snackbar_header_state.clone(),
@@ -3561,7 +3604,8 @@ impl Element for BlockListElement {
 
                     let total_lines = grid_storage_lines + flat_storage_lines;
                     let total_bytes = grid_storage_bytes + flat_storage_bytes;
-                    let text = format!("\
+                    let text = format!(
+                        "\
                             Lines: {total_lines} (grid: {grid_storage_lines}, flat: {flat_storage_lines}); \
                             Size: {:#.1} (grid: {:#.1}, flat: {:#.1})\
                         ",
@@ -3747,16 +3791,15 @@ impl Element for BlockListElement {
         let mut visible_selected_blocks = HashSet::new();
         let mut start_of_continuous_selected_blocks = HashSet::new();
         let mut end_of_continuous_selected_blocks = HashSet::new();
-        if let Some(visible_blocks) = &self.visible_blocks {
-            if !visible_blocks.is_empty() {
-                let visible_blocks_inclusive_range =
-                    visible_blocks.start..=(visible_blocks.end - 1.into());
-                for range in self.selected_blocks.ranges() {
-                    visible_selected_blocks
-                        .extend(range.intersection(&visible_blocks_inclusive_range));
-                    start_of_continuous_selected_blocks.insert(range.start());
-                    end_of_continuous_selected_blocks.insert(range.end());
-                }
+        if let Some(visible_blocks) = &self.visible_blocks
+            && !visible_blocks.is_empty()
+        {
+            let visible_blocks_inclusive_range =
+                visible_blocks.start..=(visible_blocks.end - 1.into());
+            for range in self.selected_blocks.ranges() {
+                visible_selected_blocks.extend(range.intersection(&visible_blocks_inclusive_range));
+                start_of_continuous_selected_blocks.insert(range.start());
+                end_of_continuous_selected_blocks.insert(range.end());
             }
         }
 
@@ -3775,7 +3818,7 @@ impl Element for BlockListElement {
         }
 
         let mut cli_subagent_views_to_paint = vec![];
-        let agent_view_state = model.block_list().agent_view_state();
+        let transcript_scope = model.block_list().transcript_scope();
 
         let items = self
             .visible_items
@@ -3829,7 +3872,7 @@ impl Element for BlockListElement {
 
                     // TODO(vorporeal): should probably use `Pixels` here
                     let block_pixel_height =
-                        block.height(agent_view_state).as_f64() as f32 * cell_size.y();
+                        block.height(transcript_scope).as_f64() as f32 * cell_size.y();
 
                     let block_bottom_y = grid_origin.y() + block_pixel_height;
                     let selection_bottom_y = snackbar_header
@@ -3852,7 +3895,7 @@ impl Element for BlockListElement {
                         );
 
                         let can_be_ai_context = self.ai_render_context.borrow().is_ai_input_enabled
-                            && block.can_be_ai_context(agent_view_state);
+                            && block.can_be_ai_context(transcript_scope);
 
                         ctx.scene
                             .draw_rect_with_hit_recording(RectF::new(
@@ -3969,7 +4012,9 @@ impl Element for BlockListElement {
                                     - SPACE_BETWEEN_SELECTED_BLOCK_AVATARS,
                             );
                         } else {
-                            log::warn!("Should show avatar for shared session participant at selected block but avatar element was not found")
+                            log::warn!(
+                                "Should show avatar for shared session participant at selected block but avatar element was not found"
+                            )
                         }
                     }
 
@@ -4053,7 +4098,7 @@ impl Element for BlockListElement {
                         self.ai_render_context.borrow().deref(),
                         self.cursor_hint_text_element.as_mut(),
                         &model.image_id_to_metadata,
-                        agent_view_state,
+                        transcript_scope,
                         ctx,
                         app,
                     );
@@ -4084,10 +4129,9 @@ impl Element for BlockListElement {
 
                     if let Some(snackbar_toggle_button_origin) =
                         self.compute_snackbar_toggle_button_draw_location(&block_grid_params)
+                        && let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut()
                     {
-                        if let Some(snackbar_toggle_button) = self.snackbar_toggle_button.as_mut() {
-                            snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
-                        }
+                        snackbar_toggle_button.paint(snackbar_toggle_button_origin, ctx, app);
                     }
 
                     // The block buttons might overlap with the prompt. If that's the case,
@@ -4617,9 +4661,23 @@ impl Element for BlockListElement {
                 ctx,
                 app,
             ),
-            Event::RightMouseDown { position, .. } if !handled => {
-                self.right_mouse_down(*position, ctx)
-            }
+            Event::RightMouseDown {
+                position,
+                cmd,
+                shift,
+                ..
+            } if !handled => self.right_mouse_down(
+                *position,
+                &ModifiersState {
+                    alt: false,
+                    cmd: *cmd,
+                    shift: *shift,
+                    ctrl: false,
+                    func: false,
+                },
+                ctx,
+                app,
+            ),
             Event::LeftMouseUp {
                 position,
                 modifiers,
@@ -4817,33 +4875,33 @@ where
         };
         let mut stack = Stack::new().with_child(container.finish());
 
-        if let Some(tooltip_info) = tooltip_info {
-            if state.is_hovered() {
-                let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
-                // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
-                let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
-                    (
-                        ParentAnchor::BottomRight,
-                        ChildAnchor::TopRight,
-                        vec2f(0., 5.),
-                    )
-                } else {
-                    (
-                        ParentAnchor::TopRight,
-                        ChildAnchor::BottomRight,
-                        vec2f(0., -5.),
-                    )
-                };
-                stack.add_positioned_overlay_child(
-                    tool_tip,
-                    OffsetPositioning::offset_from_parent(
-                        offset,
-                        ParentOffsetBounds::Unbounded,
-                        parent_anchor,
-                        child_anchor,
-                    ),
-                );
-            }
+        if let Some(tooltip_info) = tooltip_info
+            && state.is_hovered()
+        {
+            let tool_tip = ui_builder.tool_tip(tooltip_info.label).build().finish();
+            // Adjust the position of the tooltip depending on whether it is showing on the snackbar header
+            let (parent_anchor, child_anchor, offset) = if tooltip_info.tool_tip_below_button {
+                (
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                    vec2f(0., 5.),
+                )
+            } else {
+                (
+                    ParentAnchor::TopRight,
+                    ChildAnchor::BottomRight,
+                    vec2f(0., -5.),
+                )
+            };
+            stack.add_positioned_overlay_child(
+                tool_tip,
+                OffsetPositioning::offset_from_parent(
+                    offset,
+                    ParentOffsetBounds::Unbounded,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
         }
 
         stack.finish()

@@ -4,8 +4,7 @@
 mod tests;
 
 #[cfg(feature = "local_fs")]
-use std::path::PathBuf;
-use std::str::FromStr;
+use std::path::{Path, PathBuf};
 
 use ::local_control::protocol::{
     Direction as ControlDirection, DirectionParams, FileOpenParams, PageQueryParams, QueryParams,
@@ -14,6 +13,8 @@ use ::local_control::protocol::{
 };
 use ::local_control::{ActionKind, ControlError, ErrorCode, InstanceId};
 use serde_json::json;
+#[cfg(feature = "local_fs")]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::LineAndColumnArg;
 #[cfg(feature = "local_fs")]
 use warpui::SingletonEntity;
@@ -21,15 +22,15 @@ use warpui::{AppContext, ModelContext, TypedActionView};
 
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::local_control::LocalControlBridge;
 use crate::local_control::handlers::ack;
-use crate::local_control::handlers::layout::{create_tab, resolve_shell};
-use crate::local_control::handlers::metadata::{surface_unavailable_reason, SurfaceDestination};
+use crate::local_control::handlers::layout::create_tab;
+use crate::local_control::handlers::metadata::{SurfaceDestination, surface_unavailable_reason};
 use crate::local_control::resolver::{
     activate_target, active_target_pane_group, decode_params, focus_explicit_pane_target,
     input_target_pane_id, reject_target_families, tab_index_from_target, target_pane_group,
     target_pane_id, target_session_pane_id, target_window_id_for_target, target_workspace,
 };
-use crate::local_control::LocalControlBridge;
 use crate::palette::PaletteMode;
 use crate::pane_group::{ActivationReason, Direction, PaneGroupAction};
 use crate::server::telemetry::PaletteSource;
@@ -37,7 +38,7 @@ use crate::settings_view::SettingsSection;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{resolve_file_target_to_open_in_warp, EditorLayout};
+use crate::util::openable_file_type::{EditorLayout, resolve_file_target_to_open_in_warp};
 #[cfg(feature = "local_fs")]
 use crate::workspace::PaneViewLocator;
 use crate::workspace::{CommandSearchOptions, InitContent, WorkspaceAction};
@@ -246,13 +247,7 @@ fn window_create(
             ));
         }
     }
-    match params.shell.as_deref() {
-        Some(shell_name) => {
-            let shell = resolve_shell(shell_name, ctx)?;
-            ctx.dispatch_global_action("root_view:open_new_with_shell", Some(shell));
-        }
-        None => ctx.dispatch_global_action("root_view:open_new", ()),
-    }
+    ctx.dispatch_global_action("root_view:open_new", ());
     Ok(ack(instance_id, ActionKind::WindowCreate))
 }
 
@@ -686,7 +681,7 @@ fn surface_settings_open(
 }
 
 fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
-    let section = SettingsSection::from_str(&page).map_err(|_| {
+    let section = SettingsSection::from_slug(&page).ok_or_else(|| {
         ControlError::new(
             ErrorCode::InvalidParams,
             format!("surface.settings.open cannot resolve settings page {page:?}"),
@@ -760,10 +755,11 @@ fn file_open(
     }
     let line_and_column = line_and_column(&params)?;
     let workspace = target_workspace(ActionKind::FileOpen, target, ctx)?;
+    #[cfg(feature = "local_fs")]
+    let path = resolve_file_open_path(&params.path, target, ctx)?;
     activate_target(&workspace, ActionKind::FileOpen, target, ctx)?;
     #[cfg(feature = "local_fs")]
     {
-        let path = PathBuf::from(params.path);
         let layout = params.new_tab.then_some(EditorLayout::NewTab);
         let file_target =
             resolve_file_target_to_open_in_warp(&path, EditorSettings::as_ref(ctx), layout);
@@ -787,6 +783,53 @@ fn file_open(
         ErrorCode::UnsupportedAction,
         "file.open is unavailable without local filesystem support",
     ))
+}
+
+/// Resolves the path for `file.open` against the targeted terminal session's working
+/// directory, so a caller running `warpctrl file open README.md` from a session gets the
+/// file the shell would resolve rather than one relative to Warp's own process directory.
+#[cfg(feature = "local_fs")]
+fn resolve_file_open_path(
+    path: &str,
+    target: &TargetSelector,
+    ctx: &mut ModelContext<LocalControlBridge>,
+) -> Result<PathBuf, ControlError> {
+    let action = ActionKind::FileOpen;
+    let path = Path::new(path);
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    let pane_group = target_pane_group(action, target, ctx)?;
+    let pane_id = target_session_pane_id(action, target, &pane_group, ctx)?;
+    let working_directory = pane_group.read(ctx, |pane_group, ctx| {
+        pane_group
+            .terminal_view_from_pane_id(pane_id, ctx)
+            .and_then(|terminal| terminal.as_ref(ctx).pwd_as_local_or_remote(ctx))
+    });
+    match working_directory {
+        Some(LocalOrRemotePath::Local(working_directory)) => {
+            Ok(resolve_against_working_directory(path, &working_directory))
+        }
+        Some(LocalOrRemotePath::Remote(_)) => Err(ControlError::new(
+            ErrorCode::TargetStateConflict,
+            "file.open requires an absolute path when the target session is remote",
+        )),
+        None => Err(ControlError::new(
+            ErrorCode::TargetStateConflict,
+            "file.open cannot resolve a relative path without a working directory for the target session",
+        )),
+    }
+}
+
+/// Joins a relative path onto `working_directory`, normalizing the result when it exists on
+/// disk so `./README.md` and `../README.md` display and compare like any other opened file.
+#[cfg(feature = "local_fs")]
+fn resolve_against_working_directory(path: &Path, working_directory: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    let joined = working_directory.join(path);
+    dunce::canonicalize(&joined).unwrap_or(joined)
 }
 
 fn direction_param(params: &serde_json::Value) -> Result<ControlDirection, ControlError> {

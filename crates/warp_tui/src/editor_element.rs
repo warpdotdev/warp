@@ -4,8 +4,8 @@
 //! The element *paints and interacts*; it does not compute row structure.
 //! Rows come from the render state's single display-row implementation
 //! (`CharCellState::display_lattice`), which interleaves ghost rows and
-//! elides hidden line ranges; the element slices its text snapshot by each
-//! row's char range, applies consumer-supplied styles, prefixes gutter cells,
+//! elides hidden line ranges; the element obtains each row's paint-ready text
+//! from the lattice, applies consumer-supplied styles, prefixes gutter cells,
 //! and windows by scroll. Interaction geometry (cursor placement, mouse
 //! hit-testing) queries the same lattice, so what is painted and what a click
 //! resolves to can never disagree.
@@ -25,15 +25,15 @@ use std::rc::Rc;
 use string_offset::CharOffset;
 use warp::editor::CodeEditorModel;
 use warp_editor::model::CoreEditorModel;
-use warp_editor::render::model::{
-    char_cell_display_width, CharCellTemporaryBlock, DisplayRow, DisplayRowKind,
-};
+use warp_editor::render::model::{DisplayLattice, DisplayRow, DisplayRowKind};
 use warpui_core::elements::tui::{
-    Modifier, TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex,
-    TuiGridPoint, TuiLayoutContext, TuiPaintContext, TuiParentElement, TuiPoint, TuiRect,
-    TuiRectExt, TuiSize, TuiStyle, TuiText,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiFlex, TuiGridPoint, TuiLayoutContext,
+    TuiLocalPoint, TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::{AppContext, ModelHandle};
+
+use crate::tui_builder::TuiUiBuilder;
 
 /// Display columns between the line-number column and the row content.
 const GUTTER_GAP: u16 = 2;
@@ -45,10 +45,13 @@ const WHEEL_STEP: isize = 2;
 /// owning view translates them into its own typed actions and applies them to
 /// the editor model (mirroring how the GUI's element dispatches into its view).
 #[derive(Debug, Clone)]
-pub(crate) enum TuiEditorAction {
+pub enum TuiEditorAction {
     /// Insert a printable character (only emitted when the element is
     /// [`editable`](TuiEditorElement::editable)).
     InsertChar(char),
+    /// Insert one complete paste payload (only emitted when the element is
+    /// [`editable`](TuiEditorElement::editable)).
+    PasteText(String),
     /// Place the cursor / begin a character selection at `offset` (single click).
     SelectionStartAt { offset: CharOffset },
     /// Extend the active selection's head to `offset` (shift-click).
@@ -67,7 +70,10 @@ pub(crate) enum TuiEditorAction {
 }
 
 /// Handler receiving the element's [`TuiEditorAction`]s during event dispatch.
-type TuiEditorActionHandler = Rc<dyn Fn(TuiEditorAction, &mut TuiEventContext)>;
+type TuiEditorActionHandler = Rc<dyn for<'a> Fn(TuiEditorAction, &mut TuiEventContext<'a>)>;
+
+/// Resolves the placeholder ghost text (and its style) from fresh app state.
+type PlaceholderGhostTextProvider = Rc<dyn Fn(&AppContext) -> Option<(String, TuiStyle)>>;
 
 /// Whole-row styles by row kind, plus per-line overrides — all consumer
 /// policy. Gutter cells take their row's style.
@@ -81,6 +87,9 @@ pub(crate) struct TuiEditorStyles {
     pub gap: TuiStyle,
     /// Whole-line overrides by 0-based logical line index; first match wins.
     pub line_overrides: Vec<(Range<usize>, TuiStyle)>,
+    /// Character-range style overlays over buffer rows. Applied after the
+    /// row's base style and before selection.
+    pub text_overrides: Vec<(Range<CharOffset>, TuiStyle)>,
 }
 
 /// The core char-cell editor element. Construct per render via
@@ -94,8 +103,8 @@ pub(crate) struct TuiEditorElement {
     text: String,
     /// Cursor gap offset (1-based) captured at construction.
     cursor_offset: CharOffset,
-    /// Selection as a 0-based character-offset range, if any.
-    sel_char_range: Option<Range<CharOffset>>,
+    /// Selections as 0-based character-offset ranges.
+    selection_ranges: Vec<Range<CharOffset>>,
     /// Model-derived hidden line ranges captured at construction. Structural
     /// extras are folded in via [`Self::effective_hidden_ranges`], which is
     /// also what the event path uses over fresh model state.
@@ -103,6 +112,11 @@ pub(crate) struct TuiEditorElement {
 
     // ── Config ──────────────────────────────────────────────────────────────
     editable: bool,
+    /// Whether the owning view is focused, snapshotted at construction like
+    /// the GUI editor element's `view_snapshot.is_focused`. Editable elements
+    /// only consume typed text while focused, so several editable elements
+    /// can be rendered at once without contending for keystrokes.
+    is_focused: bool,
     /// Maximum visible rows for a scroll-windowed consumer; the first visible
     /// row comes from the render state's char-cell scroll offset. `None`
     /// renders full height.
@@ -112,8 +126,20 @@ pub(crate) struct TuiEditorElement {
     /// Whether to elide the buffer's final empty line (see
     /// [`Self::hide_trailing_empty_line`]).
     hide_trailing_empty_line: bool,
+    /// Whether buffer characters are painted as fixed-width mask glyphs.
+    masked: bool,
     styles: TuiEditorStyles,
+    trailing_ghost_text: Option<(String, TuiStyle)>,
+    /// Resolves the empty-buffer placeholder hint against fresh app state
+    /// during every layout pass; see [`Self::with_placeholder_ghost_text`].
+    placeholder_ghost_text_provider: Option<PlaceholderGhostTextProvider>,
+    /// The provider's most recent resolution, refreshed in [`Self::build`].
+    placeholder_ghost_text: Option<(String, TuiStyle)>,
     on_action: Option<TuiEditorActionHandler>,
+
+    /// Solid selection highlight: fg = terminal background, bg = theme
+    /// foreground. Computed once at construction from the active theme.
+    selection_style: TuiStyle,
 
     // ── Built during layout ─────────────────────────────────────────────────
     column: TuiFlex,
@@ -122,9 +148,14 @@ pub(crate) struct TuiEditorElement {
     /// Selected spans `(row_in_view, start_col, exclusive_end_col)`, in
     /// element-relative columns (gutter included).
     selected_spans: Vec<(u16, u16, u16)>,
+    /// Consumer-supplied style spans in the same display-column coordinate
+    /// space as `selected_spans`.
+    styled_spans: Vec<(u16, u16, u16, TuiStyle)>,
     cursor_col: u16,
     cursor_row_in_view: u16,
     cursor_visible: bool,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 impl TuiEditorElement {
@@ -148,14 +179,16 @@ impl TuiEditorElement {
             .unwrap_or_default();
         let sel = inner.buffer_selection_model().as_ref(app);
         let (head, tail) = (sel.first_selection_head(), sel.first_selection_tail());
-        let sel_char_range = (head != tail).then(|| {
-            let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
-            let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
-            start..end
-        });
-        let hidden_line_ranges = inner
-            .render_state()
-            .as_ref(app)
+        let selection_ranges = (head != tail)
+            .then(|| {
+                let start = CharOffset::from(head.min(tail).as_usize().saturating_sub(1));
+                let end = CharOffset::from(head.max(tail).as_usize().saturating_sub(1));
+                start..end
+            })
+            .into_iter()
+            .collect();
+        let render_state = inner.render_state().as_ref(app);
+        let hidden_line_ranges = render_state
             .char_cell()
             .map(|char_cell| char_cell.hidden_line_ranges(app))
             .unwrap_or_default();
@@ -164,20 +197,29 @@ impl TuiEditorElement {
             model: model.clone(),
             text,
             cursor_offset,
-            sel_char_range,
+            selection_ranges,
             hidden_line_ranges,
             editable: false,
+            is_focused: false,
             viewport_rows: None,
             line_number_gutter: false,
             hide_trailing_empty_line: false,
+            masked: false,
             styles: TuiEditorStyles::default(),
+            trailing_ghost_text: None,
+            placeholder_ghost_text_provider: None,
+            placeholder_ghost_text: None,
             on_action: None,
+            selection_style: TuiUiBuilder::from_app(app).selection_style(),
             column: TuiFlex::column(),
             gutter_cols: 0,
             selected_spans: Vec::new(),
+            styled_spans: Vec::new(),
             cursor_col: 0,
             cursor_row_in_view: 0,
             cursor_visible: false,
+            size: None,
+            origin: None,
         }
     }
 
@@ -189,12 +231,39 @@ impl TuiEditorElement {
         self
     }
 
+    /// Replace the model selection snapshot with 1-based buffer ranges from a
+    /// non-mutating projection such as Vim Visual mode.
+    pub(crate) fn with_selection_ranges(mut self, ranges: Vec<Range<CharOffset>>) -> Self {
+        self.selection_ranges = ranges
+            .into_iter()
+            .map(|range| {
+                CharOffset::from(range.start.as_usize().saturating_sub(1))
+                    ..CharOffset::from(range.end.as_usize().saturating_sub(1))
+            })
+            .collect();
+        self
+    }
+
+    /// Records the owning view's focus state (tracked by the view via
+    /// `on_focus`/`on_blur`, like the GUI's `EditorView::focused`). Editable
+    /// consumers must pass this: typed text is only consumed while focused.
+    pub(crate) fn with_view_focused(mut self, is_focused: bool) -> Self {
+        self.is_focused = is_focused;
+        self
+    }
+
     /// Window the rows to `max_visible_rows`, starting at the render state's
     /// char-cell scroll offset (owned model-side; consumers drive it via
     /// `CharCellState::follow_cursor` / `scroll_by`). Omitted = render all
     /// rows (e.g. the diff body, which scrolls with the transcript).
     pub(crate) fn with_viewport_rows(mut self, max_visible_rows: u32) -> Self {
         self.viewport_rows = Some(max_visible_rows);
+        self
+    }
+
+    /// Conceals buffer text while preserving the backing editor model for editing.
+    pub(crate) fn masked(mut self) -> Self {
+        self.masked = true;
         self
     }
 
@@ -210,6 +279,53 @@ impl TuiEditorElement {
     pub(crate) fn with_styles(mut self, styles: TuiEditorStyles) -> Self {
         self.styles = styles;
         self
+    }
+
+    pub(crate) fn with_trailing_ghost_text(
+        mut self,
+        text: impl Into<String>,
+        style: TuiStyle,
+    ) -> Self {
+        self.trailing_ghost_text = Some((text.into(), style));
+        self
+    }
+
+    /// Ghost text painted while the buffer is empty — placeholder-style
+    /// guidance (e.g. mode-dependent keybinding hints). Painted starting one
+    /// cell after the cursor so the terminal's block cursor never obscures
+    /// the first glyph (matching the design's cursor·gap·hint layout).
+    /// Rendered under the same conditions as trailing ghost text (editable,
+    /// focused, cursor visible); a configured trailing ghost text takes
+    /// precedence when both are set.
+    ///
+    /// `provider` is re-evaluated against fresh app state during every layout
+    /// pass — the element may stay cached across frames while the state the
+    /// hint depends on (e.g. transcript emptiness) changes without this
+    /// view being invalidated, so the content must never be snapshotted at
+    /// construction time.
+    pub(crate) fn with_placeholder_ghost_text(
+        mut self,
+        provider: impl Fn(&AppContext) -> Option<(String, TuiStyle)> + 'static,
+    ) -> Self {
+        self.placeholder_ghost_text_provider = Some(Rc::new(provider));
+        self
+    }
+
+    /// The ghost text to paint this frame and the column offset from the
+    /// cursor to start painting at: the trailing ghost text when set
+    /// (contextual hints like slash-command arguments outrank passive
+    /// placeholders) painted at the cursor, else the placeholder one cell
+    /// after the cursor while the buffer is empty.
+    fn active_ghost_text(&self) -> Option<(&str, TuiStyle, u16)> {
+        if let Some((text, style)) = &self.trailing_ghost_text {
+            return Some((text, *style, 0));
+        }
+        if self.text.is_empty()
+            && let Some((text, style)) = &self.placeholder_ghost_text
+        {
+            return Some((text, *style, 1));
+        }
+        None
     }
 
     /// Elide the buffer's final empty line (buffers whose text ends with a
@@ -229,7 +345,7 @@ impl TuiEditorElement {
     /// all (a read-only, click-through body).
     pub(crate) fn on_action(
         mut self,
-        handler: impl Fn(TuiEditorAction, &mut TuiEventContext) + 'static,
+        handler: impl for<'a> Fn(TuiEditorAction, &mut TuiEventContext<'a>) + 'static,
     ) -> Self {
         self.on_action = Some(Rc::new(handler));
         self
@@ -255,6 +371,11 @@ impl TuiEditorElement {
     /// Builds the visible rows, cursor position, and selection spans at
     /// `full_width`, storing them for `render`/`cursor_position`.
     fn build(&mut self, full_width: u16, app: &AppContext) {
+        // Placeholder hints depend on app state that changes without this
+        // element's view being invalidated; re-resolve them every layout.
+        if let Some(provider) = &self.placeholder_ghost_text_provider {
+            self.placeholder_ghost_text = provider(app);
+        }
         let render_state = self.model.as_ref(app).render_state().clone();
         let render_state = render_state.as_ref(app);
         let Some(char_cell) = render_state.char_cell() else {
@@ -273,10 +394,18 @@ impl TuiEditorElement {
             0
         };
         let content_width = full_width.saturating_sub(self.gutter_cols);
+        let width_changed = char_cell.terminal_width() != content_width;
         char_cell.set_terminal_width(content_width);
 
         let chars: Vec<char> = self.text.chars().collect();
         let cursor_offset = CharOffset::from(self.cursor_offset.as_usize().saturating_sub(1));
+        if let Some(viewport_rows) = self.viewport_rows {
+            if width_changed {
+                char_cell.follow_cursor(cursor_offset, viewport_rows, &hidden);
+            } else {
+                char_cell.clamp_scroll_offset(cursor_offset, viewport_rows, &hidden);
+            }
+        }
         // The first visible row is model-side scroll state; unwindowed
         // consumers always render from the top.
         let first_visible_row = if self.viewport_rows.is_some() {
@@ -288,7 +417,7 @@ impl TuiEditorElement {
         // One projection serves rows, cursor placement, and selection spans,
         // so everything below is geometry over the same lattice.
         let lattice = char_cell.display_lattice(&hidden);
-        let (column, selected_spans, cursor, visible_end) = {
+        let (column, selected_spans, styled_spans, cursor, visible_end) = {
             let rows = lattice.rows();
             // The cursor sits one row past the last text row when a logical
             // line exactly fills the width (deferred wrap); that phantom row
@@ -319,15 +448,28 @@ impl TuiEditorElement {
                 .saturating_sub(visible_slice.len());
 
             let mut selected_spans = Vec::new();
+            let mut styled_spans = Vec::new();
             let mut column = TuiFlex::column();
             for (vis_idx, row) in visible_slice.iter().enumerate() {
-                column.add_child(self.render_row(row, &chars, lattice.ghosts()));
-                if let Some((start_col, end_col)) = self.selection_span_in_row(row, &chars) {
+                column.add_child(self.render_row(row, &chars, &lattice));
+                if let Some((start_col, end_col)) = self.selection_span_in_row(row, &lattice) {
                     selected_spans.push((
                         vis_idx as u16,
                         start_col + self.gutter_cols,
                         end_col + self.gutter_cols,
                     ));
+                }
+                for (range, style) in &self.styles.text_overrides {
+                    if let Some((start_col, end_col)) =
+                        Self::char_range_span_in_row(row, &lattice, range.clone())
+                    {
+                        styled_spans.push((
+                            vis_idx as u16,
+                            start_col + self.gutter_cols,
+                            end_col + self.gutter_cols,
+                            *style,
+                        ));
+                    }
                 }
             }
             for _ in 0..phantom_rows {
@@ -338,16 +480,19 @@ impl TuiEditorElement {
                 // element never collapses to zero height.
                 column.add_child(TuiText::new(" ").truncate().finish());
             }
-            (column, selected_spans, cursor, visible_end)
+            (column, selected_spans, styled_spans, cursor, visible_end)
         };
 
         self.column = column;
         self.selected_spans = selected_spans;
+        self.styled_spans = styled_spans;
         if let Some(cursor) = cursor {
             self.cursor_col = cursor.col + self.gutter_cols;
             self.cursor_row_in_view = cursor.row.saturating_sub(first_visible_row) as u16;
-            self.cursor_visible =
-                self.editable && cursor.row >= first_visible_row && cursor.row < visible_end.max(1);
+            self.cursor_visible = self.editable
+                && self.is_focused
+                && cursor.row >= first_visible_row
+                && cursor.row < visible_end.max(1);
         } else {
             self.cursor_col = 0;
             self.cursor_row_in_view = 0;
@@ -376,11 +521,18 @@ impl TuiEditorElement {
         &self,
         row: &DisplayRow,
         chars: &[char],
-        ghosts: &[CharCellTemporaryBlock],
+        lattice: &DisplayLattice<'_>,
     ) -> Box<dyn TuiElement> {
         let (content, style) = match &row.kind {
             DisplayRowKind::Buffer { line_index } => {
-                let content = slice_chars(chars, &row.char_range);
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("buffer display rows have source text");
+                let content = if self.masked {
+                    "•".repeat(content.chars().count())
+                } else {
+                    content
+                };
                 let style = self
                     .styles
                     .line_overrides
@@ -390,12 +542,11 @@ impl TuiEditorElement {
                     .unwrap_or(self.styles.text);
                 (content, style)
             }
-            DisplayRowKind::Ghost { ghost_index } => {
-                let ghost_chars: Vec<char> = ghosts[*ghost_index].content.chars().collect();
-                (
-                    slice_chars(&ghost_chars, &row.char_range),
-                    self.styles.ghost,
-                )
+            DisplayRowKind::Ghost { .. } => {
+                let content = lattice
+                    .row_text(row, chars)
+                    .expect("ghost display rows have source text");
+                (content, self.styles.ghost)
             }
             DisplayRowKind::Gap { line_range } => {
                 (format!("… {} lines", line_range.len()), self.styles.gap)
@@ -433,26 +584,32 @@ impl TuiEditorElement {
 
     /// The selection's display-column span within `row`, if the selection
     /// overlaps it. Selection offsets are char indices; terminal highlighting
-    /// works in display columns, so convert via each char's display width.
-    fn selection_span_in_row(&self, row: &DisplayRow, chars: &[char]) -> Option<(u16, u16)> {
-        let selection = self.sel_char_range.clone()?;
+    /// works in display columns, so query the lattice's retained widths.
+    fn selection_span_in_row(
+        &self,
+        row: &DisplayRow,
+        lattice: &DisplayLattice<'_>,
+    ) -> Option<(u16, u16)> {
+        self.selection_ranges
+            .iter()
+            .find_map(|selection| Self::char_range_span_in_row(row, lattice, selection.clone()))
+    }
+
+    fn char_range_span_in_row(
+        row: &DisplayRow,
+        lattice: &DisplayLattice<'_>,
+        range: Range<CharOffset>,
+    ) -> Option<(u16, u16)> {
         if !matches!(row.kind, DisplayRowKind::Buffer { .. }) {
             return None;
         }
-        if selection.end <= row.char_range.start || selection.start >= row.char_range.end {
+        if range.end <= row.char_range.start || range.start >= row.char_range.end {
             return None;
         }
-        let start_offset = selection.start.max(row.char_range.start);
-        let end_offset = selection.end.min(row.char_range.end);
-        let row_start = row.char_range.start.as_usize();
-        let display_col = |offset: CharOffset| -> u16 {
-            chars[row_start..offset.as_usize()]
-                .iter()
-                .map(|&c| char_cell_display_width(c) as u16)
-                .sum()
-        };
-        let start_col = display_col(start_offset);
-        let end_col = display_col(end_offset);
+        let start_offset = range.start.max(row.char_range.start);
+        let end_offset = range.end.min(row.char_range.end);
+        let start_col = lattice.display_width(row.char_range.start..start_offset);
+        let end_col = lattice.display_width(row.char_range.start..end_offset);
         (end_col > start_col).then_some((start_col, end_col))
     }
 
@@ -469,7 +626,7 @@ impl TuiEditorElement {
     /// below maps to the last display row (or the buffer's end on the
     /// deferred-wrap phantom row), so a drag that leaves the element drives
     /// auto-scroll.
-    fn offset_at(&self, position: TuiPoint, area: TuiRect, app: &AppContext) -> Option<CharOffset> {
+    fn offset_at(&self, position: TuiLocalPoint, app: &AppContext) -> Option<CharOffset> {
         let inner = self.model.as_ref(app);
         let render_state = inner.render_state().as_ref(app);
         let char_cell = render_state.char_cell()?;
@@ -486,11 +643,10 @@ impl TuiEditorElement {
             0
         };
 
-        let row_in_view = i64::from(position.y) - i64::from(area.y);
+        let row_in_view = i64::from(position.y);
         let display_row = (i64::from(first_visible_row) + row_in_view).max(0) as usize;
-        let col = position
-            .x
-            .saturating_sub(area.x)
+        let col = u16::try_from(position.x.max(0))
+            .unwrap_or(u16::MAX)
             .saturating_sub(self.gutter_cols);
 
         let lattice = char_cell.display_lattice(&hidden);
@@ -528,9 +684,10 @@ impl TuiEditorElement {
     pub(crate) fn mouse_action(
         &self,
         event: &TuiEvent,
-        area: TuiRect,
+        event_ctx: &TuiEventContext<'_>,
         app: &AppContext,
     ) -> Option<TuiEditorAction> {
+        let (origin, size) = self.origin.zip(self.size)?;
         match event {
             TuiEvent::LeftMouseDown {
                 position,
@@ -540,10 +697,10 @@ impl TuiEditorElement {
             } => {
                 // The focus-bringing first click has no matching mouse-up, and
                 // a press outside the element must not start a selection.
-                if *is_first_mouse || !area.contains_point(*position) {
+                if *is_first_mouse || !event_ctx.hit_test(origin, size, *position) {
                     return None;
                 }
-                let offset = self.offset_at(*position, area, app)?;
+                let offset = self.offset_at(event_ctx.local_point(origin, *position), app)?;
                 Some(match *click_count {
                     0 | 1 if modifiers.shift => TuiEditorAction::SelectionExtendTo { offset },
                     0 | 1 => TuiEditorAction::SelectionStartAt { offset },
@@ -555,7 +712,7 @@ impl TuiEditorElement {
             // but only while a selection that began inside it is active.
             TuiEvent::LeftMouseDragged { position, .. } if self.drag_in_progress(app) => {
                 Some(TuiEditorAction::SelectionUpdateTo {
-                    offset: self.offset_at(*position, area, app)?,
+                    offset: self.offset_at(event_ctx.local_point(origin, *position), app)?,
                 })
             }
             TuiEvent::LeftMouseUp { .. } if self.drag_in_progress(app) => {
@@ -565,7 +722,7 @@ impl TuiEditorElement {
             // meaningful for scroll-windowed consumers.
             TuiEvent::ScrollWheel {
                 position, delta, ..
-            } if self.viewport_rows.is_some() && area.contains_point(*position) => {
+            } if self.viewport_rows.is_some() && event_ctx.hit_test(origin, size, *position) => {
                 // crossterm reports ScrollUp as +1 row / ScrollDown as -1;
                 // negate so wheel-up scrolls toward the top.
                 Some(TuiEditorAction::Scroll {
@@ -602,83 +759,152 @@ impl TuiElement for TuiEditorElement {
         let content_size = self.column.layout(constraint, ctx, app);
         // The editor claims the full width it was offered (its wrap width),
         // not just the longest row's width the content-sized column reports.
-        TuiSize::new(full_width, content_size.height)
+        let size = TuiSize::new(full_width, content_size.height);
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiPaintContext) {
-        self.column.render(area, buffer, ctx);
-        if !self.selected_spans.is_empty() {
-            let reversed = TuiStyle::default().add_modifier(Modifier::REVERSED);
-            for &(row_in_view, start_col, end_col) in &self.selected_spans {
-                let y = area.y.saturating_add(row_in_view);
-                let x = area.x.saturating_add(start_col);
-                let width = end_col.saturating_sub(start_col);
-                if y < area.y + area.height && width > 0 {
-                    let sel_rect =
-                        TuiRect::new(x, y, width.min(area.width.saturating_sub(start_col)), 1);
-                    buffer.set_style(sel_rect, reversed);
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        self.column.render(origin, surface, ctx);
+        if let Some((text, style, cursor_gap)) = self.active_ghost_text() {
+            let cursor_at_end =
+                self.cursor_offset.as_usize().saturating_sub(1) == self.text.chars().count();
+            if cursor_at_end
+                && self.cursor_visible
+                && self.cursor_col < size.width
+                && self.cursor_row_in_view < size.height
+            {
+                let mut col = self.cursor_col.saturating_add(cursor_gap);
+                for char in text.chars() {
+                    if col >= size.width {
+                        break;
+                    }
+                    let position =
+                        origin.offset(i32::from(col), i32::from(self.cursor_row_in_view));
+                    if let Some(cell) = surface.cell_mut(position) {
+                        cell.set_char(char);
+                        cell.set_style(style);
+                    }
+                    col += 1;
                 }
             }
         }
-    }
-
-    fn cursor_position(&self, area: TuiRect, _ctx: &mut TuiPaintContext) -> Option<(u16, u16)> {
-        if !self.cursor_visible
-            || self.cursor_col >= area.width
-            || self.cursor_row_in_view >= area.height
-        {
-            return None;
+        for &(row_in_view, start_col, end_col, style) in &self.styled_spans {
+            let width = end_col.saturating_sub(start_col);
+            if row_in_view < size.height && width > 0 {
+                surface.set_style(
+                    origin.offset(i32::from(start_col), i32::from(row_in_view)),
+                    TuiSize::new(width.min(size.width.saturating_sub(start_col)), 1),
+                    style,
+                );
+            }
         }
-        Some((self.cursor_col, self.cursor_row_in_view))
+        if !self.selected_spans.is_empty() {
+            let selection_style = self.selection_style;
+            for &(row_in_view, start_col, end_col) in &self.selected_spans {
+                let width = end_col.saturating_sub(start_col);
+                if row_in_view < size.height && width > 0 {
+                    surface.set_style(
+                        origin.offset(i32::from(start_col), i32::from(row_in_view)),
+                        TuiSize::new(width.min(size.width.saturating_sub(start_col)), 1),
+                        selection_style,
+                    );
+                }
+            }
+        }
+        if self.cursor_visible
+            && self.cursor_col < size.width
+            && self.cursor_row_in_view < size.height
+        {
+            let scene_origin = self
+                .origin
+                .expect("editor origin is retained before cursor paint");
+            ctx.set_terminal_cursor(TuiScreenPoint::new(
+                scene_origin.x.saturating_add(i32::from(self.cursor_col)),
+                scene_origin
+                    .y
+                    .saturating_add(i32::from(self.cursor_row_in_view)),
+                scene_origin.z_index,
+            ));
+        }
     }
 
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
+    }
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if self.column.dispatch_event(event, area, event_ctx, ctx, app) {
+        if self.column.dispatch_event(event, event_ctx, app) {
             return true;
         }
         let Some(handler) = self.on_action.clone() else {
             return false;
         };
 
-        if let Some(action) = self.mouse_action(event, area, app) {
+        if let Some(action) = self.mouse_action(event, event_ctx, app) {
             handler(action, event_ctx);
             return true;
         }
 
-        if self.editable {
-            if let TuiEvent::KeyDown {
-                keystroke, chars, ..
-            } = event
-            {
-                // Chorded editing commands are dispatched by the keymap pass
-                // (consumer keybindings) before the element pass ever sees the
-                // key. Only printable-character insertion stays element-level —
-                // text insertion is not a keybinding, matching the GUI.
-                if !keystroke.ctrl && !keystroke.alt && !chars.is_empty() {
-                    if let Some(char) = chars.chars().next() {
+        // Raw text only flows into the focused view's editor: with several
+        // editable elements rendered at once (e.g. a prompt input plus a
+        // search field), only the focused one may consume typed characters,
+        // mirroring the GUI editor element's `is_focused` gate
+        // (`typed_characters` in `app/src/editor/view/element.rs`).
+        if self.editable && self.is_focused {
+            match event {
+                TuiEvent::KeyDown {
+                    keystroke, chars, ..
+                } => {
+                    // Chorded editing commands are dispatched by the keymap pass
+                    // (consumer keybindings) before the element pass ever sees the
+                    // key. Only printable-character insertion stays element-level —
+                    // text insertion is not a keybinding, matching the GUI.
+                    if !keystroke.ctrl
+                        && !keystroke.alt
+                        && !chars.is_empty()
+                        && let Some(char) = chars.chars().next()
+                    {
                         handler(TuiEditorAction::InsertChar(char), event_ctx);
                         return true;
                     }
                 }
+                TuiEvent::Paste { text } => {
+                    handler(TuiEditorAction::PasteText(text.clone()), event_ctx);
+                    return true;
+                }
+                TuiEvent::FocusGained
+                | TuiEvent::FocusLost
+                | TuiEvent::ModifierKeyChanged { .. }
+                | TuiEvent::ScrollWheel { .. }
+                | TuiEvent::LeftMouseDown { .. }
+                | TuiEvent::LeftMouseUp { .. }
+                | TuiEvent::LeftMouseDragged { .. }
+                | TuiEvent::MiddleMouseDown { .. }
+                | TuiEvent::RightMouseDown { .. }
+                | TuiEvent::MouseMoved { .. } => {}
             }
         }
 
         false
     }
-}
-
-/// The chars in `range`, collected into the row's paint text.
-fn slice_chars(chars: &[char], range: &Range<CharOffset>) -> String {
-    let start = range.start.as_usize().min(chars.len());
-    let end = range.end.as_usize().min(chars.len());
-    chars[start..end].iter().collect()
 }
 
 /// The number of decimal digits in `n` (minimum 1), sizing the gutter's

@@ -361,7 +361,7 @@ fn test_empty_task_handling() {
 
 #[test]
 fn test_from_tasks() {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     let task = create_test_task_with_exchanges(3);
     let task_id = task.id().clone();
@@ -858,6 +858,36 @@ fn test_exchange_by_id_after_set_root_task() {
     }
     // The new root's exchanges resolve.
     for id in &task2_exchange_ids {
+        assert_eq!(store.exchange_by_id(*id).map(|e| e.id), Some(*id));
+    }
+}
+
+#[test]
+fn test_exchange_by_id_resolves_unlinked_subtask_exchange() {
+    // Regression: a subtask can exist in the store before it is reachable from
+    // the root via a sub-agent output message — e.g. an optimistically-created
+    // CLI sub-agent subtask whose parent's sub-agent call hasn't streamed in
+    // yet. Its exchanges are absent from the linearized (root-reachable) index,
+    // but must still be resolvable by id; otherwise callers like
+    // `AIBlockModelImpl::new` fail to find an exchange that genuinely exists.
+    let root_task = create_test_task_with_exchanges(1);
+    let mut store = TaskStore::with_root_task(root_task);
+
+    let subtask = create_test_subtask_with_exchanges(2);
+    let subtask_exchange_ids: Vec<_> = subtask.exchanges().map(|e| e.id).collect();
+
+    // Insert the subtask WITHOUT wiring a sub-agent call exchange into the root,
+    // so it isn't reachable from the root DFS traversal.
+    store.insert(subtask);
+
+    // The subtask's exchanges are (intentionally) not in the linearized index...
+    assert!(
+        !store
+            .all_exchanges()
+            .any(|e| e.id == subtask_exchange_ids[0])
+    );
+    // ...but are still resolvable by id via the all-tasks fallback.
+    for id in &subtask_exchange_ids {
         assert_eq!(store.exchange_by_id(*id).map(|e| e.id), Some(*id));
     }
 }

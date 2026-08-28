@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_errors::report_error;
 
 use super::{Fill, Point, ZIndex};
@@ -148,11 +148,7 @@ impl ResizableState {
 
             self.mode = ResizableMode::Dragging { last_position };
 
-            if resized {
-                Some(origin_delta)
-            } else {
-                None
-            }
+            if resized { Some(origin_delta) } else { None }
         } else {
             None
         }

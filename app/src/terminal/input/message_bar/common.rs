@@ -1,11 +1,11 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
 use warpui::elements::{
-    Border, CacheOption, Clipped, Container, CornerRadius, Element, FormattedTextElement,
-    Hoverable, Image, ParentElement, Radius, Wrap, WrapFill, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Border, CacheOption, Clipped, Container, CornerRadius, DEFAULT_UI_LINE_HEIGHT_RATIO, Element,
+    FormattedTextElement, Hoverable, Image, ParentElement, Radius, Wrap, WrapFill,
 };
 use warpui::platform::Cursor;
 use warpui::prelude::{Align, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisSize, Text};

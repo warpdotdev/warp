@@ -5,17 +5,21 @@ use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     HighlightedHyperlink, HyperlinkLens, MainAxisAlignment, MainAxisSize, ParentElement,
 };
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    WeakViewHandle,
+};
 
-use crate::ai::blocklist::error_color;
 use crate::ai::AIRequestUsageModel;
+use crate::ai::blocklist::error_color;
+use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason};
 use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::server::ids::ServerId;
 use crate::settings_view::SettingsSection;
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
@@ -74,6 +78,7 @@ pub enum PromptAlertState {
 }
 
 pub struct PromptAlertView {
+    view_handle: WeakViewHandle<Self>,
     state: PromptAlertState,
     action_hyperlink: HighlightedHyperlink,
 }
@@ -86,39 +91,53 @@ impl PromptAlertView {
         let api_key_manager = ApiKeyManager::handle(ctx);
 
         ctx.subscribe_to_model(&request_usage_model, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&user_workspaces, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&network_status, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&api_key_manager, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
+        let state = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            Self::determine_state(&scope, ctx)
+        };
+
         Self {
-            state: Self::determine_state(ctx),
+            view_handle: ctx.handle(),
+            state,
             action_hyperlink: Default::default(),
         }
     }
 
-    pub fn determine_state(app: &AppContext) -> PromptAlertState {
+    pub fn determine_state<S: TeamScope + ?Sized>(scope: &S, app: &AppContext) -> PromptAlertState {
         // First, if the user is offline, no AI features will work.
         if !NetworkStatus::as_ref(app).is_online() {
             return PromptAlertState::NoConnection;
         }
 
         let request_usage_model = AIRequestUsageModel::as_ref(app);
-        let has_requests_remaining = request_usage_model.has_requests_remaining();
+        // Anonymous soft/hard gates are based on the base-plan request quota,
+        // not overall AI availability (bonus grants / BYO / etc.).
+        let has_base_plan_requests_remaining =
+            request_usage_model.has_base_plan_requests_remaining();
         let auth_state = AuthStateProvider::as_ref(app).get();
 
         // Next, if the user is anonymous, we check if they have reached a certain percentage of requests used.
@@ -129,13 +148,23 @@ impl PromptAlertView {
             let percentage_used = request_usage_model.request_percentage_used();
 
             if percentage_used >= ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE {
-                if has_requests_remaining {
+                if has_base_plan_requests_remaining {
                     return PromptAlertState::AnonymousUserRequestLimitSoftGate;
                 } else {
                     return PromptAlertState::AnonymousUserRequestLimitHardGate;
                 }
             }
         }
+
+        // The server-authoritative availability decision drives the alert once
+        // it has been fetched; local data below is only a pre-fetch fallback.
+        if let Some(availability) = request_usage_model.server_availability() {
+            return Self::state_from_server_availability(availability, scope, app);
+        }
+
+        // Legacy locally derived fallback, used only before the first
+        // successful availability fetch (e.g. right after startup or against
+        // servers that don't support the availability field yet).
 
         // Next, make sure the user isn't delinquent in their plan.
         let workspace = UserWorkspaces::as_ref(app).current_workspace();
@@ -144,12 +173,51 @@ impl PromptAlertView {
         }
 
         // If there is ever any ai remaining, no alert
-        if request_usage_model.has_any_ai_remaining(app) {
+        if request_usage_model.has_any_ai_remaining(scope, app) {
             return PromptAlertState::NoAlert;
         }
 
+        Self::out_of_credits_presentation(app)
+    }
+
+    /// Maps the server-authoritative availability decision to presentation
+    /// state. The server decides *whether* AI is available; workspace policy
+    /// only shapes the call-to-action copy.
+    fn state_from_server_availability<S: TeamScope + ?Sized>(
+        availability: AICreditAvailability,
+        scope: &S,
+        app: &AppContext,
+    ) -> PromptAlertState {
+        if availability.available {
+            return PromptAlertState::NoAlert;
+        }
+
+        match availability.denial_reason {
+            AICreditDenialReason::Delinquent => PromptAlertState::DelinquentDueToPaymentIssue,
+            AICreditDenialReason::EnterpriseTeamSpendLimitHit
+            | AICreditDenialReason::EnterprisePerUserSpendLimitHit
+            | AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit => {
+                PromptAlertState::MonthlyOveragesSpendLimitReached
+            }
+            AICreditDenialReason::None
+            | AICreditDenialReason::OutOfCredits
+            | AICreditDenialReason::Unknown => {
+                // An out-of-credits denial only means the server found no path
+                // it can see; a locally stored API key still permits requests,
+                // which `has_any_ai_remaining` accounts for.
+                if AIRequestUsageModel::as_ref(app).has_any_ai_remaining(scope, app) {
+                    return PromptAlertState::NoAlert;
+                }
+                Self::out_of_credits_presentation(app)
+            }
+        }
+    }
+
+    /// Picks the most actionable presentation for an out-of-credits denial
+    /// based on the current workspace's overage policy.
+    fn out_of_credits_presentation(app: &AppContext) -> PromptAlertState {
         // Check if overages are available.
-        if let Some(workspace) = workspace {
+        if let Some(workspace) = UserWorkspaces::as_ref(app).current_workspace() {
             let are_overages_toggleable = workspace.are_overages_toggleable();
             let are_overages_enabled = workspace.are_overages_enabled();
 
@@ -175,8 +243,11 @@ impl PromptAlertView {
         &self.state
     }
 
-    pub fn does_alert_block_ai_requests(app: &AppContext) -> bool {
-        does_alert_block_ai_requests(&Self::determine_state(app))
+    pub fn does_alert_block_ai_requests<S: TeamScope + ?Sized>(
+        scope: &S,
+        app: &AppContext,
+    ) -> bool {
+        does_alert_block_ai_requests(&Self::determine_state(scope, app))
     }
 
     fn primary_text(
@@ -228,7 +299,7 @@ impl PromptAlertView {
         app: &AppContext,
     ) {
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
+        let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = current_team.is_some_and(|team| {
             team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
         });
@@ -290,7 +361,7 @@ impl PromptAlertView {
             }
             PromptAlertState::RequestLimitReached => {
                 text_fragments.push(FormattedTextFragment::plain_text("  "));
-                if let Some(team) = UserWorkspaces::as_ref(app).current_team() {
+                if let Some(team) = current_team {
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                         let upgrade_text = if !has_admin_permissions {
@@ -363,21 +434,25 @@ impl View for PromptAlertView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let state = Self::determine_state(app);
+        let workspaces = UserWorkspaces::as_ref(app);
+        let scope = workspaces.team_context(&self.view_handle, app);
+        let state = Self::determine_state(&scope, app);
         let mut text_fragments = vec![];
 
         self.primary_text(&state, &mut text_fragments);
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let current_team = UserWorkspaces::as_ref(app).current_team();
-        let has_admin_permissions = auth_state
-            .user_email()
-            .zip(current_team)
-            .is_some_and(|(email, team)| team.has_admin_permissions(&email));
+        let current_team = workspaces.team_for_view_handle(&self.view_handle, app);
+        // A teamless user can be considered the admin of their non-existent team.
+        let has_admin_permissions = current_team.is_none_or(|team| {
+            auth_state
+                .user_email()
+                .is_some_and(|email| team.has_admin_permissions(&email))
+        });
 
-        let can_purchase_addon_credits = current_team
-            .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-            .is_some_and(|policy| policy.enabled);
+        let can_purchase_addon_credits = workspaces
+            .purchase_policy()
+            .is_some_and(|policy| policy.allows_purchases());
 
         let suggest_buy_credits = can_purchase_addon_credits
             && has_admin_permissions
@@ -473,3 +548,7 @@ impl TypedActionView for PromptAlertView {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "prompt_alert_tests.rs"]
+mod tests;

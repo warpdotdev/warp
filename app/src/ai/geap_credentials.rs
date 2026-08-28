@@ -1,21 +1,23 @@
 use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{
-    ApiKeyManager, GeapCredentials, GeapCredentialsState, GeapFederation, GeapMintBinding,
-    LoadGeapCredentialsError, GEAP_REFRESH_LEAD_TIME,
+    ApiKeyManager, GEAP_REFRESH_LEAD_TIME, GeapCredentials, GeapCredentialsState, GeapFederation,
+    GeapMintBinding, GeapRefreshOutcome, LoadGeapCredentialsError,
 };
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use vec1::vec1;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warp_managed_secrets::ManagedSecretManager;
+use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warpui::r#async::Timer;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::auth::AuthStateProvider;
 use crate::settings::{AISettings, AISettingsChangedEvent};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{
+    GeminiEnterpriseBackgroundHost, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+};
 
 const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 
@@ -24,8 +26,7 @@ const GEAP_IDENTITY_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60);
 const GEAP_MIN_TIMER_DELAY: Duration = Duration::from_secs(60);
 
 const STS_TOKEN_URL: &str = "https://sts.googleapis.com/v1/token";
-const IAM_GENERATE_ACCESS_TOKEN_URL: &str =
-    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken";
+const IAM_GENERATE_ACCESS_TOKEN_URL: &str = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{sa_email}:generateAccessToken";
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
 const ID_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:id_token";
@@ -38,6 +39,9 @@ const GEAP_MINT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) enum GeapPolicy {
     Disabled,
     Unconfigured,
+    /// Two or more of the user's teams enable Gemini Enterprise against different Google
+    /// Cloud projects, named here.
+    Conflicting(Vec<String>),
     Mintable(GeapMintBinding),
 }
 
@@ -45,7 +49,7 @@ impl GeapPolicy {
     pub(crate) fn mint_binding(self) -> Option<GeapMintBinding> {
         match self {
             GeapPolicy::Mintable(binding) => Some(binding),
-            GeapPolicy::Disabled | GeapPolicy::Unconfigured => None,
+            GeapPolicy::Disabled | GeapPolicy::Unconfigured | GeapPolicy::Conflicting(_) => None,
         }
     }
 }
@@ -75,19 +79,15 @@ fn geap_mint_binding_from_parts(
     })
 }
 
-pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
-    if !FeatureFlag::GeminiEnterprise.is_enabled() {
-        return GeapPolicy::Disabled;
-    }
-    let user_workspaces = UserWorkspaces::as_ref(app);
-    if !user_workspaces.is_gemini_enterprise_credentials_enabled(app) {
-        return GeapPolicy::Disabled;
-    }
+fn geap_policy_from_host_settings(
+    settings: Option<&crate::workspaces::workspace::LlmHostSettings>,
+    app: &AppContext,
+) -> GeapPolicy {
+    let Some(settings) = settings else {
+        return GeapPolicy::Unconfigured;
+    };
     let Some(user_id) = AuthStateProvider::as_ref(app).get().user_id() else {
         return GeapPolicy::Disabled;
-    };
-    let Some(settings) = user_workspaces.gemini_enterprise_host_settings() else {
-        return GeapPolicy::Unconfigured;
     };
     match geap_mint_binding_from_parts(
         user_id.as_string(),
@@ -96,6 +96,47 @@ pub(crate) fn current_geap_policy(app: &AppContext) -> GeapPolicy {
     ) {
         Some(binding) => GeapPolicy::Mintable(binding),
         None => GeapPolicy::Unconfigured,
+    }
+}
+
+/// The GEAP policy for a request made under `scope`. Use this whenever a scope is available --
+/// i.e. whenever the work is rooted in a window.
+pub(crate) fn current_geap_policy<S: TeamScope + ?Sized>(
+    scope: &S,
+    app: &AppContext,
+) -> GeapPolicy {
+    let user_workspaces = UserWorkspaces::as_ref(app);
+    if !user_workspaces.is_gemini_enterprise_credentials_enabled(scope, app) {
+        return GeapPolicy::Disabled;
+    }
+    geap_policy_from_host_settings(user_workspaces.gemini_enterprise_host_settings(scope), app)
+}
+
+/// The GEAP gate for the single, app-wide credential store.
+///
+/// Every trigger for a background mint -- a settings poll, a token nearing expiry, a
+/// request-time safety net with no scope threaded to it yet -- has no window behind it, so this
+/// deliberately takes no team scope and instead reads across all of the user's teams:
+/// background GEAP work succeeds if any one of them enables it. See
+/// [`UserWorkspaces::gemini_enterprise_host_for_any_enabling_team`].
+pub(crate) fn current_geap_policy_for_any_team(app: &AppContext) -> GeapPolicy {
+    match UserWorkspaces::as_ref(app).gemini_enterprise_host_for_any_enabling_team(app) {
+        GeminiEnterpriseBackgroundHost::NoneEnabled => GeapPolicy::Disabled,
+        // Nothing can be minted, but the user's org does use GEAP and an admin has to align
+        // the disagreeing teams on one project. `Conflicting` is the state that says so, named
+        // by the teams involved, and offers the same admin recovery action `Unconfigured`
+        // does; `Disabled` would tell them the feature is simply not theirs.
+        GeminiEnterpriseBackgroundHost::Conflicting(team_names) => {
+            log::warn!(
+                "GEAP: teams ({}) enable Gemini Enterprise against different Google Cloud \
+                 projects; background minting has no window to choose between them",
+                team_names.join(", ")
+            );
+            GeapPolicy::Conflicting(team_names.into_iter().map(str::to_string).collect())
+        }
+        GeminiEnterpriseBackgroundHost::Enabled(settings) => {
+            geap_policy_from_host_settings(Some(settings), app)
+        }
     }
 }
 
@@ -134,15 +175,23 @@ pub(crate) fn refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, false, ctx);
+    refresh_geap_credentials_with_options(manager, false, None, ctx);
 }
 
-#[allow(dead_code)]
 pub(crate) fn force_refresh_geap_credentials(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    refresh_geap_credentials_with_options(manager, true, ctx);
+    refresh_geap_credentials_with_options(manager, true, None, ctx);
+}
+
+/// Mint kickoff for a request blocked on an expired credential.
+pub(crate) fn start_geap_refresh_for_waiter(
+    manager: &mut ApiKeyManager,
+    waiter: oneshot::Sender<GeapRefreshOutcome>,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) {
+    refresh_geap_credentials_with_options(manager, false, Some(waiter), ctx);
 }
 
 /// Request-time safety net. The triggering request is never delayed —
@@ -151,8 +200,8 @@ pub(crate) fn refresh_geap_credentials_if_needed(
     manager: &mut ApiKeyManager,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let binding = match current_geap_policy(ctx) {
-        GeapPolicy::Disabled | GeapPolicy::Unconfigured => return,
+    let binding = match current_geap_policy_for_any_team(ctx) {
+        GeapPolicy::Disabled | GeapPolicy::Unconfigured | GeapPolicy::Conflicting(_) => return,
         GeapPolicy::Mintable(binding) => binding,
     };
     let needs_mint = match manager.geap_credentials_state() {
@@ -163,6 +212,8 @@ pub(crate) fn refresh_geap_credentials_if_needed(
             ..
         } => *minted_for != binding || credentials.needs_refresh(),
         GeapCredentialsState::Missing
+        | GeapCredentialsState::Unconfigured
+        | GeapCredentialsState::ConflictingAcrossTeams { .. }
         | GeapCredentialsState::Disabled
         | GeapCredentialsState::Failed { .. } => true,
     };
@@ -176,15 +227,23 @@ pub(crate) fn refresh_geap_credentials_if_needed(
 fn refresh_geap_credentials_with_options(
     manager: &mut ApiKeyManager,
     force: bool,
+    waiter: Option<oneshot::Sender<GeapRefreshOutcome>>,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let minted_for = match current_geap_policy(ctx) {
+    let minted_for = match current_geap_policy_for_any_team(ctx) {
         GeapPolicy::Disabled => {
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
             return;
         }
         GeapPolicy::Unconfigured => {
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            return;
+        }
+        GeapPolicy::Conflicting(team_names) => {
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::ConflictingAcrossTeams { team_names },
+                ctx,
+            );
             return;
         }
         GeapPolicy::Mintable(binding) => binding,
@@ -195,17 +254,16 @@ fn refresh_geap_credentials_with_options(
     ) {
         return;
     }
-    if !force {
-        if let GeapCredentialsState::Loaded {
+    if !force
+        && let GeapCredentialsState::Loaded {
             credentials,
             minted_for: current_binding,
             ..
         } = manager.geap_credentials_state()
-        {
-            if *current_binding == minted_for && !credentials.needs_refresh() {
-                return;
-            }
-        }
+        && *current_binding == minted_for
+        && !credentials.needs_refresh()
+    {
+        return;
     }
     let previous = match manager.geap_credentials_state() {
         GeapCredentialsState::Loaded {
@@ -219,6 +277,7 @@ fn refresh_geap_credentials_with_options(
         "GEAP: minting credentials (audience={}, force={force})",
         minted_for.audience
     );
+    manager.install_geap_refresh_waiter(waiter);
     manager.set_geap_credentials_state(GeapCredentialsState::Refreshing { previous }, ctx);
 
     // Leg 1: every mint — initial or re-mint, timer/trigger/forced — starts
@@ -253,16 +312,40 @@ fn apply_geap_mint_result(
     force: bool,
     ctx: &mut ModelContext<ApiKeyManager>,
 ) {
-    let current_binding = match current_geap_policy(ctx) {
+    let waiters = manager.take_geap_refresh_waiters();
+    let outcome = apply_geap_mint_result_inner(manager, result, minted_for, force, ctx);
+    for waiter in waiters {
+        let _ = waiter.send(outcome);
+    }
+}
+
+fn apply_geap_mint_result_inner(
+    manager: &mut ApiKeyManager,
+    result: Result<GeapCredentials, LoadGeapCredentialsError>,
+    minted_for: GeapMintBinding,
+    force: bool,
+    ctx: &mut ModelContext<ApiKeyManager>,
+) -> GeapRefreshOutcome {
+    let current_binding = match current_geap_policy_for_any_team(ctx) {
         GeapPolicy::Disabled => {
             log::info!("GEAP: gate flipped off mid-mint; discarding the mint result");
             manager.set_geap_credentials_state(GeapCredentialsState::Disabled, ctx);
-            return;
+            return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Unconfigured => {
             log::info!("GEAP: gate unconfigured mid-mint; discarding the mint result");
-            manager.set_geap_credentials_state(GeapCredentialsState::Missing, ctx);
-            return;
+            manager.set_geap_credentials_state(GeapCredentialsState::Unconfigured, ctx);
+            return GeapRefreshOutcome::Failed;
+        }
+        GeapPolicy::Conflicting(team_names) => {
+            log::info!(
+                "GEAP: teams began disagreeing on the project mid-mint; discarding the mint result"
+            );
+            manager.set_geap_credentials_state(
+                GeapCredentialsState::ConflictingAcrossTeams { team_names },
+                ctx,
+            );
+            return GeapRefreshOutcome::Failed;
         }
         GeapPolicy::Mintable(binding) => binding,
     };
@@ -294,7 +377,7 @@ fn apply_geap_mint_result(
             }
         }
         refresh_geap_credentials(manager, ctx);
-        return;
+        return GeapRefreshOutcome::Failed;
     }
 
     match result {
@@ -315,9 +398,11 @@ fn apply_geap_mint_result(
             // Arm the next one-shot proactive refresh — this is what makes
             // the ~hourly loop self-sustaining.
             schedule_geap_token_refresh(manager, ctx);
+            manager.clear_geap_mint_failure();
+            GeapRefreshOutcome::Refreshed
         }
         Err(err) => {
-            report_error!("GEAP: credential mint failed", extra: { "error" => ?err });
+            report_error!(anyhow::Error::new(err.clone()).context("GEAP: credential mint failed"));
             match previous {
                 // A failed background re-mint keeps the previous token — even
                 // near/past expiry (Google remains the authority on validity;
@@ -344,6 +429,9 @@ fn apply_geap_mint_result(
                     );
                 }
             }
+            // Start the cooldown.
+            manager.record_geap_mint_failure();
+            GeapRefreshOutcome::Failed
         }
     }
 }

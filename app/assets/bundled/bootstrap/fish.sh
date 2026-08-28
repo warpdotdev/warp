@@ -65,7 +65,28 @@ end
 
 # warp_hex_encode_string hex-encodes the given string with `od`.
 function warp_hex_encode_string 
-  echo "$argv" | od -An -v -tx1 | command tr -d ' \n'
+  printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
+end
+
+# fish has no byte-safe string indexing, so `od` is still needed to reach the raw UTF-8 bytes.
+function warp_completions_hex_encode
+  set -l od_output (printf '%s' "$argv" | od -An -v -tx1)
+  string replace -a -- ' ' '' (string join '' $od_output)
+end
+
+function warp_hex_decode_string
+    if test (count $argv) -eq 0 -o -z "$argv[1]"
+        return
+    end
+    set -l hex $argv[1]
+    set -l escaped ''
+    set -l i 1
+    while test $i -le (string length -- $hex)
+        set -l pair (string sub -s $i -l 2 -- $hex)
+        set escaped "$escaped\\x$pair"
+        set i (math $i + 2)
+    end
+    printf '%b' $escaped
 end
 
 # A list of PIDs for running in-band command(s). This is used to kill running
@@ -156,6 +177,32 @@ function warp_run_generator_command
     _warp_run_generator_command_internal $argv
 end
 
+# Computes native shell completions for the given (hex-encoded) command line and emits them over the
+# completions OSC protocol.
+function warp_run_generator_command_native_completions
+    set -g _WARP_GENERATOR_COMMAND 1
+    set -l line
+    if test (count $argv) -gt 0
+        set line (warp_hex_decode_string $argv[1] 2>/dev/null)
+    end
+
+    printf '\e]9280;A\a'
+    set -l trimmed_line (string trim -- "$line")
+    if test -n "$trimmed_line"
+        for entry in (complete -C "$line")
+            set -l parts (string split -m 1 \t -- $entry)
+            # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+            # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL,
+            # or ESC in a match or description would otherwise corrupt the sequence.
+            printf '\e]9280;C;%s\a' (warp_completions_hex_encode $parts[1])
+            if test (count $parts) -gt 1 -a -n "$parts[2]"
+                printf '\e]9280;D?description;%s\a' (warp_completions_hex_encode $parts[2])
+            end
+        end
+    end
+    printf '\e]9280;B\a'
+end
+
 # Run before a command is executed.
 function warp_preexec --on-event fish_preexec
     set -l command (warp_escape_json "$argv")
@@ -163,12 +210,12 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    if test (! string match -q "warp_run_generator_command*" $argv[1])
+    if not string match -q "warp_run_generator_command*" -- (string trim -- $argv[1])
         for pid in $_warp_generator_pids
-            # Suppress stderr output; kill writes to stderr if any of the given
-            # PIDS are not running (which might rarely be the case due to race
-            # conditions in checking which PIDS to cancel and this kill command.
-            kill -9 $pids >/dev/null 2>/dev/null
+            # Suppress stderr output; kill writes to stderr if the given PID is not running
+            # (which might rarely be the case due to race conditions in checking which PIDs to
+            # cancel and this kill command).
+            kill -9 $pid >/dev/null 2>/dev/null
         end
         set -g _warp_generator_pids ''
     end
@@ -652,7 +699,7 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
         # Hex-encode the ZSH environment script we use to bootstrap remote zsh b/c it contains control characters
         # We decode on the SSH server using xxd if its available, otherwise fall back to a for-loop over each byte
         # and use printf to convert back to plaintext
-        set -l zsh_env_script (printf '%s' 'unsetopt ZLE; unset RCS; unset GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); printf '"'"'\x1b\x50\x24\x64%s\x1b\x5c'"'"' $_msg; unset _hostname _user _msg' | command od -An -v -tx1 | command tr -d ' \n')
+        set -l zsh_env_script (printf '%s' 'unsetopt ZLE RCS GLOBAL_RCS; WARP_SESSION_ID='$remote_session_id'; WARP_USING_WINDOWS_CON_PTY=@@USING_CON_PTY_BOOLEAN@@; WARP_HONOR_PS1='$WARP_HONOR_PS1'; _hostname=$(command -pv hostname >/dev/null 2>&1 && command -p hostname 2>/dev/null || uname -n); _user=$(command -pv whoami >/dev/null 2>&1 && command -p whoami 2>/dev/null || echo $USER); _msg=$(printf "{\"hook\": \"InitShell\", \"value\": {\"session_id\": $WARP_SESSION_ID, \"shell\": \"zsh\", \"user\": \"%s\", \"hostname\": \"%s\"}}" "$_user" "$_hostname" | command -p od -An -v -tx1 | command -p tr -d " \n"); printf '"'"'\x1b\x50\x24\x64%s\x1b\x5c'"'"' $_msg; unset _hostname _user _msg' | command od -An -v -tx1 | command tr -d ' \n')
 
         # Optionally attach to an existing ControlMaster the user already
         # runs for this destination instead of creating our own. Resolve

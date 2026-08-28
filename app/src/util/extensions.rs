@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+pub use warp_terminal::util::extensions::TrimStringExt;
+
 pub trait SliceExt<T: 'static> {
     fn find_insertion_index<'a, F, E>(&'a self, compare: F) -> Result<usize, E>
     where
@@ -34,21 +36,6 @@ impl<T: 'static> SliceExt<T> for [T] {
             Ok(base)
         } else {
             Ok(base + (cmp == Less) as usize)
-        }
-    }
-}
-
-pub trait TrimStringExt {
-    fn trim_trailing_newline(&mut self);
-}
-
-impl TrimStringExt for String {
-    fn trim_trailing_newline(&mut self) {
-        if self.ends_with('\n') {
-            self.pop();
-        }
-        if self.ends_with('\r') {
-            self.pop();
         }
     }
 }

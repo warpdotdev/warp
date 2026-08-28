@@ -50,16 +50,24 @@ use crate::editor::{CrdtOperation, ReplicaId};
 use crate::server::server_api::ServerApiProvider;
 #[cfg(not(any(test, feature = "integration_tests")))]
 use crate::server::telemetry::telemetry_context;
-use crate::terminal::model::block::BlockId;
-use crate::terminal::shared_session::{
-    connect_endpoint, max_session_size, EventNumber, SharedSessionScrollbackType,
-    SharedSessionSource, SELECTION_THROTTLE_PERIOD,
-};
 use crate::terminal::TerminalModel;
+use crate::terminal::model::block::BlockId;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::terminal::shared_session::SharedSessionScrollbackType;
+use crate::terminal::shared_session::{
+    EventNumber, SELECTION_THROTTLE_PERIOD, SharedSessionSource, connect_endpoint,
+};
 use crate::throttle::throttle;
 
-/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server
+/// The amount of time we will wait to batch consecutive PTY read events before sending an event to the server.
+#[cfg(not(any(test, feature = "integration_tests")))]
 const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(50);
+/// Under `test`/`integration_tests` the threshold is larger so the transient
+/// `Batching` state is reliably observable instead of racing the real ~50ms timer
+/// under coarse scheduler granularity (which flaked on Windows CI); see
+/// `test_handle_pty_read_event_while_not_batching`.
+#[cfg(any(test, feature = "integration_tests"))]
+const PTY_READS_BATCH_THRESHOLD: Duration = Duration::from_millis(250);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
 const CREATE_SESSION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
@@ -76,7 +84,7 @@ const RECONNECT_RETRY_STRATEGY: RetryOption = RetryOption::exponential(
 .with_jitter(0.2);
 
 macro_rules! sharer_info {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::info!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -88,7 +96,7 @@ macro_rules! sharer_info {
 }
 
 macro_rules! sharer_warn {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         log::warn!(
             "{message}; session_id={session_id:?} source_task_id={source_task_id:?}",
@@ -100,7 +108,7 @@ macro_rules! sharer_warn {
 }
 
 macro_rules! sharer_error {
-    ($network:expr, $($arg:tt)+) => {{
+    ($network:expr_2021, $($arg:tt)+) => {{
         let (session_id, source_task_id) = $network.log_context();
         warp_errors::report_error!(
             anyhow::anyhow!("{}", format_args!($($arg)+)),
@@ -304,10 +312,9 @@ impl Network {
     pub fn new_for_test(
         model: Arc<FairMutex<TerminalModel>>,
         ordered_events_rx: Receiver<OrderedTerminalEventType>,
-        _scrollback_type: SharedSessionScrollbackType,
         active_prompt: ActivePrompt,
         selection: Selection,
-        _input_replica_id: ReplicaId,
+        max_session_size: Byte,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
@@ -321,7 +328,7 @@ impl Network {
             model: model.clone(),
             ws_proxy_tx,
             num_bytes_shared: Byte::from_u64(0),
-            max_session_size: max_session_size(ctx),
+            max_session_size,
             pty_bytes_batch_status: PtyBytesBatchStatus::NotBatching {
                 last_sent_at: Instant::now(),
             },
@@ -377,15 +384,16 @@ impl Network {
         selection: Selection,
         input_replica_id: ReplicaId,
         terminal_view_id: warpui::EntityId,
+        team_uid: Option<crate::server::ids::ServerId>,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
         source: SharedSessionSource,
+        max_session_size: Byte,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let (ws_proxy_tx, ws_proxy_rx) = async_channel::unbounded();
         let scrollback = scrollback_type.to_scrollback(&model.lock());
         let num_bytes_scrollback = scrollback.num_bytes();
-        let max_session_size = max_session_size(ctx);
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let init_block_id = model.lock().block_list().active_block_id().clone();
@@ -397,7 +405,7 @@ impl Network {
             }
         };
         let selected_model_id: String = crate::ai::llms::LLMPreferences::as_ref(ctx)
-            .get_active_base_model(ctx, Some(terminal_view_id))
+            .get_active_base_model_for_team_uid(team_uid, ctx, Some(terminal_view_id))
             .id
             .clone()
             .into();
@@ -727,10 +735,10 @@ impl Network {
         update: UniversalDeveloperInputContextUpdate,
     ) {
         // Skip update if nothing would change
-        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context {
-            if !update.changes_cached_context(cached) {
-                return;
-            }
+        if let Some(ref cached) = self.cached_latest_state.universal_developer_input_context
+            && !update.changes_cached_context(cached)
+        {
+            return;
         }
 
         sharer_info!(
@@ -1653,13 +1661,13 @@ impl Network {
                 .insert(event.event_no, event.clone());
         }
 
-        if let Stage::StartedSuccessfully { .. } = self.stage {
-            if let Err(e) = self.ws_proxy_tx.try_send(message) {
-                sharer_warn!(
-                    self,
-                    "Failed to send message over ws_proxy channel in session sharer: {e}"
-                );
-            }
+        if let Stage::StartedSuccessfully { .. } = self.stage
+            && let Err(e) = self.ws_proxy_tx.try_send(message)
+        {
+            sharer_warn!(
+                self,
+                "Failed to send message over ws_proxy channel in session sharer: {e}"
+            );
         }
     }
 

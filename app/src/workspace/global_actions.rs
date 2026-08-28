@@ -7,8 +7,8 @@ use warp_graphql::mutations::create_anonymous_user::AnonymousUserType;
 use warpui::windowing::WindowManager;
 use warpui::{AppContext, SingletonEntity, TypedActionView};
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::app_state::get_app_state;
 use crate::network::NetworkStatus;
 use crate::persistence::ModelEvent;
@@ -19,7 +19,7 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::undo_close::UndoCloseStack;
 use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::{Workspace, WorkspaceAction};
-use crate::{auth, GlobalResourceHandlesProvider};
+use crate::{GlobalResourceHandlesProvider, auth};
 
 /// Specifies where a forked conversation should be opened.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -207,14 +207,13 @@ fn trigger_maybe_log_out(_: &(), ctx: &mut AppContext) {
 
 /// Dispatches an action to the active workspace, if one exists.
 fn dispatch_to_active_workspace(ctx: &mut AppContext, action: WorkspaceAction) {
-    if let Some(window_id) = WindowManager::as_ref(ctx).active_window() {
-        if let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id) {
-            if let Some(workspace) = workspaces.into_iter().next() {
-                workspace.update(ctx, |workspace, ctx| {
-                    workspace.handle_action(&action, ctx);
-                });
-            }
-        }
+    if let Some(window_id) = WindowManager::as_ref(ctx).active_window()
+        && let Some(workspaces) = ctx.views_of_type::<Workspace>(window_id)
+        && let Some(workspace) = workspaces.into_iter().next()
+    {
+        workspace.update(ctx, |workspace, ctx| {
+            workspace.handle_action(&action, ctx);
+        });
     }
 }
 

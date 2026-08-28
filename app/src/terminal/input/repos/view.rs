@@ -7,9 +7,9 @@ use std::path::PathBuf;
 #[cfg(feature = "local_fs")]
 use std::sync::{Arc, Mutex};
 
-use warpui::elements::ChildView;
 #[cfg(feature = "local_fs")]
 use warpui::SingletonEntity;
+use warpui::elements::ChildView;
 use warpui::{Element, Entity, ModelHandle, View, ViewContext, ViewHandle};
 
 use crate::ai::blocklist::agent_view::AgentViewController;
@@ -19,10 +19,10 @@ use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::{AddAsyncSourceOptions, SearchMixer};
 use crate::terminal::input::buffer_model::{InputBufferModel, InputBufferUpdateEvent};
 use crate::terminal::input::inline_menu::{InlineMenuEvent, InlineMenuPositioner, InlineMenuView};
+use crate::terminal::input::repos::AcceptRepo;
 #[cfg(feature = "local_fs")]
 use crate::terminal::input::repos::data_source::GitSummaryCache;
 use crate::terminal::input::repos::data_source::RepoMenuDataSource;
-use crate::terminal::input::repos::AcceptRepo;
 use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };

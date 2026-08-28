@@ -133,7 +133,7 @@ pub(crate) fn find_session_file(sessions_root: &Path, session_id: Uuid) -> Optio
     None
 }
 
-fn read_subdirs(parent: &Path) -> impl Iterator<Item = PathBuf> {
+fn read_subdirs(parent: &Path) -> impl Iterator<Item = PathBuf> + use<> {
     fs::read_dir(parent)
         .into_iter()
         .flatten()
@@ -200,15 +200,14 @@ pub(crate) fn rehydrate_codex_transcript(
     local_cwd: &Path,
 ) -> Result<CodexLocalContinuation> {
     envelope.cwd = local_cwd.to_path_buf();
-    if let Some(Value::Object(entry)) = envelope.entries.first_mut() {
-        if entry.get("type").and_then(|value| value.as_str()) == Some("session_meta") {
-            if let Some(Value::Object(payload)) = entry.get_mut("payload") {
-                payload.insert(
-                    "cwd".to_string(),
-                    Value::String(local_cwd.to_string_lossy().to_string()),
-                );
-            }
-        }
+    if let Some(Value::Object(entry)) = envelope.entries.first_mut()
+        && entry.get("type").and_then(|value| value.as_str()) == Some("session_meta")
+        && let Some(Value::Object(payload)) = entry.get_mut("payload")
+    {
+        payload.insert(
+            "cwd".to_string(),
+            Value::String(local_cwd.to_string_lossy().to_string()),
+        );
     }
 
     let session_id = envelope.session_id;

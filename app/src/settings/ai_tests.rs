@@ -1,4 +1,6 @@
 use chrono::Utc;
+use settings::schema::SettingSchemaEntry;
+use settings::{Setting, SettingSurfaces, SettingsMode};
 use warp_graphql::scalars::time::ServerTimestamp;
 use warpui::{App, SingletonEntity};
 
@@ -31,17 +33,126 @@ fn create_test_request_limit_info(
     }
 }
 
+#[test]
+fn auto_approve_denylist_bypass_defaults_on_and_is_available_in_gui_and_tui_settings() {
+    let setting = AutoApproveBypassesCommandDenylist::new(None);
+    assert!(*setting.value());
+    assert_eq!(
+        AutoApproveBypassesCommandDenylist::toml_path(),
+        Some("agents.warp_agent.other.auto_approve_bypasses_command_denylist")
+    );
+
+    let entry = inventory::iter::<SettingSchemaEntry>
+        .into_iter()
+        .find(|entry| {
+            entry.hierarchy == Some("agents.warp_agent.other")
+                && entry.storage_key == "auto_approve_bypasses_command_denylist"
+        })
+        .expect("expected auto-approve denylist bypass schema entry");
+    let surfaces: SettingSurfaces = (entry.surfaces_fn)();
+    assert!(surfaces.includes(SettingsMode::Gui));
+    assert!(surfaces.includes(SettingsMode::Tui));
+}
+
 fn add_ai_enablement_dependencies_for_test(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
+/// A real terminal surface for the [`FocusedTerminalInfo`] cases below, which record the
+/// handle of the terminal their flags came from. The change-detection cases reuse one stable
+/// surface so only the flags vary.
+fn focused_terminal_for_test(app: &mut App) -> WeakViewHandle<TerminalView> {
+    crate::test_util::terminal::initialize_app_for_terminal_view(app);
+    crate::test_util::add_window_with_terminal(app, None).downgrade()
+}
+
+#[test]
+fn tui_statusline_default_matches_figma() {
+    let config = TuiStatuslineConfig::default();
+    assert_eq!(config.order, TuiStatuslineItem::ALL);
+    assert_eq!(
+        config.enabled,
+        vec![
+            TuiStatuslineItem::AutoApprove,
+            TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::WorkingDirectory,
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::GitDiffStatus,
+        ]
+    );
+}
+
+#[test]
+fn tui_statusline_normalization_preserves_custom_order_and_appends_missing_items() {
+    let config = TuiStatuslineConfig {
+        order: vec![
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::GitBranch,
+        ],
+        enabled: vec![
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::ContextWindowUsage,
+        ],
+    }
+    .normalized();
+
+    assert_eq!(
+        config.order,
+        vec![
+            TuiStatuslineItem::GitBranch,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::AutoApprove,
+            TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Team,
+            TuiStatuslineItem::WorkingDirectory,
+            TuiStatuslineItem::GitBranchStatus,
+            TuiStatuslineItem::GitDiffStatus,
+            TuiStatuslineItem::GitHubPullRequest,
+            TuiStatuslineItem::CreditUsage,
+            TuiStatuslineItem::ContextWindowUsage,
+            TuiStatuslineItem::Date,
+            TuiStatuslineItem::Time12Hour,
+            TuiStatuslineItem::Time24Hour,
+            TuiStatuslineItem::AgentTodoList,
+            TuiStatuslineItem::VoiceInput,
+        ]
+    );
+    assert_eq!(
+        config.enabled,
+        vec![
+            TuiStatuslineItem::VimModeIndicator,
+            TuiStatuslineItem::Model,
+            TuiStatuslineItem::ContextWindowUsage,
+        ]
+    );
+}
+
+#[test]
+fn tui_statusline_normalization_preserves_explicitly_disabled_vim_indicator() {
+    let mut config = TuiStatuslineConfig::default();
+    config
+        .enabled
+        .retain(|item| *item != TuiStatuslineItem::VimModeIndicator);
+
+    let normalized = config.normalized();
+
+    assert!(
+        normalized
+            .order
+            .contains(&TuiStatuslineItem::VimModeIndicator)
+    );
+    assert!(!normalized.is_enabled(TuiStatuslineItem::VimModeIndicator));
+}
 // FocusedTerminalInfo Tests
 
 #[test]
 fn test_update_both_values_changed() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -60,7 +171,7 @@ fn test_update_both_values_changed() {
 
         // Update both values to (true, false)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, false, ctx);
+            model.update(terminal.clone(), true, false, ctx);
         });
 
         // Verify model state
@@ -81,7 +192,7 @@ fn test_update_both_values_changed() {
 #[test]
 fn test_update_additional_value_changed() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -100,7 +211,7 @@ fn test_update_additional_value_changed() {
 
         // First update to (true, false)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, false, ctx);
+            model.update(terminal.clone(), true, false, ctx);
         });
 
         // Clear events by draining the channel
@@ -108,7 +219,7 @@ fn test_update_additional_value_changed() {
 
         // Now update to (true, true) - only changing restored blocks
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Verify model state
@@ -129,7 +240,7 @@ fn test_update_additional_value_changed() {
 #[test]
 fn test_update_no_change() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -148,7 +259,7 @@ fn test_update_no_change() {
 
         // First update to (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Clear events by draining the channel
@@ -156,7 +267,7 @@ fn test_update_no_change() {
 
         // Update with same values (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Verify model state remains the same
@@ -177,7 +288,7 @@ fn test_update_no_change() {
 #[test]
 fn test_update_only_remote_toggles() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -196,7 +307,7 @@ fn test_update_only_remote_toggles() {
 
         // First update to (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Clear events by draining the channel
@@ -204,7 +315,7 @@ fn test_update_only_remote_toggles() {
 
         // Update with (false, true) - only remote blocks changes
         model_handle.update(&mut app, |model, ctx| {
-            model.update(false, true, ctx);
+            model.update(terminal.clone(), false, true, ctx);
         });
 
         // Verify model state
@@ -225,7 +336,7 @@ fn test_update_only_remote_toggles() {
 #[test]
 fn test_update_only_restored_toggles() {
     App::test((), |mut app| async move {
-        // Create FocusedTerminalInfo with default values (false, false)
+        let terminal = focused_terminal_for_test(&mut app);
         let model_handle = app.add_model(|_| FocusedTerminalInfo::default());
 
         // Setup event tracking
@@ -244,7 +355,7 @@ fn test_update_only_restored_toggles() {
 
         // First update to (true, true)
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, true, ctx);
+            model.update(terminal.clone(), true, true, ctx);
         });
 
         // Clear events by draining the channel
@@ -252,7 +363,7 @@ fn test_update_only_restored_toggles() {
 
         // Update with (true, false) - only restored blocks changes
         model_handle.update(&mut app, |model, ctx| {
-            model.update(true, false, ctx);
+            model.update(terminal.clone(), true, false, ctx);
         });
 
         // Verify model state
@@ -361,9 +472,11 @@ fn test_toolbar_command_map_matched_agent() {
         map.insert("^custom-tool".to_string(), String::new());
 
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            report_if_error!(settings
-                .cli_agent_footer_enabled_commands
-                .set_value(ToolbarCommandMap::new(map), ctx));
+            report_if_error!(
+                settings
+                    .cli_agent_footer_enabled_commands
+                    .set_value(ToolbarCommandMap::new(map), ctx)
+            );
         });
 
         app.read(|ctx| {
@@ -382,6 +495,37 @@ fn test_toolbar_command_map_matched_agent() {
             assert_eq!(agent, None);
         });
     });
+}
+
+#[test]
+fn usage_display_unit_defaults_to_credits_and_round_trips() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(settings.usage_display_unit, UsageDisplayUnit::Credits);
+        });
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            report_if_error!(
+                settings
+                    .usage_display_unit
+                    .set_value(UsageDisplayUnit::Dollars, ctx)
+            );
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(settings.usage_display_unit, UsageDisplayUnit::Dollars);
+        });
+    });
+}
+
+#[test]
+fn usage_display_unit_toml_path() {
+    assert_eq!(
+        UsageDisplayUnit::toml_path(),
+        Some("agents.warp_agent.other.usage_display_unit")
+    );
 }
 
 #[test]
@@ -756,6 +900,126 @@ fn test_mark_quota_banner_as_dismissed() {
             assert!(cycle_history[1].banner_state.dismissed);
             // Future cycle should not be dismissed
             assert!(!cycle_history[2].banner_state.dismissed);
+        });
+    });
+}
+
+// VOICE_INPUT_LANGUAGES catalog tests
+
+#[test]
+fn test_voice_input_languages_auto_detect_is_first_with_empty_code() {
+    // The picker relies on the first entry being the Auto-detect sentinel with an
+    // empty code, since an empty stored value means "don't force a language".
+    let (code, name) = VOICE_INPUT_LANGUAGES[0];
+    assert_eq!(code, "");
+    assert_eq!(name, "Auto-detect");
+}
+
+#[test]
+fn test_voice_input_languages_has_full_catalog() {
+    // Sanity check that we ship the full list rather than a small curated subset:
+    // Auto-detect plus well over 100 ISO-639-1 languages.
+    assert!(
+        VOICE_INPUT_LANGUAGES.len() > 150,
+        "expected the full ISO-639-1 catalog, got {} entries",
+        VOICE_INPUT_LANGUAGES.len()
+    );
+}
+
+#[test]
+fn test_voice_input_languages_codes_and_names_are_valid_and_unique() {
+    use std::collections::HashSet;
+
+    let mut seen_codes = HashSet::new();
+    let mut seen_names = HashSet::new();
+    for (index, (code, name)) in VOICE_INPUT_LANGUAGES.iter().enumerate() {
+        assert!(
+            !name.is_empty(),
+            "language name must not be empty: {code:?}"
+        );
+        assert!(
+            seen_names.insert(*name),
+            "duplicate language name: {name:?}"
+        );
+        assert!(
+            seen_codes.insert(*code),
+            "duplicate language code: {code:?}"
+        );
+
+        if index == 0 {
+            // Auto-detect sentinel: empty code, validated separately.
+            continue;
+        }
+        // Every real language uses a two-letter lowercase ISO-639-1 code.
+        assert_eq!(
+            code.len(),
+            2,
+            "expected a 2-letter ISO-639-1 code: {code:?}"
+        );
+        assert!(
+            code.chars().all(|c| c.is_ascii_lowercase()),
+            "ISO-639-1 code must be lowercase ascii: {code:?}"
+        );
+    }
+}
+
+#[test]
+fn test_voice_input_languages_includes_common_languages() {
+    // A representative spot check, including Marathi (mr) which was explicitly
+    // requested in the review that motivated the full list.
+    for expected in [("en", "English"), ("es", "Spanish"), ("mr", "Marathi")] {
+        assert!(
+            VOICE_INPUT_LANGUAGES.contains(&expected),
+            "catalog is missing {expected:?}"
+        );
+    }
+}
+#[test]
+fn ai_autodetection_defaults_to_opt_in() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        add_ai_enablement_dependencies_for_test(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, ctx| {
+            // NLD is opt-in: a fresh user who never touched the setting has it off.
+            // This fails before the default flip (default was `true`) and passes after.
+            assert!(!*settings.ai_autodetection_enabled_internal.value());
+            // AI is enabled by default, so the getter reflects the opt-in setting
+            // rather than a disabled-AI state.
+            assert!(settings.is_any_ai_enabled(ctx));
+            assert!(!settings.is_ai_autodetection_enabled(ctx));
+        });
+    });
+}
+
+#[test]
+fn ai_autodetection_setting_can_be_toggled_on_and_off() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        add_ai_enablement_dependencies_for_test(&mut app);
+
+        // Mirrors what `/enable-natural-language-detection` does in the TUI.
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .ai_autodetection_enabled_internal
+                .set_value(true, ctx)
+                .unwrap();
+        });
+        AISettings::handle(&app).read(&app, |settings, ctx| {
+            assert!(*settings.ai_autodetection_enabled_internal.value());
+            assert!(settings.is_ai_autodetection_enabled(ctx));
+        });
+
+        // Mirrors what `/disable-natural-language-detection` does in the TUI.
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .ai_autodetection_enabled_internal
+                .set_value(false, ctx)
+                .unwrap();
+        });
+        AISettings::handle(&app).read(&app, |settings, ctx| {
+            assert!(!*settings.ai_autodetection_enabled_internal.value());
+            assert!(!settings.is_ai_autodetection_enabled(ctx));
         });
     });
 }

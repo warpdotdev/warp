@@ -4,9 +4,13 @@ use std::path::PathBuf;
 use ai::skills::SkillProvider;
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+#[cfg(not(target_family = "wasm"))]
+use repo_metadata::repositories::DetectedRepositories;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon as WarpIcon;
+use warp_core::ui::appearance::Appearance;
+#[cfg(not(target_family = "wasm"))]
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::fonts::FamilyId;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
@@ -15,20 +19,24 @@ use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISuba
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
-use crate::search::slash_command_menu::static_commands::{commands, Availability};
+use crate::search::slash_command_menu::static_commands::{Availability, commands};
 use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
-use crate::settings::{AISettings, AISettingsChangedEvent};
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
+};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::input::slash_command_model::{
-    slash_command_composition_filter, DetectedCommand, DetectedSkillCommand,
-    ParsedSlashCommandInput,
+    DetectedCommand, DetectedSkillCommand, ParsedSlashCommandInput,
+    slash_command_composition_filter,
 };
 use crate::terminal::input::slash_commands::AcceptSlashCommandOrSavedPrompt;
-use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
 use crate::terminal::model::session::SessionType;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
+use crate::workspaces::user_workspaces::{
+    TeamContext, TeamContextResolver, UserWorkspaces, UserWorkspacesEvent,
+};
 
 /// Event emitted when the set of active slash commands changes.
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +98,15 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
             event,
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
                 | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
+                | AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
+        ) {
+            recompute_active_commands(me, ctx);
+        }
+    });
+    ctx.subscribe_to_model(&PrivacySettings::handle(ctx), move |me, _, event, ctx| {
+        if matches!(
+            event,
+            PrivacySettingsChangedEvent::UpdateIsCloudConversationStorageEnabled { .. }
         ) {
             recompute_active_commands(me, ctx);
         }
@@ -110,10 +127,9 @@ pub(super) fn subscribe_to_shared_dependencies<T>(
                 terminal_view_id: event_terminal_view_id,
                 ..
             } = event
+                && *event_terminal_view_id == terminal_view_id
             {
-                if *event_terminal_view_id == terminal_view_id {
-                    recompute_active_commands(me, ctx);
-                }
+                recompute_active_commands(me, ctx);
             }
         },
     );
@@ -158,12 +174,16 @@ pub struct SlashCommandDataSourceState {
     terminal_view_id: EntityId,
     active_commands_by_id: HashMap<SlashCommandId, StaticCommand>,
     active_repo_root: Option<PathBuf>,
+    /// Resolves the team context of the window this data source's terminal surface belongs to,
+    /// minted by that surface at construction. See [`SlashCommandDataSource::team_context`].
+    team_context_resolver: TeamContextResolver,
 }
 impl SlashCommandDataSourceState {
     pub(super) fn new(
         active_session: ModelHandle<ActiveSession>,
         cli_subagent_controller: ModelHandle<CLISubagentController>,
         terminal_view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
     ) -> Self {
         Self {
             active_session,
@@ -171,6 +191,7 @@ impl SlashCommandDataSourceState {
             terminal_view_id,
             active_commands_by_id: HashMap::new(),
             active_repo_root: None,
+            team_context_resolver,
         }
     }
 }
@@ -191,6 +212,12 @@ pub trait SlashCommandDataSource {
 
     fn terminal_view_id(&self) -> EntityId {
         self.state().terminal_view_id
+    }
+
+    /// The team context of the window this data source's terminal surface belongs to. Resolved
+    /// on demand so it follows the surface if it is ever moved between windows.
+    fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        (self.state().team_context_resolver)(app)
     }
 
     fn active_commands(&self) -> impl Iterator<Item = (&SlashCommandId, &StaticCommand)> {
@@ -274,17 +301,17 @@ pub trait SlashCommandDataSource {
         }
     }
 
-    /// Replace the active command set. Returns whether the number of active commands changed.
-    ///
-    /// This is an imperfect heuristic, but better than re-firing unnecessarily. If it actually
-    /// matters, we can update it.
+    /// Replace the active command set. Returns whether the active commands changed.
     fn replace_active_commands(
         &mut self,
         commands: HashMap<SlashCommandId, StaticCommand>,
     ) -> bool {
-        let changed = commands.len() != self.state().active_commands_by_id.len();
-        self.state_mut().active_commands_by_id = commands;
-        changed
+        if self.state().active_commands_by_id == commands {
+            false
+        } else {
+            self.state_mut().active_commands_by_id = commands;
+            true
+        }
     }
 
     /// Availability bits derived only from state shared by both surfaces.
@@ -293,9 +320,6 @@ pub trait SlashCommandDataSource {
     /// conversation) on top of this baseline.
     fn base_availability(&self, ctx: &AppContext) -> Availability {
         let mut availability = Availability::empty();
-        if self.state().active_repo_root.is_some() {
-            availability |= Availability::REPOSITORY;
-        }
 
         let is_local = self
             .active_session()
@@ -304,6 +328,19 @@ pub trait SlashCommandDataSource {
             .is_some_and(|st| st == SessionType::Local);
         if is_local {
             availability |= Availability::LOCAL;
+        }
+
+        // Derive REPOSITORY from the *live* working directory rather than the
+        // cached `active_repo_root`. The cache is only refreshed after async git
+        // detection resolves, but the pwd-changed recompute runs immediately on
+        // `cd`; keying off the cache would leave repo-gated commands (e.g.
+        // `/pr-comments`) available in the stale window after leaving a repo.
+        // Repo roots are only tracked for local sessions, so this is gated on
+        // `is_local`. `active_repo_root` is retained solely as the recompute
+        // trigger that re-runs this once detection caches a newly-entered
+        // repo's root.
+        if is_local && self.cwd_is_in_repository(ctx) {
+            availability |= Availability::REPOSITORY;
         }
 
         if !self
@@ -324,6 +361,47 @@ pub trait SlashCommandDataSource {
         }
 
         availability
+    }
+
+    /// Whether the active session's current working directory is inside a
+    /// detected git repository. Uses the live cwd (not the cached
+    /// `active_repo_root`) so REPOSITORY-gated commands update immediately on
+    /// `cd`, without waiting for async repo detection to resolve. Delegates path
+    /// membership to `DetectedRepositories`, reusing its centralized
+    /// canonicalization + ancestor walk.
+    #[cfg(not(target_family = "wasm"))]
+    fn cwd_is_in_repository(&self, ctx: &AppContext) -> bool {
+        let active_session = self.active_session().as_ref(ctx);
+        let Some(cwd) = active_session.current_working_directory() else {
+            return false;
+        };
+
+        // Repo detection converts the shell-native CWD (e.g. Git Bash/MSYS2/WSL
+        // "/c/Users/...") to an OS-native path via `ShellLaunchData` before
+        // caching the repo root (see the `detect_possible_git_repo` call site in
+        // `terminal/view.rs`). The live CWD must go through the same conversion
+        // so it can match those cached roots; otherwise repo-gated commands
+        // would be hidden inside a repo on Windows shell variants. Fall back to
+        // the raw path when no session/launch-data conversion applies (the
+        // common native-shell case, where the conversion is already a no-op).
+        let path = active_session
+            .session(ctx)
+            .and_then(|session| {
+                session
+                    .launch_data()
+                    .and_then(|data| data.maybe_convert_absolute_path(cwd))
+            })
+            .unwrap_or_else(|| PathBuf::from(cwd));
+
+        DetectedRepositories::as_ref(ctx)
+            .get_root_for_path(&LocalOrRemotePath::Local(path))
+            .is_some()
+    }
+
+    /// Repo detection is not wired up on wasm, so no directory is ever in a repo.
+    #[cfg(target_family = "wasm")]
+    fn cwd_is_in_repository(&self, _ctx: &AppContext) -> bool {
+        false
     }
 
     /// Whether a command should be shown given the availability set and the shared gates.
@@ -355,12 +433,15 @@ pub trait SlashCommandDataSource {
 
     fn common_command_gates(&self, ctx: &AppContext) -> CommonCommandGates {
         let ai_settings = AISettings::as_ref(ctx);
-        // Hide /host when no default host is configured (env var or workspace setting).
+        // Hide /host when no default host is configured (env var or the window's own team
+        // setting), matching the host the command itself resolves when it runs.
         let has_default_host = std::env::var("WARP_CLOUD_MODE_DEFAULT_HOST")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some()
-            || UserWorkspaces::as_ref(ctx).default_host_slug().is_some();
+            || UserWorkspaces::as_ref(ctx)
+                .default_host_slug(&self.team_context(ctx))
+                .is_some();
         CommonCommandGates {
             is_orchestration_enabled: ai_settings.is_orchestration_enabled(ctx),
             is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),
@@ -562,7 +643,7 @@ fn prefix_match_bonus(query: &str, name: &str) -> f64 {
 #[derive(Debug, Clone)]
 pub struct InlineItem {
     pub action: AcceptSlashCommandOrSavedPrompt,
-    pub icon_path: &'static str,
+    pub icon_path: Option<&'static str>,
     pub name: String,
     pub description: Option<String>,
     pub font_family: FamilyId,
@@ -581,7 +662,7 @@ impl InlineItem {
         let appearance = Appearance::as_ref(app);
         Self {
             action: AcceptSlashCommandOrSavedPrompt::SlashCommand { id: *command_id },
-            icon_path: command.icon_path,
+            icon_path: command.supported_surfaces.gui_icon_path(),
             name: command.name.to_owned(),
             description: Some(command.description.to_owned()),
             font_family: appearance.monospace_font_family(),
@@ -601,7 +682,7 @@ impl InlineItem {
             action: AcceptSlashCommandOrSavedPrompt::SavedPrompt {
                 id: saved_prompt.id,
             },
-            icon_path: "bundled/svg/prompt.svg",
+            icon_path: Some("bundled/svg/prompt.svg"),
             name: saved_prompt.model().data.name().to_owned(),
             description: None,
             font_family: appearance.ui_font_family(),
@@ -634,7 +715,7 @@ impl InlineItem {
                 reference: skill.reference.clone(),
                 name: skill.name.clone(),
             },
-            icon_path: icon.into(),
+            icon_path: Some(icon.into()),
             name: format!("/{}", &skill.name),
             description: Some(skill.description.clone()),
             font_family: appearance.monospace_font_family(),

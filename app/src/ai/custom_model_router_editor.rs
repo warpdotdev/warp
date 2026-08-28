@@ -22,10 +22,12 @@ use warpui::{
 };
 
 use crate::ai::custom_model_routers::{
-    is_auto_target, ComplexityRouting, CustomModelRouter, CustomModelRouting, PromptRouting,
-    PromptRule,
+    ComplexityRouting, CustomModelRouter, CustomModelRouting, PromptRouting, PromptRule,
+    is_auto_target,
 };
-use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
+use crate::ai::execution_profiles::model_menu_items::{
+    CollapsedModelVariants, available_model_menu_items,
+};
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
@@ -37,11 +39,12 @@ use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 #[cfg(feature = "local_fs")]
 use crate::user_config::WarpConfig;
+use crate::view_components::FilterableDropdown;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::dropdown::DropdownAction;
-use crate::view_components::FilterableDropdown;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub const HEADER_TEXT: &str = "Router Editor";
 
@@ -1048,16 +1051,17 @@ fn fill_filterable_dropdown<F>(
     // `set_filtered_items` keeps an empty selection blank rather than
     // auto-selecting the first model.
     dropdown.set_placeholder(MODEL_PLACEHOLDER, ctx);
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
     let items = available_model_menu_items(
         LLMPreferences::as_ref(ctx)
-            .get_base_llm_choices_for_agent_mode(ctx)
+            .get_base_llm_choices_for_agent_mode(&scope, ctx)
             .filter(|llm| !is_auto_target(llm.id.as_str()))
             .collect_vec(),
         |llm| DropdownAction::select_action_and_close(make_action(llm.id.to_string())),
         None,
         None,
-        false,
-        false,
+        CollapsedModelVariants::default(),
+        &scope,
         ctx,
     );
     dropdown.set_rich_items(items, ctx);

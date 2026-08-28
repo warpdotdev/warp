@@ -4,8 +4,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use futures::Future;
-pub use futures_lite::future::block_on;
 use futures_lite::FutureExt;
+pub use futures_lite::future::block_on;
 // There is no such thing as a background thread in wasm, so all futures are local.
 pub use futures_util::future::LocalBoxFuture as BoxFuture;
 use gloo::timers::future::TimeoutFuture;

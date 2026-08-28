@@ -34,14 +34,21 @@ pub mod mcp;
 pub mod memory_store;
 pub mod model;
 pub mod provider;
+pub mod runner;
 pub mod schedule;
 pub mod secret;
 pub mod share;
 pub mod task;
+// Each of these variables is injected under both its `OZ_` and its `WARP_` name, carrying the
+// identical value. Read sites still use the `OZ_` names.
 pub const OZ_RUN_ID_ENV: &str = "OZ_RUN_ID";
+pub const WARP_RUN_ID_ENV: &str = "WARP_RUN_ID";
 pub const OZ_PARENT_RUN_ID_ENV: &str = "OZ_PARENT_RUN_ID";
+pub const WARP_PARENT_RUN_ID_ENV: &str = "WARP_PARENT_RUN_ID";
 pub const OZ_CLI_ENV: &str = "OZ_CLI";
+pub const WARP_CLI_ENV: &str = "WARP_CLI";
 pub const OZ_HARNESS_ENV: &str = "OZ_HARNESS";
+pub const WARP_HARNESS_ENV: &str = "WARP_HARNESS";
 pub const SERVER_ROOT_URL_OVERRIDE_ENV: &str = "WARP_SERVER_ROOT_URL";
 pub const WS_SERVER_URL_OVERRIDE_ENV: &str = "WARP_WS_SERVER_URL";
 pub const SESSION_SHARING_SERVER_URL_OVERRIDE_ENV: &str = "WARP_SESSION_SHARING_SERVER_URL";
@@ -91,7 +98,12 @@ pub struct RemoteServerIdentityArgs {
 #[derive(Debug, Default, Clone, clap::Args)]
 pub struct GlobalOptions {
     /// API key for server authentication.
-    #[arg(long = "api-key", global = true, env = "WARP_API_KEY")]
+    #[arg(
+        long = "api-key",
+        global = true,
+        env = "WARP_API_KEY",
+        hide_env_values = true
+    )]
     pub api_key: Option<String>,
 
     /// Set the output format.
@@ -123,7 +135,7 @@ Use the CLI to:
 * Manage the environments that cloud agents run in
 * Upload secrets to Oz's secure storage"#
 )]
-#[clap(args_conflicts_with_subcommands = true)]
+#[clap(subcommand_precedence_over_arg = true)]
 pub struct Args {
     #[clap(flatten)]
     global_options: GlobalOptions,
@@ -273,6 +285,15 @@ impl Args {
                     }
                 }
 
+                if !FeatureFlag::CloudAgentRunners.is_enabled() {
+                    let args: Vec<String> = env::args().collect();
+                    if args.len() > 1 && args[1] == "runner" {
+                        eprintln!("error: unrecognized subcommand 'runner'\n");
+                        eprintln!("For more information, try '--help'");
+                        std::process::exit(2);
+                    }
+                }
+
                 let command = Self::clap_command();
 
                 command.try_get_matches()
@@ -390,6 +411,11 @@ impl Args {
         // Hide the api-key subcommand from help text.
         if !FeatureFlag::APIKeyManagement.is_enabled() {
             command = command.mut_subcommand("api-key", |c| c.hide(true));
+        }
+
+        // Hide the runner subcommand from help text.
+        if !FeatureFlag::CloudAgentRunners.is_enabled() {
+            command = command.mut_subcommand("runner", |c| c.hide(true));
         }
 
         // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
@@ -588,6 +614,10 @@ pub enum CliCommand {
     /// Manage API keys.
     #[command(subcommand)]
     ApiKey(crate::api_key::ApiKeyCommand),
+
+    /// Manage cloud agent runners.
+    #[command(subcommand)]
+    Runner(crate::runner::RunnerCommand),
 }
 
 impl CliCommand {
@@ -612,6 +642,7 @@ impl CliCommand {
             CliCommand::ApiKey(command) => command.as_str_for_tracing(),
             CliCommand::MemoryStore(command) => command.as_str_for_tracing(),
             CliCommand::Memory(command) => command.as_str_for_tracing(),
+            CliCommand::Runner(command) => command.as_str_for_tracing(),
         }
     }
 }
@@ -652,6 +683,12 @@ pub enum Command {
     /// Print debugging information and exit.
     #[clap(long_flag = "dump-debug-info")]
     DumpDebugInfo,
+    /// Print the JSON schema for the current Warp channel's settings and exit.
+    #[cfg(not(target_family = "wasm"))]
+    DumpSettingsSchema {
+        /// Write the schema to this path instead of standard output.
+        output_path: Option<std::path::PathBuf>,
+    },
 
     /// Print telemetry events in production and exit.
     #[clap(long_flag = "print-telemetry-events", hide = true)]
@@ -666,6 +703,8 @@ impl Command {
             Command::Worker(_) => false,
             Command::CommandLine(_) | Command::DumpDebugInfo => true,
             Command::Completions { .. } => true,
+            #[cfg(not(target_family = "wasm"))]
+            Command::DumpSettingsSchema { output_path } => output_path.is_none(),
             #[cfg(not(target_family = "wasm"))]
             Command::PrintTelemetryEvents => true,
         }

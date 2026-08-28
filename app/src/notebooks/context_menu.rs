@@ -16,7 +16,7 @@ use crate::menu::{self, Menu, MenuItem, MenuItemFields};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::{PaneEvent, SplitPaneState};
 use crate::util::bindings::{
-    keybinding_name_to_display_string, trigger_to_keystroke, CustomAction,
+    CustomAction, keybinding_name_to_display_string, trigger_to_keystroke,
 };
 
 #[cfg(test)]

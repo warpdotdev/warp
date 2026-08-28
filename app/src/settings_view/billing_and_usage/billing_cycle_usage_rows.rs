@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools as _;
 use pathfinder_color::ColorU;
@@ -18,16 +18,16 @@ use warpui::{AppContext, Element, EventContext, SingletonEntity};
 use crate::ai::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::settings_view::billing_and_usage::billing_cycle_usage_common::{
+    BarSegment, BillingUsageMouseStates, ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
     aggregate_segments, cost_type_color, format_cost_cents, format_credits,
-    render_breakdown_tooltip, render_section_subheader, BarSegment, BillingUsageMouseStates,
-    ROW_BORDER_RADIUS, ROW_BORDER_WIDTH, TOOLTIP_GAP,
+    render_breakdown_tooltip, render_section_subheader,
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
-    Workspace, WorkspaceMember,
+    WorkspaceMember,
 };
 
 const BAR_HEIGHT: f32 = 8.;
@@ -40,6 +40,16 @@ const ROW_PADDING: f32 = 12.;
 
 const SELF_OWN_KEY: &str = "__self_own__";
 const OTHER_MEMBERS_KEY: &str = "__other_members__";
+
+const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
+
+fn dimmed_row_text_color(main: ColorU, dimmed: ColorU, is_dimmed: bool) -> ColorU {
+    if is_dimmed { dimmed } else { main }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SourceFilter {
@@ -81,6 +91,8 @@ pub struct MemberUsageRow {
     pub segments: Vec<BarSegment>,
     /// Denominator the row's stacked bar fills against.
     pub bar_max_credits: i64,
+    pub is_current_team_member: bool,
+    pub is_disabled: bool,
 }
 
 fn viewer_identity(app: &AppContext) -> (Option<String>, String) {
@@ -128,6 +140,8 @@ impl MemberUsageRow {
             total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1),
+            is_current_team_member: true,
+            is_disabled: false,
         }
     }
 
@@ -158,6 +172,8 @@ impl MemberUsageRow {
             total_cost_cents: 0,
             segments,
             bar_max_credits: used.max(1),
+            is_current_team_member: true,
+            is_disabled: false,
         }
     }
 
@@ -178,20 +194,24 @@ impl MemberUsageRow {
             total_cost_cents,
             segments,
             bar_max_credits: total_credits.max(1),
+            is_current_team_member: true,
+            is_disabled: false,
         }
     }
 
     /// Per-member rows for `PerUserTotals` / `FullBreakdown` visibility.
-    /// Iterates the workspace member list so zero-usage members still
-    /// get a row. Service accounts and other non-member subjects surface
-    /// as extra rows at the bottom, sorted by total credits desc.
+    /// Iterates the member list so zero-usage members still get a row —
+    /// callers pass the selected team's roster, not every workspace member,
+    /// so members of other teams don't show up. Service accounts and other
+    /// non-member subjects surface as extra rows at the bottom, sorted by
+    /// total credits desc.
     fn for_each_member(
         entries: &[BillingCycleUsageEntry],
         members: &[WorkspaceMember],
         source_filter: SourceFilter,
     ) -> Vec<Self> {
         // Group entries by subject for joining against the member list below.
-        let mut grouped: HashMap<String, GroupedSubjectUsage> = HashMap::new();
+        let mut unmatched_usage_by_subject: HashMap<String, GroupedSubjectUsage> = HashMap::new();
         let mut unknown_counter = 0usize;
 
         for entry in entries
@@ -209,21 +229,24 @@ impl MemberUsageRow {
                     format!("{:?}:unknown-{unknown_counter}", entry.subject_type)
                 }
             };
-            let group = grouped.entry(key).or_insert_with(|| GroupedSubjectUsage {
-                subject_type: entry.subject_type.clone(),
-                display_name: entry
-                    .subject_display_name
-                    .clone()
-                    .unwrap_or_else(|| "Unknown".to_string()),
-                entries: Vec::new(),
-            });
+            let group =
+                unmatched_usage_by_subject
+                    .entry(key)
+                    .or_insert_with(|| GroupedSubjectUsage {
+                        subject_type: entry.subject_type.clone(),
+                        display_name: entry
+                            .subject_display_name
+                            .clone()
+                            .unwrap_or_else(|| "Unknown".to_string()),
+                        entries: Vec::new(),
+                    });
             group.entries.push(entry.clone());
         }
 
         let mut rows: Vec<Self> = Vec::with_capacity(members.len());
 
         // One row per workspace member, including zero-usage members.
-        let mut seen_keys: std::collections::HashSet<String> = Default::default();
+        let mut seen_keys: HashSet<String> = Default::default();
         for member in members {
             let key = format!(
                 "{:?}:{}",
@@ -232,10 +255,11 @@ impl MemberUsageRow {
             );
             seen_keys.insert(key.clone());
 
-            let (segments, total_credits, total_cost_cents) = match grouped.remove(&key) {
-                Some(group) => aggregate_segments(group.entries.iter()),
-                None => (Vec::new(), 0, 0),
-            };
+            let (segments, total_credits, total_cost_cents) =
+                match unmatched_usage_by_subject.remove(&key) {
+                    Some(group) => aggregate_segments(group.entries.iter()),
+                    None => (Vec::new(), 0, 0),
+                };
 
             rows.push(Self {
                 subject_type: AiCreditsUsageAndCostSubjectType::User,
@@ -246,28 +270,37 @@ impl MemberUsageRow {
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
+                is_current_team_member: true,
+                is_disabled: member.is_disabled,
             });
         }
 
-        // Subjects not in the member list (typically service accounts) render after.
-        for (key, group) in grouped {
+        // Subjects not in the member list (service accounts or former members) render after.
+        for (key, subject_usage) in unmatched_usage_by_subject {
             if seen_keys.contains(&key) {
                 continue;
             }
             // All entries in a group share the same subject_uid by construction
-            // (it's part of the grouping key), so first.is representative.
-            let subject_uid = group.entries.first().and_then(|e| e.subject_uid.clone());
+            // (it's part of the grouping key), so first is representative.
+            let subject_uid = subject_usage
+                .entries
+                .first()
+                .and_then(|e| e.subject_uid.clone());
+            let is_current_team_member =
+                subject_usage.subject_type != AiCreditsUsageAndCostSubjectType::User;
             let (segments, total_credits, total_cost_cents) =
-                aggregate_segments(group.entries.iter());
+                aggregate_segments(subject_usage.entries.iter());
             rows.push(Self {
-                subject_type: group.subject_type,
+                subject_type: subject_usage.subject_type,
                 subject_key: key,
                 subject_uid,
-                display_name: group.display_name,
+                display_name: subject_usage.display_name,
                 total_credits,
                 total_cost_cents,
                 segments,
                 bar_max_credits: 0,
+                is_current_team_member,
+                is_disabled: false,
             });
         }
 
@@ -283,7 +316,7 @@ impl MemberUsageRow {
 }
 
 fn build_rows(
-    workspace: &Workspace,
+    members: &[WorkspaceMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -312,7 +345,7 @@ fn build_rows(
             rows
         }
         UsageVisibilityGranularity::PerUserTotals | UsageVisibilityGranularity::FullBreakdown => {
-            MemberUsageRow::for_each_member(entries, &workspace.members, source_filter)
+            MemberUsageRow::for_each_member(entries, members, source_filter)
         }
     };
 
@@ -460,6 +493,8 @@ fn render_row_card(
     let theme = appearance.theme();
     let card_bg = theme.background().into_solid();
     let main = blended_colors::text_main(theme, card_bg);
+    let is_former_member = !row.is_current_team_member;
+    let is_dimmed = is_former_member || row.is_disabled;
 
     let bar = render_stacked_bar(
         &row.segments,
@@ -500,7 +535,11 @@ fn render_row_card(
             appearance.ui_font_family(),
             appearance.ui_font_size(),
         )
-        .with_color(main)
+        .with_color(dimmed_row_text_color(
+            main,
+            theme.sub_text_color(theme.background()).into(),
+            is_dimmed,
+        ))
         .finish()
     };
 
@@ -536,6 +575,26 @@ fn render_row_card(
         })
         .finish();
         name_row.add_child(Container::new(info_icon).with_margin_left(6.).finish());
+    }
+    if is_former_member {
+        let badge_color = theme.sub_text_color(theme.background());
+        name_row.add_child(
+            Container::new(
+                Text::new_inline(
+                    "Former member",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() - 1.,
+                )
+                .with_color(badge_color.into())
+                .finish(),
+            )
+            .with_horizontal_padding(6.)
+            .with_vertical_padding(2.)
+            .with_border(Border::all(1.).with_border_color(theme.outline().into_solid()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+            .with_margin_left(6.)
+            .finish(),
+        );
     }
 
     let credits_text = Text::new_inline(
@@ -578,12 +637,28 @@ fn render_row_card(
         .with_child(Container::new(cost_cluster).with_margin_left(6.).finish())
         .finish();
 
+    let name_row_element: Box<dyn Element> = match disabled_member_tooltip_text(row.is_disabled) {
+        Some(tooltip_text) => {
+            let disabled_state =
+                mouse_states.tooltip_mouse_state(&format!("{}__disabled", row.subject_key));
+            appearance.ui_builder().overlay_tool_tip_on_element(
+                tooltip_text.to_string(),
+                disabled_state,
+                name_row.finish(),
+                ParentAnchor::TopLeft,
+                ChildAnchor::BottomLeft,
+                vec2f(0., -TOOLTIP_GAP),
+            )
+        }
+        None => name_row.finish(),
+    };
+
     let body = Container::new(
         Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_main_axis_size(MainAxisSize::Max)
-            .with_child(Shrinkable::new(1., name_row.finish()).finish())
+            .with_child(Shrinkable::new(1., name_row_element).finish())
             .with_child(
                 Container::new(credits_and_cost)
                     .with_margin_left(16.)
@@ -594,7 +669,7 @@ fn render_row_card(
     .with_uniform_padding(ROW_PADDING)
     .finish();
 
-    Container::new(
+    let mut card = Container::new(
         Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(bar)
@@ -603,8 +678,11 @@ fn render_row_card(
     )
     .with_background_color(card_bg)
     .with_border(Border::all(ROW_BORDER_WIDTH).with_border_color(theme.outline().into_solid()))
-    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)))
-    .finish()
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_BORDER_RADIUS)));
+    if is_dimmed {
+        card = card.with_foreground_overlay(theme.background().with_opacity(40));
+    }
+    card.finish()
 }
 
 /// Row card wrapped in a Hoverable that opens the breakdown tooltip.
@@ -620,15 +698,16 @@ fn render_member_row(
         return render_row_card(row, team_max_credits, mouse_states, appearance);
     }
 
-    // The info icon sits inside the row card, so hovering it would otherwise
-    // trigger both this row's breakdown tooltip and the icon's own tooltip
-    // on top of each other. Pull the icon's hover state up so we can
-    // suppress the breakdown tooltip while the icon is hovered.
+    // Pull nested hover states up so the breakdown tooltip is suppressed
+    // while the info icon or disabled tooltip is hovered.
     let info_state = matches!(
         row.subject_type,
         AiCreditsUsageAndCostSubjectType::ServiceAccount
     )
     .then(|| mouse_states.tooltip_mouse_state(&format!("{}__agent_info", row.subject_key)));
+    let disabled_state = row
+        .is_disabled
+        .then(|| mouse_states.tooltip_mouse_state(&format!("{}__disabled", row.subject_key)));
 
     Hoverable::new(tooltip_mouse_state, move |state| {
         let mut stack = Stack::new();
@@ -642,8 +721,11 @@ fn render_member_row(
         let info_hovered = info_state
             .as_ref()
             .is_some_and(|s| s.lock().is_ok_and(|guard| guard.is_hovered()));
+        let disabled_hovered = disabled_state
+            .as_ref()
+            .is_some_and(|s| s.lock().is_ok_and(|guard| guard.is_hovered()));
 
-        if state.is_hovered() && !info_hovered {
+        if state.is_hovered() && !info_hovered && !disabled_hovered {
             stack.add_positioned_overlay_child(
                 render_usage_tooltip_content(row, appearance),
                 OffsetPositioning::offset_from_parent(
@@ -752,7 +834,7 @@ pub fn render_own_usage_solo_row(
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_rows(
-    workspace: &Workspace,
+    members: &[WorkspaceMember],
     entries: &[BillingCycleUsageEntry],
     visibility: &UsageVisibility,
     source_filter: SourceFilter,
@@ -761,7 +843,7 @@ pub fn render_rows(
     app: &AppContext,
     on_filter_change: FilterChangeFn,
 ) -> Box<dyn Element> {
-    let rows = build_rows(workspace, entries, visibility, source_filter, app);
+    let rows = build_rows(members, entries, visibility, source_filter, app);
 
     let mut column = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)

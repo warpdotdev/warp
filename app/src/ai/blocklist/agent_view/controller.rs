@@ -4,20 +4,21 @@ use std::time::Duration;
 use instant::Instant;
 use parking_lot::FairMutex;
 use warp_core::ui::appearance::Appearance;
-use warpui::keymap::Keystroke;
 use warpui::r#async::SpawnedFutureHandle;
+use warpui::keymap::Keystroke;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::{DismissalStrategy, EphemeralMessage, EphemeralMessageModel};
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::orchestration_topology::{
-    adjacent_orchestration_child_conversation_id, OrchestrationNavigationDirection,
+    OrchestrationNavigationDirection, adjacent_orchestration_child_conversation_id,
 };
+use crate::features::FeatureFlag;
+use crate::terminal::TerminalModel;
 use crate::terminal::input::message_bar::{Message, MessageItem};
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
-use crate::terminal::TerminalModel;
 use crate::util::bindings::keybinding_name_to_keystroke;
-use crate::BlocklistAIHistoryModel;
 
 /// Error returned when entering the agent view fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -804,22 +805,29 @@ impl AgentViewController {
         }
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        let (conversation_id, exchange_count) = if let Some(conversation) =
-            conversation_id.and_then(|id| history_model.as_ref(ctx).conversation(&id))
-        {
-            (conversation.id(), conversation.exchange_count())
-        } else {
-            let id = history_model.update(ctx, |history_model, ctx| {
-                history_model.start_new_conversation(
-                    self.terminal_view_id,
-                    false,
-                    matches!(&origin, AgentViewEntryOrigin::CloudAgent),
-                    matches!(&origin, AgentViewEntryOrigin::ThirdPartyCloudAgent),
-                    ctx,
+        let (conversation_id, exchange_count, is_existing_child_placeholder) =
+            if let Some(conversation) =
+                conversation_id.and_then(|id| history_model.as_ref(ctx).conversation(&id))
+            {
+                (
+                    conversation.id(),
+                    conversation.exchange_count(),
+                    conversation.is_remote_child()
+                        || (conversation.is_viewing_shared_session()
+                            && conversation.parent_conversation_id().is_some()),
                 )
-            });
-            (id, 0)
-        };
+            } else {
+                let id = history_model.update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(
+                        self.terminal_view_id,
+                        false,
+                        matches!(&origin, AgentViewEntryOrigin::CloudAgent),
+                        matches!(&origin, AgentViewEntryOrigin::ThirdPartyCloudAgent),
+                        ctx,
+                    )
+                });
+                (id, 0, false)
+            };
         history_model.update(ctx, |history_model, ctx| {
             history_model.set_active_conversation_id(conversation_id, self.terminal_view_id, ctx)
         });
@@ -830,14 +838,28 @@ impl AgentViewController {
             display_mode,
             original_conversation_length: exchange_count,
         };
+
+        let is_cloud = matches!(
+            origin,
+            AgentViewEntryOrigin::CloudAgent | AgentViewEntryOrigin::ThirdPartyCloudAgent
+        );
+
         self.terminal_model
             .lock()
             .block_list_mut()
-            .set_agent_view_state(self.agent_view_state.clone());
+            .enter_conversation_context(conversation_id, display_mode.is_inline(), is_cloud);
 
+        // An empty child placeholder is still an existing run, not a brand-new
+        // cloud conversation. This applies to owner-side remote children and
+        // viewer-side shared-session children. Preserve that distinction so
+        // TerminalView does not insert cloud composition UI while the child is
+        // restoring or waiting for its first streamed exchange.
+        let is_new = exchange_count == 0
+            && !(FeatureFlag::OrchestrationUnifiedStack.is_enabled()
+                && is_existing_child_placeholder);
         ctx.emit(AgentViewControllerEvent::EnteredAgentView {
             conversation_id,
-            is_new: exchange_count == 0,
+            is_new,
             origin,
             display_mode,
         });
@@ -958,7 +980,7 @@ impl AgentViewController {
         self.terminal_model
             .lock()
             .block_list_mut()
-            .set_agent_view_state(self.agent_view_state.clone());
+            .exit_conversation_context();
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         let final_exchange_count = history_model

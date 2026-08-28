@@ -1,13 +1,10 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-use ::ai::api_keys::CustomEndpoint;
-use url::Url;
+use ::ai::api_keys::{CustomEndpoint, CustomEndpointSchema, validate_custom_endpoint_url};
 use warp_editor::editor::NavigationKey;
 use warpui::elements::{
     Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Empty, Expanded, Flex, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, SavePosition, ScrollTarget, ScrollToPositionMode, ScrollbarWidth,
-    Shrinkable, Text,
+    Shrinkable, Stack, Text,
 };
 use warpui::fonts::FamilyId;
 use warpui::ui_components::button::ButtonVariant;
@@ -25,6 +22,8 @@ use crate::editor::{
 use crate::modal::{Modal, ModalViewState};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, DangerSecondaryTheme};
+use crate::view_components::dropdown::DropdownEvent;
+use crate::view_components::{Dropdown, DropdownItem};
 
 const LABEL_FONT_SIZE: f32 = 12.;
 const INPUT_WIDTH: f32 = 480.;
@@ -54,6 +53,7 @@ pub enum CustomEndpointModalEvent {
         name: String,
         url: String,
         api_key: String,
+        schema: CustomEndpointSchema,
         models: Vec<(String, Option<String>, Option<String>)>,
     },
     SaveEndpoint {
@@ -61,6 +61,7 @@ pub enum CustomEndpointModalEvent {
         name: String,
         url: String,
         api_key: String,
+        schema: CustomEndpointSchema,
         models: Vec<(String, Option<String>, Option<String>)>,
     },
     RemoveEndpoint {
@@ -75,6 +76,7 @@ pub enum CustomEndpointModalAction {
     AddModel,
     RemoveModel(usize),
     RemoveEndpoint,
+    SetSchema(CustomEndpointSchema),
 }
 
 struct ModelRow {
@@ -88,6 +90,8 @@ pub struct CustomEndpointModal {
     endpoint_name_editor: ViewHandle<EditorView>,
     endpoint_url_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
+    schema_dropdown: ViewHandle<Dropdown<CustomEndpointModalAction>>,
+    schema: CustomEndpointSchema,
     model_rows: Vec<ModelRow>,
     cancel_button_mouse_state: MouseStateHandle,
     save_button_mouse_state: MouseStateHandle,
@@ -175,6 +179,39 @@ impl CustomEndpointModal {
             editor
         });
 
+        let schema = endpoint.map(|endpoint| endpoint.schema).unwrap_or_default();
+        let schema_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            // Render the popup externally on the outermost Stack so it paints
+            // after all form content and appears on top.
+            dropdown.set_render_popup_externally(true, ctx);
+            dropdown.set_match_menu_width_to_top_bar(true, ctx);
+            dropdown.set_items(
+                [
+                    CustomEndpointSchema::OpenaiChatCompletions,
+                    CustomEndpointSchema::OpenaiResponses,
+                    CustomEndpointSchema::AnthropicMessages,
+                ]
+                .into_iter()
+                .map(|schema| {
+                    DropdownItem::new(
+                        schema.display_name(),
+                        CustomEndpointModalAction::SetSchema(schema),
+                    )
+                })
+                .collect(),
+                ctx,
+            );
+            dropdown
+        });
+        // Re-render the modal body when the schema dropdown opens or closes so
+        // we can add/remove the popup on the outer Stack.
+        ctx.subscribe_to_view(&schema_dropdown, |_, _, event, ctx| match event {
+            DropdownEvent::ToggleExpanded | DropdownEvent::Close => ctx.notify(),
+        });
+        schema_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_selected_by_name(schema.display_name(), ctx);
+        });
         let mut model_rows = Vec::new();
         if let Some(ep) = endpoint {
             for model in &ep.models {
@@ -233,6 +270,8 @@ impl CustomEndpointModal {
             endpoint_name_editor,
             endpoint_url_editor,
             api_key_editor,
+            schema_dropdown,
+            schema,
             model_rows,
             cancel_button_mouse_state: Default::default(),
             save_button_mouse_state: Default::default(),
@@ -319,6 +358,16 @@ impl CustomEndpointModal {
         self.api_key_editor.update(ctx, |editor, ctx| {
             editor.set_buffer_text(endpoint.map(|e| e.api_key.as_str()).unwrap_or(""), ctx);
         });
+        self.schema_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.set_selected_by_name(
+                endpoint
+                    .map(|endpoint| endpoint.schema)
+                    .unwrap_or_default()
+                    .display_name(),
+                ctx,
+            );
+        });
+        self.schema = endpoint.map(|endpoint| endpoint.schema).unwrap_or_default();
         // Rebuild model rows
         // Old model row editors will be dropped with the modal body
         self.model_rows.clear();
@@ -413,6 +462,7 @@ impl CustomEndpointModal {
         let name = self.endpoint_name_editor.as_ref(ctx).buffer_text(ctx);
         let url = self.endpoint_url_editor.as_ref(ctx).buffer_text(ctx);
         let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
+        let schema = self.selected_schema(ctx);
         let models: Vec<(String, Option<String>, Option<String>)> = self
             .model_rows
             .iter()
@@ -434,6 +484,7 @@ impl CustomEndpointModal {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             });
         } else {
@@ -441,8 +492,23 @@ impl CustomEndpointModal {
                 name,
                 url,
                 api_key,
+                schema,
                 models,
             });
+        }
+    }
+
+    /// Returns the schema currently selected in the dropdown.
+    ///
+    /// The schema dropdown renders its popup externally (see
+    /// `set_render_popup_externally`), so the selection action does not bubble
+    /// through the dropdown to update `self.schema` via `SetSchema`. Read the
+    /// dropdown's mirrored selection directly instead, falling back to the
+    /// last known schema.
+    fn selected_schema(&self, ctx: &AppContext) -> CustomEndpointSchema {
+        match self.schema_dropdown.as_ref(ctx).selected_action() {
+            Some(CustomEndpointModalAction::SetSchema(schema)) => schema,
+            _ => self.schema,
         }
     }
 
@@ -703,6 +769,17 @@ impl View for CustomEndpointModal {
             )
             .with_margin_bottom(16.)
             .finish(),
+        );
+        // Request/response protocol
+        column.add_child(
+            Container::new(label("API schema"))
+                .with_margin_bottom(4.)
+                .finish(),
+        );
+        column.add_child(
+            Container::new(ChildView::new(&self.schema_dropdown).finish())
+                .with_margin_bottom(16.)
+                .finish(),
         );
 
         // Endpoint name
@@ -980,11 +1057,21 @@ impl View for CustomEndpointModal {
         .for_single_frame()
         .finish();
 
-        Flex::column()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(Shrinkable::new(1., scrollable_content).finish())
-            .with_child(buttons_row)
-            .finish()
+        // Render the schema dropdown popup at the outermost Stack level so it
+        // paints after all form content and appears on top of sibling fields.
+        let schema_popup = self.schema_dropdown.as_ref(app).render_menu_as_overlay();
+        let mut outer_stack = Stack::new();
+        outer_stack.add_child(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(Shrinkable::new(1., scrollable_content).finish())
+                .with_child(buttons_row)
+                .finish(),
+        );
+        if let Some((popup, positioning)) = schema_popup {
+            outer_stack.add_positioned_overlay_child(popup, positioning);
+        }
+        outer_stack.finish()
     }
 }
 
@@ -992,17 +1079,7 @@ fn validate_url(url: &str) -> Result<(), &'static str> {
     if url.trim().is_empty() {
         return Ok(());
     }
-    let parsed = Url::parse(url).map_err(|_| "Invalid URL")?;
-    if parsed.scheme() != "https" {
-        return Err("URL must use HTTPS");
-    }
-    let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) else {
-        return Err("URL must include a host");
-    };
-    if is_restricted_host(host) {
-        return Err("URL must not use a local or private host");
-    }
-    Ok(())
+    validate_custom_endpoint_url(url)
 }
 
 fn is_endpoint_form_valid(name: &str, url: &str, api_key: &str, has_models: bool) -> bool {
@@ -1013,46 +1090,6 @@ fn is_endpoint_form_valid(name: &str, url: &str, api_key: &str, has_models: bool
         && validate_url(url).is_ok()
 }
 
-fn is_restricted_host(host: &str) -> bool {
-    let host = host
-        .strip_prefix('[')
-        .and_then(|host| host.strip_suffix(']'))
-        .unwrap_or(host);
-    if host.eq_ignore_ascii_case("localhost") {
-        return true;
-    }
-    host.parse::<IpAddr>().is_ok_and(is_restricted_ip)
-}
-
-fn is_restricted_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_restricted_ipv4(ip),
-        IpAddr::V6(ip) => is_restricted_ipv6(ip),
-    }
-}
-
-fn is_restricted_ipv4(ip: Ipv4Addr) -> bool {
-    ip.is_loopback() || ip.is_unspecified() || ip.is_private() || ip.is_link_local()
-}
-
-fn is_restricted_ipv6(ip: Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() || is_ipv6_unique_local(ip) || is_ipv6_link_local(ip)
-    {
-        return true;
-    }
-    if let Some(ipv4) = ip.to_ipv4_mapped() {
-        return is_restricted_ipv4(ipv4);
-    }
-    false
-}
-
-fn is_ipv6_unique_local(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xfe00 == 0xfc00
-}
-
-fn is_ipv6_link_local(ip: Ipv6Addr) -> bool {
-    ip.segments()[0] & 0xffc0 == 0xfe80
-}
 impl TypedActionView for CustomEndpointModal {
     type Action = CustomEndpointModalAction;
 
@@ -1066,6 +1103,10 @@ impl TypedActionView for CustomEndpointModal {
                 if let Some(index) = self.editing_index {
                     ctx.emit(CustomEndpointModalEvent::RemoveEndpoint { index });
                 }
+            }
+            CustomEndpointModalAction::SetSchema(schema) => {
+                self.schema = *schema;
+                ctx.notify();
             }
         }
     }

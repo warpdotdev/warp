@@ -1,12 +1,12 @@
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use parking_lot::FairMutex;
-use warp_errors::report_error;
 use warpui::{AppContext, ModelHandle, SingletonEntity};
 
 use crate::persistence::{ModelEvent, StartedCommandMetadata};
 use crate::terminal::model::session::Sessions;
+use crate::terminal::model::session::command_executor::is_in_band_command;
 use crate::terminal::view::ExecuteCommandEvent;
 use crate::terminal::{History, HistoryEntry, TerminalModel};
 
@@ -17,6 +17,10 @@ pub fn update_command_history(
     sessions: &ModelHandle<Sessions>,
     ctx: &mut AppContext,
 ) {
+    if is_in_band_command(&event.command) {
+        return;
+    }
+
     let model = model.lock();
     let active_block = model.block_list().active_block();
     let session_id = event.session_id;
@@ -43,7 +47,7 @@ pub fn update_command_history(
                 event.workflow_command.to_owned(),
                 is_agent_executed,
             )],
-        )
+        );
     });
 
     if let Some(sender) = model_event_sender {
@@ -69,7 +73,7 @@ pub fn update_command_history(
             .spawn(async move {
                 // Sending over a sync sender can block the current thread, so we do this async.
                 if let Err(e) = sender_clone.send(insert_command_event) {
-                    report_error!(anyhow::Error::new(e).context("Error sending ModelEvent"));
+                    log::warn!("Error sending ModelEvent: {e:#}");
                 }
             })
             .detach();

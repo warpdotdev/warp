@@ -8,7 +8,7 @@ use warp_errors::report_error;
 use warpui::integration::{
     AssertionCallback, AssertionOutcome, AssertionWithDataCallback, StepDataMap, TestStep,
 };
-use warpui::{async_assert, async_assert_eq, App, SingletonEntity, WindowId};
+use warpui::{App, SingletonEntity, WindowId, async_assert, async_assert_eq};
 
 use crate::integration_testing::view_getters::single_terminal_view_for_tab;
 use crate::remote_server::manager::{
@@ -255,9 +255,9 @@ pub fn write_file_via_remote_server(
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                 let result = rt.block_on(handle.write_file(path.clone(), content));
-                if let Err(e) = &result {
+                if let Err(e) = result {
                     report_error!(
-                        anyhow::anyhow!("{e}").context("write_file_via_remote_server failed"),
+                        anyhow::Error::new(e).context("write_file_via_remote_server failed"),
                         extra: { "path" => %path }
                     );
                 }

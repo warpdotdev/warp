@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use itertools::Itertools;
 use warp_core::features::FeatureFlag;
 use warpui::r#async::FutureExt as AsyncFutureExt;
@@ -16,20 +16,21 @@ use crate::ai::agent::{
 };
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::paths::{host_native_absolute_path, join_paths, shell_native_absolute_path};
+use crate::terminal::ShellLaunchData;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
 use crate::terminal::shell::ShellType;
-use crate::terminal::ShellLaunchData;
-use crate::{send_telemetry_from_app_ctx, TelemetryEvent};
+use crate::workspaces::user_workspaces::TeamContext;
+use crate::{TelemetryEvent, send_telemetry_from_app_ctx};
 
 const FILE_GLOB_TIMEOUT: Duration = Duration::from_secs(10);
 
 use warp_errors::report_error;
 
 use super::{
-    get_server_output_id, is_git_repository, ActionExecution, AnyActionExecution,
-    ExecuteActionInput, PreprocessActionInput,
+    ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
+    get_server_output_id, is_git_repository,
 };
 
 pub struct FileGlobExecutor {
@@ -53,7 +54,8 @@ impl FileGlobExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
             action:
@@ -88,6 +90,7 @@ impl FileGlobExecutor {
                 &conversation_id,
                 vec![PathBuf::from(absolute_path)],
                 Some(self.terminal_view_id),
+                scope,
                 ctx,
             )
             .is_allowed()
@@ -97,7 +100,7 @@ impl FileGlobExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let AIAgentAction {
             action:
                 AIAgentActionType::FileGlob { patterns, path }

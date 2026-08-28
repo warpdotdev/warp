@@ -13,10 +13,11 @@
 //!   leading/trailing hidden runs produce no rows).
 //!
 //! Rows are style- and text-free: they carry char *ranges* (into the buffer
-//! text or a ghost's content), never strings or colors. Both consumers — the
-//! TUI editor element's painting and interaction geometry (cursor placement,
-//! mouse hit-testing) — are projections of this one computation, so what is
-//! painted on row N and what a click on row N resolves to can never disagree.
+//! text or a ghost's content), never strings or colors. [`DisplayLattice`]
+//! projects those ranges to paint-ready text using the same retained widths
+//! that drive interaction geometry (cursor placement and mouse hit-testing),
+//! so what is painted on row N and what a click on row N resolves to cannot
+//! disagree.
 //!
 //! Display-row space vs buffer visual-row space: the softwrap functions
 //! ([`char_cell_offset_to_softwrap_point`](super::char_cell_offset_to_softwrap_point)
@@ -35,10 +36,7 @@ use std::ops::Range;
 use string_offset::CharOffset;
 use warpui_core::text::TuiGridPoint;
 
-use super::{
-    CharCellTemporaryBlock, char_cell_display_width, char_cell_line_gap_position,
-    char_cell_line_row_starts, char_cell_logical_line,
-};
+use super::{CharCellTemporaryBlock, CharCellTextIndex};
 
 /// What a display row was projected from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,32 +80,24 @@ pub struct DisplayRow {
 /// rows.
 pub struct DisplayLattice<'a> {
     rows: Vec<DisplayRow>,
-    line_starts: Ref<'a, Vec<usize>>,
-    char_widths: Ref<'a, Vec<u8>>,
+    text_index: Ref<'a, CharCellTextIndex>,
     terminal_width: u16,
     ghosts: Ref<'a, Vec<CharCellTemporaryBlock>>,
-    hidden_line_ranges: &'a [Range<usize>],
+    hidden_line_ranges: Vec<Range<usize>>,
 }
 
 impl<'a> DisplayLattice<'a> {
     pub(super) fn new(
-        line_starts: Ref<'a, Vec<usize>>,
-        char_widths: Ref<'a, Vec<u8>>,
+        text_index: Ref<'a, CharCellTextIndex>,
         terminal_width: u16,
         ghosts: Ref<'a, Vec<CharCellTemporaryBlock>>,
-        hidden_line_ranges: &'a [Range<usize>],
+        hidden_line_ranges: &[Range<usize>],
     ) -> Self {
-        let rows = display_rows(
-            &line_starts,
-            &char_widths,
-            terminal_width,
-            &ghosts,
-            hidden_line_ranges,
-        );
+        let hidden_line_ranges = normalize_hidden_line_ranges(hidden_line_ranges);
+        let rows = display_rows(&text_index, terminal_width, &ghosts, &hidden_line_ranges);
         Self {
             rows,
-            line_starts,
-            char_widths,
+            text_index,
             terminal_width,
             ghosts,
             hidden_line_ranges,
@@ -124,6 +114,47 @@ impl<'a> DisplayLattice<'a> {
         &self.ghosts
     }
 
+    /// Paint-ready text for a buffer or ghost `row`.
+    ///
+    /// Tabs expand to the exact width retained by the layout index for their
+    /// source character. Paint therefore consumes layout's tab geometry
+    /// directly instead of independently recalculating tab stops. Gap rows
+    /// have no source text and return `None`.
+    pub fn row_text(&self, row: &DisplayRow, buffer_chars: &[char]) -> Option<String> {
+        match &row.kind {
+            DisplayRowKind::Buffer { .. } => Some(display_text_for_range(
+                buffer_chars,
+                &self.text_index.char_widths,
+                &row.char_range,
+            )),
+            DisplayRowKind::Ghost { ghost_index } => {
+                let ghost = self.ghosts.get(*ghost_index)?;
+                let ghost_chars: Vec<char> = ghost.content.chars().collect();
+                Some(display_text_for_range(
+                    &ghost_chars,
+                    &ghost.char_widths,
+                    &row.char_range,
+                ))
+            }
+            DisplayRowKind::Gap { .. } => None,
+        }
+    }
+
+    /// The display columns occupied by the clamped buffer character `range`.
+    pub fn display_width(&self, range: Range<CharOffset>) -> u16 {
+        let start = range
+            .start
+            .as_usize()
+            .min(self.text_index.char_widths.len());
+        let end = range
+            .end
+            .as_usize()
+            .clamp(start, self.text_index.char_widths.len());
+        self.text_index.char_widths[start..end]
+            .iter()
+            .fold(0u16, |width, &next| width.saturating_add(u16::from(next)))
+    }
+
     /// The [`TuiGridPoint`] of the gap before 0-based `char_offset`.
     ///
     /// Returns `None` when the offset is inside a hidden line. A deferred-wrap
@@ -133,24 +164,36 @@ impl<'a> DisplayLattice<'a> {
     /// buffer gap for a cursor. Callers sizing a viewport must accommodate
     /// that phantom row.
     pub fn offset_to_display_point(&self, char_offset: CharOffset) -> Option<TuiGridPoint> {
-        let char_idx = char_offset.as_usize();
         let line_index = self
+            .text_index
             .line_starts
-            .partition_point(|&start| start <= char_idx)
+            .partition_point(|&start| start <= char_offset)
             .saturating_sub(1);
-
-        if self
-            .hidden_line_ranges
-            .iter()
-            .any(|range| range.contains(&line_index))
-        {
+        if line_is_hidden(&self.hidden_line_ranges, line_index) {
             return None;
         }
 
-        let line_start = self.line_starts.get(line_index).copied().unwrap_or(0);
-        let line = char_cell_logical_line(&self.line_starts, &self.char_widths, line_index);
-        let (row_within_line, col) =
-            char_cell_line_gap_position(line, self.terminal_width, char_idx - line_start);
+        let line_range = self.text_index.logical_line_char_range(line_index);
+        let char_index = char_offset.as_usize().min(line_range.end);
+        let visual_row = self
+            .text_index
+            .visual_row_for_offset(line_index, char_offset);
+        let row_range = self
+            .text_index
+            .visual_row_char_range(line_index, visual_row);
+        let col = self.text_index.char_widths[row_range.start..char_index]
+            .iter()
+            .map(|&width| width as usize)
+            .sum::<usize>();
+        let mut row_within_line = visual_row - self.text_index.line_visual_row_starts[line_index];
+        let mut display_col = col as u16;
+        if char_index == line_range.end
+            && self.terminal_width > 0
+            && col == self.terminal_width as usize
+        {
+            row_within_line += 1;
+            display_col = 0;
+        }
 
         // The line's display rows are contiguous by construction.
         let mut line_rows = self.rows.iter().enumerate().filter(|(_, row)| {
@@ -158,10 +201,10 @@ impl<'a> DisplayLattice<'a> {
         });
         let (first_row, _) = line_rows.next()?;
         let last_row = line_rows.next_back().map_or(first_row, |(index, _)| index);
-        if (row_within_line as usize) <= last_row - first_row {
+        if row_within_line <= last_row - first_row {
             return Some(TuiGridPoint {
-                row: first_row + row_within_line as usize,
-                col,
+                row: first_row + row_within_line,
+                col: display_col,
             });
         }
 
@@ -172,7 +215,10 @@ impl<'a> DisplayLattice<'a> {
             .iter()
             .position(|row| matches!(row.kind, DisplayRowKind::Buffer { .. }))
             .map_or(self.rows.len(), |offset| last_row + 1 + offset);
-        Some(TuiGridPoint { row, col })
+        Some(TuiGridPoint {
+            row,
+            col: display_col,
+        })
     }
 
     /// The 0-based character offset of the gap at `point`.
@@ -189,7 +235,7 @@ impl<'a> DisplayLattice<'a> {
                 let mut col = 0usize;
                 let mut offset = row.char_range.start;
                 while offset < row.char_range.end {
-                    let width = self.char_widths[offset.as_usize()] as usize;
+                    let width = self.text_index.char_widths[offset.as_usize()] as usize;
                     if col + width > target_col {
                         break;
                     }
@@ -203,19 +249,72 @@ impl<'a> DisplayLattice<'a> {
     }
 }
 
+fn display_text_for_range(chars: &[char], char_widths: &[u8], range: &Range<CharOffset>) -> String {
+    let start = range
+        .start
+        .as_usize()
+        .min(chars.len())
+        .min(char_widths.len());
+    let end = range
+        .end
+        .as_usize()
+        .min(chars.len())
+        .min(char_widths.len())
+        .max(start);
+    let mut text = String::with_capacity(end - start);
+    for (&ch, &width) in chars[start..end].iter().zip(&char_widths[start..end]) {
+        if ch == '\t' {
+            for _ in 0..width {
+                text.push(' ');
+            }
+        } else {
+            text.push(ch);
+        }
+    }
+    text
+}
+
+fn normalize_hidden_line_ranges(ranges: &[Range<usize>]) -> Vec<Range<usize>> {
+    let mut ranges: Vec<_> = ranges
+        .iter()
+        .filter(|range| range.start < range.end)
+        .cloned()
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(previous) = merged.last_mut()
+            && range.start <= previous.end
+        {
+            previous.end = previous.end.max(range.end);
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
+}
+
+fn line_is_hidden(ranges: &[Range<usize>], line_index: usize) -> bool {
+    let candidate = ranges.partition_point(|range| range.end <= line_index);
+    ranges
+        .get(candidate)
+        .is_some_and(|range| range.start <= line_index)
+}
+
 /// Projects the wrap tables + overlays into the flat display-row list
 /// described in the module docs. Ghosts always render, even when their insert
 /// position falls inside a hidden range (they represent changed content),
 /// splitting the gap.
 fn display_rows(
-    line_starts: &[usize],
-    char_widths: &[u8],
+    text_index: &CharCellTextIndex,
     terminal_width: u16,
     ghosts: &[CharCellTemporaryBlock],
     hidden_line_ranges: &[Range<usize>],
 ) -> Vec<DisplayRow> {
     let mut rows = Vec::new();
     let mut pending_ghosts = ghosts.iter().enumerate().peekable();
+    let mut hidden_ranges = hidden_line_ranges.iter().peekable();
     // Hidden lines accumulated since the last visible row; materialized as a
     // Gap row only when more visible content follows (interior gaps).
     let mut pending_hidden: Option<Range<usize>> = None;
@@ -236,10 +335,16 @@ fn display_rows(
             }
         };
 
-    for line_index in 0..line_starts.len() {
-        let hidden = hidden_line_ranges
-            .iter()
-            .any(|range| range.contains(&line_index));
+    for line_index in 0..text_index.line_starts.len() {
+        while hidden_ranges
+            .peek()
+            .is_some_and(|range| range.end <= line_index)
+        {
+            hidden_ranges.next();
+        }
+        let hidden = hidden_ranges
+            .peek()
+            .is_some_and(|range| range.start <= line_index);
         let has_ghosts_here = pending_ghosts
             .peek()
             .is_some_and(|(_, ghost)| (ghost.insert_before.as_u32() as usize) <= line_index);
@@ -263,13 +368,7 @@ fn display_rows(
                 None => pending_hidden = Some(line_index..line_index + 1),
             }
         } else {
-            push_buffer_line_rows(
-                &mut rows,
-                line_index,
-                line_starts,
-                char_widths,
-                terminal_width,
-            );
+            push_buffer_line_rows(&mut rows, line_index, text_index);
             emitted_visible = true;
         }
     }
@@ -290,18 +389,14 @@ fn display_rows(
 fn push_buffer_line_rows(
     rows: &mut Vec<DisplayRow>,
     line_index: usize,
-    line_starts: &[usize],
-    char_widths: &[u8],
-    terminal_width: u16,
+    text_index: &CharCellTextIndex,
 ) {
-    let line_start = line_starts[line_index].min(char_widths.len());
-    let line = char_cell_logical_line(line_starts, char_widths, line_index);
-    let row_starts = char_cell_line_row_starts(line, terminal_width);
-    for (row, &start) in row_starts.iter().enumerate() {
-        let end = row_starts.get(row + 1).copied().unwrap_or(line.len());
+    let line_rows = text_index.logical_line_visual_rows(line_index);
+    for (row, visual_row) in line_rows.enumerate() {
+        let range = text_index.visual_row_char_range(line_index, visual_row);
         rows.push(DisplayRow {
             kind: DisplayRowKind::Buffer { line_index },
-            char_range: CharOffset::range((line_start + start)..(line_start + end)),
+            char_range: CharOffset::range(range),
             is_continuation: row > 0,
         });
     }
@@ -318,14 +413,29 @@ fn push_ghost_rows(
     ghost: &CharCellTemporaryBlock,
     terminal_width: u16,
 ) {
-    let content = ghost.content.strip_suffix('\n').unwrap_or(&ghost.content);
-    let widths: Vec<u8> = content
-        .chars()
-        .map(|c| char_cell_display_width(c) as u8)
-        .collect();
-    let row_starts = char_cell_line_row_starts(&widths, terminal_width);
+    let mut cached_rows = ghost.wrapped_row_starts.borrow_mut();
+    if cached_rows
+        .as_ref()
+        .is_none_or(|(width, _)| *width != terminal_width)
+    {
+        let mut row_starts = cached_rows
+            .take()
+            .map(|(_, row_starts)| row_starts)
+            .unwrap_or_default();
+        super::char_cell_line_row_starts_into(
+            &ghost.line_breaks,
+            &ghost.char_widths,
+            terminal_width,
+            &mut row_starts,
+        );
+        *cached_rows = Some((terminal_width, row_starts));
+    }
+    let row_starts = &cached_rows.as_ref().unwrap().1;
     for (row, &start) in row_starts.iter().enumerate() {
-        let end = row_starts.get(row + 1).copied().unwrap_or(widths.len());
+        let end = row_starts
+            .get(row + 1)
+            .copied()
+            .unwrap_or(ghost.char_widths.len());
         rows.push(DisplayRow {
             kind: DisplayRowKind::Ghost { ghost_index },
             char_range: CharOffset::range(start..end),

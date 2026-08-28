@@ -1,6 +1,6 @@
 use http::StatusCode;
 
-use crate::{register_error, ErrorExt};
+use crate::{ErrorExt, register_error};
 
 impl ErrorExt for reqwest::Error {
     fn is_actionable(&self) -> bool {
@@ -33,12 +33,12 @@ impl ErrorExt for reqwest::Error {
         // If we're making a request to the staging server and get back a 403 Forbidden, the user
         // is probably not whitelisted to talk to staging from their current IP address, so
         // downgrade to a warning.
-        if let (Some(url), Some(status)) = (self.url(), self.status()) {
-            if let Some(domain) = url.domain() {
-                if domain == "staging.warp.dev" && status == StatusCode::FORBIDDEN {
-                    return false;
-                }
-            }
+        if let (Some(url), Some(status)) = (self.url(), self.status())
+            && let Some(domain) = url.domain()
+            && domain == "staging.warp.dev"
+            && status == StatusCode::FORBIDDEN
+        {
+            return false;
         }
 
         true

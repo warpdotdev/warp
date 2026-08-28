@@ -2,22 +2,22 @@ use chrono::{DateTime, Utc};
 use comfy_table::Cell;
 use futures::future;
 use serde::Serialize;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
-use warp_cli::GlobalOptions;
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
 
 use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::output::{self, TableFormat};
+use crate::ai::ambient_agents::AgentConfigSnapshot;
 use crate::ai::ambient_agents::scheduled::{
     CloudScheduledAmbientAgent, ScheduledAgentManager, ScheduledAmbientAgent, UpdateScheduleParams,
 };
-use crate::ai::ambient_agents::AgentConfigSnapshot;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::ids::{ServerId, SyncId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
@@ -64,13 +64,13 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
             };
 
             let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.no_environment {
-                if let Some(environment_id) = loaded_file
+            if environment_args.environment.is_none()
+                && !environment_args.no_environment
+                && let Some(environment_id) = loaded_file
                     .as_ref()
                     .and_then(|f| f.file.environment_id.clone())
-                {
-                    environment_args.environment = Some(environment_id);
-                }
+            {
+                environment_args.environment = Some(environment_id);
             }
 
             let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
@@ -90,14 +90,13 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 }
             };
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(err) => {
-                        super::report_fatal_error(err, ctx);
-                        return;
-                    }
-                };
+            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             let cli_mcp_servers =
                 match super::mcp_config::build_mcp_servers_from_specs(&args.mcp_specs) {
@@ -126,6 +125,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                     // TODO(REMOTE-1134): Support harness flag for scheduled agents.
                     harness: None,
                     harness_auth_secrets: None,
+                    additional_source_repos: None,
                 },
             );
 
@@ -133,7 +133,13 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
             let model_id = match merged_config
                 .model_id
                 .as_deref()
-                .map(|model_id| super::common::validate_agent_mode_base_model_id(model_id, ctx))
+                .map(|model_id| {
+                    super::common::validate_agent_mode_base_model_id_for_scope(
+                        model_id,
+                        &args.scope,
+                        ctx,
+                    )
+                })
                 .transpose()
             {
                 Ok(id) => id.map(|id| id.to_string()),
@@ -437,10 +443,11 @@ fn update(ctx: &mut AppContext, args: UpdateScheduleArgs) -> anyhow::Result<()> 
             };
 
             let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.remove_environment {
-                if let Some(environment_id) = file_config.and_then(|f| f.environment_id.clone()) {
-                    environment_args.environment = Some(environment_id);
-                }
+            if environment_args.environment.is_none()
+                && !environment_args.remove_environment
+                && let Some(environment_id) = file_config.and_then(|f| f.environment_id.clone())
+            {
+                environment_args.environment = Some(environment_id);
             }
 
             let environment_id = match EnvironmentChoice::resolve_for_update(environment_args, ctx)

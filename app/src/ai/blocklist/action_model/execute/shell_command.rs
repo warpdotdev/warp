@@ -6,7 +6,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Local};
 use futures::channel::oneshot;
 use futures::future::BoxFuture;
-use futures::{select, FutureExt};
+use futures::{FutureExt, select};
 use futures_lite::pin;
 use itertools::Itertools;
 use parking_lot::FairMutex;
@@ -22,18 +22,20 @@ use crate::ai::agent::{
     ReadShellCommandOutputResult, RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
-use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::blocklist::BlocklistAIPermissions;
+use crate::ai::blocklist::action_model::recording_controller::RecordingController;
+use crate::ai::blocklist::permissions::CommandExecutionPermission;
 use crate::ai::execution_profiles::WriteToPtyPermission;
+use crate::terminal::TerminalModel;
 use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::{
-    formatted_terminal_contents_for_input, Block, BlockId, CURSOR_MARKER,
+    Block, BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
-use crate::terminal::TerminalModel;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::workspaces::user_workspaces::TeamContext;
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -106,7 +108,8 @@ impl ShellCommandExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         let blocklist_permissions = BlocklistAIPermissions::as_ref(ctx);
         match &input.action.action {
@@ -131,6 +134,7 @@ impl ShellCommandExecutor {
                     is_read_only.unwrap_or(false),
                     *is_risky,
                     Some(self.terminal_view_id),
+                    scope,
                     ctx,
                 );
                 if let CommandExecutionPermission::Allowed(reason) = autoexecution_permission {
@@ -139,12 +143,9 @@ impl ShellCommandExecutor {
                         ctx
                     );
                 } else if let CommandExecutionPermission::Denied(reason) = autoexecution_permission
+                    && AppExecutionMode::as_ref(ctx).is_autonomous()
                 {
-                    if AppExecutionMode::as_ref(ctx).is_autonomous() {
-                        log::warn!(
-                            "Command denied during autonomous execution, reason: {reason:?}"
-                        );
-                    }
+                    log::warn!("Command denied during autonomous execution, reason: {reason:?}");
                 }
                 autoexecution_permission.is_allowed()
             }
@@ -160,6 +161,7 @@ impl ShellCommandExecutor {
                     let should_autoexecute = match blocklist_permissions.can_write_to_pty(
                         &input.conversation_id,
                         Some(self.terminal_view_id),
+                        scope,
                         ctx,
                     ) {
                         WriteToPtyPermission::AlwaysAllow => true,
@@ -211,7 +213,7 @@ impl ShellCommandExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let model = self.terminal_model.lock();
 
         // Determine the action we want to take based on the input.
@@ -245,7 +247,6 @@ impl ShellCommandExecutor {
                 // was requested, cancel instead of executing.
                 let is_displaced_by_other_conversation = model
                     .block_list()
-                    .agent_view_state()
                     .active_conversation_id()
                     .is_some_and(|active_id| active_id != input.conversation_id);
                 if is_displaced_by_other_conversation {
@@ -262,6 +263,14 @@ impl ShellCommandExecutor {
                     } else {
                         command.clone()
                     };
+                // Let the recording controller decide whether this command's
+                // on-screen work should be kept in an active computer-use
+                // recording, opening an action group before it starts if so.
+                let conversation_id = input.conversation_id;
+                let opened_recording_group = RecordingController::handle(ctx)
+                    .update(ctx, |controller, _| {
+                        controller.maybe_begin_action_group(conversation_id, command)
+                    });
                 ctx.emit(ShellCommandExecutorEvent::ExecuteCommand {
                     action_id: action_id.clone(),
                     command: decorated_command,
@@ -279,6 +288,24 @@ impl ShellCommandExecutor {
                             handle.update(ctx, |me, _| {
                                 me.block_finished_senders.remove(&block_selector);
                                 me.force_refresh_senders.remove(&block_selector);
+                            });
+                        }
+
+                        if opened_recording_group {
+                            RecordingController::handle(ctx).update(ctx, |controller, _| {
+                                match &result {
+                                    // Commit regardless of exit code: failed browser
+                                    // automation is still on-screen work worth keeping.
+                                    ActionResult::CommandFinished { .. } => {
+                                        controller.commit_action_group_now(conversation_id);
+                                    }
+                                    ActionResult::Cancelled | ActionResult::BlockNotFound => {
+                                        controller.discard_action_group(conversation_id);
+                                    }
+                                    // Still running; the group stays open until a later
+                                    // poll observes the finished block.
+                                    ActionResult::LongRunningCommandSnapshot { .. } => {}
+                                }
                             });
                         }
 
@@ -362,6 +389,13 @@ impl ShellCommandExecutor {
                     let exit_code = block.exit_code();
                     let start_ts = block.start_ts().cloned();
                     let completed_ts = block.completed_ts().cloned();
+                    // A finished poll settles any action group left open by a
+                    // long-running `playwright-cli` command; no-op when no
+                    // group is pending.
+                    let conversation_id = input.conversation_id;
+                    RecordingController::handle(ctx).update(ctx, |controller, _| {
+                        controller.commit_action_group_now(conversation_id);
+                    });
                     return ActionExecution::Sync(AIAgentActionResultType::ReadShellCommandOutput(
                         ReadShellCommandOutputResult::CommandFinished {
                             command,
@@ -376,6 +410,7 @@ impl ShellCommandExecutor {
                 drop(model);
 
                 let block_selector = BlockSelector::Id(block_id.clone());
+                let conversation_id = input.conversation_id;
                 ActionExecution::new_async(
                     self.action_result_future(block_selector.clone(), delay.clone()),
                     move |result, ctx| {
@@ -385,6 +420,17 @@ impl ShellCommandExecutor {
                                 me.block_finished_senders.remove(&block_selector);
                                 me.force_refresh_senders.remove(&block_selector);
                             });
+                        }
+
+                        match &result {
+                            ActionResult::CommandFinished { .. } => {
+                                RecordingController::handle(ctx).update(ctx, |controller, _| {
+                                    controller.commit_action_group_now(conversation_id);
+                                });
+                            }
+                            ActionResult::LongRunningCommandSnapshot { .. }
+                            | ActionResult::Cancelled
+                            | ActionResult::BlockNotFound => {}
                         }
 
                         action_result_for_read_shell_command_output(command.clone(), result)
@@ -518,7 +564,7 @@ impl ShellCommandExecutor {
         &mut self,
         block_selector: BlockSelector,
         delay: Option<ShellCommandDelay>,
-    ) -> impl Spawnable<Output = ActionResult> {
+    ) -> impl Spawnable<Output = ActionResult> + use<> {
         // Create a channel to notify us when we receive block metadata.
         let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
         self.block_finished_senders
@@ -592,7 +638,8 @@ impl ShellCommandExecutor {
             // At this point, we've either received block metadata or we've timed out.
             // Check the current state of the block and produce a result accordingly.
             let model = terminal_model.lock();
-            let result = match block_selector.get_block(&model) {
+
+            match block_selector.get_block(&model) {
                 Some(block) => {
                     if block.finished() {
                         ActionResult::CommandFinished {
@@ -627,9 +674,7 @@ impl ShellCommandExecutor {
                     }
                 }
                 None => ActionResult::BlockNotFound,
-            };
-
-            result
+            }
         }
     }
 
@@ -674,10 +719,10 @@ impl ShellCommandExecutor {
             .cloned();
         drop(terminal_model);
 
-        if let Some(selector) = matching_selector {
-            if let Some(sender) = self.force_refresh_senders.remove(&selector) {
-                let _ = sender.send(());
-            }
+        if let Some(selector) = matching_selector
+            && let Some(sender) = self.force_refresh_senders.remove(&selector)
+        {
+            let _ = sender.send(());
         }
     }
 

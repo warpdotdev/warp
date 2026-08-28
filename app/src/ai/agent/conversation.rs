@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::document::AIDocumentId;
@@ -7,8 +6,6 @@ use ai::skills::SkillPathOrigin;
 use anyhow::Context as _;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use vec1::{Size0Error, Vec1};
 use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
@@ -16,8 +13,8 @@ use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warp_errors::report_error;
 use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
@@ -29,8 +26,8 @@ use super::api::ServerConversationToken;
 use super::task::helper::*;
 use super::task::transaction::{SavedTask, Transaction};
 use super::task::{
-    derive_todo_lists_from_root_task, ExtractMessagesError, Task, TaskId, TaskMessageContext,
-    UpdateTaskError, UpgradeOptimisticTaskError,
+    ExtractMessagesError, Task, TaskId, TaskMessageContext, UpdateTaskError,
+    UpgradeOptimisticTaskError, derive_todo_lists_from_root_task,
 };
 use super::task_store::TaskStore;
 use super::{
@@ -41,8 +38,8 @@ use super::{
     StopRecordingResult, SuggestedLoggingId, Suggestions,
 };
 use crate::ai::agent::api::convert_conversation::{
-    compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,
-    ConvertToExchanges,
+    ConvertToExchanges, compute_time_to_first_token_ms_from_messages,
+    proto_timestamp_to_local_datetime,
 };
 use crate::ai::agent::comment::CodeReview;
 use crate::ai::agent::icons::{
@@ -64,11 +61,11 @@ use crate::ai::llms::LLMPreferences;
 use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
-use crate::persistence::model::{
-    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
-    PersistedAutoexecuteMode, ToolUsageMetadata,
-};
 use crate::persistence::ModelEvent;
+use crate::persistence::model::{
+    AgentConversationData, ChargedUsageTotals, ContextWindowSegment, ConversationUsageMetadata,
+    ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
+};
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::block::{
@@ -183,11 +180,49 @@ pub struct ConversationUsageTotals {
     /// shows as "Credits spent (total)" and the conversation details panel
     /// shows as "Credits used".
     pub credits_spent: f32,
-    /// Total provider cost across all models, in US cents. Fractional —
-    /// per-request provider costs are routinely sub-cent — and `f32` to match
-    /// both the upstream `TokenUsage.cost_in_cents` proto float it sums and
-    /// `credits_spent` above.
-    pub cost_in_cents: f32,
+    /// Total provider cost across all models, in US cents. `None` means the
+    /// server did not provide a historical baseline; it must not be rendered
+    /// as `$0.00` or as an incremental-only total.
+    pub cost_in_cents: Option<f32>,
+    /// Whether the conversation has reported any usage. Derived from the
+    /// contents of the usage metadata (not its mere presence), so a restored
+    /// conversation that never ran a request keeps the footer entry hidden,
+    /// while a restored legacy conversation with real usage but an unknown
+    /// historical cost still shows it.
+    pub has_usage: bool,
+    /// Cumulative per-category charged-usage breakdown (input/output/
+    /// cache-read/cache-write cost + token counts) for the whole
+    /// conversation so far, from `ConversationUsageMetadata.total_charges`.
+    /// `None` when the server didn't provide it (flag off, or a legacy
+    /// conversation).
+    pub charged_usage: Option<ChargedUsageTotals>,
+}
+
+impl ConversationUsageTotals {
+    /// Returns the summed total of the tracked usage
+    /// if not available, falls back to the legacy provider total
+    pub fn total_cost_in_cents(&self) -> Option<f32> {
+        self.charged_usage
+            .map(|usage| usage.total_cost_in_cents())
+            .or(self.cost_in_cents)
+    }
+}
+
+/// Whether persisted or server usage metadata carries evidence that the
+/// conversation actually incurred usage. Metadata presence alone is not
+/// enough: the local persistence path always writes a (possibly all-default)
+/// metadata blob, and a restored conversation that never ran a request must
+/// keep the footer's usage entry hidden.
+fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool {
+    // A present provider cost counts even at 0.0: the server only records a
+    // cost once a turn has completed accounting, so `Some(0.0)` is a known
+    // zero baseline (rendered as $0.00), unlike `None` (unknown).
+    metadata.credits_spent != 0.0
+        || metadata.platform_credits_spent != 0.0
+        || metadata.total_provider_cost_in_cents.is_some()
+        || !metadata.token_usage.is_empty()
+        || metadata.context_window_usage != 0.0
+        || metadata.was_summarized
 }
 
 // basic info for creating a dummy command block based on an exchange's inputs
@@ -315,6 +350,14 @@ pub struct AIConversation {
 
     total_request_cost: RequestCost,
     total_token_usage_by_model: HashMap<String, TokenUsage>,
+    /// Server-authoritative cumulative provider cost in US cents. New
+    /// conversations start at a known zero; restored legacy conversations can
+    /// remain `None` until a server snapshot is available.
+    total_provider_cost_in_cents: Option<f32>,
+    /// True once hydrated usage metadata shows evidence of usage (see
+    /// [`usage_metadata_indicates_usage`]) or a live response reports usage
+    /// (even when its numeric totals are zero).
+    has_usage_metadata: bool,
 
     /// Fallback title used when no task description or initial query exists.
     fallback_display_title: Option<String>,
@@ -404,6 +447,8 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
+            total_provider_cost_in_cents: Some(0.),
+            has_usage_metadata: false,
             fallback_display_title: None,
             artifacts: Vec::new(),
             parent_agent_id: None,
@@ -477,7 +522,7 @@ impl AIConversation {
                 })
                 .collect();
 
-            let mut tasks_by_id = HashMap::new();
+            let mut tasks_by_id = hashbrown::HashMap::new();
             // Defer root selection until we've seen every parentless task so
             // we can deterministically prefer a candidate with non-empty
             // messages. Heals legacy DB rows that contain an orphan
@@ -537,6 +582,7 @@ impl AIConversation {
         let (
             server_conversation_token,
             forked_from_server_conversation_token,
+            has_usage_metadata,
             conversation_usage_metadata,
             reverted_action_ids,
             artifacts,
@@ -553,6 +599,10 @@ impl AIConversation {
             let server_conversation_token = data
                 .server_conversation_token
                 .map(ServerConversationToken::new);
+            let has_usage_metadata = data
+                .conversation_usage_metadata
+                .as_ref()
+                .is_some_and(usage_metadata_indicates_usage);
             let conversation_usage_metadata = data.conversation_usage_metadata.unwrap_or_default();
             let reverted_action_ids: HashSet<AIAgentActionId> = data
                 .reverted_action_ids
@@ -563,17 +613,18 @@ impl AIConversation {
             let forked_from_server_conversation_token = data
                 .forked_from_server_conversation_token
                 .map(ServerConversationToken::new);
-            let artifacts: Vec<Artifact> =
-                data.artifacts_json
-                    .and_then(|json| {
-                        serde_json::from_str(&json)
-                            .map_err(|e| {
-                                report_error!(anyhow::Error::new(e)
-                                    .context("Failed to deserialize artifacts"))
-                            })
-                            .ok()
-                    })
-                    .unwrap_or_default();
+            let artifacts: Vec<Artifact> = data
+                .artifacts_json
+                .and_then(|json| {
+                    serde_json::from_str(&json)
+                        .map_err(|e| {
+                            report_error!(
+                                anyhow::Error::new(e).context("Failed to deserialize artifacts")
+                            )
+                        })
+                        .ok()
+                })
+                .unwrap_or_default();
             let parent_conversation_id = data
                 .parent_conversation_id
                 .and_then(|id| AIConversationId::try_from(id).ok());
@@ -587,6 +638,7 @@ impl AIConversation {
             (
                 server_conversation_token,
                 forked_from_server_conversation_token,
+                has_usage_metadata,
                 conversation_usage_metadata,
                 reverted_action_ids,
                 artifacts,
@@ -604,6 +656,7 @@ impl AIConversation {
             (
                 None,
                 None,
+                false,
                 ConversationUsageMetadata::default(),
                 HashSet::new(),
                 Vec::new(),
@@ -618,6 +671,7 @@ impl AIConversation {
                 false,
             )
         };
+        let total_provider_cost_in_cents = conversation_usage_metadata.total_provider_cost_in_cents;
 
         Ok(Self {
             id,
@@ -644,6 +698,8 @@ impl AIConversation {
             dismissed_suggestion_ids: Default::default(),
             total_request_cost: RequestCost::new(0.),
             total_token_usage_by_model: Default::default(),
+            total_provider_cost_in_cents,
+            has_usage_metadata,
             optimistic_cli_subagent_subtask_id: None,
             fallback_display_title: None,
             artifacts,
@@ -737,14 +793,43 @@ impl AIConversation {
         self.conversation_usage_metadata.platform_credits_spent
     }
 
-    /// Test-only helper that sets the conversation's credit total directly.
-    /// Used by unit tests that exercise downstream credit-aware logic
-    /// (e.g. the orchestration credit rollup) without having to wire up a
-    /// full `StreamFinished` event.
+    /// Test-only helper that sets the conversation's credit total directly,
+    /// without wiring up a full `StreamFinished` event.
     #[cfg(test)]
     pub(crate) fn set_credits_spent_for_test(&mut self, credits: f32) {
         self.conversation_usage_metadata.credits_spent = credits;
         self.conversation_usage_metadata.platform_credits_spent = 0.0;
+    }
+
+    /// Test-only helper that sets (or clears) the conversation's dollar-cost
+    /// baseline directly, mirroring what `set_server_metadata` would derive
+    /// from a real snapshot, without wiring up a full snapshot.
+    #[cfg(test)]
+    pub(crate) fn set_cost_in_cents_for_test(&mut self, cost_in_cents: Option<f32>) {
+        self.total_provider_cost_in_cents = cost_in_cents;
+        self.conversation_usage_metadata
+            .total_provider_cost_in_cents = cost_in_cents;
+    }
+
+    /// Test-only helper that sets (or clears) the conversation's cumulative
+    /// charged-usage breakdown directly, mirroring what a real
+    /// `ConversationUsageMetadata.total_charges` update would populate,
+    /// without wiring up a full `StreamFinished` event.
+    #[cfg(test)]
+    pub(crate) fn set_charged_usage_for_test(&mut self, charged_usage: Option<ChargedUsageTotals>) {
+        self.conversation_usage_metadata.total_charged_usage = charged_usage;
+    }
+
+    /// Test-only helper that sets (or clears) the conversation's last-block
+    /// charged-usage breakdown directly, mirroring what a real
+    /// `StreamFinished.request_charges` update would populate.
+    #[cfg(test)]
+    pub(crate) fn set_charged_usage_for_last_block_for_test(
+        &mut self,
+        charged_usage: Option<ChargedUsageTotals>,
+    ) {
+        self.conversation_usage_metadata
+            .charged_usage_for_last_block = charged_usage;
     }
 
     /// Test-only helper that simulates the root-task upgrade performed by the
@@ -778,6 +863,18 @@ impl AIConversation {
         self.conversation_usage_metadata
             .credits_spent_for_last_block
             .map(|credits| (credits * 10.0).round() / 10.0)
+    }
+
+    /// Per-category charged-usage breakdown over the last block, where the
+    /// block comprises all agent outputs since the most recent user input
+    /// (mirrors [`Self::credits_spent_for_last_block`], but as a full
+    /// input/output/cache-read/cache-write cost + token breakdown rather
+    /// than a bare credits figure). `None` when the server didn't provide
+    /// `StreamFinished.request_charges` (flag off) or before any block has
+    /// completed.
+    pub fn charged_usage_for_last_block(&self) -> Option<ChargedUsageTotals> {
+        self.conversation_usage_metadata
+            .charged_usage_for_last_block
     }
 
     /// Time to first token for the last completed set of agent responses
@@ -1007,7 +1104,7 @@ impl AIConversation {
     pub fn new_exchange_ids_for_response(
         &self,
         stream_id: &ResponseStreamId,
-    ) -> impl Iterator<Item = AIAgentExchangeId> + '_ {
+    ) -> impl Iterator<Item = AIAgentExchangeId> + '_ + use<'_> {
         self.added_exchanges_by_response
             .get(stream_id)
             .into_iter()
@@ -1020,6 +1117,10 @@ impl AIConversation {
 
     pub fn server_conversation_token(&self) -> Option<&ServerConversationToken> {
         self.server_conversation_token.as_ref()
+    }
+    pub fn debugging_server_conversation_token(&self) -> Option<&ServerConversationToken> {
+        self.server_conversation_token()
+            .or_else(|| self.forked_from_server_conversation_token())
     }
 
     /// Returns the server-assigned run identifier as a string.
@@ -1080,6 +1181,24 @@ impl AIConversation {
     }
 
     pub fn set_server_metadata(&mut self, metadata: ServerAIConversationMetadata) {
+        // An absent field (legacy server or conversation) must not erase a
+        // known baseline. Asynchronous metadata snapshots can also be stale
+        // relative to live per-request cost accounting, so a snapshot may
+        // only seed or advance the displayed total — never regress it or
+        // re-add costs the client already counted.
+        if let Some(total_provider_cost_in_cents) = metadata.usage.total_provider_cost_in_cents
+            && self
+                .total_provider_cost_in_cents
+                .is_none_or(|current| total_provider_cost_in_cents >= current)
+        {
+            self.total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+            self.conversation_usage_metadata
+                .total_provider_cost_in_cents = Some(total_provider_cost_in_cents);
+        }
+        // Usage evidence is derived from the metadata's contents (not its
+        // presence) so a zero-usage conversation keeps the footer entry
+        // hidden.
+        self.has_usage_metadata |= usage_metadata_indicates_usage(&metadata.usage);
         self.server_metadata = Some(metadata);
     }
 
@@ -1152,16 +1271,12 @@ impl AIConversation {
         self.pinned = pinned;
     }
 
-    /// Returns true if this conversation was spawned by a parent orchestrator agent.
+    /// Returns true if this conversation was spawned by a parent orchestrator
+    /// agent — either via a local parent placeholder
+    /// (`parent_conversation_id`, set in the GUI parent) or via the parent's
+    /// server-side run identifier (`parent_agent_id`, stamped in
+    /// driver-hosted processes).
     pub fn is_child_agent_conversation(&self) -> bool {
-        self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
-    }
-
-    /// True iff this conversation knows about a parent agent — either via a
-    /// local parent placeholder (`parent_conversation_id`, set in the GUI
-    /// parent) or via the parent's server-side run identifier
-    /// (`parent_agent_id`, stamped in driver-hosted processes).
-    pub fn has_parent_agent(&self) -> bool {
         self.parent_conversation_id.is_some() || self.parent_agent_id.is_some()
     }
 
@@ -1318,19 +1433,16 @@ impl AIConversation {
                     message: AIAgentOutputMessageType::Action(action),
                     ..
                 } = message
+                    && &action.id == action_id
+                    && let super::AIAgentActionType::CreateDocuments(
+                        super::CreateDocumentsRequest { documents },
+                    ) = &action.action
                 {
-                    if &action.id == action_id {
-                        if let super::AIAgentActionType::CreateDocuments(
-                            super::CreateDocumentsRequest { documents },
-                        ) = &action.action
-                        {
-                            let titles = documents
-                                .iter()
-                                .map(|doc| doc.title.clone())
-                                .collect::<Vec<_>>();
-                            return Some(titles);
-                        }
-                    }
+                    let titles = documents
+                        .iter()
+                        .map(|doc| doc.title.clone())
+                        .collect::<Vec<_>>();
+                    return Some(titles);
                 }
             }
         }
@@ -1409,11 +1521,9 @@ impl AIConversation {
         }
 
         // Check if conversation was never continued (no user queries in any exchange)
-        let never_continued = self
-            .root_task_exchanges()
-            .all(|exchange| !exchange.has_user_query());
 
-        never_continued
+        self.root_task_exchanges()
+            .all(|exchange| !exchange.has_user_query())
     }
 
     /// Returns true if this conversation should be unconditionally excluded
@@ -1651,23 +1761,22 @@ impl AIConversation {
         for artifact in &mut self.artifacts {
             if let Artifact::Plan {
                 document_uid: doc_uid,
-                notebook_uid: ref mut nb_uid,
+                notebook_uid: nb_uid,
                 ..
             } = artifact
+                && doc_uid == &document_uid
             {
-                if doc_uid == &document_uid {
-                    *nb_uid = Some(notebook_uid);
-                    let updated_artifact = artifact.clone();
-                    self.write_updated_conversation_state(ctx);
-                    if let Some(terminal_surface_id) = terminal_surface_id {
-                        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                            terminal_surface_id,
-                            conversation_id: self.id,
-                            artifact: updated_artifact,
-                        });
-                    }
-                    return;
+                *nb_uid = Some(notebook_uid);
+                let updated_artifact = artifact.clone();
+                self.write_updated_conversation_state(ctx);
+                if let Some(terminal_surface_id) = terminal_surface_id {
+                    ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
+                        terminal_surface_id,
+                        conversation_id: self.id,
+                        artifact: updated_artifact,
+                    });
                 }
+                return;
             }
         }
     }
@@ -1838,7 +1947,7 @@ impl AIConversation {
                             buffered_action_ids.push(action.id.clone());
                         }
                     }
-                    AIAgentActionType::StopRecording { recording_id } => {
+                    AIAgentActionType::StopRecording { recording_id, .. } => {
                         let Some(span) = active_span.as_ref() else {
                             continue;
                         };
@@ -1861,7 +1970,9 @@ impl AIConversation {
                                 active_span = None;
                             }
                             Some(AIAgentActionResultType::StopRecording(
-                                StopRecordingResult::Error(_) | StopRecordingResult::Cancelled,
+                                StopRecordingResult::Error(_)
+                                | StopRecordingResult::Cancelled
+                                | StopRecordingResult::Discarded,
                             )) => {
                                 // The stop saved no recording, so the buffered
                                 // rows must not be labeled as captured.
@@ -2082,10 +2193,9 @@ impl AIConversation {
             if let Some(idx) = added_exchanges
                 .iter()
                 .position(|new_exchange| new_exchange.exchange_id == exchange_id)
+                && let Err(Size0Error) = added_exchanges.remove(idx)
             {
-                if let Err(Size0Error) = added_exchanges.remove(idx) {
-                    response_entries_to_remove.push(stream_id.clone());
-                }
+                response_entries_to_remove.push(stream_id.clone());
             }
         }
         for response_id in response_entries_to_remove.into_iter() {
@@ -2099,10 +2209,10 @@ impl AIConversation {
                 .then(|| task.id().clone())
         });
 
-        if let Some(task_id) = task_id {
-            if let Some(exchange) = self.task_store.remove_task_exchange(&task_id, exchange_id) {
-                return Ok(exchange);
-            }
+        if let Some(task_id) = task_id
+            && let Some(exchange) = self.task_store.remove_task_exchange(&task_id, exchange_id)
+        {
+            return Ok(exchange);
         }
         Err(UpdateConversationError::ExchangeNotFound)
     }
@@ -2142,12 +2252,18 @@ impl AIConversation {
     pub fn update_cost_and_usage_for_request(
         &mut self,
         request_cost: Option<RequestCost>,
+        request_charges: Option<stream_finished::RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
         was_user_initiated_request: bool,
         ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
+        self.has_usage_metadata |=
+            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         for usage in token_usage.into_iter() {
+            if let Some(total_provider_cost_in_cents) = self.total_provider_cost_in_cents.as_mut() {
+                *total_provider_cost_in_cents += usage.cost_in_cents;
+            }
             let entry = self
                 .total_token_usage_by_model
                 .entry(usage.model_id.clone())
@@ -2184,12 +2300,39 @@ impl AIConversation {
             self.total_request_cost += request_cost;
         }
 
+        // Mirrors the `credits_spent_for_last_block` reset above: a
+        // user-initiated request starts a new response block. Reset
+        // unconditionally (not only inside the `Some(request_charges)`
+        // branch below) so a later request in the same turn that happens
+        // to carry no charges (e.g. the flag is off for it) doesn't leave
+        // the previous block's stale totals in place, which would pair a
+        // fresh credits figure with stale token/cost details.
+        if was_user_initiated_request {
+            self.conversation_usage_metadata
+                .charged_usage_for_last_block = None;
+        }
+        if let Some(request_charges) = request_charges {
+            let totals = ChargedUsageTotals::from(&request_charges);
+            let charged_usage_for_last_block = self
+                .conversation_usage_metadata
+                .charged_usage_for_last_block
+                .get_or_insert_with(ChargedUsageTotals::default);
+            *charged_usage_for_last_block += totals;
+        }
+
         if let Some(usage_metadata) = usage_metadata {
             self.conversation_usage_metadata.context_window_usage =
                 usage_metadata.context_window_usage;
             self.conversation_usage_metadata.credits_spent = usage_metadata.credits_spent;
-            self.conversation_usage_metadata.platform_credits_spent =
-                usage_metadata.platform_credits_spent;
+            #[allow(deprecated)]
+            {
+                self.conversation_usage_metadata.platform_credits_spent =
+                    usage_metadata.platform_credits_spent;
+            }
+            self.conversation_usage_metadata.total_charged_usage = usage_metadata
+                .total_charges
+                .as_ref()
+                .map(ChargedUsageTotals::from);
             let llm_preferences = LLMPreferences::as_ref(ctx);
             self.conversation_usage_metadata.token_usage =
                 footer_model_token_usage(&usage_metadata, llm_preferences);
@@ -2212,6 +2355,8 @@ impl AIConversation {
                 self.conversation_usage_metadata.was_summarized = usage_metadata.summarized;
             }
         }
+        self.conversation_usage_metadata
+            .total_provider_cost_in_cents = self.total_provider_cost_in_cents;
         Ok(())
     }
 
@@ -2796,9 +2941,7 @@ impl AIConversation {
                             terminal_surface_id,
                         });
 
-                        for AddedExchange {
-                            ref mut task_id, ..
-                        } in self
+                        for AddedExchange { task_id, .. } in self
                             .added_exchanges_by_response
                             .get_mut(response_stream_id)
                             .ok_or(UpdateConversationError::NoPendingRequest)?
@@ -2912,8 +3055,8 @@ impl AIConversation {
                         Some(api::message::Message::OrchestrationConfigSnapshot(
                             snapshot,
                         )) => {
-                            if !snapshot.plan_id.is_empty() {
-                                if let Some(config) = snapshot
+                            if !snapshot.plan_id.is_empty()
+                                && let Some(config) = snapshot
                                     .config
                                     .as_ref()
                                     .map(OrchestrationConfig::from_proto)
@@ -2934,7 +3077,6 @@ impl AIConversation {
                                         );
                                     }
                                 }
-                            }
                         }
                         Some(api::message::Message::ToolCallResult(tcr)) => {
                             // Shared-session viewers do not own temp directories created by
@@ -2950,6 +3092,15 @@ impl AIConversation {
                                     &task_id,
                                     &self.task_store,
                                 );
+                                // A computer-use subagent finishing normally ends its background
+                                // session; restore the user's keyboard focus so it no longer
+                                // targets the driven window. Scoped to this conversation so a
+                                // concurrent background session in another conversation is left
+                                // intact. Idempotent and a no-op when this conversation has no
+                                // active background session (e.g. other subagent types). The
+                                // ctrl-c / cancel path, where no SubagentResult is produced, is
+                                // handled in `BlocklistAIController::cancel_conversation_progress`.
+                                computer_use::end_background_session(&self.id.to_string());
                             }
                         }
                         Some(api::message::Message::ModelUsed(model_used)) => {
@@ -3086,26 +3237,22 @@ impl AIConversation {
                 // tool call result updating a single message in place).
                 if let Some(api::message::Message::OrchestrationConfigSnapshot(snapshot)) =
                     &message.message
+                    && !snapshot.plan_id.is_empty()
+                    && let Some(config) = snapshot
+                        .config
+                        .as_ref()
+                        .map(OrchestrationConfig::from_proto)
                 {
-                    if !snapshot.plan_id.is_empty() {
-                        if let Some(config) = snapshot
-                            .config
-                            .as_ref()
-                            .map(OrchestrationConfig::from_proto)
-                        {
-                            let status =
-                                OrchestrationConfigStatus::from_proto(snapshot.status.as_ref());
-                            if self.set_orchestration_config_for_plan(
-                                snapshot.plan_id.clone(),
-                                config,
-                                status,
-                            ) {
-                                ctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
-                                    conversation_id: self.id,
-                                    from_restore: false,
-                                });
-                            }
-                        }
+                    let status = OrchestrationConfigStatus::from_proto(snapshot.status.as_ref());
+                    if self.set_orchestration_config_for_plan(
+                        snapshot.plan_id.clone(),
+                        config,
+                        status,
+                    ) {
+                        ctx.emit(BlocklistAIHistoryEvent::OrchestrationConfigUpdated {
+                            conversation_id: self.id,
+                            from_restore: false,
+                        });
                     }
                 }
 
@@ -3416,6 +3563,13 @@ impl AIConversation {
         &self.todo_lists
     }
 
+    /// Replaces the conversation's todo lists directly, bypassing the normal
+    /// todo-operation replay, for projection tests.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_todo_lists_for_test(&mut self, todo_lists: Vec<AIAgentTodoList>) {
+        self.todo_lists = todo_lists;
+    }
+
     pub fn active_todo_list(&self) -> Option<&AIAgentTodoList> {
         self.todo_lists.last()
     }
@@ -3476,8 +3630,16 @@ impl AIConversation {
         &mut self,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        // We should not persist non-local conversations (e.g. shared sessions).
-        if self.is_viewing_shared_session {
+        // Don't persist viewer conversations (e.g. shared sessions).
+        // Under the unified stack, remote child placeholder conversations are
+        // also not persisted — they are rediscovered on restore via the
+        // ancestor-list seed, so a persisted row would only risk going stale.
+        // Under the flag-off path, remote children must be persisted so they
+        // survive restarts.
+        if self.is_viewing_shared_session
+            || (self.is_remote_child
+                && crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled())
+        {
             return;
         }
 
@@ -3522,12 +3684,13 @@ impl AIConversation {
             }
         };
 
+        let updated_tasks: Vec<_> = self
+            .all_tasks()
+            .filter_map(|task| task.source_for_persistence())
+            .collect();
         let event = ModelEvent::UpdateMultiAgentConversation {
             conversation_id: self.id.to_string(),
-            updated_tasks: self
-                .all_tasks()
-                .filter_map(|task| task.source_for_persistence())
-                .collect(),
+            updated_tasks,
             conversation_data: AgentConversationData {
                 server_conversation_token: self
                     .server_conversation_token
@@ -3679,17 +3842,15 @@ impl AIConversation {
     }
 
     /// Compact usage totals for lightweight displays (e.g. the TUI footer's
-    /// usage entry): the GUI-consistent credits total plus the accumulated
-    /// provider dollar cost from the per-request `StreamFinished` usage rows.
+    /// usage entry): the GUI-consistent credits total plus the server-seeded
+    /// provider cost and any permitted live per-request deltas.
     pub fn usage_totals(&self) -> ConversationUsageTotals {
-        let mut totals = ConversationUsageTotals {
+        ConversationUsageTotals {
             credits_spent: self.inference_credits_spent() + self.platform_credits_spent(),
-            cost_in_cents: 0.0,
-        };
-        for usage in self.total_token_usage_by_model.values() {
-            totals.cost_in_cents += usage.cost_in_cents;
+            cost_in_cents: self.total_provider_cost_in_cents,
+            has_usage: self.has_usage_metadata,
+            charged_usage: self.conversation_usage_metadata.total_charged_usage,
         }
-        totals
     }
 
     /// Normalize all newlines to CRLF so restored blocks render lines starting at column 0,
@@ -3787,23 +3948,23 @@ impl AIConversation {
             if let Some(tool_call) = message.tool_call() {
                 // Check if this is a moved-messages subtask (summarization subagent).
                 // If so, extract its command blocks here to maintain chronological order.
-                if let Some(subagent) = tool_call.subagent() {
-                    if subagent.is_summarization() {
-                        let subtask_id = TaskId::new(subagent.task_id.clone());
-                        if let Some(subtask) = self.task_store.get(&subtask_id) {
-                            if let Some(subtask_source) = subtask.source() {
-                                // Recursively extract from subtask (in case of nested summarization).
-                                self.extract_command_blocks_from_messages(
-                                    &subtask_source.messages,
-                                    message_id_to_exchange,
-                                    command_blocks,
-                                    seen_command_ids,
-                                );
-                            }
-                        }
-                        // Don't process this message further - it's just a subagent call.
-                        continue;
+                if let Some(subagent) = tool_call.subagent()
+                    && subagent.is_summarization()
+                {
+                    let subtask_id = TaskId::new(subagent.task_id.clone());
+                    if let Some(subtask) = self.task_store.get(&subtask_id)
+                        && let Some(subtask_source) = subtask.source()
+                    {
+                        // Recursively extract from subtask (in case of nested summarization).
+                        self.extract_command_blocks_from_messages(
+                            &subtask_source.messages,
+                            message_id_to_exchange,
+                            command_blocks,
+                            seen_command_ids,
+                        );
                     }
+                    // Don't process this message further - it's just a subagent call.
+                    continue;
                 }
 
                 // Extract from RunShellCommand tool calls.
@@ -3816,8 +3977,7 @@ impl AIConversation {
                     // Find the corresponding tool call result in this message set.
                     if let Some((cmd_result, result_message_id, result_proto_ts)) =
                         tool_call_results.get(tool_call_id.as_str())
-                    {
-                        if let Some(api::run_shell_command_result::Result::CommandFinished(
+                        && let Some(api::run_shell_command_result::Result::CommandFinished(
                             api::ShellCommandFinished {
                                 output: command_output,
                                 exit_code,
@@ -3826,76 +3986,73 @@ impl AIConversation {
                                 finish_ts: proto_finish_ts,
                             },
                         )) = &cmd_result.result
-                        {
-                            // Track the command_id so attachment/context blocks for the
-                            // same command are skipped (RunShellCommand blocks have
-                            // better timestamps).
-                            if !finished_command_id.is_empty() {
-                                seen_command_ids.insert(finished_command_id.clone());
-                            }
-
-                            // start_ts: prefer the block timestamp stored on ShellCommandFinished,
-                            // falling back to the tool call message's proto timestamp.
-                            let start_ts = proto_start_ts
-                                .as_ref()
-                                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos))
-                                .or_else(|| {
-                                    message.timestamp.as_ref().map(|ts| {
-                                        proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)
-                                    })
-                                });
-                            if start_ts.is_none() {
-                                report_error!(
-                                    "RunShellCommand tool call message has no timestamp",
-                                    extra: { "message_id" => %message_id }
-                                );
-                            }
-
-                            // completed_ts: prefer the block timestamp stored on ShellCommandFinished.
-                            // Fall back to the earlier of (1) the exchange start_time for the
-                            // exchange containing the result message (from CurrentTime input
-                            // context) and (2) the result message's proto timestamp.
-                            let completed_ts = proto_finish_ts
-                                .as_ref()
-                                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos))
-                                .or_else(|| {
-                                    let exchange_ts = message_id_to_exchange
-                                        .get(*result_message_id)
-                                        .map(|exchange| exchange.start_time);
-                                    match (*result_proto_ts, exchange_ts) {
-                                        (Some(proto_ts), Some(exchange_ts)) => {
-                                            Some(proto_ts.min(exchange_ts))
-                                        }
-                                        (Some(proto_ts), None) => Some(proto_ts),
-                                        (None, Some(exchange_ts)) => Some(exchange_ts),
-                                        (None, None) => None,
-                                    }
-                                });
-
-                            command_blocks.push(CommandBlockInfo {
-                                command: command.clone(),
-                                output: command_output.clone(),
-                                exit_code: ExitCode::from(*exit_code),
-                                ai_metadata: Some(
-                                    serde_json::to_string(&Some(
-                                        Into::<SerializedAIMetadata>::into(
-                                            AgentInteractionMetadata::new_hidden(
-                                                tool_call_id.clone().into(),
-                                                self.id(),
-                                            ),
-                                        ),
-                                    ))
-                                    .unwrap_or_default(),
-                                ),
-                                // Use the tool call message ID (not the result message ID)
-                                // so that to_serialized_blocklist_items looks up the exchange
-                                // where the command was initiated — the right exchange for PWD
-                                // and the start_ts fallback.
-                                message_id: message_id.clone(),
-                                start_ts,
-                                completed_ts,
-                            });
+                    {
+                        // Track the command_id so attachment/context blocks for the
+                        // same command are skipped (RunShellCommand blocks have
+                        // better timestamps).
+                        if !finished_command_id.is_empty() {
+                            seen_command_ids.insert(finished_command_id.clone());
                         }
+
+                        // start_ts: prefer the block timestamp stored on ShellCommandFinished,
+                        // falling back to the tool call message's proto timestamp.
+                        let start_ts = proto_start_ts
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos))
+                            .or_else(|| {
+                                message.timestamp.as_ref().map(|ts| {
+                                    proto_timestamp_to_local_datetime(ts.seconds, ts.nanos)
+                                })
+                            });
+                        if start_ts.is_none() {
+                            report_error!(
+                                "RunShellCommand tool call message has no timestamp",
+                                extra: { "message_id" => %message_id }
+                            );
+                        }
+
+                        // completed_ts: prefer the block timestamp stored on ShellCommandFinished.
+                        // Fall back to the earlier of (1) the exchange start_time for the
+                        // exchange containing the result message (from CurrentTime input
+                        // context) and (2) the result message's proto timestamp.
+                        let completed_ts = proto_finish_ts
+                            .as_ref()
+                            .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos))
+                            .or_else(|| {
+                                let exchange_ts = message_id_to_exchange
+                                    .get(*result_message_id)
+                                    .map(|exchange| exchange.start_time);
+                                match (*result_proto_ts, exchange_ts) {
+                                    (Some(proto_ts), Some(exchange_ts)) => {
+                                        Some(proto_ts.min(exchange_ts))
+                                    }
+                                    (Some(proto_ts), None) => Some(proto_ts),
+                                    (None, Some(exchange_ts)) => Some(exchange_ts),
+                                    (None, None) => None,
+                                }
+                            });
+
+                        command_blocks.push(CommandBlockInfo {
+                            command: command.clone(),
+                            output: command_output.clone(),
+                            exit_code: ExitCode::from(*exit_code),
+                            ai_metadata: Some(
+                                serde_json::to_string(&Some(Into::<SerializedAIMetadata>::into(
+                                    AgentInteractionMetadata::new_hidden(
+                                        tool_call_id.clone().into(),
+                                        self.id(),
+                                    ),
+                                )))
+                                .unwrap_or_default(),
+                            ),
+                            // Use the tool call message ID (not the result message ID)
+                            // so that to_serialized_blocklist_items looks up the exchange
+                            // where the command was initiated — the right exchange for PWD
+                            // and the start_ts fallback.
+                            message_id: message_id.clone(),
+                            start_ts,
+                            completed_ts,
+                        });
                     }
                 }
             }
@@ -4224,13 +4381,11 @@ fn subagent_pair_message_ids_to_remove(
     // tool_call_id -> tool_call_result message id
     let mut tool_call_result_message_ids: HashMap<String, String> = HashMap::new();
     for message in &root_source.messages {
-        if let Some(tool_call) = message.tool_call() {
-            if let Some(subagent) = tool_call.subagent() {
-                if !subagent.task_id.is_empty() {
-                    subagent_call_message_ids
-                        .insert(tool_call.tool_call_id.clone(), message.id.clone());
-                }
-            }
+        if let Some(tool_call) = message.tool_call()
+            && let Some(subagent) = tool_call.subagent()
+            && !subagent.task_id.is_empty()
+        {
+            subagent_call_message_ids.insert(tool_call.tool_call_id.clone(), message.id.clone());
         }
         if let Some(result) = message.tool_call_result() {
             tool_call_result_message_ids.insert(result.tool_call_id.clone(), message.id.clone());
@@ -4359,27 +4514,20 @@ fn cleanup_conversation_search_temp_dir(
 
     let base_dir = super::conversation_yaml::base_dir();
     for msg in subtask.messages() {
-        if let Some(api::message::Message::ToolCallResult(tcr)) = &msg.message {
-            if let Some(api::message::tool_call_result::Result::FetchConversation(result)) =
+        if let Some(api::message::Message::ToolCallResult(tcr)) = &msg.message
+            && let Some(api::message::tool_call_result::Result::FetchConversation(result)) =
                 &tcr.result
-            {
-                if let Some(api::fetch_conversation_result::Result::Success(success)) =
-                    &result.result
-                {
-                    let dir = std::path::Path::new(&success.directory_path);
-                    if dir.starts_with(&base_dir) {
-                        if let Err(e) = std::fs::remove_dir_all(dir) {
-                            log::warn!(
-                                "Failed to clean up conversation search temp dir {}: {e}",
-                                dir.display(),
-                            );
-                        } else {
-                            log::info!(
-                                "Cleaned up conversation search temp dir: {}",
-                                dir.display(),
-                            );
-                        }
-                    }
+            && let Some(api::fetch_conversation_result::Result::Success(success)) = &result.result
+        {
+            let dir = std::path::Path::new(&success.directory_path);
+            if dir.starts_with(&base_dir) {
+                if let Err(e) = std::fs::remove_dir_all(dir) {
+                    log::warn!(
+                        "Failed to clean up conversation search temp dir {}: {e}",
+                        dir.display(),
+                    );
+                } else {
+                    log::info!("Cleaned up conversation search temp dir: {}", dir.display(),);
                 }
             }
         }
@@ -4414,35 +4562,7 @@ pub enum UpdateConversationError {
     NoPendingRequest,
 }
 
-/// A globally unique ID for a conversation with an AI agent.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AIConversationId(Uuid);
-
-impl Display for AIConversationId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl AIConversationId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-}
-
-impl Default for AIConversationId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TryFrom<String> for AIConversationId {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Ok(Self(Uuid::try_parse(&value)?))
-    }
-}
+pub use ai_types::AIConversationId;
 
 /// The harness that produced an agent conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4524,7 +4644,7 @@ impl AIAgentExchange {
         server_output_id: ServerOutputId,
     ) -> Result<(), UpdateTaskError> {
         match &mut self.output_status {
-            AIAgentOutputStatus::Streaming { ref mut output } => {
+            AIAgentOutputStatus::Streaming { output } => {
                 if let Some(shared_output) = output {
                     // We expect to initialize output that has already been initialized if we retry
                     // after receiving a StreamInit event but before receiving any ClientActions.

@@ -1,5 +1,5 @@
-use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
+use winreg::enums::HKEY_CURRENT_USER;
 
 use crate::platform::SystemTheme;
 

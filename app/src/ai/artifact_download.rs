@@ -63,7 +63,7 @@ pub(crate) async fn download_artifact_bytes(
 ) -> anyhow::Result<()> {
     use std::time::Duration;
 
-    use anyhow::{anyhow, Context as _};
+    use anyhow::{Context as _, anyhow};
     use futures::TryStreamExt as _;
     use tokio_util::io::StreamReader;
 

@@ -6,25 +6,24 @@ use warp::integration_testing::terminal::{
 };
 use warp::integration_testing::view_getters::single_terminal_view_for_tab;
 use warp::settings_view::{PrivacyPageAction, SettingsAction};
+use warp::terminal::GridType;
 use warp::terminal::model::index::Point;
 use warp::terminal::model::terminal_model::{BlockIndex, WithinBlock, WithinModel};
 use warp::terminal::shell::ShellType;
-use warp::terminal::GridType;
 use warpui_core::{async_assert, async_assert_eq};
 
 use super::new_builder;
+use crate::Builder;
 use crate::test::integration_testing::block_filtering::{
-    open_block_filter_editor, open_block_filter_editor_for_long_running_command,
-    open_block_filter_editor_via_keybinding,
-    open_block_filter_editor_via_keybinding_long_running_command, LongRunningCommandTestCase,
-    SecretTestCase, SimpleTestCase,
+    LongRunningCommandTestCase, SecretTestCase, SimpleTestCase, open_block_filter_editor,
+    open_block_filter_editor_for_long_running_command, open_block_filter_editor_via_keybinding,
+    open_block_filter_editor_via_keybinding_long_running_command,
 };
 use crate::test::integration_testing::secret_redaction::assert_secret_tooltip_open;
 use crate::test::integration_testing::terminal::{
     clear_blocklist_to_remove_bootstrapped_blocks, hover_over_block_zero,
 };
-use crate::test::{new_step_with_default_assertions, toggle_setting, TestStep};
-use crate::Builder;
+use crate::test::{TestStep, new_step_with_default_assertions, toggle_setting};
 
 // TODO(CORE-2721): Block count / index Failed b/c of in-band generators
 pub fn test_block_filtering_keybinding() -> Builder {

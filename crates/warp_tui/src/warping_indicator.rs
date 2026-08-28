@@ -16,12 +16,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use warp::tui_export::format_credits;
+use warpui_core::AppContext;
 use warpui_core::elements::animation::{AnimationClock, Keyframe, KeyframeTimeline};
 use warpui_core::elements::shimmer_math::ShimmerConfig;
 use warpui_core::elements::tui::{
-    Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiText,
+    Modifier, TuiAnimated, TuiElement, TuiFlex, TuiShimmeringText, TuiStyle, TuiText,
 };
-use warpui_core::AppContext;
 
 use crate::tui_builder::TuiUiBuilder;
 
@@ -68,9 +68,24 @@ static SPINNER_TIMELINE: LazyLock<KeyframeTimeline<&'static str>> = LazyLock::ne
     ])
 });
 
-/// Renders the `⋮ Warping... (Ns)` row for an exchange that has been running for
-/// `elapsed`.
-pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> Box<dyn TuiElement> {
+/// Renders the shared animated TUI spinner with the supplied clock and style.
+pub(crate) fn render_spinner(clock: AnimationClock, style: TuiStyle) -> Box<dyn TuiElement> {
+    TuiAnimated::new(Duration::from_millis(FAST_SPIN_FRAME_MILLIS), move || {
+        TuiText::new(*SPINNER_TIMELINE.value_at(clock.elapsed()))
+            .with_style(style)
+            .truncate()
+            .finish()
+    })
+    .finish()
+}
+/// Renders the animated progress row for an exchange that has been running
+/// for `elapsed`.
+pub(crate) fn render_warping_indicator_row(
+    label: impl Into<String>,
+    elapsed: Duration,
+    auto_approve_control: Box<dyn TuiElement>,
+    app: &AppContext,
+) -> Box<dyn TuiElement> {
     let builder = TuiUiBuilder::from_app(app);
     // One clock, already `elapsed` into the exchange, drives all three parts
     // so they stay phase-locked; each repaint reads its current elapsed time.
@@ -78,21 +93,16 @@ pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> B
 
     // The spinner repaints at its timeline's shortest hold so the fast spins
     // don't skip frames; repaint requests coalesce to the earliest deadline.
-    let spinner_style = builder.warping_spinner_style();
-    let spinner = TuiAnimated::new(Duration::from_millis(FAST_SPIN_FRAME_MILLIS), move || {
-        TuiText::new(*SPINNER_TIMELINE.value_at(clock.elapsed()))
-            .with_style(spinner_style)
-            .truncate()
-            .finish()
-    });
+    let spinner = render_spinner(clock, builder.warping_spinner_style());
 
     let label = TuiShimmeringText::new(
-        "Warping...",
+        label,
         builder.warping_base_color(),
         builder.warping_shimmer_color(),
         ShimmerConfig::default(),
         clock,
     )
+    .with_grouped_suffix("...")
     .with_modifier(Modifier::BOLD);
 
     let counter_style = builder.muted_text_style();
@@ -104,11 +114,21 @@ pub(crate) fn render_warping_indicator(elapsed: Duration, app: &AppContext) -> B
     });
 
     TuiFlex::row()
-        .child(spinner.finish())
+        .child(spinner)
         .child(TuiText::new(" ").truncate().finish())
         .child(label.finish())
         .child(TuiText::new(" ").truncate().finish())
         .child(counter.finish())
+        .flex_child(TuiText::new("").truncate().finish())
+        .child(auto_approve_control)
+        .child(
+            TuiText::from_spans([
+                ("  Ctrl + C".to_owned(), builder.primary_text_style()),
+                (" to stop".to_owned(), builder.muted_text_style()),
+            ])
+            .truncate()
+            .finish(),
+        )
         .finish()
 }
 

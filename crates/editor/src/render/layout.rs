@@ -20,6 +20,46 @@ use crate::content::text::{BufferBlockStyle, TextStylesWithMetadata};
 
 const HYPERLINK_UNDERLINE_COLOR: u32 = 0x7aa6daff;
 
+/// Cap on the number of `char`s shaped into a single text frame.
+///
+/// The editor lays out at an effectively infinite width, so one logical line becomes one unwrapped
+/// shaping call. Without a cap, a single multi-megabyte line allocates a text frame plus per-`char`
+/// glyph and caret-position vectors bounded only by that line's length (APP-5392). Text past the
+/// cap is dropped before shaping, which is safe because callers track buffer offsets from their own
+/// content length rather than from the shaped frame, and consumers that map an offset or coordinate
+/// into a frame already clamp to its end. The cap sits far past what can be read on screen, so a
+/// cursor pinning at the truncation point is only reachable in lines nobody edits visually.
+const MAX_LAYOUT_LINE_CHARS: usize = 2 * 1024 * 1024;
+
+/// Shortens `text` to at most [`MAX_LAYOUT_LINE_CHARS`], returning it unchanged when it already
+/// fits.
+fn truncate_text_for_layout(text: &str) -> &str {
+    // Every `char` occupies at least one byte, so a byte length within the cap puts the char count
+    // within it too. This keeps the common case off the linear `char_indices` walk below.
+    if text.len() <= MAX_LAYOUT_LINE_CHARS {
+        return text;
+    }
+
+    // `nth` yields the byte offset at which the first `MAX_LAYOUT_LINE_CHARS` chars end, and `None`
+    // when the text holds no more chars than that. Slicing there is always on a char boundary.
+    match text.char_indices().nth(MAX_LAYOUT_LINE_CHARS) {
+        Some((truncate_at, _)) => &text[..truncate_at],
+        None => text,
+    }
+}
+
+/// Drops style runs starting past [`MAX_LAYOUT_LINE_CHARS`] and clamps the tail of a run straddling
+/// it, keeping char-indexed runs consistent with text shortened by [`truncate_text_for_layout`].
+fn clamp_style_runs_for_layout(
+    style_runs: &[(Range<usize>, StyleAndFont)],
+) -> Vec<(Range<usize>, StyleAndFont)> {
+    style_runs
+        .iter()
+        .filter(|(range, _)| range.start < MAX_LAYOUT_LINE_CHARS)
+        .map(|(range, style)| (range.start..range.end.min(MAX_LAYOUT_LINE_CHARS), *style))
+        .collect()
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct InlineTextLayoutInput {
     pub text: String,
@@ -115,10 +155,17 @@ impl<'a> TextLayout<'a> {
                 paragraph_style.line_height_ratio,
             ));
         }
+
+        let shaped_text = truncate_text_for_layout(text);
+        let clamped_style_runs = (shaped_text.len() < text.len()).then(|| {
+            // Only pay for a new run list when the text actually lost characters.
+            clamp_style_runs_for_layout(style_runs)
+        });
+
         self.layout_cache.layout_text(
-            text,
+            shaped_text,
             paragraph_style.line_style(),
-            style_runs,
+            clamped_style_runs.as_deref().unwrap_or(style_runs),
             max_width,
             f32::MAX,
             alignment,
@@ -139,6 +186,7 @@ impl<'a> TextLayout<'a> {
             &paragraph_styles,
             &TextStylesWithMetadata::default().for_placeholder(),
         );
+        let text = truncate_text_for_layout(text);
         let style_runs = &[(0..text.chars().count(), style_and_font)];
         self.layout_cache.layout_line(
             text,
@@ -311,3 +359,7 @@ pub(crate) fn markdown_inline_to_text_and_style_runs(
 
     InlineTextLayoutInput { text, style_runs }
 }
+
+#[cfg(test)]
+#[path = "layout_tests.rs"]
+mod tests;

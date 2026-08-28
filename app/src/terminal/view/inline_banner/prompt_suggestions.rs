@@ -3,7 +3,6 @@ use std::rc::Rc;
 use pathfinder_geometry::vector::vec2f;
 use serde::Serialize;
 use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors::{neutral_2, neutral_3};
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Empty,
@@ -19,15 +18,15 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{PassiveSuggestionTrigger, StaticQueryType};
+use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::blocklist::prompt::prompt_alert::{
     PromptAlertEvent, PromptAlertState, PromptAlertView,
 };
-use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::ai::predict::prompt_suggestions::ACCEPT_PROMPT_SUGGESTION_KEYBINDING;
-use crate::ai::AIRequestUsageModel;
 use crate::appearance::Appearance;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::InteractionSource;
@@ -241,33 +240,34 @@ fn render_button(
         let mut stack = Stack::new();
         stack.add_child(container.finish());
 
-        if is_button_disabled && mouse_state.is_hovered() {
-            if let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state) {
-                let tooltip = appearance
-                    .ui_builder()
-                    .tool_tip(tooltip_text)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(appearance.monospace_font_size() - 4.),
-                        padding: Some(Coords {
-                            top: 4.,
-                            bottom: 4.,
-                            left: 8.,
-                            right: 8.,
-                        }),
-                        background: Some(theme.tooltip_background().into()),
-                        font_color: Some(theme.background().into_solid()),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish();
-                let tooltip_offset = OffsetPositioning::offset_from_parent(
-                    vec2f(0., 4.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::BottomMiddle,
-                    ChildAnchor::TopMiddle,
-                );
-                stack.add_positioned_overlay_child(tooltip, tooltip_offset);
-            }
+        if is_button_disabled
+            && mouse_state.is_hovered()
+            && let Some(tooltip_text) = get_tooltip_text_for_alert_state(prompt_alert_state)
+        {
+            let tooltip = appearance
+                .ui_builder()
+                .tool_tip(tooltip_text)
+                .with_style(UiComponentStyles {
+                    font_size: Some(appearance.monospace_font_size() - 4.),
+                    padding: Some(Coords {
+                        top: 4.,
+                        bottom: 4.,
+                        left: 8.,
+                        right: 8.,
+                    }),
+                    background: Some(theme.tooltip_background().into()),
+                    font_color: Some(theme.background().into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish();
+            let tooltip_offset = OffsetPositioning::offset_from_parent(
+                vec2f(0., 4.),
+                ParentOffsetBounds::WindowByPosition,
+                ParentAnchor::BottomMiddle,
+                ChildAnchor::TopMiddle,
+            );
+            stack.add_positioned_overlay_child(tooltip, tooltip_offset);
         }
 
         ConstrainedBox::new(stack.finish())
@@ -317,8 +317,7 @@ fn get_tooltip_text_for_alert_state(alert_state: &PromptAlertState) -> Option<St
 /// offering BYO/upgrade instead of a disabled button. Other disabled states
 /// (offline, payment issues, team overage gates) keep the disabled treatment.
 fn should_open_unavailable_modal(state: &PromptAlertState, app: &AppContext) -> bool {
-    FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        && matches!(state, PromptAlertState::RequestLimitReached)
+    matches!(state, PromptAlertState::RequestLimitReached)
         && !UserWorkspaces::as_ref(app)
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan())
@@ -421,7 +420,7 @@ impl View for PromptSuggestionsView {
                 1.0,
                 render_button(
                     prompt_suggestion.label().clone(),
-                    WarpUIIcon::Oz,
+                    WarpUIIcon::Agent,
                     0,
                     keybinding_name_to_keystroke(ACCEPT_PROMPT_SUGGESTION_KEYBINDING, app),
                     banner_state.accept_button_mouse_state.clone(),

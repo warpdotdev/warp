@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::diff_validation::DiffDelta;
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 // TODO(vorporeal): Remove this re-export at some point.
 pub use ai::document::{AIDocumentId, AIDocumentVersion};
 use chrono::{DateTime, Local, Utc};
@@ -14,22 +15,21 @@ use itertools::Itertools;
 use uuid::Uuid;
 use warp_editor::model::RichTextEditorModel;
 use warp_editor::render::model::RichTextStyles;
-use warp_errors::report_error;
+use warp_errors::{ReportErrorLogMode, report_error};
 use warp_multi_agent_api as maa_api;
 use warpui::color::ColorU;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
-use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentActionId;
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::appearance::Appearance;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{CloudObject, CloudObjectEventEntrypoint, Owner};
-use crate::drive::folders::CloudFolder;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::folders::CloudFolder;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
 use crate::notebooks::editor::model::{
     FileLinkResolutionContext, NotebooksEditorModel, RichTextEditorModelEvent,
@@ -43,11 +43,11 @@ use crate::server::cloud_objects::update_manager::{
 };
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::settings::FontSettings;
-use crate::terminal::model::session::active_session::ActiveSession;
-use crate::terminal::model::session::Session;
 use crate::terminal::TerminalView;
+use crate::terminal::model::session::Session;
+use crate::terminal::model::session::active_session::ActiveSession;
 use crate::throttle::throttle;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{SoleTeamError, UserWorkspaces};
 
 /// The frequency at which we check for modifications and save the AI document to the server.
 /// Uses the same 2-second period as notebooks for consistency.
@@ -228,7 +228,7 @@ impl AIDocumentModel {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test() -> Self {
         let (save_tx, _save_rx) = async_channel::unbounded();
         Self {
@@ -418,7 +418,8 @@ impl AIDocumentModel {
             | CloudModelEvent::ObjectPermissionsUpdated { .. }
             | CloudModelEvent::ObjectForceExpanded { .. }
             | CloudModelEvent::ObjectCreated { .. }
-            | CloudModelEvent::NotebookEditorChangedFromServer { .. } => {}
+            | CloudModelEvent::NotebookEditorChangedFromServer { .. }
+            | CloudModelEvent::EnvironmentLastTaskRunTimestampsUpdated => {}
         }
     }
     /// Reconciles one server-backed notebook with its loaded AI document.
@@ -966,7 +967,9 @@ impl AIDocumentModel {
             return;
         }
 
-        log::info!("Applying persisted SQLite content for document {id} (content differs from conversation restoration)");
+        log::info!(
+            "Applying persisted SQLite content for document {id} (content differs from conversation restoration)"
+        );
         doc.editor.update(ctx, |editor, editor_ctx| {
             editor.reset_with_markdown(persisted_content, editor_ctx);
         });
@@ -1272,13 +1275,33 @@ impl AIDocumentModel {
     fn get_plan_owner(ctx: &AppContext) -> Option<Owner> {
         let is_service_account = AuthStateProvider::as_ref(ctx).get().is_service_account();
 
-        if is_service_account {
-            // If the SA doesn't have a team, we'll skip the plan sync in the caller
-            UserWorkspaces::as_ref(ctx)
-                .current_team_uid()
-                .map(|team_uid| Owner::Team { team_uid })
-        } else {
-            UserWorkspaces::as_ref(ctx).personal_drive(ctx)
+        if !is_service_account {
+            return UserWorkspaces::as_ref(ctx).personal_drive(ctx);
+        }
+        match UserWorkspaces::as_ref(ctx).sole_team_uid() {
+            Ok(team_uid) => Some(Owner::Team { team_uid }),
+            // The caller skips plan sync without a team.
+            Err(SoleTeamError::NoTeam) => None,
+            // A service account is bound to exactly one team server-side, so several here means
+            // the client's view of its memberships disagrees with that.
+            Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => {
+                let user_uid = AuthStateProvider::as_ref(ctx)
+                    .get()
+                    .user_id()
+                    .map(|uid| uid.as_string())
+                    .unwrap_or_default();
+                let SoleTeamError::MoreThanOneTeam { team_uids } = &error else {
+                    unreachable!()
+                };
+                let team_uids = team_uids.iter().map(ServerId::to_string).join(", ");
+                report_error!(
+                    anyhow::Error::new(error)
+                        .context("Service account resolved to more than one team"),
+                    extra: { "user_uid" => %user_uid, "team_uids" => %team_uids },
+                    ReportErrorLogMode::OncePerRun
+                );
+                None
+            }
         }
     }
 

@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use markdown_parser::FormattedTextFragment;
-use warpui::keymap::Keystroke;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::keymap::Keystroke;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::ai::persisted_workspace::PersistedWorkspace;
@@ -18,10 +18,10 @@ use crate::terminal::view::init::{
     TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
 };
 use crate::util::bindings::trigger_to_keystroke;
+use crate::workspace::WorkspaceAction;
 use crate::workspace::view::{
     TOGGLE_COMMAND_PALETTE_KEYBINDING_NAME, TOGGLE_RIGHT_PANEL_BINDING_NAME,
 };
-use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Trait for tip implementations that can be displayed to users.
@@ -88,7 +88,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
     vec![
         AgentTip {
             description: "`/` to open the slash-command menu and access quick agent actions.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/slash-commands".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/slash-commands".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::SlashCommands,
@@ -102,7 +102,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "`/plan` <prompt> to create a plan for the agent before executing.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/planning".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/planning".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::SlashCommands,
@@ -134,35 +134,35 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "`@` to add context from files, blocks, or Warp Drive objects to your prompt.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/agent-context/using-to-add-context".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/agent-context/using-to-add-context".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
             description: "<keybinding> to attach the prior command output as agent context.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/agent-context/blocks-as-context#attaching-blocks-as-context".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/agent-context/blocks-as-context#attaching-blocks-as-context".to_string()),
             binding_name: Some(SELECT_PREVIOUS_BLOCK_ACTION_NAME),
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
             description: "`/init` to index the repo so the agent can understand your codebase.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/codebase-context".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/codebase-context".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::CodebaseContext,
         },
         AgentTip {
             description: "Add agent profiles to customize permissions and models per session.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/agent-profiles-permissions".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/agent-profiles-permissions".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::General,
         },
         AgentTip {
             description: "Right-click a block to fork the conversation from that point.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/interacting-with-agents/conversation-forking".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/interacting-with-agents/conversation-forking".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::General,
@@ -176,14 +176,14 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "Drag an image into the pane to attach it as agent context.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/agent-context/images-as-context".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/agent-context/images-as-context".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
             description: "Prompt the agent to control interactive tools like node, python, postgres, gdb, or vim.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/full-terminal-use".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/full-terminal-use".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::General,
@@ -197,7 +197,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "`/add-mcp` to add an MCP server to your workspace.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/mcp".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/mcp".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Mcp,
@@ -225,14 +225,14 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "`/add-rule` to create a global agent rule.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/rules".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/rules".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
             description: "`/fork` to create a fresh copy of the current conversation, optionally with a new prompt.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/interacting-with-agents/conversation-forking".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/interacting-with-agents/conversation-forking".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::SlashCommands,
@@ -246,7 +246,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "`/new` to start a new agent conversation with clean context.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/interacting-with-agents".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/interacting-with-agents".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::SlashCommands,
@@ -266,7 +266,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
             kind: AgentTipKind::General,
         },
         AgentTip {
-            description: "Use the `oz` command to run an Oz agent in headless mode, useful for remote machines.".to_string(),
+            description: "Use the `oz` command to run the Warp Agent in headless mode, useful for remote machines.".to_string(),
             link: Some("https://docs.warp.dev/reference/cli".to_string()),
             binding_name: None,
             action: None,
@@ -274,27 +274,27 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "Right-click selected text to attach it as agent context.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/agent-context/blocks-as-context#attaching-blocks-as-context".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/agent-context/blocks-as-context#attaching-blocks-as-context".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
             description: "Use `AGENTS.md` or `CLAUDE.md` to apply project-scoped rules.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/rules#project-rules-1".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/rules#project-rules-1".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
             description: "Paste a URL to attach that webpage as context for the agent.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/local-agents/agent-context/urls-as-context".to_string()),
+            link: Some("https://docs.warp.dev/agents/local-agents/agent-context/urls-as-context".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::Context,
         },
         AgentTip {
-            description: "Warpify a remote SSH session to enable Oz inside that environment.".to_string(),
+            description: "Warpify a remote SSH session to enable the Warp Agent inside that environment.".to_string(),
             link: Some("https://docs.warp.dev/terminal/warpify".to_string()),
             binding_name: None,
             action: None,
@@ -302,21 +302,21 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "Switch agent profiles to quickly change models and agent permissions.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/agent-profiles-permissions".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/agent-profiles-permissions".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::General,
         },
         AgentTip {
             description: "`/init` to generate a `WARP.md` file and define project rules for the agent.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/rules".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/rules".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::SlashCommands,
         },
         AgentTip {
             description: "<keybinding> to auto-approve the agent's commands and diffs for the rest of the session.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/capabilities/full-terminal-use#session-level-approvals".to_string()),
+            link: Some("https://docs.warp.dev/agents/capabilities/full-terminal-use#session-level-approvals".to_string()),
             binding_name: Some(TOGGLE_AUTOEXECUTE_MODE_KEYBINDING),
             action: None,
             kind: AgentTipKind::General,
@@ -330,7 +330,7 @@ static DEFAULT_TIPS: LazyLock<Vec<AgentTip>> = LazyLock::new(|| {
         },
         AgentTip {
             description: "Enable desktop notifications to get an alert when an agent needs your attention.".to_string(),
-            link: Some("https://docs.warp.dev/agent-platform/cloud-agents/managing-cloud-agents#in-app-agent-notifications".to_string()),
+            link: Some("https://docs.warp.dev/platform/managing-cloud-agents#in-app-agent-notifications".to_string()),
             binding_name: None,
             action: None,
             kind: AgentTipKind::General,
@@ -458,7 +458,7 @@ pub fn get_agent_tips(ctx: &AppContext) -> Vec<AgentTip> {
             description: "Hold <keybinding> to speak your prompt directly to the agent."
                 .to_string(),
             link: Some(
-                "https://docs.warp.dev/agent-platform/local-agents/interacting-with-agents/voice"
+                "https://docs.warp.dev/agents/local-agents/interacting-with-agents/voice"
                     .to_string(),
             ),
             binding_name: Some("FN"),

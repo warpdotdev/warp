@@ -1,21 +1,23 @@
 use std::collections::HashMap;
 
-use ai::api_keys::ApiKeyManager;
+use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    artifact_from_fork_proto, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, ConversationUsageTotals,
-    RecordingSpanStatus, RestoreConversationError,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
+    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
-use crate::persistence::model::AgentConversationData;
+use crate::persistence::model::{
+    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -34,6 +36,31 @@ fn restored_conversation(conversation_data: Option<AgentConversationData>) -> AI
         conversation_data,
     )
     .unwrap()
+}
+
+fn conversation_data_with_provider_cost(
+    total_provider_cost_in_cents: Option<f32>,
+) -> AgentConversationData {
+    AgentConversationData {
+        server_conversation_token: None,
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            total_provider_cost_in_cents,
+            ..Default::default()
+        }),
+        reverted_action_ids: None,
+        forked_from_server_conversation_token: None,
+        artifacts_json: None,
+        parent_agent_id: None,
+        agent_name: None,
+        orchestration_harness_type: None,
+        parent_conversation_id: None,
+        is_remote_child: false,
+        root_task_is_optimistic: None,
+        run_id: None,
+        autoexecute_override: None,
+        last_event_sequence: None,
+        pinned: false,
+    }
 }
 
 fn restored_conversation_with_root_description(description: &str) -> AIConversation {
@@ -118,9 +145,12 @@ fn tool_call_result_message(
 
 fn start_recording_tool_call() -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StartRecording(api::message::tool_call::StartRecording {
+        description: String::new(),
         frame_rate: 15,
         limits: None,
         summary: String::new(),
+        playback_speed_multiplier: 0,
+        target: None,
     })
 }
 
@@ -160,6 +190,7 @@ fn use_computer_tool_call(summary: &str) -> api::message::tool_call::Tool {
 fn stop_recording_tool_call(recording_id: &str) -> api::message::tool_call::Tool {
     api::message::tool_call::Tool::StopRecording(api::message::tool_call::StopRecording {
         recording_id: recording_id.to_string(),
+        discard: false,
     })
 }
 
@@ -275,6 +306,7 @@ fn custom_endpoint_usage_metadata(
         token_usage: vec![],
         tool_usage_metadata: None,
         total_input_tokens: 0,
+        total_charges: None,
         warp_token_usage: HashMap::new(),
         byok_token_usage: HashMap::new(),
         context_window_segments: Vec::new(),
@@ -406,9 +438,11 @@ fn recording_span_ignores_failed_start() {
         ),
     ]);
 
-    assert!(conversation
-        .recording_span_for_action(&"use".to_string().into(), None)
-        .is_none());
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -479,9 +513,11 @@ fn recording_span_clears_when_stop_errors() {
         ),
     ]);
 
-    assert!(conversation
-        .recording_span_for_action(&"use".to_string().into(), None)
-        .is_none());
+    assert!(
+        conversation
+            .recording_span_for_action(&"use".to_string().into(), None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -587,6 +623,139 @@ fn restored_conversation_with_empty_task_list_creates_in_progress_optimistic_roo
     assert_eq!(conversation.status(), &ConversationStatus::InProgress);
     assert!(conversation.status_error_message().is_none());
 }
+#[test]
+fn restored_conversation_seeds_known_provider_cost_baseline() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+    let totals = conversation.usage_totals();
+
+    assert_eq!(totals.cost_in_cents, Some(3.2));
+    assert!(totals.has_usage);
+}
+#[test]
+fn empty_task_restore_seeds_known_provider_cost_baseline() {
+    let conversation = AIConversation::new_restored_synthesizing_on_empty(
+        AIConversationId::new(),
+        vec![],
+        Some(conversation_data_with_provider_cost(Some(3.2))),
+    )
+    .expect("empty-task restore should synthesize a root");
+
+    assert_eq!(conversation.usage_totals().cost_in_cents, Some(3.2));
+    assert!(conversation.usage_totals().has_usage);
+}
+
+/// APP-4952 regression: the ticket's confirmed failing sequence. A restored
+/// conversation with a known 3.2¢ server baseline plus a 1.2¢ follow-up must
+/// display 4.4¢ — never 0.0¢ (dropped baseline) or 1.2¢ (increment only).
+/// Covers both the strict and the lenient restore constructor.
+#[test]
+fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let strict_restore =
+            restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+        let lenient_restore = AIConversation::new_restored_synthesizing_on_empty(
+            AIConversationId::new(),
+            vec![],
+            Some(conversation_data_with_provider_cost(Some(3.2))),
+        )
+        .expect("empty-task restore should synthesize a root");
+
+        for mut conversation in [strict_restore, lenient_restore] {
+            app.read(|ctx| {
+                conversation
+                    .update_cost_and_usage_for_request(
+                        None,
+                        None,
+                        vec![stream_token_usage("model-a", 10, 2, 1.2)],
+                        Some(credits_usage_metadata(1.0, 0.0)),
+                        false,
+                        ctx,
+                    )
+                    .expect("follow-up usage should update");
+            });
+
+            let totals = conversation.usage_totals();
+            let cost = totals
+                .cost_in_cents
+                .expect("a restored known baseline stays known");
+            assert!(
+                (cost - 4.4).abs() < 1e-6,
+                "3.2¢ baseline + 1.2¢ follow-up must total 4.4¢, got {cost}"
+            );
+            assert!(totals.has_usage);
+        }
+    });
+}
+
+/// A restored conversation whose persisted metadata shows no usage evidence
+/// must keep the footer's usage entry hidden — local persistence always
+/// writes a metadata blob, so presence alone is not usage.
+#[test]
+fn restored_zero_usage_metadata_keeps_footer_usage_hidden() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(None)));
+
+    let totals = conversation.usage_totals();
+    assert!(!totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
+/// A present provider cost is affirmative evidence even at 0.0: the server
+/// only records a cost once a turn completed accounting, so a restored
+/// known-zero baseline must surface the footer as a truthful $0.00 rather
+/// than staying hidden or reading as unknown.
+#[test]
+fn restored_known_zero_cost_marks_usage_with_known_zero_baseline() {
+    let conversation = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+
+    let totals = conversation.usage_totals();
+    assert!(totals.has_usage);
+    assert_eq!(totals.cost_in_cents, Some(0.0));
+}
+
+#[test]
+fn restored_metadata_with_credits_marks_usage_even_without_provider_cost() {
+    let conversation = restored_conversation(Some(AgentConversationData {
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            credits_spent: 2.5,
+            ..Default::default()
+        }),
+        ..conversation_data_with_provider_cost(None)
+    }));
+
+    let totals = conversation.usage_totals();
+    assert!(totals.has_usage);
+    assert_eq!(totals.cost_in_cents, None);
+}
+
+#[test]
+fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation =
+            restored_conversation(Some(conversation_data_with_provider_cost(None)));
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    None,
+                    None,
+                    vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
+                    Some(credits_usage_metadata(1.0, 0.0)),
+                    false,
+                    ctx,
+                )
+                .expect("follow-up usage should update");
+        });
+
+        let totals = conversation.usage_totals();
+        assert_eq!(totals.cost_in_cents, None);
+        assert!(totals.has_usage);
+    });
+}
 
 #[test]
 fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
@@ -594,14 +763,17 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Friendly alias".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Friendly alias".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -611,6 +783,7 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("config-key", 6)),
@@ -646,6 +819,7 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![],
                     Some(custom_endpoint_usage_metadata("missing-config-key", 9)),
@@ -700,6 +874,7 @@ fn credits_usage_metadata(
         token_usage: vec![],
         tool_usage_metadata: None,
         total_input_tokens: 0,
+        total_charges: None,
         warp_token_usage: HashMap::new(),
         byok_token_usage: HashMap::new(),
         context_window_segments: Vec::new(),
@@ -716,12 +891,18 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
         let mut conversation = AIConversation::new(false, false);
         assert_eq!(
             conversation.usage_totals(),
-            ConversationUsageTotals::default()
+            ConversationUsageTotals {
+                credits_spent: 0.0,
+                cost_in_cents: Some(0.0),
+                has_usage: false,
+                charged_usage: None,
+            }
         );
 
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
+                    None,
                     None,
                     vec![stream_token_usage("model-a", 100, 20, 1.5)],
                     Some(credits_usage_metadata(2.0, 0.5)),
@@ -735,6 +916,7 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
             conversation
                 .update_cost_and_usage_for_request(
                     None,
+                    None,
                     vec![stream_token_usage("model-a", 50, 10, 1.2)],
                     Some(credits_usage_metadata(3.0, 0.5)),
                     false,
@@ -745,7 +927,97 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
 
         let totals = conversation.usage_totals();
         assert!((totals.credits_spent - 3.5).abs() < 1e-6);
-        assert!((totals.cost_in_cents - 2.7).abs() < 1e-6);
+        assert!(
+            (totals
+                .cost_in_cents
+                .expect("new conversation cost is known")
+                - 2.7)
+                .abs()
+                < 1e-6
+        );
+    });
+}
+
+/// APP-5579 regression: for a single-response conversation, the footer's
+/// "total" dollar figure must come from the same accounting family as its
+/// "last response" figure, even when the older provider-only cost
+/// accumulator has diverged from the charged-usage total (e.g. by a
+/// rounded cent). Both figures must read from charged usage.
+#[test]
+fn usage_totals_dollar_total_matches_last_block_when_provider_cost_diverges() {
+    let mut conversation = AIConversation::new(false, false);
+
+    let charged_usage = ChargedUsageTotals {
+        input_cost_in_cents: 4.0,
+        ..Default::default()
+    };
+    // Deliberately diverge the provider-only baseline from the charged-
+    // usage total, mirroring the reported symptom of a stale/rounded
+    // provider figure sitting alongside an accurate charged-usage figure.
+    conversation.set_cost_in_cents_for_test(Some(5.0));
+    conversation.set_charged_usage_for_test(Some(charged_usage));
+    conversation.set_charged_usage_for_last_block_for_test(Some(charged_usage));
+
+    let totals = conversation.usage_totals();
+    let last_block_cost_in_cents = conversation
+        .charged_usage_for_last_block()
+        .expect("last block charged usage should be set")
+        .total_cost_in_cents();
+
+    assert_eq!(
+        totals.total_cost_in_cents(),
+        Some(last_block_cost_in_cents),
+        "a single-response conversation's total dollar figure must match its \
+         last-response figure, not the divergent provider-only baseline"
+    );
+    assert_eq!(totals.total_cost_in_cents(), Some(4.0));
+}
+
+/// A known-zero baseline is a real value, not an absence, so it must fall
+/// back too rather than reading as unknown.
+#[test]
+fn total_cost_in_cents_falls_back_to_provider_baseline_without_charged_usage() {
+    let known_positive =
+        restored_conversation(Some(conversation_data_with_provider_cost(Some(3.2))));
+    assert_eq!(
+        known_positive.usage_totals().total_cost_in_cents(),
+        Some(3.2)
+    );
+
+    let known_zero = restored_conversation(Some(conversation_data_with_provider_cost(Some(0.0))));
+    assert_eq!(known_zero.usage_totals().total_cost_in_cents(), Some(0.0));
+
+    let unknown = restored_conversation(Some(conversation_data_with_provider_cost(None)));
+    assert_eq!(unknown.usage_totals().total_cost_in_cents(), None);
+}
+
+#[test]
+fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_turn() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        // Simulate a stale last-block breakdown left over from a previous
+        // response, as would happen if this turn's request carries no
+        // `request_charges` (e.g. the flag is off for it).
+        conversation.set_charged_usage_for_last_block_for_test(Some(ChargedUsageTotals {
+            input_tokens: 500,
+            ..Default::default()
+        }));
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(None, None, vec![], None, true, ctx)
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation.charged_usage_for_last_block(),
+            None,
+            "a new user-initiated turn must clear the previous block's stale charged usage, \
+             even when this turn's request itself carries no charges"
+        );
     });
 }
 
@@ -756,14 +1028,17 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
         initialize_custom_endpoint_usage_test_app(&mut app);
         ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
             manager.add_custom_endpoint(
-                "Endpoint".to_string(),
-                "https://custom.example".to_string(),
-                "key".to_string(),
-                vec![(
-                    "raw-model".to_string(),
-                    Some("Resolved custom".to_string()),
-                    Some("config-key".to_string()),
-                )],
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Resolved custom".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
                 ctx,
             );
         });
@@ -779,6 +1054,7 @@ fn footer_model_token_usage_keeps_custom_endpoint_usage_distinct_from_same_label
             token_usage: vec![],
             tool_usage_metadata: None,
             total_input_tokens: 0,
+            total_charges: None,
             warp_token_usage: HashMap::new(),
             byok_token_usage: HashMap::from([(
                 "Resolved custom".to_string(),
@@ -844,6 +1120,7 @@ fn footer_model_token_usage_preserves_unresolved_custom_endpoint_usage_with_fall
             token_usage: vec![],
             tool_usage_metadata: None,
             total_input_tokens: 0,
+            total_charges: None,
             warp_token_usage: HashMap::new(),
             byok_token_usage: HashMap::new(),
             custom_endpoint_token_usage: HashMap::from([(
@@ -1110,10 +1387,12 @@ fn is_done_only_includes_success_error_cancelled() {
     assert!(ConversationStatus::Cancelled.is_done());
 
     assert!(!ConversationStatus::InProgress.is_done());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_done());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_done()
+    );
     assert!(!ConversationStatus::WaitingForEvents.is_done());
 }
 
@@ -1126,10 +1405,12 @@ fn is_waiting_for_events_returns_true_only_for_waiting_for_events_variant() {
     assert!(!ConversationStatus::Success.is_waiting_for_events());
     assert!(!ConversationStatus::Error.is_waiting_for_events());
     assert!(!ConversationStatus::Cancelled.is_waiting_for_events());
-    assert!(!ConversationStatus::Blocked {
-        blocked_action: "approve".to_string()
-    }
-    .is_waiting_for_events());
+    assert!(
+        !ConversationStatus::Blocked {
+            blocked_action: "approve".to_string()
+        }
+        .is_waiting_for_events()
+    );
 }
 
 /// A conversation that was yielded via `wait_for_events` at shutdown

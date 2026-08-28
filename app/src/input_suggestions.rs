@@ -10,7 +10,7 @@ use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use warp_command_signatures::IconType;
 use warp_completer::completer::{
-    MatchType, PathSeparators, Suggestion, SuggestionResults, SuggestionType,
+    MatchType, PathSeparators, PreparedSuggestion, Suggestion, SuggestionResults, SuggestionType,
 };
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::AnsiColorIdentifier;
@@ -30,12 +30,12 @@ use warpui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, WeakViewHandle,
 };
 
-use crate::ai::blocklist::{render_ai_agent_mode_icon, AIQueryHistory, AIQueryHistoryOutputStatus};
+use crate::ai::blocklist::{AIQueryHistory, AIQueryHistoryOutputStatus, render_ai_agent_mode_icon};
 use crate::appearance::Appearance;
+use crate::terminal::HistoryEntry;
 use crate::terminal::history::LinkedWorkflowData;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::rich_history::{render_ai_query_rich_history, render_rich_history};
-use crate::terminal::HistoryEntry;
 use crate::ui_components::icons::Icon as UIComponentsIcon;
 use crate::util::time_format::format_approx_duration_from_now;
 
@@ -274,8 +274,14 @@ fn filter_tab_suggestions(
     query: &str,
     path_separators: &[char],
 ) -> Vec<Item> {
+    items_from_prepared_suggestions(suggestions.prepare_for_query(query, path_separators))
+}
+
+fn items_from_prepared_suggestions(
+    suggestions: impl IntoIterator<Item = PreparedSuggestion>,
+) -> Vec<Item> {
     suggestions
-        .filter_by_query(query, path_separators)
+        .into_iter()
         .map(|suggestion| Item {
             // TODO(vorporeal): Consider changing the type of `text` and `display` here to be `SmolStr`.
             text: suggestion.suggestion.replacement.to_string(),
@@ -286,7 +292,7 @@ fn filter_tab_suggestions(
                 .as_ref()
                 .map(|desc| desc.clone().into()),
             matches: Some(suggestion.matching_indices),
-            icon_type: Some(icon_type(suggestion.suggestion)),
+            icon_type: Some(icon_type(&suggestion.suggestion)),
             match_type: suggestion.match_type,
             is_ai_query: false,
             is_history_item: false,
@@ -329,13 +335,34 @@ impl InputSuggestions {
     }
 
     fn on_visible_items(&mut self, new_visible_items: Range<usize>, ctx: &mut ViewContext<Self>) {
-        if let Some(visible_items) = &self.visible_items {
-            if visible_items == &new_visible_items {
-                return;
-            }
+        if let Some(visible_items) = &self.visible_items
+            && visible_items == &new_visible_items
+        {
+            return;
         }
 
         self.visible_items = Some(new_visible_items);
+        ctx.notify();
+    }
+
+    pub fn set_prepared_tab_completions(
+        &mut self,
+        suggestions: Vec<PreparedSuggestion>,
+        preselect_option: TabCompletionsPreselectOption,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.set_items(items_from_prepared_suggestions(suggestions));
+        if self.items.is_empty() {
+            return;
+        }
+
+        match preselect_option {
+            TabCompletionsPreselectOption::First => self.select_first_item(ctx),
+            TabCompletionsPreselectOption::Unselected => self.selected_index = None,
+            TabCompletionsPreselectOption::Unchanged => {}
+        }
+
+        self.cycle = true;
         ctx.notify();
     }
 
@@ -965,42 +992,41 @@ impl InputSuggestions {
         );
 
         // Render the overflow detail panel if the there is a visible, selected item with details.
-        if let Some(selected_index) = self.selected_index {
-            if let Some(details_box) =
+        if let Some(selected_index) = self.selected_index
+            && let Some(details_box) =
                 self.render_visible_item_details(selected_index, appearance, ctx)
-            {
-                stack.add_positioned_child(
-                    SizeConstraintSwitch::new(
-                        Container::new(details_box)
-                            .with_uniform_padding(DETAILS_PANEL_PADDING)
-                            .with_background(theme.surface_2())
-                            .with_border(Border::all(1.0).with_border_fill(theme.outline()))
-                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-                            .with_margin_right(DETAILS_PANEL_MARGIN)
-                            .with_drop_shadow(DropShadow::default())
-                            .finish(),
-                        vec![(
-                            SizeConstraintCondition::WidthLessThan(DETAILS_MIN_WIDTH),
-                            Empty::new().finish(),
-                        )],
-                    )
-                    .finish(),
-                    OffsetPositioning::from_axes(
-                        PositioningAxis::relative_to_stack_child(
-                            SUGGESTIONS_LIST_POSITION_ID,
-                            PositionedElementOffsetBounds::WindowBySize,
-                            OffsetType::Pixel(DETAILS_PANEL_MARGIN),
-                            AnchorPair::new(XAxisAnchor::Right, XAxisAnchor::Left),
-                        ),
-                        PositioningAxis::relative_to_stack_child(
-                            InputSuggestions::position_id_at_index(selected_index),
-                            PositionedElementOffsetBounds::ParentByPosition,
-                            OffsetType::Pixel(0.),
-                            AnchorPair::new(YAxisAnchor::Top, YAxisAnchor::Top),
-                        ),
+        {
+            stack.add_positioned_child(
+                SizeConstraintSwitch::new(
+                    Container::new(details_box)
+                        .with_uniform_padding(DETAILS_PANEL_PADDING)
+                        .with_background(theme.surface_2())
+                        .with_border(Border::all(1.0).with_border_fill(theme.outline()))
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                        .with_margin_right(DETAILS_PANEL_MARGIN)
+                        .with_drop_shadow(DropShadow::default())
+                        .finish(),
+                    vec![(
+                        SizeConstraintCondition::WidthLessThan(DETAILS_MIN_WIDTH),
+                        Empty::new().finish(),
+                    )],
+                )
+                .finish(),
+                OffsetPositioning::from_axes(
+                    PositioningAxis::relative_to_stack_child(
+                        SUGGESTIONS_LIST_POSITION_ID,
+                        PositionedElementOffsetBounds::WindowBySize,
+                        OffsetType::Pixel(DETAILS_PANEL_MARGIN),
+                        AnchorPair::new(XAxisAnchor::Right, XAxisAnchor::Left),
                     ),
-                );
-            }
+                    PositioningAxis::relative_to_stack_child(
+                        InputSuggestions::position_id_at_index(selected_index),
+                        PositionedElementOffsetBounds::ParentByPosition,
+                        OffsetType::Pixel(0.),
+                        AnchorPair::new(YAxisAnchor::Top, YAxisAnchor::Top),
+                    ),
+                ),
+            );
         }
 
         stack.finish()
@@ -1150,6 +1176,10 @@ impl HistoryInputSuggestion<'_> {
         }
     }
 
+    pub fn normalized_text(&self) -> &str {
+        self.text().trim()
+    }
+
     /// Which type of detail panel to show for this suggestion, if any.
     fn details(&self) -> Option<DetailContent> {
         match self {
@@ -1208,10 +1238,9 @@ impl HistoryInputSuggestion<'_> {
                 // Check if this entry belongs to the current session
                 if let (Some(entry_session_id), Some(current_session_id)) =
                     (entry.session_id, current_session_id)
+                    && entry_session_id == current_session_id
                 {
-                    if entry_session_id == current_session_id {
-                        return HistoryOrder::CurrentSession;
-                    }
+                    return HistoryOrder::CurrentSession;
                 }
                 // Other live session, or past session
                 HistoryOrder::DifferentSession

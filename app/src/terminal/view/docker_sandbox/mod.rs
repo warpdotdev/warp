@@ -10,20 +10,24 @@ use warp_cli::agent::Harness;
 #[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use warp_errors::report_error;
 #[cfg(feature = "local_tty")]
-use warpui::geometry::vector::Vector2F;
+use warpui::ModelHandle;
+use warpui::ViewContext;
 #[cfg(not(target_family = "wasm"))]
 use warpui::r#async::FutureExt;
 #[cfg(feature = "local_tty")]
-use warpui::ModelHandle;
-use warpui::ViewContext;
+use warpui::geometry::vector::Vector2F;
 #[cfg(not(target_family = "wasm"))]
 use warpui::{SingletonEntity, View, ViewHandle};
 
 use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
-    environment::prepare_environment, terminal::TerminalDriver, WARP_DRIVE_SYNC_TIMEOUT,
+    WARP_DRIVE_SYNC_TIMEOUT,
+    environment::{RepositoryPreparationOptions, prepare_environment},
+    terminal::TerminalDriver,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::environment_snapshot::EnvironmentSnapshotReporter;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 #[cfg(not(target_family = "wasm"))]
@@ -40,23 +44,23 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 #[cfg(any(feature = "local_tty", not(target_family = "wasm")))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg(feature = "local_tty")]
+use crate::terminal::TerminalManager;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::available_shells::AvailableShell;
-#[cfg(feature = "local_tty")]
-use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_tty::docker_sandbox::DOCKER_SANDBOX_HOME_DIR;
+#[cfg(feature = "local_tty")]
+use crate::terminal::local_tty::docker_sandbox::resolve_sbx_path_from_user_shell;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::local_tty::{
-    create_terminal_view_surface, TerminalManager as LocalTtyTerminalManager,
-    TerminalViewSurfaceConfig,
+    TerminalManager as LocalTtyTerminalManager, TerminalViewSurfaceConfig,
+    create_terminal_view_surface,
 };
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
 use crate::terminal::shared_session::IsSharedSessionCreator;
-#[cfg(feature = "local_tty")]
-use crate::terminal::TerminalManager;
 
 /// Default base Docker image used for newly created sandbox shells.
 ///
@@ -244,10 +248,11 @@ impl TerminalView {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
         // Local Docker sandbox tabs are not backed by an Oz run ID, so setup event reporting is
         // intentionally disabled for this environment preparation path.
-        let setup_events = SetupClientEventReporter::noop(
-            ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
-            ctx.background_executor().clone(),
-        );
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+        let background = ctx.background_executor();
+        let setup_events = SetupClientEventReporter::noop(ai_client.clone(), background.clone());
+        let environment_snapshot_reporter =
+            EnvironmentSnapshotReporter::noop(ai_client, background.clone());
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -289,14 +294,22 @@ impl TerminalView {
                     .ok_or("environment not found")?;
 
                 // Prepare the environment (clone repos, run setup commands, index codebases).
+                let source_repos = environment.effective_repos();
+                let setup_commands = environment.setup_commands;
                 let prepare_future = spawner
                     .spawn(|_, ctx| {
                         prepare_environment(
-                            environment,
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            RepositoryPreparationOptions::new(
+                                source_repos,
+                                setup_commands,
+                                Vec::new(),
+                                false,
+                            ),
                             setup_events,
+                            environment_snapshot_reporter,
                             ctx,
                         )
                     })
@@ -304,8 +317,10 @@ impl TerminalView {
                     .map_err(|_| "view dropped")?;
 
                 prepare_future.await.map_err(|e| {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Docker sandbox environment preparation failed"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Docker sandbox environment preparation failed")
+                    );
                     "environment preparation failed"
                 })?;
 
@@ -322,10 +337,7 @@ impl TerminalView {
                     log::info!("Prepared Docker Sandbox environment");
                 }
                 Err(err) => {
-                    report_error!(
-                        "Docker Sandbox environment setup failed",
-                        extra: { "error" => %err }
-                    );
+                    log::warn!("Docker Sandbox environment setup failed: {err}");
                 }
             },
         );

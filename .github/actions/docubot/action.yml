@@ -1,5 +1,5 @@
 name: "Docubot"
-description: "Helps Warp engineers identify PRs that need documentation updates in GitBook"
+description: "Helps Warp engineers identify PRs that need documentation updates in warpdotdev/docs"
 inputs:
   prompt:
     description: "Prompt to send to Warp"
@@ -24,12 +24,12 @@ runs:
       uses: ./.github/actions/setup_warp_cli
       with:
         warp_channel: ${{ inputs.warp_channel }}
-    - name: Clone Warp GitBook repository
+    - name: Clone Warp docs repository
       uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       with:
-        repository: warpdotdev/gitbook
+        repository: warpdotdev/docs
         token: ${{ inputs.github_token }}
-        path: gitbook
+        path: docs
     - name: Create prompt file
       shell: bash
       # TODO: use sdk (python or typescript) for this 
@@ -114,7 +114,7 @@ runs:
         COMMENT_HTML_URL: ${{ github.event.comment.html_url }}
         
         # Documentation Repository Context
-        GITBOOK_PATH: ${{ format('{0}/gitbook', github.workspace) }}
+        DOCS_PATH: ${{ format('{0}/docs', github.workspace) }}
 
     - name: Configure git identity
       shell: bash

@@ -6,7 +6,7 @@ mod x11;
 use std::sync::OnceLock;
 
 use async_trait::async_trait;
-pub use recording::Recorder;
+pub use recording::{Recorder, post_process_recording};
 use warp_errors::report_error;
 
 use crate::{ActionResult, Options, TargetedAction};
@@ -39,6 +39,17 @@ pub fn background_supported() -> bool {
     // The probe opens an X connection; cache it since this is consulted on every agent request.
     static SUPPORTED: OnceLock<bool> = OnceLock::new();
     *SUPPORTED.get_or_init(x11::probe_background_support)
+}
+
+/// Ends the background computer-use session owned by `owner`. On X11 this removes the
+/// session's shared agent seat (and its on-screen cursor), implicitly releasing any input state
+/// it still holds. Wayland has no background per-window control, so there is nothing to tear
+/// down.
+pub fn end_background_session(owner: &str) {
+    if is_wayland_available() || !is_x11_available() {
+        return;
+    }
+    x11::end_background_session(owner);
 }
 
 /// Enumerates the on-screen windows so a caller can pick one to target. Only supported on X11;
@@ -106,6 +117,15 @@ impl super::Actor for Actor {
             ActorInner::Wayland(actor) => actor.platform(),
             ActorInner::X11(actor) => actor.platform(),
             ActorInner::Unsupported => None,
+        }
+    }
+
+    fn set_background_session_owner(&mut self, owner: Option<String>) {
+        match &mut self.inner {
+            // The X11 actor keys its shared, session-scoped agent seat by the owner.
+            ActorInner::X11(actor) => actor.set_background_session_owner(owner),
+            // Wayland has no background per-window control; nothing to tag.
+            ActorInner::Wayland(_) | ActorInner::Unsupported => {}
         }
     }
 

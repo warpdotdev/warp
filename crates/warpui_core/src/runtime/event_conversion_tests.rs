@@ -1,17 +1,77 @@
 use std::time::Duration;
 
 use instant::Instant;
+#[cfg(not(windows))]
+use ratatui::crossterm::event::KeyEventState;
 use ratatui::crossterm::event::{
-    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
-    MouseEvent, MouseEventKind,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, ModifierKeyCode,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 
-use super::{crossterm_event_to_tui_event, ClickTracker};
+use super::{ClickTracker, crossterm_event_to_tui_event, produced_chars};
 use crate::elements::tui::{TuiEvent, TuiPoint};
+use crate::event::KeyState;
 use crate::keymap::Keystroke;
+use crate::platform::keyboard::KeyCode as PhysicalKeyCode;
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Option<TuiEvent> {
     crossterm_event_to_tui_event(CrosstermEvent::Key(KeyEvent::new(code, modifiers)))
+}
+#[cfg(not(windows))]
+fn key_with_state(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+    state: KeyEventState,
+) -> Option<TuiEvent> {
+    crossterm_event_to_tui_event(CrosstermEvent::Key(KeyEvent::new_with_kind_and_state(
+        code,
+        modifiers,
+        KeyEventKind::Press,
+        state,
+    )))
+}
+#[cfg(not(windows))]
+#[test]
+fn caps_lock_and_shift_apply_xor_casing_to_ascii_text() {
+    let cases = [
+        (
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+            KeyEventState::CAPS_LOCK,
+            "A",
+        ),
+        (
+            KeyCode::Char('A'),
+            KeyModifiers::SHIFT,
+            KeyEventState::CAPS_LOCK,
+            "a",
+        ),
+    ];
+    for (code, modifiers, state, expected_chars) in cases {
+        let Some(TuiEvent::KeyDown {
+            keystroke, chars, ..
+        }) = key_with_state(code, modifiers, state)
+        else {
+            panic!("expected KeyDown");
+        };
+        assert_eq!(chars, expected_chars);
+        assert_eq!(keystroke.shift, modifiers.contains(KeyModifiers::SHIFT));
+    }
+}
+
+#[test]
+fn backend_produced_text_is_not_recased() {
+    let cases = [
+        (KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT), "A"),
+        (KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SHIFT), "a"),
+        (
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::empty()),
+            "A",
+        ),
+    ];
+    for (event, expected_chars) in cases {
+        assert_eq!(produced_chars(event, true), expected_chars);
+    }
 }
 
 fn mouse(kind: MouseEventKind, modifiers: KeyModifiers) -> Option<TuiEvent> {
@@ -64,39 +124,196 @@ fn arrow_keys_map_to_direction_names() {
 }
 
 #[test]
+fn tab_maps_to_the_canonical_keybinding_name() {
+    assert_eq!(keystroke(KeyCode::Tab, KeyModifiers::empty()).key, "tab");
+    let back_tab = keystroke(KeyCode::BackTab, KeyModifiers::SHIFT);
+    assert_eq!(back_tab.key, "tab");
+    assert!(back_tab.shift);
+}
+
+#[test]
 fn ctrl_modifier_is_carried_into_keystroke() {
     let keystroke = keystroke(KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert!(keystroke.ctrl, "ctrl modifier should be set");
     assert_eq!(keystroke.key, "c");
 }
-
 #[test]
-fn shifted_char_preserves_case() {
-    let keystroke = keystroke(KeyCode::Char('A'), KeyModifiers::SHIFT);
-    assert!(keystroke.shift);
-    assert_eq!(keystroke.key, "A");
+fn legacy_safe_ctrl_r_chord_is_preserved_for_keybindings() {
+    let keystroke = keystroke(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert!(keystroke.ctrl);
+    assert_eq!(keystroke.key, "r");
+    assert_eq!(keystroke.normalized(), "ctrl-r");
 }
 
 #[test]
-fn non_press_key_events_are_ignored() {
-    let mut event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
-    event.kind = KeyEventKind::Release;
-    assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(event)).is_none());
-}
-
-#[test]
-fn pure_modifier_keys_have_no_tui_equivalent() {
-    let event = KeyEvent::new(
-        KeyCode::Modifier(ratatui::crossterm::event::ModifierKeyCode::LeftControl),
-        KeyModifiers::empty(),
+fn non_shift_modifiers_are_preserved_from_the_key_event() {
+    let keystroke = keystroke(
+        KeyCode::Char('c'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER | KeyModifiers::META,
     );
-    assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(event)).is_none());
+    assert!(keystroke.ctrl);
+    assert!(keystroke.alt);
+    assert!(keystroke.cmd);
+    assert!(keystroke.meta);
+    assert!(!keystroke.shift);
 }
 
 #[test]
-fn resize_and_focus_events_are_ignored() {
+fn shifted_letter_preserves_case_and_base_key() {
+    // Backends disagree on which character a shifted letter reports: terminals
+    // speaking the Kitty protocol send the unshifted codepoint and leave the
+    // casing to the decoder, while the Windows console sends the character the
+    // layout already produced. Both must decode to the same keystroke.
+    let reported = if cfg!(windows) { 'A' } else { 'a' };
+    // Ctrl must not change the naming: `ctrl-shift-A` is the form the TUI's
+    // select-all, copy, and redo bindings are registered under.
+    for modifiers in [
+        KeyModifiers::SHIFT,
+        KeyModifiers::SHIFT | KeyModifiers::CONTROL,
+    ] {
+        let Some(TuiEvent::KeyDown {
+            keystroke,
+            chars,
+            details,
+            ..
+        }) = key(KeyCode::Char(reported), modifiers)
+        else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.shift);
+        assert_eq!(keystroke.ctrl, modifiers.contains(KeyModifiers::CONTROL));
+        assert_eq!(keystroke.key, "A");
+        assert_eq!(chars, "A");
+        assert_eq!(details.key_without_modifiers.as_deref(), Some("a"));
+    }
+}
+
+#[test]
+fn alternate_key_without_shift_preserves_produced_character_semantics() {
+    for (char, expected_key) in [('A', "a"), ('!', "!")] {
+        let Some(TuiEvent::KeyDown {
+            keystroke, chars, ..
+        }) = key(KeyCode::Char(char), KeyModifiers::CONTROL)
+        else {
+            panic!("expected KeyDown");
+        };
+        assert!(keystroke.ctrl);
+        assert!(!keystroke.shift);
+        assert_eq!(keystroke.key, expected_key);
+        assert_eq!(chars, char.to_string());
+    }
+}
+
+#[test]
+fn shifted_punctuation_uses_the_terminal_character() {
+    let Some(TuiEvent::KeyDown {
+        keystroke, chars, ..
+    }) = key(KeyCode::Char('!'), KeyModifiers::SHIFT)
+    else {
+        panic!("expected KeyDown");
+    };
+    assert_eq!(keystroke.key, "!");
+    assert!(keystroke.shift);
+    assert_eq!(chars, "!");
+}
+
+#[test]
+fn repeats_remain_key_down_events_and_non_modifier_releases_are_ignored() {
+    let repeat = KeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::empty(),
+        KeyEventKind::Repeat,
+    );
+    assert!(matches!(
+        crossterm_event_to_tui_event(CrosstermEvent::Key(repeat)),
+        Some(TuiEvent::KeyDown { .. })
+    ));
+
+    let release = KeyEvent::new_with_kind(
+        KeyCode::Char('a'),
+        KeyModifiers::empty(),
+        KeyEventKind::Release,
+    );
+    assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(release)).is_none());
+}
+#[test]
+fn paste_preserves_the_complete_payload() {
+    let payload = "USER:\nhello\n\nAGENT:\nHi!\n";
+    let Some(TuiEvent::Paste { text }) =
+        crossterm_event_to_tui_event(CrosstermEvent::Paste(payload.to_owned()))
+    else {
+        panic!("expected Paste");
+    };
+    assert_eq!(text, payload);
+}
+
+#[test]
+fn modifier_keys_map_to_modifier_changed_events() {
+    let cases = [
+        (ModifierKeyCode::LeftControl, PhysicalKeyCode::ControlLeft),
+        (ModifierKeyCode::RightControl, PhysicalKeyCode::ControlRight),
+        (ModifierKeyCode::LeftAlt, PhysicalKeyCode::AltLeft),
+        (ModifierKeyCode::RightAlt, PhysicalKeyCode::AltRight),
+        (ModifierKeyCode::LeftShift, PhysicalKeyCode::ShiftLeft),
+        (ModifierKeyCode::RightShift, PhysicalKeyCode::ShiftRight),
+        (ModifierKeyCode::LeftSuper, PhysicalKeyCode::SuperLeft),
+        (ModifierKeyCode::RightSuper, PhysicalKeyCode::SuperRight),
+    ];
+
+    for (modifier, expected_key_code) in cases {
+        for (kind, expected_state) in [
+            (KeyEventKind::Press, KeyState::Pressed),
+            (KeyEventKind::Release, KeyState::Released),
+        ] {
+            let event =
+                KeyEvent::new_with_kind(KeyCode::Modifier(modifier), KeyModifiers::empty(), kind);
+            let Some(TuiEvent::ModifierKeyChanged { key_code, state }) =
+                crossterm_event_to_tui_event(CrosstermEvent::Key(event))
+            else {
+                panic!("expected ModifierKeyChanged");
+            };
+            assert_eq!(key_code, expected_key_code);
+            assert!(matches!(
+                (state, expected_state),
+                (KeyState::Pressed, KeyState::Pressed) | (KeyState::Released, KeyState::Released)
+            ));
+        }
+
+        let repeat = KeyEvent::new_with_kind(
+            KeyCode::Modifier(modifier),
+            KeyModifiers::empty(),
+            KeyEventKind::Repeat,
+        );
+        assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(repeat)).is_none());
+    }
+}
+
+#[test]
+fn unsupported_modifier_keys_have_no_tui_equivalent() {
+    for modifier in [
+        ModifierKeyCode::LeftHyper,
+        ModifierKeyCode::RightHyper,
+        ModifierKeyCode::LeftMeta,
+        ModifierKeyCode::RightMeta,
+        ModifierKeyCode::IsoLevel3Shift,
+        ModifierKeyCode::IsoLevel5Shift,
+    ] {
+        let event = KeyEvent::new(KeyCode::Modifier(modifier), KeyModifiers::empty());
+        assert!(crossterm_event_to_tui_event(CrosstermEvent::Key(event)).is_none());
+    }
+}
+
+#[test]
+fn resize_is_ignored_and_focus_events_are_preserved() {
     assert!(crossterm_event_to_tui_event(CrosstermEvent::Resize(80, 24)).is_none());
-    assert!(crossterm_event_to_tui_event(CrosstermEvent::FocusGained).is_none());
+    assert!(matches!(
+        crossterm_event_to_tui_event(CrosstermEvent::FocusGained),
+        Some(TuiEvent::FocusGained)
+    ));
+    assert!(matches!(
+        crossterm_event_to_tui_event(CrosstermEvent::FocusLost),
+        Some(TuiEvent::FocusLost)
+    ));
 }
 
 #[test]
@@ -233,26 +450,34 @@ fn mouse_moved_maps_to_tui_mouse_moved_event() {
 
 #[test]
 fn unsupported_mouse_up_and_drag_buttons_are_ignored() {
-    assert!(mouse(
-        MouseEventKind::Up(MouseButton::Right),
-        KeyModifiers::empty()
-    )
-    .is_none());
-    assert!(mouse(
-        MouseEventKind::Up(MouseButton::Middle),
-        KeyModifiers::empty()
-    )
-    .is_none());
-    assert!(mouse(
-        MouseEventKind::Drag(MouseButton::Right),
-        KeyModifiers::empty()
-    )
-    .is_none());
-    assert!(mouse(
-        MouseEventKind::Drag(MouseButton::Middle),
-        KeyModifiers::empty()
-    )
-    .is_none());
+    assert!(
+        mouse(
+            MouseEventKind::Up(MouseButton::Right),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
+    assert!(
+        mouse(
+            MouseEventKind::Up(MouseButton::Middle),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
+    assert!(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Right),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
+    assert!(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Middle),
+            KeyModifiers::empty()
+        )
+        .is_none()
+    );
 }
 
 /// Builds a `button` mouse-down at `(x, y)` via the real conversion (so it

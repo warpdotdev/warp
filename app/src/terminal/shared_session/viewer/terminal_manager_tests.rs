@@ -14,12 +14,14 @@ use async_broadcast::broadcast;
 use warpui::App;
 
 use super::*;
-use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::QueuedQueryModel;
+use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
+use crate::pane_group::PaneConfigurationEvent;
 // Bring the `TerminalManager` trait into scope (named under a different alias
 // since the local `TerminalManager` struct shadows it) so the trait method
 // `on_view_detached` is callable on the struct.
 use crate::terminal::TerminalManager as _;
+use crate::terminal::model::session::Sessions;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 use crate::workspace::ToastStack;
@@ -59,8 +61,7 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
         history.set_active_conversation_id(id, terminal_view_id, ctx);
     });
 
-    // The OVM registers with the streamer on construction (streamer flag
-    // is expected to be ON in the calling test).
+    // The OVM registers with the streamer on construction.
     let ovm_handle = app.add_model(|ctx| {
         OrchestrationViewerModel::new(parent, terminal_view_id, terminal_view.downgrade(), ctx)
     });
@@ -97,6 +98,7 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
         outbound_handlers_registered: false,
         orchestration_viewer_model: Arc::new(FairMutex::new(Some(ovm_handle))),
         enable_orchestration_polling: true,
+        orchestration_child_conversation_id: None,
     };
     (manager, parent)
 }
@@ -137,8 +139,6 @@ fn on_view_detached_closed_clears_orchestration_viewer_model_slot() {
     // Regression: closing a viewer pane must drop the OVM and release its
     // streamer registration so the ancestor SSE can be torn down.
     App::test((), |mut app| async move {
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -180,8 +180,6 @@ fn on_view_detached_hidden_for_close_keeps_orchestration_viewer_model_alive() {
     // window. OVM (and the ancestor SSE registration) must stay alive so
     // the pill bar restores seamlessly if the user undoes the close.
     App::test((), |mut app| async move {
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -210,8 +208,6 @@ fn on_view_detached_moved_keeps_orchestration_viewer_model_alive() {
     // to a new pane group. Tearing down the OVM would orphan the pill
     // bar on the moved pane.
     App::test((), |mut app| async move {
-        let _streamer = FeatureFlag::OrchestrationViewerStreamer.override_enabled(true);
-
         initialize_app_for_terminal_view(&mut app);
 
         let (manager, parent) = build_manager_with_registered_ovm(&mut app);
@@ -247,7 +243,7 @@ fn handle_viewer_session_end_ignores_stale_ambient_end() {
         let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
         let (wakeups_tx, _wakeups_rx) = async_channel::unbounded();
-        let (events_tx, _events_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded::<crate::terminal::event::Event>();
         let (pty_reads_tx, pty_reads_rx) = broadcast(8);
         let _inactive_pty_reads_rx = pty_reads_rx.deactivate();
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
@@ -289,5 +285,78 @@ fn handle_viewer_session_end_ignores_stale_ambient_end() {
             !model.lock().shared_session_status().is_finished_viewer(),
             "an ignored stale ambient end must not finish the viewer"
         );
+    });
+}
+
+#[test]
+fn ending_ambient_session_refreshes_shared_session_link_surfaces() {
+    let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(Manager::new);
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let model = terminal_view.read(&app, |view, _| view.model.clone());
+        model
+            .lock()
+            .set_shared_session_status(SharedSessionStatus::ActiveViewer {
+                role: Default::default(),
+            });
+
+        let (wakeups_tx, _wakeups_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded::<crate::terminal::event::Event>();
+        let (pty_reads_tx, pty_reads_rx) = broadcast(8);
+        let _inactive_pty_reads_rx = pty_reads_rx.deactivate();
+        let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
+        let (_write_to_pty_tx, write_to_pty_rx) = async_channel::unbounded();
+        let ended_network = app.add_model(|ctx| {
+            Network::new_for_test(
+                channel_event_proxy,
+                terminal_view.downgrade(),
+                model.clone(),
+                write_to_pty_rx,
+                RemoteUpdateGuard::new(),
+                ctx,
+            )
+        });
+        let ended_session_id = ended_network.read(&app, |network, _| network.session_id());
+        Manager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.joined_share(terminal_view.downgrade(), ended_session_id, ctx);
+        });
+
+        let link_change_events = Arc::new(FairMutex::new(0));
+        let link_change_events_for_subscription = link_change_events.clone();
+        let pane_configuration =
+            terminal_view.read(&app, |view, _| view.pane_configuration().clone());
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&pane_configuration, move |_, event, _| {
+                if matches!(event, PaneConfigurationEvent::SharedSessionLinkChanged) {
+                    *link_change_events_for_subscription.lock() += 1;
+                }
+            });
+        });
+
+        let current_network = Arc::new(FairMutex::new(Some(ended_network.clone())));
+        let handled = app.update(|ctx| {
+            TerminalManager::end_current_ambient_session(
+                &terminal_view,
+                model.clone(),
+                &current_network,
+                &ended_network,
+                ctx,
+            )
+        });
+
+        assert!(handled);
+        assert_eq!(*link_change_events.lock(), 1);
+        terminal_view.read(&app, |view, ctx| {
+            let status = view.model.lock().shared_session_status().clone();
+            assert_eq!(
+                Manager::as_ref(ctx).session_id_for_link(&view.id(), &status),
+                None,
+                "an ended id must not stay exposed while the status is still ActiveViewer"
+            );
+        });
     });
 }

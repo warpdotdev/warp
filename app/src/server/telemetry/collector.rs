@@ -9,7 +9,7 @@ use warp_errors::{report_error, report_if_error};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{App, Entity, ModelContext, SingletonEntity};
 
-use super::{clear_event_queue, rudder_event_file_path, RUDDER_TELEMETRY_EVENTS_FILE_NAME};
+use super::{RUDDER_TELEMETRY_EVENTS_FILE_NAME, clear_event_queue, rudder_event_file_path};
 use crate::auth::AuthStateProvider;
 use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
@@ -145,18 +145,20 @@ impl TelemetryCollector {
 
                 // Try flushing from both new and legacy locations.
                 for path in [new_path, old_path] {
-                    report_if_error!(server_api
-                        .flush_persisted_events_to_rudder(&path, privacy_settings_snapshot)
-                        .await
-                        .context("Failed to flush rudder events from disk"));
+                    report_if_error!(
+                        server_api
+                            .flush_persisted_events_to_rudder(&path, privacy_settings_snapshot)
+                            .await
+                            .context("Failed to flush rudder events from disk")
+                    );
                     // Remove the file regardless of outcome  of flushing the events to avoid the
                     // case where we accidentally try to re-flush the events on the next app startup.
-                    if let Err(e) = remove_file(&path) {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            report_error!(
-                                anyhow::anyhow!(e).context("Failed to remove persisted event file")
-                            );
-                        }
+                    if let Err(e) = remove_file(&path)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        report_error!(
+                            anyhow::anyhow!(e).context("Failed to remove persisted event file")
+                        );
                     }
                 }
             },
@@ -177,16 +179,14 @@ impl TelemetryCollector {
                 if is_telemetry_enabled
                     && last_active_timestamp + ACTIVE_USAGE_DURATION.as_secs() as i64
                         > Utc::now().timestamp()
-                {
-                    if let LocalResult::Single(timestamp) =
+                    && let LocalResult::Single(timestamp) =
                         Utc.timestamp_opt(last_active_timestamp, 0)
-                    {
-                        warpui::telemetry::record_app_active_event(
-                            auth_state.user_id().map(|uid| uid.as_string()),
-                            auth_state.anonymous_id(),
-                            timestamp,
-                        );
-                    }
+                {
+                    warpui::telemetry::record_app_active_event(
+                        auth_state.user_id().map(|uid| uid.as_string()),
+                        auth_state.anonymous_id(),
+                        timestamp,
+                    );
                 }
                 Timer::after(ACTIVE_USAGE_DURATION).await;
             },

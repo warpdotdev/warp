@@ -15,16 +15,16 @@ use warpui::presenter::ChildView;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle};
 
-use crate::ai::llms::{should_show_key_icon_for_model, LLMPreferences};
+use crate::ai::llms::{LLMPreferences, should_show_key_icon_for_model};
 use crate::ai::{AIRequestUsageModel, BuyCreditsBannerDisplayState};
 use crate::appearance::Appearance;
 use crate::settings::{AISettings, InputSettings};
 use crate::terminal::buy_credits_banner::BuyCreditsBanner;
 use crate::terminal::input::{Input, InputAction, InputSuggestionsMode, MenuPositioning};
 use crate::terminal::model::TerminalModel;
-use crate::terminal::view::{TerminalAction, PADDING_LEFT};
+use crate::terminal::view::{PADDING_LEFT, TerminalAction};
 use crate::ui_components::icons::Icon;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Whether the terminal input message bar should be shown.
 ///
@@ -470,22 +470,34 @@ fn render_command_token_description(
 
 /// Conditionally adds the "buy credits" banner overlay.
 /// The overlay only is shown if all of the following is true:
-/// - The user is on a team that can purchase addon credits
+/// - The workspace's purchase policy allows buying addon credits
 /// - The user is out of credits (or at their auto-reload limit)
 /// - The input is focused
 /// - There is not a BYO API key for the current model
+/// - On WASM, this pane is not merely viewing a shared session or conversation
+///   transcript (e.g. a factory-onboarding link), since the credits upsell isn't
+///   relevant to someone just observing a session
+#[allow(clippy::too_many_arguments)]
 pub(super) fn maybe_add_buy_credits_banner(
     stack: &mut Stack,
     buy_credits_banner: &ViewHandle<BuyCreditsBanner>,
     is_focused: bool,
     terminal_view_id: EntityId,
     is_input_at_top: bool,
+    scope: &dyn TeamScope,
+    model: &TerminalModel,
     app: &AppContext,
 ) {
-    let can_purchase_addon_credits = UserWorkspaces::as_ref(app)
-        .current_team()
-        .and_then(|team| team.billing_metadata.tier.purchase_add_on_credits_policy)
-        .is_some_and(|policy| policy.enabled);
+    if cfg!(target_family = "wasm")
+        && (model.is_conversation_transcript_viewer() || model.shared_session_status().is_viewer())
+    {
+        return;
+    }
+
+    let workspaces = UserWorkspaces::as_ref(app);
+    let can_purchase_addon_credits = workspaces
+        .purchase_policy()
+        .is_some_and(|policy| policy.allows_purchases());
 
     // Show buy credits banner if billing policy allows purchasing, input is focused,
     // and either:
@@ -493,11 +505,12 @@ pub(super) fn maybe_add_buy_credits_banner(
     // 2. MonthlyLimitReached: Auto-reload enabled and is blocked by monthly limit
     let ai_request_usage = AIRequestUsageModel::as_ref(app);
     let should_show_banner = !matches!(
-        ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
+        ai_request_usage.compute_buy_addon_credits_banner_display_state(scope, app),
         BuyCreditsBannerDisplayState::Hidden
     );
     let is_using_api_key_for_current_model = should_show_key_icon_for_model(
-        LLMPreferences::as_ref(app).get_active_base_model(app, Some(terminal_view_id)),
+        LLMPreferences::as_ref(app).get_active_base_model(scope, app, Some(terminal_view_id)),
+        scope,
         app,
     );
     if can_purchase_addon_credits

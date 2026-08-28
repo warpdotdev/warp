@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use serde_yaml::Mapping;
 use uuid::Uuid;
 use warp_editor::content::markdown::MarkdownStyle;
@@ -90,10 +90,9 @@ impl EmbeddedItem for EmbeddedCommentSpace {
     }
 
     fn to_rich_format(&self, app: &AppContext) -> EmbeddedItemRichFormat<'_> {
-        let text = if let Some(editor) = self.get_comment_editor(app) {
-            editor.read(app, |editor, app| editor.comment_text(app))
-        } else {
-            String::new()
+        let text = match self.get_comment_editor(app) {
+            Some(editor) => editor.read(app, |editor, app| editor.comment_text(app)),
+            _ => String::new(),
         };
 
         EmbeddedItemRichFormat {

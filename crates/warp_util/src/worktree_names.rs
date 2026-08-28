@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
-use rand::seq::SliceRandom;
 use rand::Rng;
+use rand::seq::SliceRandom;
 
 /// Desert/southwest-themed words used to generate memorable worktree branch names.
 /// Deduplicated across six categories.
@@ -247,7 +247,7 @@ pub fn generate_unique_name(existing: &HashSet<&str>, rng: &mut impl Rng) -> Str
     }
     // Practically unreachable — 198^5 ≈ 2.9 × 10^11 possibilities.
     // Fall back to a numeric suffix as a safety net.
-    let n: u32 = rng.gen();
+    let n: u32 = rng.r#gen();
     format!("worktree-{n}")
 }
 

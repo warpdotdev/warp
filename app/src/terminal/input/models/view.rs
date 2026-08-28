@@ -4,8 +4,8 @@ use std::sync::LazyLock;
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{ChildView, MainAxisSize};
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, View, ViewContext,
@@ -34,6 +34,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 struct ManageDefaultsTheme;
 
@@ -129,10 +130,11 @@ impl InlineModelSelectorView {
         positioner: &ModelHandle<InlineMenuPositioner>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| {
+        let team_context = UserWorkspaces::team_context_resolver(ctx.handle());
+        let data_source = ctx.add_model(move |_| {
             // Built without the ambient model; the setter (called below for construction and by
             // the lazy shared-session viewer path) is the single point that attaches it.
-            ModelSelectorDataSource::new(terminal_view_id, None)
+            ModelSelectorDataSource::new(terminal_view_id, team_context, None)
         });
 
         let tab_configs = TAB_CONFIGS.clone();
@@ -339,7 +341,8 @@ impl InlineModelSelectorView {
             | CLISubagentEvent::UpdatedControl { .. } => {
                 me.menu_view.update(ctx, |_, ctx| ctx.notify());
             }
-            CLISubagentEvent::UpdatedLastSnapshot
+            CLISubagentEvent::UpdatedInstruction { .. }
+            | CLISubagentEvent::UpdatedLastSnapshot
             | CLISubagentEvent::ToggledHideResponses
             | CLISubagentEvent::ControlHandedBackAfterTransfer => {}
         });
@@ -351,10 +354,9 @@ impl InlineModelSelectorView {
                     terminal_surface_id: event_terminal_surface_id,
                     ..
                 } = event
+                    && *event_terminal_surface_id == terminal_view_id
                 {
-                    if *event_terminal_surface_id == terminal_view_id {
-                        me.menu_view.update(ctx, |_, ctx| ctx.notify());
-                    }
+                    me.menu_view.update(ctx, |_, ctx| ctx.notify());
                 }
             },
         );
@@ -379,14 +381,12 @@ impl InlineModelSelectorView {
                         menu.select_first_where(|item| item.id == id, ctx)
                     })
                 });
-                if !found_by_id {
-                    if let Some(idx) = selection.index {
-                        let count = me.menu_view.as_ref(ctx).result_count();
-                        if count > 0 {
-                            me.menu_view.update(ctx, |menu, ctx| {
-                                menu.select_idx(idx.min(count - 1), ctx);
-                            });
-                        }
+                if !found_by_id && let Some(idx) = selection.index {
+                    let count = me.menu_view.as_ref(ctx).result_count();
+                    if count > 0 {
+                        me.menu_view.update(ctx, |menu, ctx| {
+                            menu.select_idx(idx.min(count - 1), ctx);
+                        });
                     }
                 }
                 return;
@@ -453,14 +453,16 @@ impl InlineModelSelectorView {
     }
 
     fn active_model_id_for_current_tab(&self, ctx: &ViewContext<Self>) -> LLMId {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
         match self.active_tab(ctx) {
             InlineModelSelectorTab::BaseAgent => llm_preferences
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
                 .id
                 .clone(),
             InlineModelSelectorTab::FullTerminalUse => llm_preferences
-                .get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
+                .get_active_cli_agent_model(&scope, ctx, Some(self.terminal_view_id))
                 .id
                 .clone(),
         }

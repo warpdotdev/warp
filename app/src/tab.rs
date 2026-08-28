@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use settings::Setting as _;
 use warp_core::context_flag::ContextFlag;
 use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::AnsiColors;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, DragAxis, Draggable, DraggableState, DropTarget, Element, Empty, Fill,
@@ -19,13 +20,16 @@ use warpui::elements::{
     SizeConstraintSwitch, Stack, Text,
 };
 use warpui::fonts::Weight;
+use warpui::keymap::Keystroke;
+use warpui::platform::keyboard::KeyCode;
 use warpui::text_layout::ClipConfig;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
-use warpui::{AppContext, SingletonEntity, ViewHandle};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, ViewHandle};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::ConversationStatus;
-use crate::ai::conversation_status_ui::{render_status_element, STATUS_ELEMENT_PADDING};
+use crate::ai::conversation_status_ui::{STATUS_ELEMENT_PADDING, render_status_element};
 use crate::appearance::Appearance;
 /// Tab module contains structures related to Tabs (such as TabData or TabComponent) that simplify
 /// the rendering and management of tabs in general.
@@ -35,13 +39,16 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
 use crate::terminal::view::TerminalViewState;
 use crate::themes::theme::{AnsiColorIdentifier, Fill as ThemeFill, VerticalGradient};
 use crate::ui_components::buttons::icon_button;
-use crate::ui_components::color_dot::{render_color_dot, TAB_COLOR_OPTIONS};
-use crate::ui_components::icons::{Icon, ICON_DIMENSIONS};
-use crate::util::color::{coloru_with_opacity, Opacity};
+use crate::ui_components::color_dot::{TAB_COLOR_OPTIONS, render_color_dot};
+use crate::ui_components::icons::{ICON_DIMENSIONS, Icon};
+use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_to_keystroke};
+use crate::util::color::{Opacity, coloru_with_opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
@@ -52,10 +59,170 @@ use crate::workspace::tab_settings::{
 use crate::workspace::{
     PaneViewLocator, TabBarDropTargetData, TabBarLocation, TabContextMenuAnchor, WorkspaceAction,
 };
-use crate::BlocklistAIHistoryModel;
 
 pub const TAB_BAR_BORDER_HEIGHT: f32 = 1.0;
 pub(crate) const TAB_INDICATOR_HEIGHT: f32 = 14.0;
+const TAB_SHORTCUT_HINT_REVEAL_DELAY: Duration = Duration::from_millis(750);
+
+/// Binding names for switching to tabs 1–8 (tab index 0–7), used to surface the
+/// effective keystroke (including user overrides) on each tab.
+pub(crate) const TAB_ACTIVATE_BINDING_NAMES: [&str; 8] = [
+    "workspace:activate_first_tab",
+    "workspace:activate_second_tab",
+    "workspace:activate_third_tab",
+    "workspace:activate_fourth_tab",
+    "workspace:activate_fifth_tab",
+    "workspace:activate_sixth_tab",
+    "workspace:activate_seventh_tab",
+    "workspace:activate_eighth_tab",
+];
+pub(crate) const TAB_ACTIVATE_LAST_BINDING_NAME: &str = "workspace:activate_last_tab";
+
+pub(crate) fn tab_activate_binding_name(
+    tab_index: usize,
+    tab_count: usize,
+) -> Option<&'static str> {
+    if tab_index >= tab_count {
+        return None;
+    }
+    if let Some(binding_name) = TAB_ACTIVATE_BINDING_NAMES.get(tab_index).copied() {
+        return Some(binding_name);
+    }
+    (tab_index == tab_count - 1).then_some(TAB_ACTIVATE_LAST_BINDING_NAME)
+}
+
+/// Modifier kinds relevant to revealing tab shortcut hints. The Super kind is
+/// the Cmd key on macOS and the Windows/Super key elsewhere; a `Keystroke`'s
+/// `cmd` and `meta` flags both correspond to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ShortcutModifierKind {
+    Super,
+    Control,
+    Alt,
+    Shift,
+}
+
+pub(crate) fn shortcut_modifier_kind(key_code: KeyCode) -> Option<ShortcutModifierKind> {
+    match key_code {
+        KeyCode::SuperLeft | KeyCode::SuperRight => Some(ShortcutModifierKind::Super),
+        KeyCode::ControlLeft | KeyCode::ControlRight => Some(ShortcutModifierKind::Control),
+        KeyCode::AltLeft | KeyCode::AltRight => Some(ShortcutModifierKind::Alt),
+        KeyCode::ShiftLeft | KeyCode::ShiftRight => Some(ShortcutModifierKind::Shift),
+        // KeyCode is non_exhaustive; non-modifier keys reveal nothing.
+        _ => None,
+    }
+}
+
+pub(crate) fn keystroke_modifier_kinds(keystroke: &Keystroke) -> HashSet<ShortcutModifierKind> {
+    let mut kinds = HashSet::new();
+    if keystroke.cmd || keystroke.meta {
+        kinds.insert(ShortcutModifierKind::Super);
+    }
+    if keystroke.ctrl {
+        kinds.insert(ShortcutModifierKind::Control);
+    }
+    if keystroke.alt {
+        kinds.insert(ShortcutModifierKind::Alt);
+    }
+    if keystroke.shift {
+        kinds.insert(ShortcutModifierKind::Shift);
+    }
+    kinds
+}
+
+pub(crate) fn reveals_shortcut_hints(
+    held: &HashSet<ShortcutModifierKind>,
+    binding_kinds: &HashSet<ShortcutModifierKind>,
+) -> bool {
+    held.intersection(binding_kinds).next().is_some()
+}
+
+#[derive(Default)]
+pub struct TabShortcutModifierState {
+    held_keys: HashSet<KeyCode>,
+    revealed_keys: HashSet<KeyCode>,
+    reveal_tasks: HashMap<KeyCode, SpawnedFutureHandle>,
+}
+
+impl TabShortcutModifierState {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn set_key_held(&mut self, key_code: KeyCode, pressed: bool, ctx: &mut ModelContext<Self>) {
+        if pressed {
+            if !self.held_keys.insert(key_code) {
+                return;
+            }
+
+            let task = ctx.spawn_abortable(
+                Timer::after(TAB_SHORTCUT_HINT_REVEAL_DELAY),
+                move |state, _, ctx| {
+                    state.reveal_tasks.remove(&key_code);
+                    if state.reveal_key_if_held(key_code) {
+                        ctx.notify();
+                    }
+                },
+                |_, _| {},
+            );
+            self.reveal_tasks.insert(key_code, task);
+        } else {
+            self.held_keys.remove(&key_code);
+            if let Some(task) = self.reveal_tasks.remove(&key_code) {
+                task.abort();
+            }
+            if self.revealed_keys.remove(&key_code) {
+                ctx.notify();
+            }
+        }
+    }
+
+    fn reveal_key_if_held(&mut self, key_code: KeyCode) -> bool {
+        self.held_keys.contains(&key_code) && self.revealed_keys.insert(key_code)
+    }
+
+    /// Clears all held keys and returns whether shortcut-hint visibility changed.
+    pub fn clear_held_keys(&mut self) -> bool {
+        for (_, task) in self.reveal_tasks.drain() {
+            task.abort();
+        }
+        self.held_keys.clear();
+        let changed = !self.revealed_keys.is_empty();
+        self.revealed_keys.clear();
+        changed
+    }
+
+    fn held_kinds(&self) -> HashSet<ShortcutModifierKind> {
+        self.revealed_keys
+            .iter()
+            .filter_map(|key| shortcut_modifier_kind(*key))
+            .collect()
+    }
+}
+
+impl Entity for TabShortcutModifierState {
+    type Event = ();
+}
+
+impl SingletonEntity for TabShortcutModifierState {}
+
+/// Whether shortcut hints should show right now: some held modifier is one the
+/// current switch-to-tab bindings actually use. Derived from the bindings so a
+/// user who remapped, say, ⌘1 to ⌥1 reveals with ⌥, not ⌘.
+pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
+    let held = TabShortcutModifierState::as_ref(ctx).held_kinds();
+    if held.is_empty() {
+        return false;
+    }
+    let binding_kinds: HashSet<_> = TAB_ACTIVATE_BINDING_NAMES
+        .iter()
+        .copied()
+        .chain(std::iter::once(TAB_ACTIVATE_LAST_BINDING_NAME))
+        .filter_map(|name| keybinding_name_to_keystroke(name, ctx))
+        .flat_map(|keystroke| keystroke_modifier_kinds(&keystroke))
+        .collect();
+    reveals_shortcut_hints(&held, &binding_kinds)
+}
 
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
@@ -96,7 +263,9 @@ const TAB_CLOSE_BUTTON_WIDTH: f32 = 20.0;
 const MAX_TOOLTIP_LENGTH: usize = 80;
 pub(crate) const TAB_PIN_INDICATOR_ICON_SIZE: f32 = 16.0;
 
-const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
+/// Color of the synchronized-inputs indicator, shared by the horizontal tab bar
+/// and the vertical tabs panel so both surfaces read identically.
+pub(crate) const TAB_INDICATOR_SYNCED_COLOR: u32 = 0x4A93FFFF;
 
 // Width threshold (in px) below which we render an icon-only tab
 pub(crate) const COMPACT_TAB_WIDTH_THRESHOLD: f32 = 42.0;
@@ -132,6 +301,20 @@ impl SelectedTabColor {
             SelectedTabColor::Cleared => None,
             SelectedTabColor::Unset => default,
         }
+    }
+}
+
+pub(crate) fn next_tab_color(current: Option<AnsiColorIdentifier>) -> SelectedTabColor {
+    match current.and_then(|color| {
+        TAB_COLOR_OPTIONS
+            .iter()
+            .position(|candidate| *candidate == color)
+    }) {
+        Some(index) if index + 1 < TAB_COLOR_OPTIONS.len() => {
+            SelectedTabColor::Color(TAB_COLOR_OPTIONS[index + 1])
+        }
+        Some(_) => SelectedTabColor::Cleared,
+        None => SelectedTabColor::Color(TAB_COLOR_OPTIONS[0]),
     }
 }
 
@@ -347,26 +530,34 @@ impl TabData {
             }
         }
 
-        // Add "Copy link" option if the focused session in this tab is being shared or viewed
-        let is_shared_or_viewed = self
-            .pane_group
-            .as_ref(ctx)
-            .focused_session_view(ctx)
-            .map(|view| {
-                view.as_ref(ctx)
-                    .model
-                    .lock()
-                    .shared_session_status()
-                    .is_sharer_or_viewer()
-            })
-            .unwrap_or(false);
+        // Add "Copy link" option if the focused session in this tab is being shared or viewed.
+        // Disable the item (rather than silently no-op) when the Manager does not yet have a
+        // session id (e.g. during ViewPending / SharePending while the session is still setting up).
+        let focused_session_view = self.pane_group.as_ref(ctx).focused_session_view(ctx);
+        let focused_session_status = focused_session_view.as_ref().map(|view| {
+            view.as_ref(ctx)
+                .model
+                .lock()
+                .shared_session_status()
+                .clone()
+        });
 
-        if is_shared_or_viewed {
+        if focused_session_status
+            .as_ref()
+            .is_some_and(SharedSessionStatus::is_sharer_or_viewer)
+        {
+            let has_session_link = focused_session_view
+                .as_ref()
+                .zip(focused_session_status.as_ref())
+                .is_some_and(|(view, status)| {
+                    Manager::as_ref(ctx).has_session_link(&view.id(), status)
+                });
             menu_items.push(
                 MenuItemFields::new("Copy link")
                     .with_on_select_action(WorkspaceAction::CopySharedSessionLinkFromTab {
                         tab_index: index,
                     })
+                    .with_disabled(!has_session_link)
                     .into_item(),
             );
         }
@@ -496,9 +687,11 @@ impl TabData {
         if !self.tab_name_hidden_in_grouped_pane_view(ctx) {
             // TODO add option to show the keybinding once we figure out a nice API to retrieve
             // the actual keybinding (based on the user's preferences etc.)
-            menu_items.append(&mut vec![MenuItemFields::new("Rename tab")
-                .with_on_select_action(WorkspaceAction::RenameTab(index))
-                .into_item()]);
+            menu_items.append(&mut vec![
+                MenuItemFields::new("Rename tab")
+                    .with_on_select_action(WorkspaceAction::RenameTab(index))
+                    .into_item(),
+            ]);
             // Group together with rename option (note, resetting doesn't make
             // sense unless you're able to rename a tab).
             let title = self.pane_group.as_ref(ctx).custom_title(ctx);
@@ -559,9 +752,11 @@ impl TabData {
             .custom_vertical_tabs_title()
             .is_some();
 
-        let mut menu_items = vec![MenuItemFields::new(target.rename_label)
-            .with_on_select_action(WorkspaceAction::RenamePane(target.locator))
-            .into_item()];
+        let mut menu_items = vec![
+            MenuItemFields::new(target.rename_label)
+                .with_on_select_action(WorkspaceAction::RenamePane(target.locator))
+                .into_item(),
+        ];
         if has_custom_name {
             menu_items.push(
                 MenuItemFields::new(target.reset_label)
@@ -614,9 +809,11 @@ impl TabData {
         if !FeatureFlag::TabConfigs.is_enabled() {
             return vec![];
         }
-        vec![MenuItemFields::new("Save as new config")
-            .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
-            .into_item()]
+        vec![
+            MenuItemFields::new("Save as new config")
+                .with_on_select_action(WorkspaceAction::SaveCurrentTabAsNewConfig(index))
+                .into_item(),
+        ]
     }
 
     /// Pin/unpin entry for the per-tab right-click menu.
@@ -630,9 +827,11 @@ impl TabData {
         } else {
             ("Pin tab", WorkspaceAction::PinTab(index))
         };
-        vec![MenuItemFields::new(label)
-            .with_on_select_action(action)
-            .into_item()]
+        vec![
+            MenuItemFields::new(label)
+                .with_on_select_action(action)
+                .into_item(),
+        ]
     }
 
     /// Returns the tab-group entries for the top-level right-click menu:
@@ -898,6 +1097,7 @@ pub struct TabComponent<'a> {
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
+    shortcut_hint_label: Option<String>,
 }
 
 /// Structure that holds TabComponent styles.
@@ -970,29 +1170,27 @@ impl<'a> TabComponent<'a> {
             .pane_group
             .as_ref(ctx)
             .active_session_view(ctx)
-            .map(|view| {
-                let view = view.as_ref(ctx);
-                view.is_ambient_agent_session(ctx) || {
-                    let model = view.model.lock();
-                    model.is_shared_ambient_agent_session()
-                        || matches!(
-                            model.conversation_transcript_viewer_status(),
-                            Some(
-                                crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus::ViewingAmbientConversation(_)
-                            )
-                        )
-                }
-            })
+            .map(|view| view.as_ref(ctx).is_cloud_agent_session(ctx))
             .unwrap_or(false);
+        // Auto-save persists edits automatically, so the tab-level unsaved
+        // indicator is suppressed for changes it can persist (avoiding flicker
+        // as the user types); unsaveable changes (untitled buffers,
+        // disconnected remotes) still surface it.
         let active_pane_has_unsaved_code_changes = tab
             .pane_group
             .as_ref(ctx)
-            .has_active_code_pane_with_unsaved_changes(ctx);
+            .has_active_code_pane_with_unsaved_indicator(ctx);
         let is_being_shared = tab
             .pane_group
             .as_ref(ctx)
             .is_terminal_pane_being_shared(ctx);
         let should_show_indicators = *TabSettings::as_ref(ctx).show_indicators.value();
+        let shortcut_hint_label = if reveals_tab_shortcut_hints(ctx) {
+            tab_activate_binding_name(tab_index, tab_bar.tab_count)
+                .and_then(|binding_name| keybinding_name_to_display_string(binding_name, ctx))
+        } else {
+            None
+        };
         let are_inputs_synced = SyncedInputState::as_ref(ctx)
             .should_sync_this_pane_group(tab.pane_group.id(), tab.pane_group.window_id(ctx));
 
@@ -1068,6 +1266,7 @@ impl<'a> TabComponent<'a> {
             sole_grouped_member: false,
             locator,
             is_in_multi_tab_selection: false,
+            shortcut_hint_label,
         }
     }
 
@@ -1501,7 +1700,7 @@ impl<'a> TabComponent<'a> {
                     }
                 } else {
                     let icon_color = self.appearance.theme().nonactive_ui_text_color();
-                    Some(Icon::Oz.to_warpui_icon(icon_color).finish())
+                    Some(Icon::Agent.to_warpui_icon(icon_color).finish())
                 }
             }
             Indicator::AmbientAgent => {
@@ -1515,8 +1714,9 @@ impl<'a> TabComponent<'a> {
                 let mouse_state = self.tab.indicator_hover_state.clone();
                 Some(
                     Hoverable::new(mouse_state, move |state| {
-                        let mut stack = Stack::new()
-                            .with_child(Icon::OzCloud.to_warpui_icon(icon_color.into()).finish());
+                        let mut stack = Stack::new().with_child(
+                            Icon::CloudFilled.to_warpui_icon(icon_color.into()).finish(),
+                        );
 
                         if state.is_hovered() {
                             let tooltip = ui_builder
@@ -1553,6 +1753,26 @@ impl<'a> TabComponent<'a> {
         })
     }
 
+    fn render_shortcut_hint(&self) -> Option<Box<dyn Element>> {
+        if self.for_drag_ghost {
+            return None;
+        }
+        let label = self.shortcut_hint_label.as_ref()?;
+        let theme = self.appearance.theme();
+        let font_size = self.styles.default.font_size.unwrap_or(12.);
+        let text = Text::new_inline(
+            label.clone(),
+            self.styles
+                .default
+                .font_family_id
+                .expect("Font family defined"),
+            font_size,
+        )
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .finish();
+        Some(Container::new(text).with_margin_left(4.).finish())
+    }
+
     fn render_tab_container(&self, is_hovered: bool) -> Box<dyn Element> {
         let is_tab_dragging = self.is_tab_dragging();
         let is_hovered = is_hovered && !self.tab_bar.is_any_tab_dragging;
@@ -1583,11 +1803,7 @@ impl<'a> TabComponent<'a> {
                     // tint. A grouped member sits on the group's color backdrop,
                     // so it needs a bigger step to read as selected against it;
                     // at rest it just shows its own color over that backdrop.
-                    if self.grouped_member {
-                        55
-                    } else {
-                        30
-                    }
+                    if self.grouped_member { 55 } else { 30 }
                 } else if is_hovered {
                     40
                 } else {
@@ -1668,6 +1884,9 @@ impl<'a> TabComponent<'a> {
                 )
                 .finish(),
             );
+            if let Some(hint) = self.render_shortcut_hint() {
+                flex_row.add_child(hint);
+            }
             // Equal padding on both sides so the title stays centered; the pin
             // vanishes before it can reach the title.
             let horizontal_padding = if reserve_pin_space {
@@ -1686,19 +1905,20 @@ impl<'a> TabComponent<'a> {
         };
 
         let compact_icon = {
-            if let Some(indicator) = self.render_indicator() {
-                indicator
-            } else {
-                // Fallback to terminal icon if no indicator is present
-                Icon::Terminal
-                    .to_warpui_icon(
-                        self.styles
-                            .default
-                            .font_color
-                            .unwrap_or(ColorU::white())
-                            .into(),
-                    )
-                    .finish()
+            match self.render_indicator() {
+                Some(indicator) => indicator,
+                _ => {
+                    // Fallback to terminal icon if no indicator is present
+                    Icon::Terminal
+                        .to_warpui_icon(
+                            self.styles
+                                .default
+                                .font_color
+                                .unwrap_or(ColorU::white())
+                                .into(),
+                        )
+                        .finish()
+                }
             }
         };
         let compact_tab_content = Clipped::new(

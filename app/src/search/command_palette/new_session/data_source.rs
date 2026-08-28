@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fuzzy_match::{match_indices_case_insensitive, FuzzyMatchResult};
+use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
@@ -307,7 +307,7 @@ mod full_text_searcher {
     use warpui::r#async::executor::Background;
 
     use crate::search::command_palette::new_session::data_source::{
-        NewSessionSearcher, SearcherAction, SEARCHER_BASE_STRINGS,
+        NewSessionSearcher, SEARCHER_BASE_STRINGS, SearcherAction,
     };
     use crate::search::command_palette::new_session::search_item::SearchItem;
     use crate::search::command_palette::new_session::{NewSessionOption, NewSessionOptionId};
@@ -429,7 +429,6 @@ mod full_text_searcher {
         }
 
         fn rebuild_search_index(&mut self) -> Result<(), anyhow::Error> {
-            self.clear_search_index();
             let documents = self.shell_id_to_options.iter().map(|(id, option)| {
                 let binding_description = option.description().to_lowercase();
 
@@ -438,7 +437,7 @@ mod full_text_searcher {
                     id: id.0.clone(),
                 }
             });
-            self.searcher.build_index_async(documents)
+            self.searcher.rebuild_index_async(documents)
         }
 
         fn clear_search_index(&mut self) {
