@@ -167,7 +167,7 @@ struct StartupConfig {
     universal_developer_input_context: UniversalDeveloperInputContext,
     lifetime: Lifetime,
     selected_model_id: String,
-    team_uid: Option<crate::server::ids::ServerId>,
+    share_with_team_uid: Option<crate::server::ids::ServerId>,
 }
 
 #[derive(Debug)]
@@ -255,7 +255,7 @@ impl StartupFailure {
 }
 
 #[cfg(test)]
-fn team_uid_for_init_payload(
+fn share_with_team_uid_for_init_payload(
     scope: &(impl crate::workspaces::user_workspaces::TeamScope + ?Sized),
 ) -> Option<String> {
     use crate::workspaces::user_workspaces::TeamScope;
@@ -430,7 +430,7 @@ impl Network {
             universal_developer_input_context: universal_developer_input_context.clone(),
             lifetime,
             selected_model_id,
-            team_uid,
+            share_with_team_uid: team_uid,
         };
 
         let mut network = Network {
@@ -876,7 +876,7 @@ impl Network {
                             supports_full_role: true,
                             supports_full_role_for_real: true,
                         },
-                        team_uid: config.team_uid.map(String::from),
+                        share_with_team_uid: config.share_with_team_uid.map(String::from),
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(message) {
                         sharer_error!(network, "Sharer failed to send initialization message: {e}");
