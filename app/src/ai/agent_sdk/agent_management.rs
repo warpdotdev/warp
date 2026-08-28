@@ -12,13 +12,14 @@ use warp_cli::agent::{
     OutputFormat,
 };
 use warp_cli::json_filter::JsonOutput;
+use warp_server_client::HttpStatusError;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::TableFormat;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
-    AgentResponse, CreateAgentRequest, SecretRef, UpdateAgentRequest,
+    AIClient, AgentResponse, CreateAgentRequest, SecretRef, UpdateAgentRequest,
 };
 
 /// Singleton model that runs async work for named-agent CLI commands.
@@ -116,11 +117,11 @@ impl AgentManagementRunner {
     ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let future = async move {
+            let agent = resolve_agent_identifier(ai_client.as_ref(), &args.identifier).await?;
             if matches!(output_format, OutputFormat::Json) || args.json_output.force_json_output() {
-                let response = ai_client.get_agent_raw(&args.uid).await?;
+                let response = ai_client.get_agent_raw(&agent.uid).await?;
                 super::output::print_raw_json(response, &args.json_output)?;
             } else {
-                let agent = ai_client.get_agent(&args.uid).await?;
                 print_single_agent(&agent, output_format)?;
             }
             Ok(())
@@ -160,27 +161,20 @@ impl AgentManagementRunner {
     ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let future = async move {
-            let uid = args.uid.clone();
             let json_output = args.json_output.clone();
-            let needs_current_agent = !args.add_secrets.is_empty()
-                || !args.remove_secrets.is_empty()
-                || !args.add_skills.is_empty()
-                || !args.remove_skills.is_empty();
-            let current_agent = if needs_current_agent {
-                Some(ai_client.get_agent(&uid).await?)
-            } else {
-                None
-            };
-            let request = build_update_request(args, current_agent.as_ref());
+            let current_agent =
+                resolve_agent_identifier(ai_client.as_ref(), &args.identifier).await?;
+            let request = build_update_request(args, Some(&current_agent));
             if request_is_empty(&request) {
                 return Err(anyhow!("No updates requested"));
             }
-
             if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
-                let response = ai_client.update_agent_raw(&uid, request).await?;
+                let response = ai_client
+                    .update_agent_raw(&current_agent.uid, request)
+                    .await?;
                 super::output::print_raw_json(response, &json_output)?;
             } else {
-                let agent = ai_client.update_agent(&uid, request).await?;
+                let agent = ai_client.update_agent(&current_agent.uid, request).await?;
                 print_single_agent(&agent, output_format)?;
             }
             Ok(())
@@ -197,12 +191,39 @@ impl AgentManagementRunner {
     ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let future = async move {
-            ai_client.delete_agent(&args.uid).await?;
-            print_delete_result(&args.uid, output_format)?;
+            let agent = resolve_agent_identifier(ai_client.as_ref(), &args.identifier).await?;
+            ai_client.delete_agent(&agent.uid).await?;
+            print_delete_result(&agent.uid, output_format)?;
             Ok(())
         };
         self.spawn_command(future, ctx);
         Ok(())
+    }
+}
+
+fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<HttpStatusError>()
+            .is_some_and(|error| error.status == 404)
+    })
+}
+
+fn is_agent_uid(identifier: &str) -> bool {
+    uuid::Uuid::try_parse(identifier).is_ok_and(|uid| uid.get_version_num() == 7)
+}
+
+pub(super) async fn resolve_agent_identifier(
+    ai_client: &dyn AIClient,
+    identifier: &str,
+) -> anyhow::Result<AgentResponse> {
+    if !is_agent_uid(identifier) {
+        return ai_client.get_agent_by_name(identifier).await;
+    }
+    match ai_client.get_agent(identifier).await {
+        Ok(agent) => Ok(agent),
+        Err(error) if is_not_found(&error) => ai_client.get_agent_by_name(identifier).await,
+        Err(error) => Err(error),
     }
 }
 

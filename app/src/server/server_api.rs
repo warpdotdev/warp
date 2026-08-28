@@ -762,6 +762,10 @@ impl ServerApi {
         }
 
         // Try to deserialize error response as { "error": "message" }
+        let status_error = HttpStatusError {
+            status: status.as_u16(),
+            body: response_text.clone(),
+        };
         match serde_json::from_str::<ClientError>(&response_text) {
             Ok(error_response) => anyhow::Error::new(status_error).context(error_response),
             Err(_) => anyhow::Error::new(status_error)

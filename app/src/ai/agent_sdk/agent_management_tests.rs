@@ -1,6 +1,12 @@
 use chrono::{TimeZone as _, Utc};
+use mockall::predicate::eq;
+use warp_server_client::HttpStatusError;
 
 use super::*;
+use crate::server::server_api::ai::MockAIClient;
+
+const AGENT_UID: &str = "019f8766-c6a5-70af-9624-7c215dd46ccb";
+const OTHER_AGENT_UID: &str = "019f8766-c6a5-70af-9624-7c215dd46ccc";
 
 fn agent(uid: &str, name: &str, created_at_seconds: i64) -> AgentResponse {
     agent_with_available(uid, name, created_at_seconds, true)
@@ -27,6 +33,92 @@ fn agent_with_available(
         base_model: None,
         environment_id: None,
     }
+}
+
+fn http_error(status: u16) -> anyhow::Error {
+    anyhow::Error::new(HttpStatusError {
+        status,
+        body: format!("status {status}"),
+    })
+}
+
+#[test]
+fn agent_uid_requires_uuid_v7() {
+    assert!(is_agent_uid(AGENT_UID));
+    assert!(!is_agent_uid("550e8400-e29b-41d4-a716-446655440000"));
+    assert!(!is_agent_uid("agent-name"));
+}
+
+#[tokio::test]
+async fn resolve_agent_identifier_prefers_direct_uid_lookup() {
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_get_agent()
+        .with(eq(AGENT_UID))
+        .times(1)
+        .returning(|_| Ok(agent(AGENT_UID, "agent-name", 1)));
+    ai_client.expect_get_agent_by_name().times(0);
+
+    let resolved = resolve_agent_identifier(&ai_client, AGENT_UID)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved.uid, AGENT_UID);
+}
+
+#[tokio::test]
+async fn resolve_agent_identifier_uses_name_lookup_for_non_uid() {
+    let mut ai_client = MockAIClient::new();
+    ai_client.expect_get_agent().times(0);
+    ai_client
+        .expect_get_agent_by_name()
+        .with(eq("agent-name"))
+        .times(1)
+        .returning(|_| Ok(agent(AGENT_UID, "agent-name", 1)));
+
+    let resolved = resolve_agent_identifier(&ai_client, "agent-name")
+        .await
+        .unwrap();
+
+    assert_eq!(resolved.uid, AGENT_UID);
+}
+
+#[tokio::test]
+async fn resolve_agent_identifier_falls_back_for_uuid_shaped_name() {
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_get_agent()
+        .with(eq(AGENT_UID))
+        .times(1)
+        .returning(|_| Err(http_error(404)));
+    ai_client
+        .expect_get_agent_by_name()
+        .with(eq(AGENT_UID))
+        .times(1)
+        .returning(|_| Ok(agent(OTHER_AGENT_UID, AGENT_UID, 1)));
+
+    let resolved = resolve_agent_identifier(&ai_client, AGENT_UID)
+        .await
+        .unwrap();
+
+    assert_eq!(resolved.uid, OTHER_AGENT_UID);
+}
+
+#[tokio::test]
+async fn resolve_agent_identifier_does_not_fall_back_on_other_errors() {
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_get_agent()
+        .with(eq(AGENT_UID))
+        .times(1)
+        .returning(|_| Err(http_error(403)));
+    ai_client.expect_get_agent_by_name().times(0);
+
+    let error = resolve_agent_identifier(&ai_client, AGENT_UID)
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("403"));
 }
 
 #[test]
@@ -218,9 +310,9 @@ fn create_args(name: &str) -> AgentCreateArgs {
     }
 }
 
-fn update_args(uid: &str) -> AgentUpdateArgs {
+fn update_args(identifier: &str) -> AgentUpdateArgs {
     AgentUpdateArgs {
-        uid: uid.to_string(),
+        identifier: identifier.to_string(),
         name: None,
         description: None,
         remove_description: false,

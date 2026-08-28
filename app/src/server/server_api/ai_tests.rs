@@ -11,8 +11,8 @@ use super::{
     ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
-    build_list_agent_runs_url, build_run_followup_url,
+    TaskListFilter, UploadFieldValue, UserQueryMode, build_agent_by_name_url,
+    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
 };
 use crate::notebooks::NotebookId;
 use crate::server::server_api::presigned_upload::upload_to_target;
@@ -38,6 +38,14 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
             CLOUD_AGENT_ID_HEADER.to_string(),
             task_scoped_id.to_string()
         )]
+    );
+}
+
+#[test]
+fn agent_by_name_url_encodes_query_parameter() {
+    assert_eq!(
+        build_agent_by_name_url("deploy / test & review"),
+        "agent/identities/by-name?name=deploy%20%2F%20test%20%26%20review"
     );
 }
 

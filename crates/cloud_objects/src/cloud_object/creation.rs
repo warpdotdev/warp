@@ -49,7 +49,7 @@ pub enum CreateCloudObjectResult {
     UserFacingError(String),
     /// The object creation was rejected because the generic string object had
     /// already been created by another client.
-    GenericStringObjectUniqueKeyConflict,
+    GenericStringObjectUniqueKeyConflict(String),
 }
 
 /// Result of attempting to bulk create a cloud object.

@@ -2358,7 +2358,7 @@ fn environment_update_accepts_description() {
         panic!("Expected `warp environment update` command");
     };
     let CliCommand::Environment(EnvironmentCommand::Update {
-        id,
+        identifier,
         description,
         remove_description,
         ..
@@ -2367,7 +2367,7 @@ fn environment_update_accepts_description() {
         panic!("Expected `warp environment update` command");
     };
 
-    assert_eq!(id, "env-id");
+    assert_eq!(identifier, "env-id");
     assert_eq!(description.as_deref(), Some("Updated description"));
     assert!(!remove_description);
 }
@@ -2387,7 +2387,7 @@ fn environment_update_accepts_remove_description() {
         panic!("Expected `warp environment update` command");
     };
     let CliCommand::Environment(EnvironmentCommand::Update {
-        id,
+        identifier,
         description,
         remove_description,
         ..
@@ -2396,7 +2396,7 @@ fn environment_update_accepts_remove_description() {
         panic!("Expected `warp environment update` command");
     };
 
-    assert_eq!(id, "env-id");
+    assert_eq!(identifier, "env-id");
     assert!(description.is_none());
     assert!(remove_description);
 }

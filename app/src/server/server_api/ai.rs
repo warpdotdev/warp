@@ -1040,6 +1040,12 @@ struct ListAgentsResponse {
 fn build_agent_url(uid: &str) -> String {
     format!("agent/identities/{}", urlencoding::encode(uid))
 }
+fn build_agent_by_name_url(name: &str) -> String {
+    format!(
+        "agent/identities/by-name?name={}",
+        urlencoding::encode(name)
+    )
+}
 
 #[derive(Clone, serde::Deserialize, Debug, PartialEq, Eq)]
 pub struct ConnectedSelfHostedWorker {
@@ -1360,6 +1366,8 @@ pub trait AIClient: 'static + Send + Sync {
     async fn get_agent(&self, uid: &str) -> anyhow::Result<AgentResponse, anyhow::Error>;
 
     async fn get_agent_raw(&self, uid: &str) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+
+    async fn get_agent_by_name(&self, name: &str) -> anyhow::Result<AgentResponse, anyhow::Error>;
 
     async fn create_agent(
         &self,
@@ -2618,6 +2626,10 @@ impl AIClient for ServerApi {
 
     async fn get_agent_raw(&self, uid: &str) -> anyhow::Result<serde_json::Value, anyhow::Error> {
         self.get_public_api(&build_agent_url(uid)).await
+    }
+
+    async fn get_agent_by_name(&self, name: &str) -> anyhow::Result<AgentResponse, anyhow::Error> {
+        self.get_public_api(&build_agent_by_name_url(name)).await
     }
 
     async fn create_agent(

@@ -3246,6 +3246,41 @@ impl UpdateManager {
     }
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn create_ambient_agent_environment_online_with_events(
+        &mut self,
+        ambient_agent_environment: AmbientAgentEnvironment,
+        client_id: ClientId,
+        owner: Owner,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let create_future = self.create_ambient_agent_environment_online(
+            ambient_agent_environment,
+            client_id,
+            owner,
+            ctx,
+        );
+
+        ctx.spawn(create_future, move |_, result, ctx| {
+            let (success_type, server_id) = match result {
+                Ok(server_id) => (OperationSuccessType::Success, Some(server_id)),
+                Err(err) => (OperationSuccessType::Denied(err.to_string()), None),
+            };
+
+            ctx.emit(UpdateManagerEvent::ObjectOperationComplete {
+                result: ObjectOperationResult {
+                    success_type,
+                    operation: ObjectOperation::Create {
+                        initiated_by: InitiatedBy::User,
+                    },
+                    client_id: Some(client_id),
+                    server_id,
+                    num_objects: None,
+                },
+            });
+        });
+    }
+
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub fn create_scheduled_ambient_agent_online(
         &mut self,
         scheduled_ambient_agent: ScheduledAmbientAgent,
@@ -3791,8 +3826,8 @@ impl UpdateManager {
                 Ok(CreateCloudObjectResult::UserFacingError(error)) => {
                     let _ = tx.send(Err(anyhow::anyhow!(error)));
                 }
-                Ok(CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict) => {
-                    let _ = tx.send(Err(anyhow::anyhow!("Unique key conflict")));
+                Ok(CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict(message)) => {
+                    let _ = tx.send(Err(anyhow::anyhow!(message)));
                 }
                 Err(err) => {
                     let _ = tx.send(Err(err));

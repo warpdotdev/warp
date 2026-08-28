@@ -1373,7 +1373,7 @@ impl SyncQueue {
                                 ctx,
                             );
                         }
-                        CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict => {
+                        CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict(_) => {
                             log::warn!(
                                 "Failed to create {object_type:?} because of conflicting unique key"
                             );

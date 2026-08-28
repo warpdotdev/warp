@@ -60,17 +60,14 @@ use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
-use crate::cloud_object::CloudObjectLookup as _;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::send_telemetry_sync_from_app_ctx;
-use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
 use crate::terminal::view::ConversationRestorationInNewPaneType;
@@ -1468,24 +1465,14 @@ impl AgentDriverRunner {
 
         let environment = foreground
             .spawn(move |_, ctx| -> Result<_, AgentDriverError> {
-                let server_id = ServerId::try_from(environment_id.as_str()).map_err(|_| {
-                    report_error!(
-                        "Invalid environment ID",
-                        extra: { "environment_id" => %environment_id }
-                    );
-                    AgentDriver::log_valid_environments(ctx);
-                    AgentDriverError::EnvironmentNotFound(environment_id.clone())
-                })?;
-                let sync_id = SyncId::ServerId(server_id);
-
-                CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx)
-                    .ok_or_else(|| {
+                common::resolve_environment(&environment_id, ctx)
+                    .map_err(|_| {
                         report_error!(
-                            "Environment not found with ID",
+                            "Environment not found",
                             extra: { "environment_id" => %environment_id }
                         );
                         AgentDriver::log_valid_environments(ctx);
-                        AgentDriverError::EnvironmentNotFound(environment_id)
+                        AgentDriverError::EnvironmentNotFound(environment_id.clone())
                     })
                     .map(|env| env.model().string_model.clone())
             })

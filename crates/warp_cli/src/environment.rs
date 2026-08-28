@@ -52,22 +52,25 @@ pub enum EnvironmentCommand {
     },
     /// Delete a cloud environment.
     Delete {
-        /// ID of the environment to delete
-        id: String,
+        /// ID or name of the environment to delete
+        #[arg(value_name = "ID|NAME")]
+        identifier: String,
         /// Force delete without checking for integration usage
         #[arg(long, default_value_t = false)]
         force: bool,
     },
     /// Get details of a cloud environment.
     Get {
-        /// ID of the environment to get
-        id: String,
+        /// ID or name of the environment to get
+        #[arg(value_name = "ID|NAME")]
+        identifier: String,
     },
     /// Update an existing cloud environment.
     Update {
-        /// ID of the environment to update
-        id: String,
-        /// Name of the environment (optional, updates if present)
+        /// ID or name of the environment to update
+        #[arg(value_name = "ID|NAME")]
+        identifier: String,
+        /// New name for the environment (optional, renames if present)
         #[arg(long = "name", short = 'n')]
         name: Option<String>,
         /// Description of the environment (max 240 characters)
@@ -119,7 +122,7 @@ impl EnvironmentCommand {
 #[group(required = false, multiple = false)]
 pub struct EnvironmentCreateArgs {
     /// Cloud environment to run the agent in.
-    #[arg(long = "environment", value_name = "ENVIRONMENT_ID", short = 'e')]
+    #[arg(long = "environment", value_name = "ID|NAME", short = 'e')]
     pub environment: Option<String>,
 
     /// Do not run the agent in an environment (not recommended).
@@ -132,7 +135,7 @@ pub struct EnvironmentCreateArgs {
 #[group(required = false, multiple = false)]
 pub struct EnvironmentUpdateArgs {
     /// Cloud environment to run the agent in.
-    #[arg(long = "environment", value_name = "ENVIRONMENT_ID", short = 'e')]
+    #[arg(long = "environment", value_name = "ID|NAME", short = 'e')]
     pub environment: Option<String>,
 
     /// Do not run the agent in an environment (not recommended).

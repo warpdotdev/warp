@@ -3065,6 +3065,22 @@ type GetRunnersOutput implements Response {
 
 union GetRunnersResult = GetRunnersOutput | UserFacingError
 
+"""
+Selects a single runner by UID or by name. Trying lookup as uid takes
+precedence and name is used as a fallback if no runner matches the uid.
+"""
+input RunnerSelector {
+  uid: ID
+  name: String
+}
+
+type GetRunnerOutput implements Response {
+  runner: Runner!
+  responseContext: ResponseContext!
+}
+
+union GetRunnerResult = GetRunnerOutput | UserFacingError
+
 input RunnerInstanceShapeInput {
   vcpus: Int!
   memoryGb: Int!
@@ -3235,6 +3251,11 @@ type RootQuery {
   getIntegrationsUsingEnvironment(input: GetIntegrationsUsingEnvironmentInput!, requestContext: RequestContext!): GetIntegrationsUsingEnvironmentResult!
   getOAuthConnectTxStatus(input: GetOAuthConnectTxStatusInput!, requestContext: RequestContext!): GetOAuthConnectTxStatusResult!
   getRelevantFragments(input: GetRelevantFragmentsInput!, requestContext: RequestContext!): GetRelevantFragmentsResult!
+
+  """
+  Resolve a single runner accessible to the principal by UID or name.
+  """
+  getRunner(requestContext: RequestContext!, selector: RunnerSelector!): GetRunnerResult!
 
   """
   Get runners accessible to the principal.

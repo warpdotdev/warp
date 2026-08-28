@@ -208,7 +208,11 @@ fn test_generic_string_object_unique_key_failure() {
             .expect_create_generic_string_object()
             .times(1)
             .return_once(move |_, _, _| {
-                Ok(CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict)
+                Ok(
+                    CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict(
+                        "object already exists".to_string(),
+                    ),
+                )
             });
         cloud_objects_client_mock
             .expect_create_workflow()

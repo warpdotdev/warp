@@ -471,8 +471,8 @@ pub struct RunAgentArgs {
     /// Maximum time to wait for requested MCP servers to start (e.g. `30s`, `1m`).
     #[arg(long = "mcp-startup-timeout", value_name = "DURATION")]
     pub mcp_startup_timeout: Option<humantime::Duration>,
-    /// Cloud environment to use, identified by ID.
-    #[arg(long = "environment", short = 'e', value_name = "ID")]
+    /// Cloud environment to use, identified by ID or name.
+    #[arg(long = "environment", short = 'e', value_name = "ID|NAME")]
     pub environment: Option<String>,
 
     /// Keep the agent's session open after the conversation completes.
@@ -692,8 +692,8 @@ pub struct RunCloudArgs {
     pub environment: EnvironmentCreateArgs,
 
     /// Runner to use for this agent's compute (docker image, instance size,
-    /// setup commands), identified by ID. Overrides the environment's default runner.
-    #[arg(long = "runner", value_name = "ID")]
+    /// setup commands), identified by ID or name. Overrides the environment's default runner.
+    #[arg(long = "runner", value_name = "ID|NAME")]
     pub runner: Option<String>,
 
     /// Open the agent's session in Warp once it's available.
@@ -707,12 +707,12 @@ pub struct RunCloudArgs {
     #[command(flatten)]
     pub scope: ObjectScope,
 
-    /// UID of the agent to execute this run as.
+    /// UID or name of the agent to execute this run as.
     ///
     /// This will apply the agent's configuration, such
     /// as its skills and base model, and attribute
     /// credit usage back to the agent.
-    #[arg(long = "agent", value_name = "UID")]
+    #[arg(long = "agent", value_name = "UID|NAME")]
     pub agent_uid: Option<String>,
 
     /// Where this job should be hosted. Setting "warp" runs it on Warp's infrastructure. Any other
@@ -815,8 +815,9 @@ pub struct AgentListArgs {
 /// Arguments for getting a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentGetArgs {
-    /// UID of the agent to get.
-    pub uid: String,
+    /// UID or name of the agent to get.
+    #[arg(value_name = "UID|NAME")]
+    pub identifier: String,
 
     /// JSON formatting configuration.
     #[command(flatten)]
@@ -862,8 +863,9 @@ pub struct AgentCreateArgs {
 /// Arguments for updating a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentUpdateArgs {
-    /// UID of the agent to update.
-    pub uid: String,
+    /// UID or name of the agent to update.
+    #[arg(value_name = "UID|NAME")]
+    pub identifier: String,
 
     /// New name for the agent.
     #[arg(long = "name", short = 'n')]
@@ -964,8 +966,9 @@ pub struct AgentUpdateArgs {
 /// Arguments for deleting a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentDeleteArgs {
-    /// UID of the agent to delete.
-    pub uid: String,
+    /// UID or name of the agent to delete.
+    #[arg(value_name = "UID|NAME")]
+    pub identifier: String,
 }
 
 /// Arguments for listing available agent skills.

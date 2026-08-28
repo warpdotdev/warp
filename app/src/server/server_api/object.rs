@@ -384,8 +384,8 @@ impl ObjectClient for ServerApi {
                 })
             }
             CreateGenericStringObjectResult::UserFacingError(e) => Ok(match e.error {
-                UserFacingErrorInterface::GenericStringObjectUniqueKeyConflict(_) => {
-                    CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict
+                UserFacingErrorInterface::GenericStringObjectUniqueKeyConflict(error) => {
+                    CreateCloudObjectResult::GenericStringObjectUniqueKeyConflict(error.message)
                 }
                 _ => CreateCloudObjectResult::UserFacingError(get_user_facing_error_message(e)),
             }),
