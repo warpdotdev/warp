@@ -13413,7 +13413,10 @@ impl TerminalView {
     /// CLI-harness conversation needs this bridge just as much as a child
     /// one does (e.g. for orchestration event delivery, which reads
     /// `ConversationStatus` directly).
-    fn conversation_id_for_cli_status_updates(&self, ctx: &AppContext) -> Option<AIConversationId> {
+    fn conversation_id_for_cli_agent_status_updates(
+        &self,
+        ctx: &AppContext,
+    ) -> Option<AIConversationId> {
         let task_id =
             LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
@@ -13524,7 +13527,7 @@ impl TerminalView {
             return;
         }
 
-        if let Some(conversation_id) = self.conversation_id_for_cli_status_updates(ctx) {
+        if let Some(conversation_id) = self.conversation_id_for_cli_agent_status_updates(ctx) {
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status(
                     self.view_id,
