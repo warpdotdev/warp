@@ -2281,6 +2281,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: prepare_release
     if: ${{ inputs.build_windows != false }}
+    permissions:
+      contents: read
     timeout-minutes: 150
     strategy:
       fail-fast: false
@@ -2360,6 +2362,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: [prepare_release, build_windows_binaries, build_windows_cli_binaries]
     if: ${{ inputs.build_windows != false }}
+    permissions:
+      contents: read
     timeout-minutes: 150
     strategy:
       fail-fast: false
