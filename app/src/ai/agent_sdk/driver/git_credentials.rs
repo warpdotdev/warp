@@ -10,7 +10,10 @@
 /// - An async refresh loop that periodically fetches a fresh token from the
 ///   server and overwrites the credential files, keeping long-running agents
 ///   authenticated for their entire duration.
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
@@ -29,6 +32,47 @@ const GITHUB_HOST: &str = "github.com";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
 const GLAB_HOST: &str = "gitlab.com";
 const GLAB_CONFIG_FILENAME: &str = "config.yml";
+const REFRESH_LOOP_EXIT_WRAPPER_DROPPED: u8 = 0;
+const REFRESH_LOOP_EXIT_RUN_COMPLETED: u8 = 1;
+
+#[derive(Clone)]
+pub(crate) struct RefreshLoopLifecycle {
+    exit_reason: Arc<AtomicU8>,
+}
+
+impl RefreshLoopLifecycle {
+    pub(crate) fn new() -> Self {
+        Self {
+            exit_reason: Arc::new(AtomicU8::new(REFRESH_LOOP_EXIT_WRAPPER_DROPPED)),
+        }
+    }
+
+    pub(crate) fn mark_run_future_completed(&self) {
+        self.exit_reason
+            .store(REFRESH_LOOP_EXIT_RUN_COMPLETED, Ordering::Release);
+    }
+
+    fn started(&self) -> RefreshLoopLifecycleGuard {
+        log::info!("Git credential refresh lifecycle: event=loop_first_poll");
+        RefreshLoopLifecycleGuard {
+            lifecycle: self.clone(),
+        }
+    }
+}
+
+struct RefreshLoopLifecycleGuard {
+    lifecycle: RefreshLoopLifecycle,
+}
+
+impl Drop for RefreshLoopLifecycleGuard {
+    fn drop(&mut self) {
+        let reason = match self.lifecycle.exit_reason.load(Ordering::Acquire) {
+            REFRESH_LOOP_EXIT_RUN_COMPLETED => "run_future_completed",
+            _ => "wrapper_future_dropped",
+        };
+        log::info!("Git credential refresh lifecycle: event=loop_dropped reason={reason}");
+    }
+}
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
@@ -332,6 +376,7 @@ pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
     task_id,
 ))]
 async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()> {
+    log::info!("Git credential refresh lifecycle: event=refresh_attempt_started");
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
@@ -344,16 +389,24 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
         .context("Failed to fetch git credentials from server")?;
 
     if credentials.is_empty() {
-        log::debug!("No git credentials returned during refresh; skipping file write");
+        log::info!(
+            "Git credential refresh lifecycle: event=refresh_attempt_finished \
+             outcome=no_credentials_returned"
+        );
         return Ok(());
     }
 
     match write_git_credentials(&credentials) {
         Err(e) => {
-            log::warn!("Failed to write refreshed git credentials: {e:#}");
+            log::warn!(
+                "Git credential refresh lifecycle: event=refresh_attempt_finished \
+                 outcome=credential_write_failed error={e:#}"
+            );
         }
         _ => {
-            log::info!("Git credentials refreshed successfully");
+            log::info!(
+                "Git credential refresh lifecycle: event=refresh_attempt_finished outcome=succeeded"
+            );
         }
     }
     Ok(())
@@ -377,11 +430,19 @@ async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()>
 /// This future never resolves — it is designed to be raced with the harness
 /// execution future via `futures::select!` and dropped when the harness
 /// completes.
-pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) {
+pub(crate) async fn refresh_loop(
+    task_id: String,
+    ai_client: Arc<dyn AIClient>,
+    lifecycle: RefreshLoopLifecycle,
+) {
+    let _lifecycle_guard = lifecycle.started();
     loop {
+        log::info!(
+            "Git credential refresh lifecycle: event=timer_armed interval_seconds={}",
+            GIT_CREDENTIALS_REFRESH_INTERVAL.as_secs()
+        );
         warpui::r#async::Timer::after(GIT_CREDENTIALS_REFRESH_INTERVAL).await;
-
-        log::info!("Refreshing git credentials for task {task_id}");
+        log::info!("Git credential refresh lifecycle: event=timer_woke");
 
         let backoff_delays = [
             Duration::from_secs(60),
@@ -395,7 +456,9 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
                 Err(e) if attempt < backoff_delays.len() => {
                     let delay = backoff_delays[attempt];
                     log::warn!(
-                        "Git credentials refresh failed (attempt {}): {e:#}; retrying in {}s",
+                        "Git credential refresh lifecycle: event=refresh_attempt_finished \
+                         outcome=request_failed attempt={} retry=true \
+                         retry_delay_seconds={} error={e:#}",
                         attempt + 1,
                         delay.as_secs()
                     );
@@ -404,9 +467,10 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
                 }
                 Err(e) => {
                     log::warn!(
-                        "Git credentials refresh failed after {} attempts: {e:#}; \
-                         credentials may expire before next refresh cycle",
-                        attempt + 1
+                        "Git credential refresh lifecycle: event=refresh_attempt_finished \
+                         outcome=request_failed attempt={} retry=false \
+                         credentials_may_expire=true error={e:#}",
+                        attempt + 1,
                     );
                     break;
                 }
