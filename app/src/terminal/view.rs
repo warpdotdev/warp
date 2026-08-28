@@ -13413,10 +13413,7 @@ impl TerminalView {
     /// CLI-harness conversation needs this bridge just as much as a child
     /// one does (e.g. for orchestration event delivery, which reads
     /// `ConversationStatus` directly).
-    fn conversation_id_for_cli_status_updates(
-        &self,
-        ctx: &AppContext,
-    ) -> Option<AIConversationId> {
+    fn conversation_id_for_cli_status_updates(&self, ctx: &AppContext) -> Option<AIConversationId> {
         let task_id =
             LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
@@ -13435,10 +13432,7 @@ impl TerminalView {
             .filter(matches_task)
             .map(|conversation| conversation.id());
         let conversation_id = conversation_ids.next()?;
-        conversation_ids
-            .next()
-            .is_none()
-            .then_some(conversation_id)
+        conversation_ids.next().is_none().then_some(conversation_id)
     }
 
     /// If the startup auto-open setting is enabled, auto-opens rich input for a
