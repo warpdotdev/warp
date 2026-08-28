@@ -527,3 +527,69 @@ pub enum KeyCode {
     /// General-purpose function key.
     F35,
 }
+
+impl KeyCode {
+    /// The character this physical key produces on the standard PC-101 (US QWERTY) layout.
+    ///
+    /// The Kitty keyboard protocol calls this the base layout key. Reporting it lets an
+    /// application match a chord such as ctrl+v while a layout with no Latin letters is
+    /// active, where the layout-dependent key code carries no letter to match on.
+    ///
+    /// Returns `None` for keys that produce no character on that layout.
+    pub fn base_layout_key(self) -> Option<char> {
+        Some(match self {
+            Self::KeyA => 'a',
+            Self::KeyB => 'b',
+            Self::KeyC => 'c',
+            Self::KeyD => 'd',
+            Self::KeyE => 'e',
+            Self::KeyF => 'f',
+            Self::KeyG => 'g',
+            Self::KeyH => 'h',
+            Self::KeyI => 'i',
+            Self::KeyJ => 'j',
+            Self::KeyK => 'k',
+            Self::KeyL => 'l',
+            Self::KeyM => 'm',
+            Self::KeyN => 'n',
+            Self::KeyO => 'o',
+            Self::KeyP => 'p',
+            Self::KeyQ => 'q',
+            Self::KeyR => 'r',
+            Self::KeyS => 's',
+            Self::KeyT => 't',
+            Self::KeyU => 'u',
+            Self::KeyV => 'v',
+            Self::KeyW => 'w',
+            Self::KeyX => 'x',
+            Self::KeyY => 'y',
+            Self::KeyZ => 'z',
+            Self::Digit0 => '0',
+            Self::Digit1 => '1',
+            Self::Digit2 => '2',
+            Self::Digit3 => '3',
+            Self::Digit4 => '4',
+            Self::Digit5 => '5',
+            Self::Digit6 => '6',
+            Self::Digit7 => '7',
+            Self::Digit8 => '8',
+            Self::Digit9 => '9',
+            Self::Backquote => '`',
+            Self::Minus => '-',
+            Self::Equal => '=',
+            Self::BracketLeft => '[',
+            Self::BracketRight => ']',
+            Self::Backslash => '\\',
+            Self::Semicolon => ';',
+            Self::Quote => '\'',
+            Self::Comma => ',',
+            Self::Period => '.',
+            Self::Slash => '/',
+            _ => return None,
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "keyboard_tests.rs"]
+mod tests;
