@@ -22,6 +22,8 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use settings::{Setting, ToggleableSetting};
 use strum::IntoEnumIterator;
+#[cfg(not(target_family = "wasm"))]
+use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::features::FeatureFlag;
@@ -108,8 +110,6 @@ use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::workspaces::user_workspaces::{TeamContext, UserWorkspacesEvent};
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
 use crate::{TelemetryEvent, UserWorkspaces, send_telemetry_from_ctx};
-#[cfg(not(target_family = "wasm"))]
-use uuid::Uuid;
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
 const AI_SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 250.;
