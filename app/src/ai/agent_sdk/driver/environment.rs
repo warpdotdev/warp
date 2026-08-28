@@ -22,6 +22,7 @@ use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
+use super::git_credentials;
 use super::terminal::TerminalDriver;
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
@@ -413,6 +414,13 @@ async fn prepare_environment_impl(
 
     if !source_repos.is_empty() {
         for repo in source_repos {
+            // Each checkout authors its commits as its own forge's identity.
+            // Done here rather than in the clone script because it must also
+            // apply to a directory that already existed and was reused.
+            git_credentials::configure_repository_git_identity(
+                &working_dir.join(&repo.repo),
+                repo.code_forge.unwrap_or_default().host(),
+            );
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
                 let receiver = index_repo_codebase(
@@ -579,6 +587,10 @@ fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge.unwrap_or_default() {
         CodeForge::GitHub => Some(RepositoryForge::GitHub),
         CodeForge::GitLab => Some(RepositoryForge::GitLab),
+        // MULTIPLE is a container-only marker and never a valid
+        // per-repository value; treat it as the legacy GitHub default
+        // defensively.
+        CodeForge::Multiple => Some(RepositoryForge::GitHub),
         CodeForge::None | CodeForge::Unknown => None,
     }
 }

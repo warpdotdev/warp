@@ -182,6 +182,39 @@ fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
 }
 
 #[test]
+fn deserialize_mixed_forge_environment_with_multiple_container() {
+    // A mixed environment stores code_forge MULTIPLE with every repository
+    // declaring its own concrete forge; MULTIPLE itself never fills one.
+    let json = serde_json::json!({
+        "name": "mixed-env",
+        "code_forge": "MULTIPLE",
+        "github_repos": [{"owner": "warpdotdev", "repo": "warp"}],
+        "source_repos": [
+            {"code_forge": "GITHUB", "owner": "warpdotdev", "repo": "warp"},
+            {"code_forge": "GITLAB", "owner": "platform/backend", "repo": "api"}
+        ],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.code_forge, Some(CodeForge::Multiple));
+    // The fill accessor stays concrete: MULTIPLE resolves to GitHub there.
+    assert_eq!(env.effective_code_forge(), CodeForge::GitHub);
+    let repos = env.effective_repos();
+    assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
+    assert_eq!(repos[1].code_forge, Some(CodeForge::GitLab));
+    assert_eq!(
+        repos[0].https_clone_url(),
+        "https://github.com/warpdotdev/warp.git"
+    );
+    assert_eq!(
+        repos[1].https_clone_url(),
+        "https://gitlab.com/platform/backend/api.git"
+    );
+}
+
+#[test]
 fn present_empty_source_repos_override_legacy_mirror() {
     let json = serde_json::json!({
         "name": "empty-env",
