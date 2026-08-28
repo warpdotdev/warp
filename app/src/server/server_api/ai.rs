@@ -22,6 +22,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
+use warp_graphql::error::{UserFacingError, UserFacingErrorInterface};
 use warp_graphql::mutations::confirm_file_artifact_upload::{
     ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput, ConfirmFileArtifactUploadResult,
     ConfirmFileArtifactUploadVariables,
@@ -70,6 +71,7 @@ use warp_graphql::mutations::update_merkle_tree::{
     MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
     UpdateMerkleTreeVariables,
 };
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::codebase_context_config::{
     CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
 };
@@ -167,6 +169,54 @@ const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
+    pub platform_error: Option<Box<PlatformErrorInfo>>,
+}
+
+/// Error fetching git credentials for a task, either a structured platform error
+/// (potentially retryable) or a request-layer failure (workload-token issuance,
+/// network transport).
+#[derive(Debug, thiserror::Error)]
+pub enum TaskGitCredentialsError {
+    #[error("{message}")]
+    Platform {
+        message: String,
+        detail: Option<String>,
+        info: PlatformErrorInfo,
+    },
+    #[error("{message}")]
+    Unstructured { message: String },
+    #[error("Failed to fetch task git credentials")]
+    Request(#[source] anyhow::Error),
+}
+
+impl TaskGitCredentialsError {
+    pub(crate) fn from_user_facing(error: UserFacingError) -> Self {
+        let UserFacingError {
+            error,
+            response_context,
+        } = error;
+        match error {
+            UserFacingErrorInterface::PlatformError(error) => Self::Platform {
+                message: error.message,
+                detail: error.detail,
+                info: error.info.into(),
+            },
+            error => Self::Unstructured {
+                message: get_user_facing_error_message(UserFacingError {
+                    error,
+                    response_context,
+                }),
+            },
+        }
+    }
+}
+
+fn agent_task_status_message_input(update: TaskStatusUpdate) -> AgentTaskStatusMessageInput {
+    AgentTaskStatusMessageInput {
+        message: update.message,
+        error_code: update.error_code,
+        error: update.platform_error.map(|info| (*info).into()),
+    }
 }
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
     match mode {
@@ -192,6 +242,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: None,
+            platform_error: None,
         }
     }
 
@@ -200,6 +251,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: Some(error_code),
+            platform_error: None,
         }
     }
 }
@@ -1442,7 +1494,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error>;
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError>;
 
     async fn get_task_attachments(
         &self,
@@ -2177,10 +2229,7 @@ impl AIClient for ServerApi {
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),
-                status_message: status_message.map(|update| AgentTaskStatusMessageInput {
-                    message: update.message,
-                    error_code: update.error_code,
-                }),
+                status_message: status_message.map(agent_task_status_message_input),
                 session_debug_until: session_debug_until.map(Into::into),
             },
             request_context: get_request_context(),
@@ -2668,7 +2717,7 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error> {
+    ) -> Result<Vec<GitCredential>, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
@@ -2677,28 +2726,28 @@ impl AIClient for ServerApi {
             request_context: get_request_context(),
         };
         let operation = TaskGitCredentials::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         match response.task_git_credentials {
-            TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
-                let credentials = output
-                    .credentials
-                    .into_iter()
-                    .map(|c| GitCredential {
-                        token: c.token,
-                        username: c.username,
-                        email: c.email,
-                        host: c.host,
-                    })
-                    .collect();
-                Ok(credentials)
-            }
+            TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => Ok(output
+                .credentials
+                .into_iter()
+                .map(|credential| GitCredential {
+                    token: credential.token,
+                    username: credential.username,
+                    email: credential.email,
+                    host: credential.host,
+                })
+                .collect()),
             TaskGitCredentialsResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(TaskGitCredentialsError::from_user_facing(error))
             }
-            TaskGitCredentialsResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
+            TaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(anyhow!(
+                "Unknown taskGitCredentials response"
+            ))),
         }
     }
 

@@ -1,9 +1,10 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
+use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::AgentDriverError;
 use super::terminal::ShareSessionError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
-use crate::server::server_api::ai::TaskStatusUpdate;
+use crate::server::server_api::ai::{TaskGitCredentialsError, TaskStatusUpdate};
 
 /// Classify an `AgentDriverError` into a task state and a `TaskStatusUpdate`
 /// suitable for reporting via `update_agent_task`.
@@ -239,6 +240,7 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::ResourceNotFound,
             ),
         ),
+        AgentDriverError::GitCredentialsFetchFailed(error) => classify_git_credentials_error(error),
         AgentDriverError::ConfigBuildFailed(err) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -393,6 +395,76 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
         AgentDriverError::TerminatedBySignal => (
             AgentTaskState::Failed,
             TaskStatusUpdate::message(error.to_string()),
+        ),
+    }
+}
+
+/// Map a `PlatformErrorCode` to the `AgentTaskState` it implies. Not specific
+/// to any one error source: callers translate their own error into a
+/// `PlatformErrorCode` first, then share this mapping.
+fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState {
+    match code {
+        PlatformErrorCode::AuthenticationRequired
+        | PlatformErrorCode::InternalError
+        | PlatformErrorCode::ResourceUnavailable => AgentTaskState::Error,
+        PlatformErrorCode::BudgetExceeded
+        | PlatformErrorCode::ContentPolicyViolation
+        | PlatformErrorCode::EnvironmentSetupFailed
+        | PlatformErrorCode::ExternalAuthenticationRequired
+        | PlatformErrorCode::FeatureNotAvailable
+        | PlatformErrorCode::InsufficientCredits
+        | PlatformErrorCode::IntegrationDisabled
+        | PlatformErrorCode::IntegrationNotConfigured
+        | PlatformErrorCode::InvalidRequest
+        | PlatformErrorCode::NotAuthorized
+        | PlatformErrorCode::ResourceNotFound => AgentTaskState::Failed,
+    }
+}
+
+/// Classify a `TaskGitCredentialsError` into a task state and a `TaskStatusUpdate`.
+fn classify_git_credentials_error(
+    error: &TaskGitCredentialsError,
+) -> (AgentTaskState, TaskStatusUpdate) {
+    match error {
+        TaskGitCredentialsError::Platform {
+            message,
+            detail,
+            info,
+        } => {
+            let message = match detail {
+                Some(detail) if !detail.is_empty() => format!("{message} ({detail})"),
+                _ => message.clone(),
+            };
+            (
+                task_state_for_platform_error_code(info.code),
+                TaskStatusUpdate {
+                    message,
+                    error_code: Some(info.code),
+                    platform_error: Some(Box::new(info.clone())),
+                },
+            )
+        }
+        TaskGitCredentialsError::Unstructured { message } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate {
+                message: message.clone(),
+                error_code: Some(PlatformErrorCode::InvalidRequest),
+                platform_error: Some(Box::new(PlatformErrorInfo::new(
+                    PlatformErrorCode::InvalidRequest,
+                    false,
+                ))),
+            },
+        ),
+        TaskGitCredentialsError::Request(_) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate {
+                message: error.to_string(),
+                error_code: Some(PlatformErrorCode::InternalError),
+                platform_error: Some(Box::new(PlatformErrorInfo::new(
+                    PlatformErrorCode::InternalError,
+                    true,
+                ))),
+            },
         ),
     }
 }

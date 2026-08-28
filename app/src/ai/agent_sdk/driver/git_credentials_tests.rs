@@ -1,4 +1,109 @@
+use warp_graphql::ai::PlatformErrorCode;
+use warp_graphql::error::{
+    PlatformError as GraphqlPlatformError, UserFacingError, UserFacingErrorInterface,
+};
+use warp_graphql::platform_error::{
+    PlatformErrorInfo, PlatformErrorInfoResponse, PlatformErrorMetadataResponse,
+};
+use warp_graphql::response_context::ResponseContext;
+
 use super::*;
+
+#[test]
+fn from_user_facing_converts_platform_error_preserving_metadata_and_debug() {
+    let error = TaskGitCredentialsError::from_user_facing(UserFacingError {
+        error: UserFacingErrorInterface::PlatformError(GraphqlPlatformError {
+            message: "GitHub is temporarily unavailable.".to_string(),
+            detail: Some("Repository access could not be resolved.".to_string()),
+            info: PlatformErrorInfoResponse {
+                code: PlatformErrorCode::ResourceUnavailable,
+                retryable: true,
+                metadata: vec![
+                    PlatformErrorMetadataResponse {
+                        key: "provider".to_string(),
+                        value: "github".to_string(),
+                    },
+                    PlatformErrorMetadataResponse {
+                        key: "resource".to_string(),
+                        value: "installation".to_string(),
+                    },
+                ],
+                debug: Some("request-id=dogfood-only".to_string()),
+            },
+        }),
+        response_context: ResponseContext {
+            server_version: None,
+        },
+    });
+
+    match error {
+        TaskGitCredentialsError::Platform {
+            message,
+            detail,
+            info,
+        } => {
+            assert_eq!(message, "GitHub is temporarily unavailable.");
+            assert_eq!(info.code, PlatformErrorCode::ResourceUnavailable);
+            assert!(info.retryable);
+            assert_eq!(
+                detail.as_deref(),
+                Some("Repository access could not be resolved.")
+            );
+            assert_eq!(info.metadata["provider"], "github");
+            assert_eq!(info.metadata["resource"], "installation");
+            assert_eq!(info.debug.as_deref(), Some("request-id=dogfood-only"));
+        }
+        error => panic!("expected structured platform error, got {error:?}"),
+    }
+}
+
+fn dependency_error(retryable: bool) -> TaskGitCredentialsError {
+    TaskGitCredentialsError::Platform {
+        message: "GitHub is temporarily unavailable.".to_string(),
+        detail: Some("Repository access could not be resolved.".to_string()),
+        info: PlatformErrorInfo {
+            code: PlatformErrorCode::ResourceUnavailable,
+            retryable,
+            metadata: std::collections::BTreeMap::from([
+                ("provider".to_string(), "github".to_string()),
+                ("resource".to_string(), "installation".to_string()),
+            ]),
+            debug: None,
+        },
+    }
+}
+
+#[test]
+fn is_retryable_treats_retryable_platform_error_as_retryable() {
+    assert!(is_retryable(&dependency_error(true)));
+}
+
+#[test]
+fn is_retryable_treats_non_retryable_platform_error_as_non_retryable() {
+    assert!(!is_retryable(&dependency_error(false)));
+}
+
+#[test]
+fn is_retryable_treats_unstructured_error_as_non_retryable() {
+    let error = TaskGitCredentialsError::Unstructured {
+        message: "Unable to access task git credentials".to_string(),
+    };
+    assert!(!is_retryable(&error));
+}
+
+#[test]
+fn is_retryable_treats_generic_request_error_as_retryable() {
+    let error = TaskGitCredentialsError::Request(anyhow::anyhow!("transient request failure"));
+    assert!(is_retryable(&error));
+}
+
+#[test]
+fn is_retryable_treats_missing_isolation_platform_as_non_retryable() {
+    let error = TaskGitCredentialsError::Request(anyhow::anyhow!(
+        warp_isolation_platform::IsolationPlatformError::NoIsolationPlatformDetected
+    ));
+    assert!(!is_retryable(&error));
+}
 
 #[test]
 fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
