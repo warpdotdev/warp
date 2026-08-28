@@ -111,17 +111,15 @@ fn log_unresolved_secret_refs(
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
-    /// Managed/integration servers that resolved into installations, tracked
-    /// so their startup outcomes can be reported as `mcp_attach_result`
-    /// client events.
+    /// Managed/integration servers whose startup outcomes get
+    /// `mcp_attach_result` events.
     attach_targets: Vec<McpAttachTarget>,
-    /// Managed/integration servers that failed resolution without failing
-    /// the run (well-known integration skips), reported as failed attaches.
+    /// Resolution failures that did not fail the run (well-known skips).
     attach_failures: Vec<McpAttachFailure>,
 }
 
-/// A managed/integration MCP server installation to be spawned during setup,
-/// tracked for `mcp_attach_result` reporting.
+/// A resolved managed/integration installation pending spawn, tracked for
+/// `mcp_attach_result` reporting.
 #[derive(Debug)]
 struct McpAttachTarget {
     installation_uuid: Uuid,
@@ -130,8 +128,8 @@ struct McpAttachTarget {
     kind: McpAttachKind,
 }
 
-/// A managed/integration MCP server that failed before an installation could
-/// be spawned.
+/// A managed/integration server that failed before its installation could
+/// spawn.
 #[derive(Debug)]
 struct McpAttachFailure {
     mcp_key: String,
@@ -928,10 +926,9 @@ impl AgentDriver {
         }
     }
 
-    /// Report one `mcp_attach_result` client event per managed/integration
-    /// MCP server attached during setup. A server is `ok` only when it
-    /// reached `Running` (connected) and its startup `tools/list` query did
-    /// not fail. Best-effort: never affects the run outcome.
+    /// Post one `mcp_attach_result` event per managed/integration MCP
+    /// attach. `ok` requires `Running` plus a clean startup `tools/list`.
+    /// Best-effort: never affects the run outcome.
     async fn report_mcp_attach_results(
         startup_result: &Result<(), AgentDriverError>,
         attach_targets: Vec<McpAttachTarget>,
@@ -939,8 +936,8 @@ impl AgentDriver {
         setup_events: &SetupClientEventReporter,
         foreground: &ModelSpawner<Self>,
     ) {
-        // A managed resolution failure aborts setup before attach targets
-        // are collected, so report the failed server from the error itself.
+        // A managed resolution failure aborts setup before targets are
+        // collected; report it from the error.
         if let Err(AgentDriverError::ManagedMcpResolutionFailed { uid, message }) = startup_result {
             setup_events.post_mcp_attach_result_best_effort(
                 uid.to_string(),

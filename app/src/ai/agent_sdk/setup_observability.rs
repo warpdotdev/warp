@@ -11,8 +11,7 @@ use crate::server::server_api::ai::{
     AIClient, AgentRunClientEventRequest, AgentRunClientMcpAttachResultPayload,
 };
 
-/// Maximum length for the error string in an `mcp_attach_result` payload;
-/// it is a diagnostic breadcrumb, not a full error report.
+/// Max chars for an `mcp_attach_result` error string.
 const MCP_ATTACH_ERROR_MAX_CHARS: usize = 300;
 
 #[derive(Clone)]
@@ -116,10 +115,9 @@ impl SetupClientEventReporter {
             .detach();
     }
 
-    /// Report the outcome of attaching one managed/integration MCP server
-    /// during run setup as an `mcp_attach_result` client event. `error: None`
-    /// means the attach succeeded. Best-effort: posted in the background and
-    /// never blocks or fails run setup.
+    /// Post an `mcp_attach_result` client event for one managed/integration
+    /// MCP attach. `error: None` means success. Best-effort: posted in the
+    /// background, never blocks or fails setup.
     pub(crate) fn post_mcp_attach_result_best_effort(
         &self,
         mcp_key: String,
@@ -204,8 +202,7 @@ impl SetupClientEventReporter {
     }
 }
 
-/// Collapse a string to a single line and cap it at
-/// [`MCP_ATTACH_ERROR_MAX_CHARS`] characters.
+/// Collapse to one line, capped at [`MCP_ATTACH_ERROR_MAX_CHARS`] chars.
 fn single_line_truncated(input: &str) -> String {
     let line = input
         .lines()
@@ -216,12 +213,12 @@ fn single_line_truncated(input: &str) -> String {
     line.chars().take(MCP_ATTACH_ERROR_MAX_CHARS).collect()
 }
 
-/// Kind of server-owned MCP attachment reported via `mcp_attach_result`.
+/// MCP kind reported in `mcp_attach_result`.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum McpAttachKind {
-    /// A managed MCP server row, referenced by UID.
+    /// Managed MCP row, referenced by UID.
     Managed,
-    /// A well-known integration id (e.g. "linear").
+    /// Well-known integration id (e.g. "linear").
     Integration,
 }
 

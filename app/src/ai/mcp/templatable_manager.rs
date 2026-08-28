@@ -242,9 +242,8 @@ impl TemplatableMCPServerManager {
             .map(|s| s.as_str())
     }
 
-    /// Error from a connected server's startup `tools/list` query, when it
-    /// failed. Tool listing fails soft, so the server still runs with no
-    /// tools.
+    /// Startup `tools/list` error for a connected server. Listing fails
+    /// soft; the server still runs with no tools.
     pub fn get_server_tools_list_error(&self, installation_uuid: Uuid) -> Option<&str> {
         self.active_servers
             .get(&installation_uuid)
