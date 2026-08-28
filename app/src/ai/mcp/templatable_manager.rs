@@ -16,6 +16,8 @@ use mcp::oauth;
 #[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
+use native::RetainedSpawnConfig;
+#[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
 #[cfg(not(target_family = "wasm"))]
 use simple_logger::SimpleLogger;
@@ -48,6 +50,12 @@ pub struct TemplatableMCPServerManager {
     locally_installed_servers: HashMap<Uuid, TemplatableMCPServerInstallation>,
     server_states: HashMap<Uuid, MCPServerState>,
     active_servers: HashMap<Uuid, TemplatableMCPServerInfo>,
+    /// The installation each server instance was spawned with, keyed by
+    /// installation UUID. Retained so reconnection can respawn servers whose
+    /// configs exist nowhere else (ephemeral, file-based, built-in). Entries
+    /// hold resolved secrets and proxy tokens; never log them.
+    #[cfg(not(target_family = "wasm"))]
+    spawn_configs: HashMap<Uuid, RetainedSpawnConfig>,
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,

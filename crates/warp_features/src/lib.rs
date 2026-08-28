@@ -429,6 +429,10 @@ pub enum FeatureFlag {
     /// Enables OAuth support for MCP.
     McpOauth,
 
+    /// Enables self-healing MCP connections: reconnecting ephemeral/managed/builtin
+    /// servers, broadened tool-call retry, and managed proxy-token re-minting.
+    McpSelfHeal,
+
     /// Enables attaching diff sets (multiple hunks from multiple files) as context in Agent Mode.
     DiffSetAsContext,
 

@@ -73,6 +73,30 @@ enum SpawnMode {
     Reconnect,
 }
 
+/// How a spawned server's installation was obtained; used to pick the right
+/// source of truth when respawning during reconnect.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SpawnProvenance {
+    /// Installed by the user and persisted in SQLite (`locally_installed_servers`).
+    LocallyInstalled,
+    /// Discovered from an MCP config file (`.mcp.json`, `.claude.json`, ...).
+    FileBased,
+    /// Started ephemerally by a CLI agent run (`oz agent run --mcp`).
+    CliEphemeral,
+    /// Built-in Warp-hosted server (the Factory MCP), authenticated with the
+    /// logged-in user's session credentials.
+    Builtin,
+}
+
+/// The exact installation a server instance was spawned with, retained so a
+/// reconnect can respawn servers whose configs exist nowhere else (ephemeral
+/// installations are consumed by the spawn, and CLI-ephemeral ones carry
+/// resolved secrets that cannot be re-derived).
+pub(crate) struct RetainedSpawnConfig {
+    pub(crate) installation: TemplatableMCPServerInstallation,
+    pub(crate) provenance: SpawnProvenance,
+}
+
 impl SpawnMode {
     fn should_send_telemetry(&self) -> bool {
         matches!(self, SpawnMode::Initial { .. })
@@ -399,6 +423,7 @@ impl TemplatableMCPServerManager {
             cloud_templatable_mcp_servers: Default::default(),
             server_states: Default::default(),
             active_servers: Default::default(),
+            spawn_configs: Default::default(),
             spawned_servers: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
@@ -744,11 +769,22 @@ impl TemplatableMCPServerManager {
         installation: TemplatableMCPServerInstallation,
         ctx: &mut ModelContext<Self>,
     ) {
+        // External callers (TUI, settings) only spawn file-based installations.
+        self.spawn_ephemeral_server_with_provenance(installation, SpawnProvenance::FileBased, ctx);
+    }
+
+    fn spawn_ephemeral_server_with_provenance(
+        &mut self,
+        installation: TemplatableMCPServerInstallation,
+        provenance: SpawnProvenance,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let installation_uuid = installation.uuid();
         log::debug!("Spawning ephemeral server with installation_uuid {installation_uuid}");
 
         self.spawn_server_impl(
             installation,
+            provenance,
             SpawnMode::Initial {
                 persist_running_state_to_sqlite: false,
             },
@@ -763,7 +799,11 @@ impl TemplatableMCPServerManager {
         ctx: &mut ModelContext<Self>,
     ) {
         self.cli_spawned_server_uuids.insert(installation.uuid());
-        self.spawn_ephemeral_server(installation, ctx);
+        self.spawn_ephemeral_server_with_provenance(
+            installation,
+            SpawnProvenance::CliEphemeral,
+            ctx,
+        );
     }
 
     /// Reconciles built-in Warp-hosted MCP servers (currently the Factory
@@ -829,7 +869,11 @@ impl TemplatableMCPServerManager {
         log::info!("Spawning the built-in Factory MCP server");
         self.builtin_server_uuids.insert(installation_uuid);
         self.builtin_server_token = Some(token.clone());
-        self.spawn_ephemeral_server(builtin::factory_mcp_installation(&token), ctx);
+        self.spawn_ephemeral_server_with_provenance(
+            builtin::factory_mcp_installation(&token),
+            SpawnProvenance::Builtin,
+            ctx,
+        );
     }
 
     /// Spawns a new MCP server from a given installation UUID.
@@ -862,6 +906,7 @@ impl TemplatableMCPServerManager {
 
         self.spawn_server_impl(
             installation,
+            SpawnProvenance::LocallyInstalled,
             SpawnMode::Initial {
                 persist_running_state_to_sqlite: true,
             },
@@ -873,10 +918,22 @@ impl TemplatableMCPServerManager {
     fn spawn_server_impl(
         &mut self,
         installation: TemplatableMCPServerInstallation,
+        provenance: SpawnProvenance,
         mode: SpawnMode,
         ctx: &mut ModelContext<Self>,
     ) {
         let installation_uuid = installation.uuid();
+
+        // Retain the exact installation this instance is spawned with so a
+        // later reconnect can respawn it even when the config exists nowhere
+        // else (see `respawnable_config`).
+        self.spawn_configs.insert(
+            installation_uuid,
+            RetainedSpawnConfig {
+                installation: installation.clone(),
+                provenance,
+            },
+        );
 
         let resolved_json = resolve_json(&installation);
         let template_uuid = installation.template_uuid();
@@ -1244,6 +1301,13 @@ impl TemplatableMCPServerManager {
         if let Some(spawned_info) = self.spawned_servers.remove(&installation_uuid) {
             spawned_info.abort_handle.abort();
         }
+        // A reconnect may be in flight for this server; aborting its spawn
+        // above means the completion callback never runs, so fail the waiters
+        // here or they would hang forever.
+        self.notify_reconnect_waiters(installation_uuid, Err("Server was shut down".to_string()));
+        // An explicitly stopped server must not be resurrected by a later
+        // reconnect; a respawn re-retains its config.
+        self.spawn_configs.remove(&installation_uuid);
         // Close the log stream now rather than when async teardown drops the
         // last logger clone, so an immediate respawn of the same server can
         // re-register its log path.
@@ -1876,8 +1940,14 @@ impl TemplatableMCPServerManager {
         self.pending_reconnections
             .insert(installation_uuid, vec![result_tx]);
 
-        // Remove the old server from active_servers if it exists.
-        self.active_servers.remove(&installation_uuid);
+        // Remove the old server from active_servers if it exists, and cancel
+        // it in the background so its transport (e.g. a stdio child process)
+        // is actually torn down before lingering indefinitely. Unlike
+        // `shutdown_server` this emits no state changes: a respawn is about
+        // to begin.
+        if let Some(server_info) = self.active_servers.remove(&installation_uuid) {
+            ctx.spawn(server_info.shutdown(), |_, _, _| {});
+        }
 
         // Cancel any in-flight spawn.
         if let Some(spawned_info) = self.spawned_servers.remove(&installation_uuid) {
@@ -1890,21 +1960,75 @@ impl TemplatableMCPServerManager {
         }
         self.pending_oauth_csrf
             .retain(|_, v| *v != installation_uuid);
+        self.authorization_urls.remove(&installation_uuid);
 
         // Look up the installation to get server details.
-        let Some(installation) = self
-            .locally_installed_servers
-            .get(&installation_uuid)
-            .cloned()
-        else {
-            self.notify_reconnect_waiters(
-                installation_uuid,
-                Err("Installation not found".to_string()),
-            );
-            return;
+        let (installation, provenance) = match self.respawnable_config(installation_uuid, ctx) {
+            Ok(found) => found,
+            Err(message) => {
+                self.notify_reconnect_waiters(installation_uuid, Err(message));
+                return;
+            }
         };
 
-        self.spawn_server_impl(installation, SpawnMode::Reconnect, ctx);
+        self.spawn_server_impl(installation, provenance, SpawnMode::Reconnect, ctx);
+    }
+
+    /// Resolves the installation (and its provenance) to respawn during a
+    /// reconnect.
+    ///
+    /// With `McpSelfHeal` enabled this consults the configs retained at spawn
+    /// time (`spawn_configs`), so ephemeral servers (file-based, CLI,
+    /// built-in) can reconnect too. Locally installed servers prefer the live
+    /// installation in case the user edited it since the last spawn, and the
+    /// built-in server re-mints its bearer token since the retained one may
+    /// have expired. With the flag disabled only locally installed servers
+    /// can reconnect, matching previous behavior.
+    fn respawnable_config(
+        &mut self,
+        installation_uuid: Uuid,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(TemplatableMCPServerInstallation, SpawnProvenance), String> {
+        let locally_installed = self
+            .locally_installed_servers
+            .get(&installation_uuid)
+            .cloned();
+
+        let retained = self
+            .spawn_configs
+            .get(&installation_uuid)
+            .filter(|_| FeatureFlag::McpSelfHeal.is_enabled());
+        let Some(retained) = retained else {
+            return locally_installed
+                .map(|installation| (installation, SpawnProvenance::LocallyInstalled))
+                .ok_or_else(|| "Installation not found".to_string());
+        };
+
+        let provenance = retained.provenance;
+        let retained_installation = retained.installation.clone();
+        match provenance {
+            SpawnProvenance::LocallyInstalled => Ok((
+                locally_installed.unwrap_or(retained_installation),
+                SpawnProvenance::LocallyInstalled,
+            )),
+            SpawnProvenance::Builtin => {
+                // The retained bearer may have expired; re-mint from the
+                // current session credentials.
+                let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+                let Some(token) = auth_state
+                    .credentials()
+                    .and_then(|credentials| builtin::builtin_bearer_token(&credentials))
+                else {
+                    return Err("No usable bearer token for the built-in server".to_string());
+                };
+                self.builtin_server_token = Some(token.clone());
+                Ok((
+                    builtin::factory_mcp_installation(&token),
+                    SpawnProvenance::Builtin,
+                ))
+            }
+            provenance => Ok((retained_installation, provenance)),
+        }
     }
 
     /// Notifies all pending reconnection waiters for the given installation UUID.
@@ -1991,7 +2115,11 @@ impl TemplatableMCPServerManager {
 
         // If not, spawn them.
         for installation in new_installations {
-            self.spawn_ephemeral_server(installation, ctx);
+            self.spawn_ephemeral_server_with_provenance(
+                installation,
+                SpawnProvenance::FileBased,
+                ctx,
+            );
         }
     }
 
@@ -2025,3 +2153,7 @@ impl TemplatableMCPServerManager {
             .contains_key(&installation_hash)
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod native_tests;

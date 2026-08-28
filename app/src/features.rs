@@ -289,6 +289,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::APIKeyManagement,
         #[cfg(feature = "mcp_oauth")]
         FeatureFlag::McpOauth,
+        #[cfg(feature = "mcp_self_heal")]
+        FeatureFlag::McpSelfHeal,
         #[cfg(feature = "file_based_mcp")]
         FeatureFlag::FileBasedMcp,
         #[cfg(feature = "diff_set_as_context")]
