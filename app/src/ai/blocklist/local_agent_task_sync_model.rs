@@ -183,6 +183,21 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
+    /// Test-only equivalent of `register_cli_session` that only records the
+    /// `terminal_view_id → task_id` mapping, without enqueuing the
+    /// IN_PROGRESS report that `register_cli_session` sends via the real
+    /// `AIClient`. Use this in tests that only need
+    /// `task_id_for_terminal_view` to resolve (e.g. exercising
+    /// `TerminalView::conversation_id_for_cli_status_updates`).
+    #[cfg(test)]
+    pub(crate) fn register_cli_session_for_test(
+        &mut self,
+        terminal_view_id: EntityId,
+        task_id: AmbientAgentTaskId,
+    ) {
+        self.cli_session_task_ids.insert(terminal_view_id, task_id);
+    }
+
     /// Returns the ambient task this terminal pane's CLI-harness session, if
     /// any, is registered under. Callers use this to identify which local
     /// `AIConversation` (if any) represents the same run as CLI agent

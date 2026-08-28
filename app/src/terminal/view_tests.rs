@@ -32,6 +32,7 @@ use crate::ai::blocklist::agent_view::{
     ExitAgentViewError,
 };
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, FakeAIBlockModel, InputConfig, InputType,
     ResponseStream, ResponseStreamId,
@@ -8641,6 +8642,8 @@ fn cli_session_status_updates_active_child_conversation() {
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
+        let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
+            .expect("valid task id");
 
         let child_conversation_id = terminal.update(&mut app, |view, ctx| {
             let parent_conversation_id =
@@ -8649,14 +8652,19 @@ fn cli_session_status_updates_active_child_conversation() {
                 });
             let child_conversation_id =
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.start_new_child_conversation(
+                    let child_conversation_id = history_model.start_new_child_conversation(
                         view.view_id,
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
                         false,
                         ctx,
-                    )
+                    );
+                    history_model
+                        .conversation_mut(&child_conversation_id)
+                        .expect("child conversation should exist")
+                        .set_task_id(task_id);
+                    child_conversation_id
                 });
 
             view.enter_agent_view(
@@ -8665,6 +8673,13 @@ fn cli_session_status_updates_active_child_conversation() {
                 AgentViewEntryOrigin::ChildAgent,
                 ctx,
             );
+
+            // Status updates only route to a conversation whose `task_id` matches
+            // the ambient task this pane's CLI-harness session is registered
+            // under (see `TerminalView::conversation_id_for_cli_status_updates`).
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |sync_model, _ctx| {
+                sync_model.register_cli_session_for_test(view.view_id, task_id);
+            });
 
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.set_session(
@@ -8794,6 +8809,8 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
+        let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
+            .expect("valid task id");
 
         let child_conversation_id = terminal.update(&mut app, |view, ctx| {
             let parent_conversation_id =
@@ -8802,15 +8819,27 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                 });
             let child_conversation_id =
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.start_new_child_conversation(
+                    let child_conversation_id = history_model.start_new_child_conversation(
                         view.view_id,
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
                         false,
                         ctx,
-                    )
+                    );
+                    history_model
+                        .conversation_mut(&child_conversation_id)
+                        .expect("child conversation should exist")
+                        .set_task_id(task_id);
+                    child_conversation_id
                 });
+
+            // Status updates only route to a conversation whose `task_id` matches
+            // the ambient task this pane's CLI-harness session is registered
+            // under (see `TerminalView::conversation_id_for_cli_status_updates`).
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |sync_model, _ctx| {
+                sync_model.register_cli_session_for_test(view.view_id, task_id);
+            });
 
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.set_session(
