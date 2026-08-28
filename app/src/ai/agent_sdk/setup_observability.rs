@@ -7,7 +7,13 @@ use tracing::Instrument as _;
 use warpui::r#async::executor::Background;
 
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::server::server_api::ai::{AIClient, AgentRunClientEventRequest};
+use crate::server::server_api::ai::{
+    AIClient, AgentRunClientEventRequest, AgentRunClientMcpAttachResultPayload,
+};
+
+/// Maximum length for the error string in an `mcp_attach_result` payload;
+/// it is a diagnostic breadcrumb, not a full error report.
+const MCP_ATTACH_ERROR_MAX_CHARS: usize = 300;
 
 #[derive(Clone)]
 pub(crate) struct SetupClientEventReporter {
@@ -110,6 +116,42 @@ impl SetupClientEventReporter {
             .detach();
     }
 
+    /// Report the outcome of attaching one managed/integration MCP server
+    /// during run setup as an `mcp_attach_result` client event. `error: None`
+    /// means the attach succeeded. Best-effort: posted in the background and
+    /// never blocks or fails run setup.
+    pub(crate) fn post_mcp_attach_result_best_effort(
+        &self,
+        mcp_key: String,
+        mcp_ref: String,
+        kind: McpAttachKind,
+        error: Option<String>,
+    ) {
+        const EVENT_NAME: &str = "mcp_attach_result";
+        let Some(run_id) = self.run_id else {
+            return;
+        };
+
+        let ai_client = self.ai_client.clone();
+        self.background
+            .spawn(async move {
+                let payload = AgentRunClientMcpAttachResultPayload {
+                    mcp_key,
+                    mcp_ref,
+                    mcp_kind: kind.as_str().to_string(),
+                    ok: error.is_none(),
+                    error: error.as_deref().map(single_line_truncated),
+                };
+                let request = AgentRunClientEventRequest::mcp_attach_result_event(
+                    EVENT_NAME,
+                    Utc::now(),
+                    payload,
+                );
+                Self::post_client_event(run_id, ai_client, EVENT_NAME, request).await;
+            })
+            .detach();
+    }
+
     pub(crate) async fn post_timeline_event(&self, event: OzRunTimelineEvent) {
         let Some(run_id) = self.run_id else {
             return;
@@ -158,6 +200,36 @@ impl SetupClientEventReporter {
             .await
         {
             log::warn!("Failed to post setup client event {event_name} for run {run_id}: {err:#}");
+        }
+    }
+}
+
+/// Collapse a string to a single line and cap it at
+/// [`MCP_ATTACH_ERROR_MAX_CHARS`] characters.
+fn single_line_truncated(input: &str) -> String {
+    let line = input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    line.chars().take(MCP_ATTACH_ERROR_MAX_CHARS).collect()
+}
+
+/// Kind of server-owned MCP attachment reported via `mcp_attach_result`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum McpAttachKind {
+    /// A managed MCP server row, referenced by UID.
+    Managed,
+    /// A well-known integration id (e.g. "linear").
+    Integration,
+}
+
+impl McpAttachKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Managed => "managed",
+            Self::Integration => "integration",
         }
     }
 }

@@ -18,6 +18,9 @@ pub struct TemplatableMCPServerInfo {
     >,
     resources: Vec<rmcp::model::Resource>,
     tools: Vec<rmcp::model::Tool>,
+    /// Error from the startup `tools/list` query, when it failed. Tool
+    /// listing fails soft, so the server still runs with no tools.
+    tools_list_error: Option<String>,
     installation_id: Uuid,
     /// Warp-side id the installation was resolved from (managed uid or
     /// well-known integration id); `None` for local servers.
@@ -42,6 +45,10 @@ impl TemplatableMCPServerInfo {
 
     pub fn tools(&self) -> &Vec<rmcp::model::Tool> {
         &self.tools
+    }
+
+    pub fn tools_list_error(&self) -> Option<&str> {
+        self.tools_list_error.as_deref()
     }
 
     pub fn installation_id(&self) -> Uuid {

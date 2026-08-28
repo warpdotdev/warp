@@ -25,7 +25,9 @@ use warpui::{Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::{AgentDriver, AgentDriverError, sandbox_deadline};
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    McpAttachKind, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
@@ -109,6 +111,33 @@ fn log_unresolved_secret_refs(
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+    /// Managed/integration servers that resolved into installations, tracked
+    /// so their startup outcomes can be reported as `mcp_attach_result`
+    /// client events.
+    attach_targets: Vec<McpAttachTarget>,
+    /// Managed/integration servers that failed resolution without failing
+    /// the run (well-known integration skips), reported as failed attaches.
+    attach_failures: Vec<McpAttachFailure>,
+}
+
+/// A managed/integration MCP server installation to be spawned during setup,
+/// tracked for `mcp_attach_result` reporting.
+#[derive(Debug)]
+struct McpAttachTarget {
+    installation_uuid: Uuid,
+    mcp_key: String,
+    mcp_ref: String,
+    kind: McpAttachKind,
+}
+
+/// A managed/integration MCP server that failed before an installation could
+/// be spawned.
+#[derive(Debug)]
+struct McpAttachFailure {
+    mcp_key: String,
+    mcp_ref: String,
+    kind: McpAttachKind,
+    error: String,
 }
 
 /// Why an [`AgentDriver::await_model_event`] wait resolved without a value.
@@ -337,6 +366,14 @@ impl AgentDriver {
                             message: err.to_string(),
                         }
                     })?;
+                    resolved
+                        .attach_targets
+                        .extend(installations.iter().map(|installation| McpAttachTarget {
+                            installation_uuid: installation.uuid(),
+                            mcp_key: installation.templatable_mcp_server().name.clone(),
+                            mcp_ref: uuid.to_string(),
+                            kind: McpAttachKind::Managed,
+                        }));
                     resolved.ephemeral_installations.extend(installations);
                 }
                 MCPSpec::WellKnown(id) => {
@@ -367,6 +404,12 @@ impl AgentDriver {
                         Ok(client_config) => client_config,
                         Err(err) => {
                             log::warn!("Skipping well-known MCP server '{id}': {err:#}");
+                            resolved.attach_failures.push(McpAttachFailure {
+                                mcp_key: id.clone(),
+                                mcp_ref: id.clone(),
+                                kind: McpAttachKind::Integration,
+                                error: format!("{err:#}"),
+                            });
                             continue;
                         }
                     };
@@ -376,10 +419,24 @@ impl AgentDriver {
                         id,
                     ) {
                         Ok(installations) => {
+                            resolved.attach_targets.extend(installations.iter().map(
+                                |installation| McpAttachTarget {
+                                    installation_uuid: installation.uuid(),
+                                    mcp_key: installation.templatable_mcp_server().name.clone(),
+                                    mcp_ref: id.clone(),
+                                    kind: McpAttachKind::Integration,
+                                },
+                            ));
                             resolved.ephemeral_installations.extend(installations);
                         }
                         Err(err) => {
                             log::warn!("Skipping well-known MCP server '{id}': {err}");
+                            resolved.attach_failures.push(McpAttachFailure {
+                                mcp_key: id.clone(),
+                                mcp_ref: id.clone(),
+                                kind: McpAttachKind::Integration,
+                                error: err.to_string(),
+                            });
                         }
                     }
                 }
@@ -552,95 +609,115 @@ impl AgentDriver {
     pub(super) async fn start_task_and_profile_mcp_servers(
         mcp_specs: &[MCPSpec],
         managed_mcp_client: Arc<dyn ManagedMcpClient>,
+        setup_events: &SetupClientEventReporter,
         foreground: &ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
-        let resolved_mcp_specs =
-            Self::resolve_mcp_specs(mcp_specs, managed_mcp_client, foreground).await?;
-        let existing_uuids = resolved_mcp_specs.local_uuids;
-        let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+        let mut mcp_attach_targets = Vec::new();
+        let mut mcp_attach_failures = Vec::new();
+        let mcp_startup_result = setup_events
+            .record_result(SetupStep::McpServerStartup, async {
+                let resolved_mcp_specs =
+                    Self::resolve_mcp_specs(mcp_specs, managed_mcp_client, foreground).await?;
+                let existing_uuids = resolved_mcp_specs.local_uuids;
+                let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+                mcp_attach_targets = resolved_mcp_specs.attach_targets;
+                mcp_attach_failures = resolved_mcp_specs.attach_failures;
 
-        // Attach the built-in Factory MCP server. Interactive clients attach built-ins via
-        // `TemplatableMCPServerManager::sync_builtin_servers`, which skips CLI agent runs, so
-        // the driver injects the same code-owned installation here, scoped to this run.
-        let local_uuids = existing_uuids.clone();
-        let mut taken_server_names: HashSet<String> = ephemeral_installations
-            .iter()
-            .map(|installation| installation.templatable_mcp_server().name.clone())
-            .collect();
-        let credentials = foreground
-            .spawn(move |_, ctx| {
-                let (local_names, builtin_already_active) = {
-                    let manager = TemplatableMCPServerManager::as_ref(ctx);
-                    let local_names = local_uuids
-                        .iter()
-                        .filter_map(|uuid| {
-                            manager.get_installed_server(uuid).map(|installation| {
-                                installation.templatable_mcp_server().name.clone()
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    let builtin_already_active =
-                        manager.is_server_active_or_pending(builtin::FACTORY_MCP_INSTALLATION_UUID);
-                    (local_names, builtin_already_active)
-                };
-                // Interactive clients (GUI/TUI) attach built-ins through `sync_builtin_servers`,
-                // under the same stable installation UUID. The driver currently only runs in SDK
-                // mode, where that path never spawns, but guard anyway so this injection can
-                // never double-spawn the built-in if the driver is ever hosted in an interactive
-                // process.
-                let builtin_owned_by_manager = builtin_already_active
-                    || AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers();
-                let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
-                let credentials = (!builtin_owned_by_manager
-                    && !auth_state.is_anonymous_or_logged_out())
-                .then(|| auth_state.credentials())
-                .flatten();
-                (credentials, local_names)
+                // Attach the built-in Factory MCP server. Interactive clients attach built-ins via
+                // `TemplatableMCPServerManager::sync_builtin_servers`, which skips CLI agent runs, so
+                // the driver injects the same code-owned installation here, scoped to this run.
+                let local_uuids = existing_uuids.clone();
+                let mut taken_server_names: HashSet<String> = ephemeral_installations
+                    .iter()
+                    .map(|installation| installation.templatable_mcp_server().name.clone())
+                    .collect();
+                let credentials = foreground
+                    .spawn(move |_, ctx| {
+                        let (local_names, builtin_already_active) = {
+                            let manager = TemplatableMCPServerManager::as_ref(ctx);
+                            let local_names = local_uuids
+                                .iter()
+                                .filter_map(|uuid| {
+                                    manager.get_installed_server(uuid).map(|installation| {
+                                        installation.templatable_mcp_server().name.clone()
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+                            let builtin_already_active = manager.is_server_active_or_pending(
+                                builtin::FACTORY_MCP_INSTALLATION_UUID,
+                            );
+                            (local_names, builtin_already_active)
+                        };
+                        // Interactive clients (GUI/TUI) attach built-ins through `sync_builtin_servers`,
+                        // under the same stable installation UUID. The driver currently only runs in SDK
+                        // mode, where that path never spawns, but guard anyway so this injection can
+                        // never double-spawn the built-in if the driver is ever hosted in an interactive
+                        // process.
+                        let builtin_owned_by_manager = builtin_already_active
+                            || AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers();
+                        let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+                        let credentials = (!builtin_owned_by_manager
+                            && !auth_state.is_anonymous_or_logged_out())
+                        .then(|| auth_state.credentials())
+                        .flatten();
+                        (credentials, local_names)
+                    })
+                    .await
+                    .map(|(credentials, local_names)| {
+                        taken_server_names.extend(local_names);
+                        credentials
+                    })?;
+                let ambient_headers = Self::factory_mcp_ambient_headers(foreground).await;
+                if let Some(installation) = Self::builtin_factory_mcp_for_run(
+                    credentials.as_ref(),
+                    &taken_server_names,
+                    &ambient_headers,
+                ) {
+                    ephemeral_installations.push(installation);
+                }
+
+                log::info!(
+                    "Starting {} existing and {} ephemeral MCP servers",
+                    existing_uuids.len(),
+                    ephemeral_installations.len()
+                );
+                let profile_allowlist = foreground
+                    .spawn(|me, ctx| {
+                        let terminal_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
+                        BlocklistAIPermissions::as_ref(ctx)
+                            .get_mcp_allowlist(ctx, Some(terminal_id))
+                    })
+                    .await?;
+
+                if !profile_allowlist.is_empty() {
+                    log::info!(
+                        "Starting {} MCP servers allowlisted in profile",
+                        profile_allowlist.len()
+                    );
+                }
+
+                foreground
+                    .spawn(move |me, ctx| {
+                        me.start_mcp_servers_concurrently(
+                            existing_uuids,
+                            ephemeral_installations,
+                            profile_allowlist,
+                            ctx,
+                        )
+                    })
+                    .await?
+                    .await
             })
-            .await
-            .map(|(credentials, local_names)| {
-                taken_server_names.extend(local_names);
-                credentials
-            })?;
-        let ambient_headers = Self::factory_mcp_ambient_headers(foreground).await;
-        if let Some(installation) = Self::builtin_factory_mcp_for_run(
-            credentials.as_ref(),
-            &taken_server_names,
-            &ambient_headers,
-        ) {
-            ephemeral_installations.push(installation);
-        }
-
-        log::info!(
-            "Starting {} existing and {} ephemeral MCP servers",
-            existing_uuids.len(),
-            ephemeral_installations.len()
-        );
-        let profile_allowlist = foreground
-            .spawn(|me, ctx| {
-                let terminal_id = me.terminal_driver.as_ref(ctx).terminal_view().id();
-                BlocklistAIPermissions::as_ref(ctx).get_mcp_allowlist(ctx, Some(terminal_id))
-            })
-            .await?;
-
-        if !profile_allowlist.is_empty() {
-            log::info!(
-                "Starting {} MCP servers allowlisted in profile",
-                profile_allowlist.len()
-            );
-        }
-
-        foreground
-            .spawn(move |me, ctx| {
-                me.start_mcp_servers_concurrently(
-                    existing_uuids,
-                    ephemeral_installations,
-                    profile_allowlist,
-                    ctx,
-                )
-            })
-            .await?
-            .await
+            .await;
+        Self::report_mcp_attach_results(
+            &mcp_startup_result,
+            mcp_attach_targets,
+            mcp_attach_failures,
+            setup_events,
+            foreground,
+        )
+        .await;
+        mcp_startup_result
     }
 
     fn start_mcp_servers_concurrently(
@@ -848,6 +925,76 @@ impl AgentDriver {
                 Ok(())
             }
             Err(other) => Err(other),
+        }
+    }
+
+    /// Report one `mcp_attach_result` client event per managed/integration
+    /// MCP server attached during setup. A server is `ok` only when it
+    /// reached `Running` (connected) and its startup `tools/list` query did
+    /// not fail. Best-effort: never affects the run outcome.
+    async fn report_mcp_attach_results(
+        startup_result: &Result<(), AgentDriverError>,
+        attach_targets: Vec<McpAttachTarget>,
+        attach_failures: Vec<McpAttachFailure>,
+        setup_events: &SetupClientEventReporter,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        // A managed resolution failure aborts setup before attach targets
+        // are collected, so report the failed server from the error itself.
+        if let Err(AgentDriverError::ManagedMcpResolutionFailed { uid, message }) = startup_result {
+            setup_events.post_mcp_attach_result_best_effort(
+                uid.to_string(),
+                uid.to_string(),
+                McpAttachKind::Managed,
+                Some(message.clone()),
+            );
+        }
+
+        for failure in attach_failures {
+            setup_events.post_mcp_attach_result_best_effort(
+                failure.mcp_key,
+                failure.mcp_ref,
+                failure.kind,
+                Some(failure.error),
+            );
+        }
+
+        if attach_targets.is_empty() {
+            return;
+        }
+        let Ok(outcomes) = foreground
+            .spawn(move |_, ctx| {
+                let manager = TemplatableMCPServerManager::as_ref(ctx);
+                attach_targets
+                    .into_iter()
+                    .map(|target| {
+                        let error = match manager.get_server_state(target.installation_uuid) {
+                            Some(MCPServerState::Running) => manager
+                                .get_server_tools_list_error(target.installation_uuid)
+                                .map(|err| format!("tools/list failed: {err}")),
+                            Some(MCPServerState::FailedToStart) => Some(
+                                manager
+                                    .get_server_error_message(target.installation_uuid)
+                                    .map(|message| format!("failed to start: {message}"))
+                                    .unwrap_or_else(|| "failed to start".to_string()),
+                            ),
+                            _ => Some("did not reach running state during setup".to_string()),
+                        };
+                        (target, error)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+        else {
+            return;
+        };
+        for (target, error) in outcomes {
+            setup_events.post_mcp_attach_result_best_effort(
+                target.mcp_key,
+                target.mcp_ref,
+                target.kind,
+                error,
+            );
         }
     }
 
