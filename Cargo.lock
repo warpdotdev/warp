@@ -11611,13 +11611,17 @@ checksum = "e12ca9067b5ebfbd5b3fcdc4acfceb81aa7d5ab2a879dff7cb75d22434276aad"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "futures",
  "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
  "oauth2",
  "pastey 0.2.1",
  "pin-project-lite",
  "process-wrap",
+ "rand 0.10.1",
  "reqwest",
  "rmcp-macros",
  "schemars 1.0.4",
@@ -11628,8 +11632,10 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tower-service",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

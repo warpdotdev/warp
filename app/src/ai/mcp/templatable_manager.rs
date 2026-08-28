@@ -76,6 +76,19 @@ pub struct TemplatableMCPServerManager {
     /// reconnection completes, all waiters are notified with the result.
     #[cfg(not(target_family = "wasm"))]
     pending_reconnections: HashMap<Uuid, Vec<ReconnectResultSender>>,
+    /// Retained installations for ephemeral MCP servers that are expected to
+    /// reconnect (the built-in Factory MCP, CLI-ephemeral servers, and
+    /// file-based servers), keyed by installation UUID.
+    ///
+    /// Ephemeral servers are never added to `locally_installed_servers`
+    /// (which represents user-managed, persisted installations), so without
+    /// this map a reconnect attempt after their peer disconnects - or after
+    /// their in-flight spawn is torn down - cannot reconstruct them. Entries
+    /// are removed when the owning server is shut down, so stale embedded
+    /// credentials (e.g. a bearer token baked into the built-in Factory
+    /// installation) don't outlive its runtime lifecycle.
+    #[cfg(not(target_family = "wasm"))]
+    reconnectable_ephemeral_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     /// Maps the OAuth CSRF `state` token to the installation UUID of the server whose
     /// authorization flow is in progress.
     ///
@@ -335,6 +348,15 @@ impl TemplatableMCPServerManager {
             .iter()
             .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
             .collect()
+    }
+
+    /// Returns `true` if `installation_uuid` is currently tracked as a CLI-spawned ephemeral
+    /// server (started via `oz agent run --mcp`), regardless of whether it's active, pending,
+    /// or failed. Test-only: production code has no need to distinguish this from the other
+    /// `is_*` queries above.
+    #[cfg(test)]
+    pub fn is_cli_spawned_server(&self, installation_uuid: Uuid) -> bool {
+        self.cli_spawned_server_uuids.contains(&installation_uuid)
     }
 
     /// Returns built-in Warp-hosted servers (e.g. the Factory MCP) that are

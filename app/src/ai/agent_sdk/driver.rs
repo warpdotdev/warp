@@ -4753,6 +4753,18 @@ impl AgentDriver {
 
     /// Perform cleanup after the agent has finished running.
     async fn cleanup(spawner: ModelSpawner<Self>) {
+        // Tear down every CLI-ephemeral MCP server (and their embedded secrets) that this run
+        // started, on every exit path (success, failure, or cancellation). Without this, a
+        // persistent-worker process serving multiple sequential runs would retain a completed
+        // run's MCP configurations for the manager's lifetime instead of ending with the run.
+        let _ = spawner
+            .spawn(|_, ctx| {
+                TemplatableMCPServerManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.despawn_cli_ephemeral_servers(ctx);
+                });
+            })
+            .await;
+
         let Ok((providers, task_id)) = spawner
             .spawn(|me, _| (std::mem::take(&mut me.cloud_providers), me.task_id))
             .await
