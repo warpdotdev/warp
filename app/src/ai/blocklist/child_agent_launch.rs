@@ -16,6 +16,7 @@ use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Server-side state prepared before a frontend creates the child's surface.
 #[cfg(not(target_family = "wasm"))]
@@ -87,6 +88,7 @@ pub fn finish_local_oz_child_conversation(
 /// Copies the parent's execution profile and effective base model to a child
 /// surface before its first request is sent.
 pub fn inherit_child_agent_settings(
+    scope: &impl TeamScope,
     parent_surface_id: EntityId,
     child_surface_id: EntityId,
     ctx: &mut AppContext,
@@ -100,11 +102,16 @@ pub fn inherit_child_agent_settings(
     });
 
     let parent_base_model_id = LLMPreferences::as_ref(ctx)
-        .get_active_base_model(ctx, Some(parent_surface_id))
+        .get_active_base_model(scope, ctx, Some(parent_surface_id))
         .id
         .clone();
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-        preferences.update_preferred_agent_mode_llm(&parent_base_model_id, child_surface_id, ctx);
+        preferences.update_preferred_agent_mode_llm(
+            scope,
+            &parent_base_model_id,
+            child_surface_id,
+            ctx,
+        );
     });
 }
 
@@ -112,6 +119,7 @@ pub fn inherit_child_agent_settings(
 /// been inherited.
 #[cfg(not(target_family = "wasm"))]
 pub fn apply_child_agent_model_override(
+    scope: &impl TeamScope,
     child_surface_id: EntityId,
     model_id: Option<&str>,
     ctx: &mut AppContext,
@@ -121,6 +129,6 @@ pub fn apply_child_agent_model_override(
     };
     let model_id = LLMId::from(model_id);
     LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-        preferences.set_agent_mode_llm_override(child_surface_id, model_id, ctx);
+        preferences.set_agent_mode_llm_override(scope, child_surface_id, model_id, ctx);
     });
 }

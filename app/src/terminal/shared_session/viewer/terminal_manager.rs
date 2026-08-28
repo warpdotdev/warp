@@ -67,6 +67,7 @@ use crate::terminal::{
     Event as TerminalViewEvent, PTY_READS_BROADCAST_CHANNEL_SIZE, TerminalModel, TerminalView,
 };
 use crate::view_components::ToastFlavor;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 enum NetworkState {
     /// No viewer network is attached yet; deferred cloud-mode viewers start here until the
@@ -587,6 +588,7 @@ impl TerminalManager {
             // Send model selection updates during session sharing (if viewer has Editor role)
             let current_network_for_models = self.current_network.clone();
             let terminal_view_id = self.view.id();
+            let weak_view_for_models = self.view.downgrade();
             let model_clone = self.model.clone();
             let model_remote_update_guard = self.viewer_remote_update_guard.clone();
             ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
@@ -595,9 +597,15 @@ impl TerminalManager {
                     return;
                 }
 
+                let Some(window_id) = weak_view_for_models.window_id(ctx) else {
+                    return;
+                };
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+                );
                 let llm_prefs = &LLMPreferences::as_ref(ctx);
                 let selected_model_id: String = llm_prefs
-                    .get_active_base_model(ctx, Some(terminal_view_id))
+                    .get_active_base_model(&scope, ctx, Some(terminal_view_id))
                     .id
                     .clone()
                     .into();
@@ -1532,7 +1540,13 @@ impl TerminalManager {
         };
 
         let terminal_view_id = view.id();
-        apply_selected_agent_model_update(terminal_view_id, selected_model, guard, ctx);
+        apply_selected_agent_model_update(
+            weak_view_handle,
+            terminal_view_id,
+            selected_model,
+            guard,
+            ctx,
+        );
     }
 
     fn handle_input_mode_update(

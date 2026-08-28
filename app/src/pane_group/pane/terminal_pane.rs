@@ -68,6 +68,8 @@ use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 #[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+#[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
         HiddenChildAgentConversation, HiddenChildAgentConversationRequest,
@@ -939,13 +941,15 @@ fn handle_terminal_view_event(
                 }
             }
             Event::ShareModalOpened(block_id) => {
+                let Some(session) = group.terminal_view_from_pane_id(pane_id, ctx) else {
+                    return;
+                };
+                let model = session.read(ctx, |view, _| view.model.clone());
+
                 group.terminal_with_open_share_block_modal = Some(terminal_pane_id);
                 group.share_block_modal.update(ctx, |share_modal, ctx| {
-                    if let Some(session) = group.terminal_view_from_pane_id(pane_id, ctx) {
-                        let model = session.read(ctx, |view, _| view.model.clone());
-                        share_modal.open_with_model_update(model, *block_id, ctx);
-                        ctx.notify();
-                    }
+                    share_modal.open_with_model_update(model, *block_id, ctx);
+                    ctx.notify();
                 });
                 ctx.notify();
             }
@@ -1671,7 +1675,15 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    apply_child_agent_model_override(
+                        &scope,
+                        terminal_view_id,
+                        model_id.as_deref(),
+                        ctx,
+                    );
                     finish_local_oz_child_conversation(
                         conversation_id,
                         terminal_view_id,
@@ -1813,7 +1825,11 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
+                        let scope = ResolvedTeamScope::from_scope(
+                            &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                        );
                         apply_child_agent_model_override(
+                            &scope,
                             terminal_view_id,
                             model_id.as_deref(),
                             ctx,

@@ -20,6 +20,7 @@ use crate::settings::AISettings;
 use crate::system::{SystemStats, SystemStatsEvent};
 use crate::terminal::view::TerminalView;
 use crate::view_components::DismissibleToast;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AutoCloudHandoffSkipReason {
@@ -335,8 +336,11 @@ impl AutoCloudHandoffController {
         };
 
         let can_handoff_to_cloud = AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx);
-        let active_model_not_cloud_runnable =
-            !LLMPreferences::as_ref(ctx).is_active_base_model_cloud_runnable(terminal_view_id, ctx);
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+        );
+        let active_model_not_cloud_runnable = !LLMPreferences::as_ref(ctx)
+            .is_active_base_model_cloud_runnable(&scope, terminal_view_id, ctx);
         if let Some(reason) = AutoCloudHandoffEligibility::from_conversation(
             conversation,
             can_handoff_to_cloud,

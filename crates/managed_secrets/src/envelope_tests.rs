@@ -140,6 +140,59 @@ fn read_keyset_json(json: &str) -> tink_core::keyset::Handle {
     tink_core::keyset::insecure::read(&mut reader).expect("failed to read keyset")
 }
 
+/// Round-trips a `DockerRegistry` secret through the exact AEAD context the Go server
+/// expects (`1:<actor_uid>:<secret_name>:docker_registry`), pinning both the JSON
+/// payload and the context string this repo and warp-server must agree on byte-for-byte.
+/// A regression in either `ManagedSecretType::envelope_name` or the JSON field names
+/// would pass every other test in this crate and only surface as the server rejecting
+/// the ciphertext in production.
+#[test]
+fn test_encrypt_decrypt_docker_registry_context_and_payload() {
+    super::init();
+
+    let private_key = read_keyset_json(TEST_PRIVATE_KEY);
+    let public_key = read_keyset_json(TEST_PUBLIC_KEY);
+
+    let upload_key = UploadKey {
+        encrypt: tink_hybrid::new_encrypt(&public_key).expect("failed to create encrypt primitive"),
+        public_key,
+    };
+
+    let actor_uid = "user123";
+    let secret_name = "MY_REGISTRY";
+    let secret =
+        ManagedSecretValue::docker_registry("us-docker.pkg.dev", "_json_key", "s3cret-pass");
+
+    let encrypted = upload_key
+        .encrypt_secret(actor_uid, secret_name, &secret)
+        .expect("failed to encrypt secret");
+    let ciphertext = base64::prelude::BASE64_STANDARD
+        .decode(&encrypted)
+        .expect("ciphertext is not valid base64");
+
+    let decrypt =
+        tink_hybrid::new_decrypt(&private_key).expect("failed to create decrypt primitive");
+
+    let context = format!("1:{actor_uid}:{secret_name}:docker_registry");
+    let decrypted = decrypt
+        .decrypt(&ciphertext, context.as_bytes())
+        .expect("failed to decrypt with the expected context");
+    assert_eq!(
+        decrypted,
+        br#"{"registry_host":"us-docker.pkg.dev","username":"_json_key","password":"s3cret-pass"}"#
+    );
+
+    // A mismatched context (e.g. the wrong secret type) must fail to decrypt - this is
+    // exactly what would surface as the server rejecting the ciphertext in production.
+    let wrong_context = format!("1:{actor_uid}:{secret_name}:raw_value");
+    assert!(
+        decrypt
+            .decrypt(&ciphertext, wrong_context.as_bytes())
+            .is_err(),
+        "decrypt must fail when the context's secret type does not match"
+    );
+}
+
 /// BYO credential sealing round-trip via [`UploadKey::seal_with_context`].
 ///
 /// Pins the exact context format shared by the WASM producer

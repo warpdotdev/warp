@@ -1105,7 +1105,7 @@ fn render_fallback_explanation<V: View>(
     let llm_prefs = LLMPreferences::as_ref(app);
     let base_model_id = model.base_model(app);
     let primary_name = base_model_id
-        .and_then(|base_id| llm_prefs.get_llm_info(base_id))
+        .and_then(|base_id| llm_prefs.get_llm_info(base_id, app))
         .map(|info| info.base_model_name.as_str());
     let text = match primary_name {
         Some(primary) => {

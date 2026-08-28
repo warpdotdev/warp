@@ -9,6 +9,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 use crate::workspaces::workspace::{ByoApiKeyPolicy, Workspace, WorkspaceUid};
 
 fn initialize_app(app: &mut App) {
@@ -51,7 +52,7 @@ fn apply_server_availability(app: &mut App, availability: AICreditAvailability) 
 }
 
 fn determine_state(app: &mut App) -> PromptAlertState {
-    app.read(PromptAlertView::determine_state)
+    app.read(|ctx| PromptAlertView::determine_state(&TeamlessScopeForTest, ctx))
 }
 
 #[test]

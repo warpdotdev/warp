@@ -1449,10 +1449,6 @@ impl From<GqlWorkspace> for Workspace {
 impl From<GqlUser> for WorkspacesMetadataResponse {
     fn from(gql_user: GqlUser) -> WorkspacesMetadataResponse {
         let user_uid = UserUid::new(&gql_user.profile.uid);
-        let feature_model_choices = gql_user
-            .workspaces
-            .first()
-            .map(|gql_workspace| gql_workspace.feature_model_choice.clone());
 
         let workspaces: Vec<Workspace> = gql_user
             .workspaces
@@ -1496,7 +1492,6 @@ impl From<GqlUser> for WorkspacesMetadataResponse {
             workspaces,
             joinable_teams,
             experiments,
-            feature_model_choices,
             ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
             user_purchase_policy,
         }

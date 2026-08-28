@@ -602,6 +602,12 @@ fn make_secret_value_from_gql_type(
             ))
         }
         ManagedSecretType::OpenaiApiKey => Ok(ManagedSecretValue::openai_api_key(raw, None)),
+        ManagedSecretType::DockerRegistry => {
+            // Registry credentials are multi-field and have no CLI creation/update flow yet.
+            Err(anyhow::anyhow!(
+                "Container registry credential secrets cannot be updated via `--value`; re-create the secret instead"
+            ))
+        }
     }
 }
 
@@ -851,5 +857,6 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::AnthropicBedrockAccessKey => "Anthropic Bedrock Access Key".to_string(),
         ManagedSecretType::AnthropicBedrockApiKey => "Anthropic Bedrock API Key".to_string(),
         ManagedSecretType::OpenaiApiKey => "OpenAI API Key".to_string(),
+        ManagedSecretType::DockerRegistry => "Container Registry Credential".to_string(),
     }
 }

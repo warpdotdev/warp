@@ -85,7 +85,9 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{TeamContext, TeamContextResolver, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -210,6 +212,7 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    #[allow(clippy::too_many_arguments)]
     fn for_task(
         inputs: Vec<AIAgentInput>,
         task_id: TaskId,
@@ -217,6 +220,7 @@ impl RequestInput {
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
@@ -224,12 +228,14 @@ impl RequestInput {
             active_session,
             shared_session_response_initiator,
             terminal_surface_id,
+            scope,
             app,
         );
         me.input_messages.insert(task_id, inputs);
         me
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn for_actions_results(
         action_results: Vec<AIAgentActionResult>,
         context: Arc<[AIAgentContext]>,
@@ -237,6 +243,7 @@ impl RequestInput {
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
@@ -244,6 +251,7 @@ impl RequestInput {
             active_session,
             shared_session_response_initiator,
             terminal_surface_id,
+            scope,
             app,
         );
         for result in action_results.into_iter() {
@@ -272,23 +280,24 @@ impl RequestInput {
         active_session: &ModelHandle<ActiveSession>,
         shared_session_response_initiator: Option<ParticipantId>,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
         let model_id = llm_prefs
-            .get_active_base_model(app, Some(terminal_surface_id))
+            .get_active_base_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let coding_model_id = llm_prefs
-            .get_active_coding_model(app, Some(terminal_surface_id))
+            .get_active_coding_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let cli_agent_model_id = llm_prefs
-            .get_active_cli_agent_model(app, Some(terminal_surface_id))
+            .get_active_cli_agent_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let computer_use_model_id = llm_prefs
-            .get_active_computer_use_model(app, Some(terminal_surface_id))
+            .get_active_computer_use_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let working_directory = active_session
@@ -845,6 +854,7 @@ impl BlocklistAIController {
             });
         }
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let send_result = self.send_request_input(
             RequestInput::for_task(
                 inputs,
@@ -853,6 +863,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 conversation_id,
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -1622,6 +1633,7 @@ impl BlocklistAIController {
             vec![],
             ctx,
         );
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let mut request_input = RequestInput::for_actions_results(
             finished_results,
             context,
@@ -1629,6 +1641,7 @@ impl BlocklistAIController {
             self.get_current_response_initiator(),
             conversation_id,
             self.terminal_surface_id,
+            &scope,
             ctx,
         );
 
@@ -1926,6 +1939,7 @@ impl BlocklistAIController {
             action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
         });
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         if self
             .send_request_input(
                 RequestInput::for_task(
@@ -1935,6 +1949,7 @@ impl BlocklistAIController {
                     self.get_current_response_initiator(),
                     conversation_id,
                     self.terminal_surface_id,
+                    &scope,
                     ctx,
                 ),
                 None,
@@ -2074,6 +2089,7 @@ impl BlocklistAIController {
         } else {
             None
         };
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let _ = self.send_request_input(
             RequestInput::for_task(
                 inputs,
@@ -2082,6 +2098,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 conversation_id,
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             metadata,
@@ -2154,6 +2171,7 @@ impl BlocklistAIController {
             input_context.push(block_context);
         }
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let new_conversation = self.start_new_conversation_for_request(ctx);
         self.send_request_input(
             RequestInput::for_task(
@@ -2166,6 +2184,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 new_conversation.id(),
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -2271,6 +2290,7 @@ impl BlocklistAIController {
             trigger: trigger.clone(),
         }];
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let request_input = RequestInput::for_task(
             inputs,
             task_id,
@@ -2278,6 +2298,7 @@ impl BlocklistAIController {
             self.get_current_response_initiator(),
             conversation_id,
             self.terminal_surface_id,
+            &scope,
             ctx,
         )
         .with_supported_tools(supported_tools);
@@ -2325,6 +2346,7 @@ impl BlocklistAIController {
             trigger,
         }];
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let new_conversation = self.start_new_conversation_for_request(ctx);
         self.send_request_input(
             RequestInput::for_task(
@@ -2334,6 +2356,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 new_conversation.id(),
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -3227,8 +3250,8 @@ impl BlocklistAIController {
 
                 if self.should_refresh_available_llms_on_stream_finish {
                     self.should_refresh_available_llms_on_stream_finish = false;
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences.refresh_authed_models(ctx);
+                    TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                        drop(manager.refresh_workspace_metadata(ctx));
                     });
                 }
                 ctx.emit(BlocklistAIControllerEvent::FinishedReceivingOutput {
@@ -3482,8 +3505,8 @@ impl BlocklistAIController {
         }
 
         if finished_event.should_refresh_model_config {
-            LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                llm_preferences.refresh_authed_models(ctx);
+            TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                drop(manager.refresh_workspace_metadata(ctx));
             });
         }
     }
