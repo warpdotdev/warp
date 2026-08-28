@@ -12644,7 +12644,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=b30fdd06379a3d073b398eabd106abed5b443aae#b30fdd06379a3d073b398eabd106abed5b443aae"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=c0f956a984da1be7b0772351f7d73014808436f7#c0f956a984da1be7b0772351f7d73014808436f7"
 dependencies = [
  "byte-unit",
  "serde",

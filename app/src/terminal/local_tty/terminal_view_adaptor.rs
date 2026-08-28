@@ -854,9 +854,10 @@ impl TerminalManager<TerminalView> {
                     cli_agent_session,
                 };
 
-                let team_uid = UserWorkspaces::as_ref(ctx)
-                    .team_context_for_window(window_id)
-                    .team_uid();
+                let team_uid = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+                )
+                .team_uid();
                 let network = ctx.add_model(|ctx| {
                     Network::new(
                         model.clone(),
