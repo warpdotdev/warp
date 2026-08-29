@@ -661,3 +661,20 @@ fn test_warp_tui_variant_properties() {
         CLIAgent::WarpTui
     );
 }
+
+#[test]
+fn test_hermes_variant_properties() {
+    assert_eq!(CLIAgent::Hermes.command_prefix(), "hermes");
+    assert_eq!(CLIAgent::Hermes.display_name(), "Hermes");
+    assert_eq!(
+        CLIAgent::Hermes.brand_color(),
+        Some(ColorU::new(124, 58, 237, 255))
+    );
+    // Deliberately None until an officially licensed SVG is available (same as Vibe).
+    assert!(CLIAgent::Hermes.icon().is_none());
+    assert_eq!(CLIAgent::Hermes.brand_icon_color(), ColorU::white());
+    assert_eq!(
+        CLIAgent::from_serialized_name(&CLIAgent::Hermes.to_serialized_name()),
+        CLIAgent::Hermes
+    );
+}
