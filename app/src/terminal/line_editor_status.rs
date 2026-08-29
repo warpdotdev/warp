@@ -69,16 +69,21 @@ impl LineEditorStatus {
     }
 
     fn handle_model_event(&mut self, event: &ModelEvent, ctx: &mut ModelContext<Self>) {
-        let Some(active_session_id) = self.model_event_dispatcher.as_ref(ctx).active_session_id()
-        else {
-            return;
+        // The shell's first precmd can arrive before its session is registered -- the
+        // Bootstrapped hook lands after it. Returning early here deadlocked the terminal:
+        // bash only emits another precmd once a command finishes, but no command can be
+        // written to the pty while the line editor is inactive, so nothing ever ran. Treat
+        // an unknown session as non-zsh, which is the correct reading of precmd for every
+        // shell except zsh.
+        let active_session_id = self.model_event_dispatcher.as_ref(ctx).active_session_id();
+        let is_active_session_zsh = match active_session_id {
+            Some(active_session_id) => self
+                .sessions
+                .as_ref(ctx)
+                .get(active_session_id)
+                .is_some_and(|session| session.shell().shell_type() == ShellType::Zsh),
+            None => false,
         };
-
-        let Some(active_session) = self.sessions.as_ref(ctx).get(active_session_id) else {
-            return;
-        };
-
-        let is_active_session_zsh = active_session.shell().shell_type() == ShellType::Zsh;
         match event {
             ModelEvent::Handler(AnsiHandlerEvent::Precmd) => {
                 if is_active_session_zsh {
