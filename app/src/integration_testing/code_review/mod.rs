@@ -46,6 +46,39 @@ pub fn assert_code_review_loaded() -> AssertionCallback {
     })
 }
 
+/// Asserts a file's inline image-preview state in the code review panel.
+/// `expected_sides` is `None` when the file must have no preview (binary
+/// placeholder), or `Some((old, new))` describing which sides must render
+/// an image.
+pub fn assert_code_review_image_preview(
+    expected_file_path: impl Into<String>,
+    expected_sides: Option<(bool, bool)>,
+) -> AssertionCallback {
+    let expected_file_path = expected_file_path.into();
+
+    Box::new(move |app, window_id| {
+        let Some(code_review_view) = try_single_code_review_view(app, window_id) else {
+            return AssertionOutcome::failure(
+                "code review view not yet available in the window".to_string(),
+            );
+        };
+        code_review_view.read(app, |code_review_view, _| {
+            let Some(sides) = code_review_view.image_preview_sides_for_test(&expected_file_path)
+            else {
+                return AssertionOutcome::failure(format!(
+                    "expected {expected_file_path:?} to be part of the loaded code review diff",
+                ));
+            };
+
+            async_assert!(
+                sides == expected_sides,
+                "expected image preview sides for {expected_file_path:?} to be \
+                 {expected_sides:?}, got {sides:?}"
+            )
+        })
+    })
+}
+
 pub fn assert_code_review_anchor(
     expected_file_path: impl Into<String>,
     expected_text: impl Into<String>,

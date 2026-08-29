@@ -141,6 +141,7 @@ fn build_diff_state_snapshot_preserves_repo_relative_file_paths() {
             size: DiffSize::Normal,
         },
         content_at_head: None,
+        image_preview: None,
     };
     let diffs = GitDiffWithBaseContent {
         files: vec![diff],

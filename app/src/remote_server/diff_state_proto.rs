@@ -275,6 +275,9 @@ impl TryFrom<&proto::FileDiff> for FileDiffAndContent {
         Ok(Self {
             file_diff: FileDiff::try_from(file)?,
             content_at_head: file.content_at_base.clone(),
+            // Remote/PR diffs arrive over an RPC carrying only text content;
+            // image previews are local-only (see specs/GH12093/PRODUCT.md).
+            image_preview: None,
         })
     }
 }

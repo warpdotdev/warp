@@ -976,6 +976,10 @@ pub enum FeatureFlag {
     /// always forwarded unchanged and the harness process/sandbox are never
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
+
+    /// Renders inline image previews for changed image files in the code
+    /// review panel instead of the "Binary file" placeholder.
+    ImagePreviewInCodeReview,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1053,6 +1057,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
+    FeatureFlag::ImagePreviewInCodeReview,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
