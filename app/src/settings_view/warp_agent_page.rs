@@ -22,6 +22,7 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use settings::{Setting, ToggleableSetting};
 use strum::IntoEnumIterator;
+use url::Url;
 #[cfg(not(target_family = "wasm"))]
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
@@ -79,7 +80,7 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::geap_credentials::force_refresh_geap_credentials;
 use crate::ai::llms::{LLMId, LLMPreferences, LLMProvider, is_using_api_key_for_provider};
 use crate::appearance::{Appearance, AppearanceEvent};
-use crate::auth::AuthStateProvider;
+use crate::auth::{AuthManager, AuthStateProvider};
 use crate::editor::{
     EditorOptions, EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextColors, TextOptions,
@@ -1909,6 +1910,46 @@ impl WarpAgentPageView {
         });
     }
 
+    /// Opens Sign in with ChatGPT in the browser. warp-server runs the confidential
+    /// OAuth exchange and links the ChatGPT `sub` to this Warp account; the desktop
+    /// continue URL is the same `/login/remote` handoff used for sign-in.
+    fn start_chatgpt_oauth(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::ToastStack;
+        use crate::view_components::{DismissibleToast, ToastLink};
+        use crate::workspace::WorkspaceAction;
+
+        const CONNECT_TOAST_OBJECT_ID: &str = "chatgpt_oauth_connect_toast";
+
+        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.set_chatgpt_oauth_pending(true, ctx);
+        });
+
+        let authorize_url = AuthManager::handle(ctx).update(ctx, |auth_manager, _ctx| {
+            let continue_url = auth_manager.sign_in_url();
+            let mut start = Url::parse(&format!("{}/auth/openai", ChannelState::server_root_url()))
+                .expect("server_root_url is a valid URL");
+            start
+                .query_pairs_mut()
+                .append_pair("continueUrl", &continue_url);
+            start.to_string()
+        });
+        ctx.open_url(&authorize_url);
+
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+            let toast = DismissibleToast::default(
+                "Opening your browser to connect your ChatGPT subscription…".to_string(),
+            )
+            .with_object_id(CONNECT_TOAST_OBJECT_ID.to_string())
+            .with_link(
+                ToastLink::new("Copy URL".to_string())
+                    .with_onclick_action(WorkspaceAction::CopyTextToClipboard(authorize_url)),
+            );
+            toast_stack.add_persistent_toast(toast, window_id, ctx);
+        });
+        ctx.notify();
+    }
+
     /// Tears down a cancelled attempt: clears state and dismisses the
     /// connect toast.
     #[cfg(not(target_family = "wasm"))]
@@ -2366,6 +2407,8 @@ pub enum WarpAgentPageAction {
     ConnectGrokSubscription,
     CancelGrokSubscriptionConnect,
     DisconnectGrokSubscription,
+    ConnectChatGPTSubscription,
+    DisconnectChatGPTSubscription,
 
     #[cfg(feature = "local_fs")]
     SetConversationLayout(crate::util::file::external_editor::settings::OpenConversationPreference),
@@ -2940,6 +2983,23 @@ impl TypedActionView for WarpAgentPageView {
                 crate::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     let toast = crate::view_components::DismissibleToast::default(
                         "SuperGrok subscription disconnected".to_string(),
+                    );
+                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
+                });
+                ctx.notify();
+            }
+            WarpAgentPageAction::ConnectChatGPTSubscription => {
+                self.start_chatgpt_oauth(ctx);
+            }
+            WarpAgentPageAction::DisconnectChatGPTSubscription => {
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.set_chatgpt_connection(None, ctx);
+                });
+
+                let window_id = ctx.window_id();
+                crate::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = crate::view_components::DismissibleToast::default(
+                        "ChatGPT subscription disconnected".to_string(),
                     );
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
@@ -4791,6 +4851,9 @@ struct ApiKeysWidget {
     grok_cancel_button: ViewHandle<ActionButton>,
     grok_cancelling_button: ViewHandle<ActionButton>,
     grok_disconnect_button: ViewHandle<ActionButton>,
+    chatgpt_connect_button: ViewHandle<ActionButton>,
+    chatgpt_connecting_button: ViewHandle<ActionButton>,
+    chatgpt_disconnect_button: ViewHandle<ActionButton>,
 
     can_use_warp_credits_for_fallback: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -4958,7 +5021,32 @@ impl ApiKeysWidget {
                     ctx.dispatch_typed_action(WarpAgentPageAction::DisconnectGrokSubscription);
                 })
         });
-        for button in [&grok_connect_button, &grok_disconnect_button] {
+        let chatgpt_connect_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Connect", SecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(WarpAgentPageAction::ConnectChatGPTSubscription);
+                })
+        });
+        let chatgpt_connecting_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Connecting", SecondaryTheme).with_size(ButtonSize::Small)
+        });
+        chatgpt_connecting_button.update(ctx, |button, ctx| {
+            button.set_disabled(true, ctx);
+        });
+        let chatgpt_disconnect_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Disconnect", DangerSecondaryTheme)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(WarpAgentPageAction::DisconnectChatGPTSubscription);
+                })
+        });
+        for button in [
+            &grok_connect_button,
+            &grok_disconnect_button,
+            &chatgpt_connect_button,
+            &chatgpt_disconnect_button,
+        ] {
             button.update(ctx, |button, ctx| {
                 button.set_disabled(
                     !(is_any_ai_enabled && is_byo_enabled && member_byo_keys_allowed),
@@ -4969,7 +5057,12 @@ impl ApiKeysWidget {
 
         // The Grok subscription is BYO auth, so keep the buttons' enablement
         // in sync with the BYO API key policy, like the editors above.
-        let grok_buttons = [grok_connect_button.clone(), grok_disconnect_button.clone()];
+        let grok_buttons = [
+            grok_connect_button.clone(),
+            grok_disconnect_button.clone(),
+            chatgpt_connect_button.clone(),
+            chatgpt_disconnect_button.clone(),
+        ];
         ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
             if is_team_policy_change_for_window(event, ctx.window_id()) {
                 let is_any_ai_enabled = AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
@@ -5015,6 +5108,9 @@ impl ApiKeysWidget {
             grok_cancel_button,
             grok_cancelling_button,
             grok_disconnect_button,
+            chatgpt_connect_button,
+            chatgpt_connecting_button,
+            chatgpt_disconnect_button,
 
             can_use_warp_credits_for_fallback: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -5395,6 +5491,111 @@ impl ApiKeysWidget {
         column.finish()
     }
 
+    fn render_chatgpt_subscription_row(
+        &self,
+        appearance: &Appearance,
+        is_enabled: bool,
+        is_connecting: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let chatgpt_connection = ApiKeyManager::as_ref(app).chatgpt_connection();
+
+        let text_color = styles::header_font_color(is_enabled, app);
+        let label = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.)
+            .with_child(
+                Text::new_inline("Use your", appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(text_color.into())
+                    .finish(),
+            )
+            .with_child(
+                ConstrainedBox::new(Icon::OpenAILogo.to_warpui_icon(text_color).finish())
+                    .with_width(14.)
+                    .with_height(14.)
+                    .finish(),
+            )
+            .with_child(
+                Text::new_inline(
+                    "OpenAI ChatGPT subscription",
+                    appearance.ui_font_family(),
+                    CONTENT_FONT_SIZE,
+                )
+                .with_color(text_color.into())
+                .finish(),
+            )
+            .finish();
+
+        let button = if chatgpt_connection.is_some() {
+            &self.chatgpt_disconnect_button
+        } else if is_connecting {
+            &self.chatgpt_connecting_button
+        } else {
+            &self.chatgpt_connect_button
+        };
+
+        let header_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., label).finish())
+            .with_child(button.as_ref(app).render(app))
+            .finish();
+
+        let description = Container::new(
+            Text::new(
+                "Connect your ChatGPT subscription to use OpenAI models in the Warp Agent through your OpenAI account.",
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(styles::description_font_color(is_enabled, app).into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_right(styles::TOGGLE_WIDTH_MARGIN)
+        .finish();
+
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_child(header_row)
+            .with_child(description);
+
+        if let Some(connection) = chatgpt_connection {
+            let connected_text = match connection.connected_at.map(DateTime::<Local>::from) {
+                Some(connected_at) => format!(
+                    "Connected on {}.",
+                    connected_at.format("%m/%d/%Y at %-I:%M%P")
+                ),
+                None => "Connected.".to_string(),
+            };
+            let check = ConstrainedBox::new(
+                Icon::Check
+                    .to_warpui_icon(appearance.theme().ansi_fg_green().into())
+                    .finish(),
+            )
+            .with_width(12.)
+            .with_height(12.)
+            .finish();
+            let status_text = Text::new_inline(
+                connected_text,
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(styles::description_font_color(is_enabled, app).into())
+            .finish();
+            column.add_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(4.)
+                    .with_child(check)
+                    .with_child(status_text)
+                    .finish(),
+            );
+        }
+
+        column.finish()
+    }
+
     /// Paste-the-code fallback for the current SuperGrok connect attempt.
     #[cfg(not(target_family = "wasm"))]
     fn render_grok_manual_code_entry(
@@ -5517,7 +5718,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = WarpAgentPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription"
+        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai chatgpt subscription"
     }
 
     fn should_render(&self, app: &AppContext) -> bool {
@@ -5636,6 +5837,22 @@ impl SettingsWidget for ApiKeysWidget {
                         .finish(),
                 );
             }
+        }
+
+        if FeatureFlag::ChatGPTSubscription.is_enabled() && show_provider_keys {
+            let manager = ApiKeyManager::as_ref(app);
+            let is_chatgpt_connecting =
+                manager.chatgpt_oauth_pending() && manager.chatgpt_connection().is_none();
+            column.add_child(
+                Container::new(self.render_chatgpt_subscription_row(
+                    appearance,
+                    provider_keys_enabled,
+                    is_chatgpt_connecting,
+                    app,
+                ))
+                .with_margin_top(16.)
+                .finish(),
+            );
         }
 
         // Warp credit fallback applies to member-provided API keys, not custom endpoints.

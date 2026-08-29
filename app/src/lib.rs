@@ -155,7 +155,7 @@ use ai::execution_profiles::editor::ExecutionProfileEditorManager;
 use ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use ai::metadata_project_rules::read_project_rule_contents;
 use ai::persisted_workspace::PersistedWorkspace;
-use auth::auth_manager::AuthManager;
+use auth::auth_manager::{AuthManager, AuthManagerEvent};
 use auth::auth_state::{AuthState, AuthStateProvider};
 use code::editor_management::CodeManager;
 use code::opened_files::OpenedFilesModel;
@@ -1791,6 +1791,15 @@ pub(crate) fn initialize_app(
             });
         },
     );
+    ctx.subscribe_to_model(&AuthManager::handle(ctx), |_, event, ctx| {
+        if matches!(event, AuthManagerEvent::AuthComplete)
+            && FeatureFlag::ChatGPTSubscription.is_enabled()
+        {
+            ::ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.complete_chatgpt_oauth_if_pending(ctx);
+            });
+        }
+    });
 
     ctx.add_singleton_model(AntivirusInfo::new);
 

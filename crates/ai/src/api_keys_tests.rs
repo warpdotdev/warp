@@ -122,6 +122,8 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
             resolved: custom_endpoints,
         },
         grok_tokens,
+        chatgpt_connection: None,
+        chatgpt_oauth_pending: false,
         #[cfg(not(target_family = "wasm"))]
         grok_refresh_allowed: false,
         #[cfg(not(target_family = "wasm"))]
@@ -135,6 +137,7 @@ fn make_manager_with_grok(keys: ApiKeys, grok_tokens: Option<GrokTokens>) -> Api
         geap_credentials_state: GeapCredentialsState::Missing,
         secure_storage_write_version: 0,
         grok_secure_storage_write_version: 0,
+        chatgpt_secure_storage_write_version: 0,
     }
 }
 

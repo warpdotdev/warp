@@ -39,6 +39,10 @@ const LEGACY_ENDPOINT_PREFIX: &str = "legacy-";
 /// a refresh lifecycle, not a user-pasted static key.
 const GROK_SECURE_STORAGE_KEY: &str = "GrokOAuthTokens";
 
+/// Secure-storage key for a connected ChatGPT subscription. This is only a
+/// local connection timestamp: identity linking lives on warp-server.
+const CHATGPT_SECURE_STORAGE_KEY: &str = "ChatGPTSubscriptionConnection";
+
 /// Emitted when user-provided API keys are updated in-memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiKeyManagerEvent {
@@ -448,6 +452,15 @@ pub struct GrokTokens {
     pub connected_at: Option<SystemTime>,
 }
 
+/// Local record that the user completed Sign in with ChatGPT from this app.
+/// The ChatGPT `sub` is linked on warp-server; this only drives the settings UI.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ChatGPTConnection {
+    /// When the browser OAuth flow completed on this client.
+    #[serde(default)]
+    pub connected_at: Option<SystemTime>,
+}
+
 impl GrokTokens {
     /// Returns the access token whenever it is non-empty, regardless of
     /// expiry. Possibly-expired tokens are still sent so the server stays the
@@ -519,6 +532,11 @@ pub struct ApiKeyManager {
     /// separately from `keys` under [`GROK_SECURE_STORAGE_KEY`];
     /// `crate::grok_subscription` keeps these fresh.
     grok_tokens: Option<GrokTokens>,
+    /// Local ChatGPT subscription connection, if the user completed Sign in
+    /// with ChatGPT from this client.
+    chatgpt_connection: Option<ChatGPTConnection>,
+    /// True while a ChatGPT OAuth attempt is waiting on the browser callback.
+    chatgpt_oauth_pending: bool,
     /// Whether background refresh of `grok_tokens` is currently allowed.
     /// Mirrors the BYO API key policy, which lives in the app layer; wired in
     /// via `ApiKeyManager::set_grok_refresh_allowed` (`crate::grok_subscription`).
@@ -550,6 +568,7 @@ pub struct ApiKeyManager {
     pub(crate) geap_credentials_state: GeapCredentialsState,
     secure_storage_write_version: u64,
     grok_secure_storage_write_version: u64,
+    chatgpt_secure_storage_write_version: u64,
 }
 
 #[derive(Clone)]
@@ -605,6 +624,7 @@ impl ApiKeyManager {
         let custom_endpoint_keys = Self::load_custom_endpoint_keys_from_secure_storage(ctx);
         let resolved_custom_endpoints = keys.custom_endpoints.clone();
         let grok_tokens = Self::load_grok_tokens_from_secure_storage(ctx);
+        let chatgpt_connection = Self::load_chatgpt_connection_from_secure_storage(ctx);
         Self {
             keys,
             custom_endpoints: CustomEndpointState {
@@ -614,6 +634,8 @@ impl ApiKeyManager {
                 resolved: resolved_custom_endpoints,
             },
             grok_tokens,
+            chatgpt_connection,
+            chatgpt_oauth_pending: false,
             #[cfg(not(target_family = "wasm"))]
             grok_refresh_allowed: false,
             #[cfg(not(target_family = "wasm"))]
@@ -627,6 +649,7 @@ impl ApiKeyManager {
             geap_credentials_state: GeapCredentialsState::Missing,
             secure_storage_write_version: 0,
             grok_secure_storage_write_version: 0,
+            chatgpt_secure_storage_write_version: 0,
         }
     }
 
@@ -802,9 +825,50 @@ impl ApiKeyManager {
             || self.has_grok_subscription()
     }
 
-    /// Stores (or clears, with `None`) the xAI/Grok OAuth tokens and persists
-    /// them to secure storage. No-op when the value is unchanged so we don't
-    /// emit spurious events or schedule redundant keychain writes.
+    pub fn chatgpt_connection(&self) -> Option<&ChatGPTConnection> {
+        self.chatgpt_connection.as_ref()
+    }
+
+    pub fn chatgpt_oauth_pending(&self) -> bool {
+        self.chatgpt_oauth_pending
+    }
+
+    pub fn set_chatgpt_oauth_pending(&mut self, pending: bool, ctx: &mut ModelContext<Self>) {
+        if self.chatgpt_oauth_pending == pending {
+            return;
+        }
+        self.chatgpt_oauth_pending = pending;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+    }
+
+    pub fn set_chatgpt_connection(
+        &mut self,
+        connection: Option<ChatGPTConnection>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self.chatgpt_connection == connection {
+            self.chatgpt_oauth_pending = false;
+            return;
+        }
+        self.chatgpt_connection = connection;
+        self.chatgpt_oauth_pending = false;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_chatgpt_connection_to_secure_storage(ctx);
+    }
+
+    /// Records a completed ChatGPT OAuth attempt started from this client.
+    pub fn complete_chatgpt_oauth_if_pending(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.chatgpt_oauth_pending {
+            return;
+        }
+        self.set_chatgpt_connection(
+            Some(ChatGPTConnection {
+                connected_at: Some(SystemTime::now()),
+            }),
+            ctx,
+        );
+    }
+
     pub fn set_grok_tokens(&mut self, tokens: Option<GrokTokens>, ctx: &mut ModelContext<Self>) {
         if self.grok_tokens == tokens {
             return;
@@ -1261,6 +1325,70 @@ impl ApiKeyManager {
                 report_error!(
                     anyhow::Error::new(e)
                         .context("Failed to persist Grok tokens to secure storage")
+                );
+            }
+        });
+    }
+
+    fn load_chatgpt_connection_from_secure_storage(
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<ChatGPTConnection> {
+        let json = match ctx.secure_storage().read_value(CHATGPT_SECURE_STORAGE_KEY) {
+            Ok(json) => json,
+            Err(e) => {
+                if !matches!(e, secure_storage::Error::NotFound) {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to read ChatGPT connection from secure storage")
+                    );
+                }
+                return None;
+            }
+        };
+
+        match serde_json::from_str(&json) {
+            Ok(connection) => Some(connection),
+            Err(e) => {
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to deserialize ChatGPT connection")
+                );
+                None
+            }
+        }
+    }
+
+    fn write_chatgpt_connection_to_secure_storage(&mut self, ctx: &mut ModelContext<Self>) {
+        let payload = match self.chatgpt_connection.as_ref().map(serde_json::to_string) {
+            Some(Ok(json)) => Some(json),
+            Some(Err(e)) => {
+                report_error!(
+                    anyhow::Error::new(e).context("Failed to serialize ChatGPT connection")
+                );
+                return;
+            }
+            None => None,
+        };
+        self.chatgpt_secure_storage_write_version += 1;
+        let write_version = self.chatgpt_secure_storage_write_version;
+
+        ctx.spawn(async move { payload }, move |me, payload, ctx| {
+            if write_version != me.chatgpt_secure_storage_write_version {
+                return;
+            }
+            let result = match payload {
+                Some(ref json) => ctx
+                    .secure_storage()
+                    .write_value(CHATGPT_SECURE_STORAGE_KEY, json),
+                None => ctx
+                    .secure_storage()
+                    .remove_value(CHATGPT_SECURE_STORAGE_KEY),
+            };
+            if let Err(e) = result
+                && !matches!(e, secure_storage::Error::NotFound)
+            {
+                report_error!(
+                    anyhow::Error::new(e)
+                        .context("Failed to persist ChatGPT connection to secure storage")
                 );
             }
         });
