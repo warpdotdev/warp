@@ -32,7 +32,7 @@ use crate::terminal::model::ansi::{
 use crate::terminal::model::grid::grid_handler::{
     FragmentBoundary, GridHandler, Link, PerformResetGridChecks, PossiblePath, TermMode,
 };
-use crate::terminal::model::grid::{Dimensions, GridStorage};
+use crate::terminal::model::grid::{Dimensions, GridStorage, IndexRegion};
 use crate::terminal::model::index::{Point, Side, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
@@ -118,6 +118,18 @@ impl AltScreen {
 
     pub fn grid_handler_mut(&mut self) -> &mut GridHandler {
         &mut self.grid_handler
+    }
+
+    pub(crate) fn replace_grid_with_blank(&mut self) -> GridHandler {
+        let primary = self.grid_handler.clone();
+        let bg = self.grid_handler.grid_storage().cursor().template.bg;
+        self.grid_handler
+            .grid_storage_mut()
+            .region_mut(..)
+            .each(|cell| *cell = bg.into());
+        self.grid_handler.clear_secrets();
+        self.grid_handler.evict_all_images();
+        primary
     }
 
     /// Resize terminal to new dimensions.

@@ -563,6 +563,11 @@ impl Input {
             SlashCommandKind::CreateDockerSandbox => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
+            SlashCommandKind::CreateTmuxWorkspace => {
+                ctx.emit(Event::CreateTmuxWorkspace {
+                    args: argument.cloned().unwrap_or_default(),
+                });
+            }
             SlashCommandKind::Conversations => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {

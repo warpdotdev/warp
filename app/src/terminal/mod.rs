@@ -70,6 +70,8 @@ pub mod settings;
 mod share_block_modal;
 pub mod shared_session;
 mod shell_launch_state;
+#[cfg(all(unix, feature = "local_tty"))]
+pub mod tmux;
 pub mod universal_developer_input;
 
 pub mod ssh;

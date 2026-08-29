@@ -125,7 +125,9 @@ impl EventLoop {
 
                 while let Ok(message) = receiver.recv().await {
                     match message {
-                        EventLoopMessage::Input(bytes) => {
+                        EventLoopMessage::Input(bytes)
+                        | EventLoopMessage::TmuxControlCommand(bytes)
+                        | EventLoopMessage::TmuxPaneInput { bytes, .. } => {
                             if let Err(e) = sink.send(Message::new_binary(bytes.to_vec())).await {
                                 report_error!(
                                     anyhow::Error::new(e)

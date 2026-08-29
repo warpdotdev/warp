@@ -2676,6 +2676,9 @@ pub(crate) fn app_callbacks(
             );
         })),
         on_will_terminate: Some(Box::new(move |ctx| {
+            #[cfg(all(unix, feature = "local_tty"))]
+            crate::terminal::tmux::protocol::schedule_kill_registered_dedicated_servers();
+
             NotebookManager::handle(ctx).update(ctx, |manager, ctx| {
                 // Notebooks are only saved periodically, so ensure that any pending changes have
                 // been sent to the writer thread before terminating.

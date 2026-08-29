@@ -920,14 +920,43 @@ pub(crate) fn open_new_with_workspace_source(
     source: NewWorkspaceSource,
     ctx: &mut AppContext,
 ) -> (WindowId, ViewHandle<RootView>) {
+    open_new_with_workspace_source_inner(source, true, ctx)
+}
+
+/// Same as [`open_new_with_workspace_source`], but does not steal OS focus or focus the root view.
+/// The caller must show and focus the window after its workspace is ready.
+pub(crate) fn open_new_with_workspace_source_without_activating(
+    source: NewWorkspaceSource,
+    ctx: &mut AppContext,
+) -> (WindowId, ViewHandle<RootView>) {
+    open_new_with_workspace_source_inner(source, false, ctx)
+}
+
+fn open_new_with_workspace_source_inner(
+    source: NewWorkspaceSource,
+    activate: bool,
+    ctx: &mut AppContext,
+) -> (WindowId, ViewHandle<RootView>) {
     let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
     let window_settings = WindowSettings::as_ref(ctx);
-    let options = default_window_options(window_settings, ctx);
-    ctx.add_window(options, |ctx| {
+    let mut options = default_window_options(window_settings, ctx);
+    if !activate {
+        options.window_style = match options.window_bounds {
+            WindowBounds::ExactPosition(_) => WindowStyle::PositionedNoFocus,
+            _ => WindowStyle::NotStealFocus,
+        };
+    }
+    let (window_id, root) = ctx.add_window(options, |ctx| {
         let mut view = RootView::new(global_resource_handles, source, ctx);
-        view.focus(ctx);
+        if activate {
+            view.focus(ctx);
+        }
         view
-    })
+    });
+    if !activate {
+        ctx.windows().hide_window(window_id);
+    }
+    (window_id, root)
 }
 
 pub(crate) fn open_new_from_path(
@@ -1701,7 +1730,7 @@ impl NewWorkspaceSource {
             self,
             NewWorkspaceSource::SharedSessionAsViewer { .. }
                 | NewWorkspaceSource::FromCloudConversationId { .. }
-        )
+        ) || matches!(self, NewWorkspaceSource::Session { options } if options.tmux_presentation)
     }
 }
 

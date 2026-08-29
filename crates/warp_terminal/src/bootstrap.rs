@@ -44,13 +44,8 @@ fn load_script(file_path: &str, assets: &dyn AssetProvider) -> String {
         .join(";")
 }
 /// Returns the raw init shell script for the given `shell_type`, without
-/// single-quote escaping. Suitable for passing as an environment variable
-/// where the caller controls the eval context (e.g. Docker sandbox init).
-///
-/// Gated on `unix` because the sole caller today is the Unix Docker
-/// sandbox spawn path (`local_tty::unix::prepare_docker_sandbox`); on
-/// Windows/wasm the function is dead code.
-#[cfg(unix)]
+/// single-quote escaping. Suitable for send-keys / typed input, or for an
+/// environment variable where the caller controls the eval context.
 pub fn raw_init_shell_script_for_shell(
     shell_type: ShellType,
     assets: &dyn AssetProvider,

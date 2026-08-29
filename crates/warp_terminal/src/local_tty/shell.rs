@@ -453,14 +453,23 @@ impl From<ShellStarterSource> for ShellStarterSourceOrWslName {
 }
 
 impl DirectShellStarter {
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
+    pub fn new(
+        shell_type: ShellType,
+        shell_path: PathBuf,
+        args: Vec<OsString>,
+        session_id: SessionId,
+    ) -> Self {
         Self {
             shell_type,
             shell_path,
             args,
-            session_id: generate_session_id(),
+            session_id,
         }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn new_for_test(shell_type: ShellType, shell_path: PathBuf, args: Vec<OsString>) -> Self {
+        Self::new(shell_type, shell_path, args, generate_session_id())
     }
 
     pub fn shell_path(&self) -> &Path {
@@ -614,7 +623,7 @@ fn parse_shell_type_from_path(path: &Path) -> Option<(PathBuf, ShellType)> {
         .map(|shell_type| (path.to_path_buf(), shell_type))
 }
 
-fn arguments_for_session_spawning_command(
+pub fn arguments_for_session_spawning_command(
     resolved_shell_path: &str,
     shell_type: ShellType,
     session_id: SessionId,

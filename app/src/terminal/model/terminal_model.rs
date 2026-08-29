@@ -101,6 +101,36 @@ pub enum ConversationTranscriptViewerStatus {
     ViewingAmbientConversation(AmbientAgentTaskId),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TmuxClientEvent {
+    LayoutChange {
+        window_id: String,
+        layout: String,
+        visible_layout: Option<String>,
+        flags: Option<String>,
+    },
+    WindowAdd {
+        window_id: String,
+    },
+    WindowClose {
+        window_id: String,
+    },
+    WindowRenamed {
+        window_id: String,
+        name: String,
+    },
+    SessionWindowChanged {
+        window_id: String,
+    },
+    CommandEnd {
+        number: u64,
+        error: bool,
+        payload: Vec<String>,
+        capture_pane: Option<String>,
+    },
+    PresentationUnready,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FindOptions {
     pub query: Option<Arc<String>>,
@@ -471,6 +501,21 @@ pub struct TerminalModel {
 
     /// Whether or not the underlying shell process has terminated.
     handled_exit: bool,
+
+    /// True while the PTY event loop is in tmux control mode (`DCS 1000p` until `%exit`).
+    tmux_control_mode: bool,
+    tmux_focused_pane: Option<String>,
+    tmux_pane_id: Option<String>,
+    tmux_instance_id: Option<u64>,
+    tmux_presentation: bool,
+    /// Primary tmux grid saved while an in-pane TUI occupies the alt-screen (`CSI ?1049h`).
+    tmux_saved_primary_grid: Option<GridHandler>,
+    tmux_open_presentation: bool,
+    tmux_close_presentation: bool,
+    tmux_events: Vec<TmuxClientEvent>,
+    last_init_shell_type: Option<ShellType>,
+    tmux_expected_session_id: Option<SessionId>,
+    tmux_retained_zsh_init: Option<String>,
 
     /// The shell type of the login shell for this session.
     shell_launch_state: ShellLaunchState,
@@ -1084,6 +1129,18 @@ impl TerminalModel {
             is_receiving_kitty_image_data: IsReceivingKittyActionData::No,
             did_receive_rc_file_dcs: None,
             handled_exit: false,
+            tmux_control_mode: false,
+            tmux_focused_pane: None,
+            tmux_pane_id: None,
+            tmux_instance_id: None,
+            tmux_presentation: false,
+            tmux_saved_primary_grid: None,
+            tmux_open_presentation: false,
+            tmux_close_presentation: false,
+            tmux_events: Vec::new(),
+            last_init_shell_type: None,
+            tmux_expected_session_id: None,
+            tmux_retained_zsh_init: None,
             env_var_collection_name: None,
             shell_launch_state: shell_state,
             obfuscate_secrets,
@@ -1501,6 +1558,115 @@ impl TerminalModel {
             || self.shared_session_status().is_finished_viewer()
     }
 
+    pub fn is_tmux_control_mode(&self) -> bool {
+        self.tmux_control_mode
+    }
+
+    pub fn set_tmux_control_mode(&mut self, active: bool) {
+        self.tmux_control_mode = active;
+        if active && !self.tmux_presentation {
+            self.tmux_open_presentation = true;
+        } else if !active {
+            self.tmux_focused_pane = None;
+            self.tmux_open_presentation = false;
+            self.tmux_expected_session_id = None;
+            self.tmux_retained_zsh_init = None;
+            if !self.tmux_presentation {
+                self.tmux_close_presentation = true;
+            }
+        }
+        self.event_proxy.send_wakeup_event();
+    }
+
+    pub fn tmux_focused_pane(&self) -> Option<&str> {
+        self.tmux_focused_pane.as_deref()
+    }
+
+    pub fn set_tmux_focused_pane(&mut self, pane_id: Option<String>) {
+        self.tmux_focused_pane = pane_id;
+        self.event_proxy.send_wakeup_event();
+    }
+
+    pub fn is_tmux_presentation(&self) -> bool {
+        self.tmux_presentation
+    }
+
+    pub fn set_tmux_presentation(&mut self, presentation: bool) {
+        self.tmux_presentation = presentation;
+        if presentation {
+            self.enter_alt_screen(false);
+        }
+    }
+
+    pub fn tmux_pane_id(&self) -> Option<&str> {
+        self.tmux_pane_id.as_deref()
+    }
+
+    pub fn set_tmux_pane_id(&mut self, pane_id: Option<String>) {
+        self.tmux_pane_id = pane_id;
+    }
+
+    pub fn tmux_instance_id(&self) -> Option<u64> {
+        self.tmux_instance_id
+    }
+
+    pub fn last_init_shell_type(&self) -> Option<ShellType> {
+        self.last_init_shell_type
+    }
+
+    pub fn tmux_expected_session_id(&self) -> Option<SessionId> {
+        self.tmux_expected_session_id
+    }
+
+    pub fn set_tmux_expected_session_id(&mut self, session_id: Option<SessionId>) {
+        self.tmux_expected_session_id = session_id;
+    }
+
+    pub fn take_tmux_expected_session_id(&mut self) -> Option<SessionId> {
+        self.tmux_expected_session_id.take()
+    }
+
+    pub fn set_tmux_retained_zsh_init(&mut self, init: Option<String>) {
+        self.tmux_retained_zsh_init = init;
+    }
+
+    pub fn take_tmux_retained_zsh_init(&mut self) -> Option<String> {
+        self.tmux_retained_zsh_init.take()
+    }
+
+    pub fn set_tmux_instance_id(&mut self, id: Option<u64>) {
+        self.tmux_instance_id = id;
+    }
+
+    pub fn tmux_split_target_pane(&self) -> Option<&str> {
+        self.tmux_pane_id().or(self.tmux_focused_pane())
+    }
+
+    pub fn push_tmux_event(&mut self, event: TmuxClientEvent) {
+        self.tmux_events.push(event);
+        self.event_proxy.send_wakeup_event();
+    }
+
+    pub fn take_tmux_events(&mut self) -> Vec<TmuxClientEvent> {
+        std::mem::take(&mut self.tmux_events)
+    }
+
+    pub fn wake_for_tmux_output(&mut self) {
+        self.event_proxy.send_wakeup_event();
+    }
+
+    pub fn take_tmux_open_presentation(&mut self) -> bool {
+        let open = self.tmux_open_presentation;
+        self.tmux_open_presentation = false;
+        open
+    }
+
+    pub fn take_tmux_close_presentation(&mut self) -> bool {
+        let close = self.tmux_close_presentation;
+        self.tmux_close_presentation = false;
+        close
+    }
+
     pub fn is_conversation_transcript_viewer(&self) -> bool {
         self.conversation_transcript_viewer_status.is_some()
     }
@@ -1574,10 +1740,10 @@ impl TerminalModel {
     }
 
     pub fn terminal_input_state(&self) -> TerminalInputState {
-        if !self.block_list().is_bootstrapped() {
-            TerminalInputState::NotBootstrapped
-        } else if self.is_alt_screen_active() {
+        if self.is_alt_screen_active() {
             TerminalInputState::AltScreen
+        } else if !self.block_list().is_bootstrapped() {
+            TerminalInputState::NotBootstrapped
         } else if self
             .block_list()
             .active_block()
@@ -2058,6 +2224,9 @@ impl TerminalModel {
             || size_update.rows_or_columns_changed()
         {
             self.alt_screen.resize(&size_update);
+            if let Some(primary) = &mut self.tmux_saved_primary_grid {
+                primary.resize(size_update.new_size);
+            }
 
             // Don't reflow old blocks for shared session size updates:
             // - Viewers skip reflow when the sharer's size changed
@@ -2105,10 +2274,15 @@ impl TerminalModel {
     /// block list and clears the alt screen's contents.
     ///
     /// If the alternate screen is already active, this will not re-initialize
-    /// it.
+    /// it, except for tmux presentation: the primary pane already paints here, so a nested
+    /// swap (`CSI ?47h` / `CSI ?1049h`) saves that grid and switches to a true alternate buffer.
     pub(crate) fn enter_alt_screen(&mut self, save_cursor_and_clear_screen: bool) {
         if self.alt_screen_active {
-            log::info!("Tried to enter the alternate screen, but it was already active");
+            if self.tmux_presentation {
+                self.enter_nested_tmux_alt_screen(save_cursor_and_clear_screen);
+            } else {
+                log::info!("Tried to enter the alternate screen, but it was already active");
+            }
             return;
         }
 
@@ -2153,6 +2327,36 @@ impl TerminalModel {
             .send_app_event(Event::TerminalModeSwapped(TerminalMode::AltScreen));
     }
 
+    fn enter_nested_tmux_alt_screen(&mut self, save_cursor_and_clear_screen: bool) {
+        if self.tmux_saved_primary_grid.is_none() {
+            self.tmux_saved_primary_grid = Some(self.alt_screen.replace_grid_with_blank());
+        }
+        self.alt_screen.reset_pending_lines_to_scroll();
+        self.alt_screen
+            .grid_handler_mut()
+            .reset_keyboard_mode_state();
+        if save_cursor_and_clear_screen {
+            let bg = self.alt_screen.grid_storage().cursor().template.bg;
+            self.alt_screen
+                .grid_storage_mut()
+                .region_mut(..)
+                .each(|cell| *cell = bg.into());
+            self.alt_screen.grid_handler_mut().clear_secrets();
+        }
+        self.alt_screen_mut().clear_selection();
+        self.event_proxy.send_wakeup_event();
+    }
+
+    fn exit_nested_tmux_alt_screen(&mut self) {
+        let Some(primary) = self.tmux_saved_primary_grid.take() else {
+            return;
+        };
+        self.alt_screen_mut().grid_handler_mut().evict_all_images();
+        *self.alt_screen.grid_handler_mut() = primary;
+        self.alt_screen_mut().clear_selection();
+        self.event_proxy.send_wakeup_event();
+    }
+
     /// Deactivate the alternate screen, switching back to the block list and
     /// copying over relevant state.
     ///
@@ -2160,6 +2364,10 @@ impl TerminalModel {
     /// against programs that set or unset the alternate screen mode multiple
     /// times, like `info`  (see WAR-5897).
     fn exit_alt_screen(&mut self, restore_cursor: bool) {
+        if self.tmux_presentation {
+            self.exit_nested_tmux_alt_screen();
+            return;
+        }
         if !self.alt_screen_active {
             log::info!("Tried to exit the alternate screen, but it was already inactive");
             return;
@@ -2503,6 +2711,10 @@ impl TerminalModel {
     /// this ID will be accepted by the integrity check.
     pub fn register_session_id(&mut self, session_id: SessionId) {
         self.registered_session_ids.insert(session_id);
+    }
+
+    pub fn unregister_session_id(&mut self, session_id: SessionId) {
+        self.registered_session_ids.remove(&session_id);
     }
 
     pub fn needs_bracketed_paste(&mut self) -> bool {
@@ -3135,6 +3347,9 @@ impl ansi::Handler for TerminalModel {
 
             let shell_type = ShellType::from_name(&data.shell)
                 .unwrap_or_else(|| panic!("invalid shell name: {}", data.shell));
+            if !self.tmux_presentation {
+                self.last_init_shell_type = Some(shell_type);
+            }
 
             let pending_session_info = SessionInfo::create_pending(
                 shell_type,

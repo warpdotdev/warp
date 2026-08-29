@@ -48,6 +48,8 @@ pub(crate) mod ssh_tmux_deprecation_banner;
 mod tab_metadata;
 #[cfg(any(test, feature = "integration_tests"))]
 mod testing;
+#[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+pub(crate) mod tmux;
 mod tooltips;
 pub mod use_agent_footer;
 mod zero_state_block;
@@ -1740,6 +1742,20 @@ pub enum Event {
     WriteBytesToPty {
         bytes: Cow<'static, [u8]>,
     },
+    TmuxControlCommand {
+        bytes: Cow<'static, [u8]>,
+    },
+    TmuxPaneInput {
+        pane_id: String,
+        bytes: Cow<'static, [u8]>,
+    },
+    OpenTmuxPresentationWindow {
+        instance_id: Option<u64>,
+    },
+    CloseTmuxPresentationWindow {
+        instance_id: Option<u64>,
+    },
+    TmuxClientEvents(Vec<crate::terminal::model::terminal_model::TmuxClientEvent>),
     WriteAgentInputToPty {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,
@@ -8456,7 +8472,7 @@ impl TerminalView {
     }
 
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
-        if model.is_read_only() {
+        if model.is_read_only() || model.is_tmux_presentation() {
             return false;
         }
         // Warp's own headless TUI (`warp_tui`) is itself an agent surface, so
@@ -9310,7 +9326,7 @@ impl TerminalView {
     /// Receiving the warpui::Event::KeyDown event from a child element.
     /// Generally, this should be control characters rather than printable characters.
     fn keydown_on_terminal(&mut self, characters: &str, ctx: &mut ViewContext<Self>) {
-        if self.is_long_running() {
+        if self.is_long_running() || self.model.lock().is_tmux_presentation() {
             self.highlighted_link.invalidate();
             self.report_possible_typeahead(characters);
             self.write_user_bytes_to_pty(characters.as_bytes().to_vec(), ctx);
@@ -9330,6 +9346,9 @@ impl TerminalView {
     fn should_write_typed_chars_to_pty(&self, ctx: &mut ViewContext<Self>) -> bool {
         // Lock the model once and hold it throughout the function
         let model = self.model.lock();
+        if model.is_tmux_presentation() {
+            return true;
+        }
 
         // If the active block hasn't started yet, we don't want to write to the pty.
         // Note that we check block started and NOT block.is_long_running(), because
@@ -9425,6 +9444,26 @@ impl TerminalView {
         ctx.emit(Event::WriteBytesToPty { bytes: data.into() });
     }
 
+    pub(crate) fn write_tmux_control_command<B: Into<Cow<'static, [u8]>>>(
+        &mut self,
+        data: B,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.emit(Event::TmuxControlCommand { bytes: data.into() });
+    }
+
+    pub(crate) fn write_tmux_pane_input<B: Into<Cow<'static, [u8]>>>(
+        &mut self,
+        pane_id: String,
+        data: B,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.emit(Event::TmuxPaneInput {
+            pane_id,
+            bytes: data.into(),
+        });
+    }
+
     fn write_agent_bytes_to_pty<B: Into<Cow<'static, [u8]>>>(
         &mut self,
         data: B,
@@ -9504,7 +9543,18 @@ impl TerminalView {
         let bytes_vec = bytes.to_vec();
         self.clear_selected_blocks(ctx);
         self.update_scroll_position_locking(ScrollPositionUpdate::AfterWriteUserBytesToPty, ctx);
-        self.write_to_pty(bytes, ctx);
+        let presentation_pane = {
+            let model = self.model.lock();
+            model
+                .is_tmux_presentation()
+                .then(|| model.tmux_pane_id().map(str::to_owned))
+                .flatten()
+        };
+        if let Some(pane_id) = presentation_pane {
+            self.write_tmux_pane_input(pane_id, bytes, ctx);
+        } else {
+            self.write_to_pty(bytes, ctx);
+        }
         self.emit_non_editor_typed_event(bytes_vec, ctx);
         true
     }
@@ -9743,6 +9793,31 @@ impl TerminalView {
         self.use_agent_footer.update(ctx, |footer, ctx| {
             footer.notify_and_notify_children(ctx);
         });
+
+        {
+            let mut model = self.model.lock();
+            let instance_id = model.tmux_instance_id();
+            let open = model.take_tmux_open_presentation();
+            let close = model.take_tmux_close_presentation();
+            let tmux_events = model.take_tmux_events();
+            drop(model);
+            if open {
+                ctx.emit(Event::OpenTmuxPresentationWindow { instance_id });
+            } else if close {
+                ctx.emit(Event::CloseTmuxPresentationWindow { instance_id });
+            }
+            if !tmux_events.is_empty() {
+                ctx.emit(Event::TmuxClientEvents(tmux_events));
+            }
+            #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+            if let Some(id) = instance_id
+                && let Some(runtime) = crate::terminal::tmux::bridge::TmuxRuntime::for_id(
+                    crate::terminal::tmux::bridge::TmuxInstanceId::from_u64(id),
+                )
+            {
+                self.flush_pending_tmux_silent_bootstrap(&runtime, ctx);
+            }
+        }
 
         // Need to re-render both the alt screen and the blocklist on keypresses.
         ctx.notify();
@@ -12846,6 +12921,36 @@ impl TerminalView {
             ModelEvent::Handler(AnsiHandlerEvent::InitShell {
                 pending_session_info,
             }) => {
+                let shell_type = pending_session_info.shell.shell_type();
+                let session_id = pending_session_info.session_id;
+                if self.model.lock().is_tmux_presentation() {
+                    self.write_tmux_presentation_bootstrap_script(shell_type, session_id, ctx);
+                } else {
+                    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+                    {
+                        use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+                        let instance_id = self.model.lock().tmux_instance_id();
+                        let fallback_pane = self.model.lock().tmux_pane_id().map(str::to_owned);
+                        if let Some(id) = instance_id
+                            && let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(id))
+                        {
+                            let pane = runtime.tracked_control_pane().or(fallback_pane);
+                            if let Some(pane) = pane {
+                                if let Some(accepted) =
+                                    runtime.note_early_init_shell(&pane, session_id, shell_type)
+                                {
+                                    self.flush_pending_tmux_silent_bootstrap(&runtime, ctx);
+                                    self.flush_queued_tmux_pane_bootstrap(accepted, ctx);
+                                }
+                            } else {
+                                runtime.note_shell_type(shell_type);
+                                self.flush_queued_tmux_pane_bootstrap(shell_type, ctx);
+                            }
+                        }
+                    }
+                    #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+                    self.flush_queued_tmux_pane_bootstrap(shell_type, ctx);
+                }
                 // The remote confirmed a subshell bootstrap is starting. Hide the
                 // original long-running block now so the user doesn't see the
                 // bootstrap payload echoed into it.
@@ -15194,6 +15299,196 @@ impl TerminalView {
                 &session_metadata,
                 DEFAULT_IGNORED_RULES_FOR_COMMAND_CORRECTIONS.into_iter(),
             )
+        }
+    }
+
+    fn flush_queued_tmux_pane_bootstrap(
+        &mut self,
+        shell_type: ShellType,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+            let Some(id) = self.model.lock().tmux_instance_id() else {
+                return;
+            };
+            let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)) else {
+                return;
+            };
+            let claims = runtime.set_authoritative_shell_type(shell_type);
+            for claim in claims {
+                let Some(model) = runtime.pane_model(&claim.pane_id) else {
+                    continue;
+                };
+                {
+                    let mut locked = model.lock();
+                    locked.register_session_id(claim.session_id);
+                    locked.set_login_shell_spawned(claim.shell_type);
+                }
+                if runtime.pane_bootstrap_ready(&claim.pane_id) {
+                    continue;
+                }
+                if runtime.control_pane_owns_retained_init(&claim.pane_id) {
+                    Self::schedule_tmux_pane_bootstrap_timeout(&runtime, &claim.pane_id, ctx);
+                    continue;
+                }
+                if runtime.early_init_session_id(&claim.pane_id) == Some(claim.session_id) {
+                    let bytes = crate::terminal::tmux::protocol::stage_complete_script(
+                        claim.shell_type,
+                        claim.session_id,
+                    );
+                    let pane = crate::terminal::tmux::parser::PaneId::from(claim.pane_id.as_str());
+                    for command in
+                        crate::terminal::tmux::protocol::send_keys_commands(&pane, &bytes)
+                    {
+                        self.write_tmux_control_command(command.into_bytes(), ctx);
+                    }
+                    Self::schedule_tmux_pane_bootstrap_timeout(&runtime, &claim.pane_id, ctx);
+                    continue;
+                }
+                let Some(bytes) = crate::terminal::tmux::protocol::in_band_init_bytes(
+                    claim.shell_type,
+                    claim.session_id,
+                ) else {
+                    continue;
+                };
+                let pane = crate::terminal::tmux::parser::PaneId::from(claim.pane_id.as_str());
+                for command in crate::terminal::tmux::protocol::send_keys_commands(&pane, &bytes) {
+                    self.write_tmux_control_command(command.into_bytes(), ctx);
+                }
+                Self::schedule_tmux_pane_bootstrap_timeout(&runtime, &claim.pane_id, ctx);
+            }
+            self.flush_pending_tmux_silent_bootstrap(&runtime, ctx);
+        }
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let _ = (shell_type, ctx);
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn schedule_tmux_pane_bootstrap_timeout(
+        runtime: &crate::terminal::tmux::bridge::TmuxRuntime,
+        pane_id: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((generation, delay)) = runtime.arm_bootstrap_timeout(pane_id) else {
+            return;
+        };
+        let instance_id = runtime.id().as_u64();
+        let pane_id = pane_id.to_owned();
+        ctx.spawn(
+            async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            move |me, _, ctx| {
+                me.on_tmux_pane_bootstrap_timeout(instance_id, pane_id, generation, ctx);
+            },
+        );
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn on_tmux_pane_bootstrap_timeout(
+        &mut self,
+        instance_id: u64,
+        pane_id: String,
+        generation: u64,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::tmux::bridge::{BootstrapTimeoutResult, TmuxInstanceId, TmuxRuntime};
+        let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(instance_id)) else {
+            return;
+        };
+        match runtime.handle_bootstrap_timeout(&pane_id, generation) {
+            BootstrapTimeoutResult::Retry(claim) => {
+                runtime.apply_claim_session(&claim);
+                let Some(bytes) = crate::terminal::tmux::protocol::in_band_init_bytes(
+                    claim.shell_type,
+                    claim.session_id,
+                ) else {
+                    return;
+                };
+                let pane = crate::terminal::tmux::parser::PaneId::from(claim.pane_id.as_str());
+                for command in crate::terminal::tmux::protocol::send_keys_commands(&pane, &bytes) {
+                    self.write_tmux_control_command(command.into_bytes(), ctx);
+                }
+                Self::schedule_tmux_pane_bootstrap_timeout(&runtime, &pane_id, ctx);
+            }
+            BootstrapTimeoutResult::Failed => {
+                ctx.emit(Event::TmuxClientEvents(vec![
+                    TmuxRuntime::bootstrap_failed_client_event(),
+                ]));
+            }
+            BootstrapTimeoutResult::Stale => {}
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn write_tmux_silent_pane_bootstrap(
+        &mut self,
+        pane_id: &str,
+        shell_type: ShellType,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let framed = crate::terminal::tmux::protocol::silent_bootstrap_bytes(shell_type);
+        let pane = crate::terminal::tmux::parser::PaneId::from(pane_id);
+        for command in crate::terminal::tmux::protocol::send_keys_commands(&pane, &framed) {
+            self.write_tmux_control_command(command.into_bytes(), ctx);
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn flush_pending_tmux_silent_bootstrap(
+        &mut self,
+        runtime: &crate::terminal::tmux::bridge::TmuxRuntime,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for (pane_id, shell_type) in runtime.take_pending_silent_bootstrap() {
+            self.write_tmux_silent_pane_bootstrap(&pane_id, shell_type, ctx);
+        }
+    }
+
+    fn write_tmux_presentation_bootstrap_script(
+        &mut self,
+        shell_type: ShellType,
+        session_id: warp_core::SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let (pane_id, is_presentation, instance_id) = {
+            let model = self.model.lock();
+            (
+                model.tmux_pane_id().map(str::to_owned),
+                model.is_tmux_presentation(),
+                model.tmux_instance_id(),
+            )
+        };
+        if !is_presentation {
+            return;
+        }
+        let Some(pane_id) = pane_id else {
+            return;
+        };
+        #[cfg(all(unix, feature = "local_tty"))]
+        {
+            #[cfg(not(feature = "remote_tty"))]
+            {
+                use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+                if let Some(id) = instance_id
+                    && let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(id))
+                    && let Some(accepted) =
+                        runtime.note_early_init_shell(&pane_id, session_id, shell_type)
+                {
+                    self.flush_pending_tmux_silent_bootstrap(&runtime, ctx);
+                    self.flush_queued_tmux_pane_bootstrap(accepted, ctx);
+                }
+            }
+            #[cfg(feature = "remote_tty")]
+            let _ = (instance_id, session_id);
+        }
+        #[cfg(not(all(unix, feature = "local_tty")))]
+        {
+            let _ = (pane_id, shell_type, session_id, instance_id, ctx);
         }
     }
 
@@ -21257,6 +21552,7 @@ impl TerminalView {
             let block_list = model.block_list();
 
             let has_bootstrapped = model.block_list().is_bootstrapping_precmd_done();
+            let is_tmux_presentation = model.is_tmux_presentation();
 
             let has_active_user_terminal_command = block_list.active_block().is_active_and_long_running()
                 && !block_list.active_block().is_agent_in_control()
@@ -21291,7 +21587,9 @@ impl TerminalView {
                 && (are_blocks_selected || is_text_selected)
                 && selection_holds_focus;
 
-            has_active_user_terminal_command || has_block_or_text_selection_in_shell_mode
+            has_active_user_terminal_command
+                || has_block_or_text_selection_in_shell_mode
+                || is_tmux_presentation
         };
         let blocked_cli_subagent_view = {
             let model = self.model.lock();
@@ -21893,6 +22191,19 @@ impl TerminalView {
                     return;
                 }
                 self.create_and_push_docker_sandbox(ctx);
+            }
+            InputEvent::CreateTmuxWorkspace { args } => {
+                if !FeatureFlag::TmuxControlPrototype.is_enabled() {
+                    log::warn!("tmux control prototype feature flag is disabled");
+                    return;
+                }
+                #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+                self.create_and_push_tmux_workspace(args, ctx);
+                #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+                {
+                    let _ = args;
+                    log::warn!("tmux control prototype requires a local Unix tty");
+                }
             }
             InputEvent::ExitCloudModeAndStartLocalAgent { initial_prompt } => {
                 let origin = AgentViewEntryOrigin::Input {
@@ -26452,6 +26763,13 @@ impl PtyIntentEvent for Event {
             Event::CtrlD => Some(PtyIntent::CtrlD),
             Event::ShutdownPty => Some(PtyIntent::ShutdownPty),
             Event::WriteBytesToPty { bytes } => Some(PtyIntent::WriteBytes(bytes.clone())),
+            Event::TmuxControlCommand { bytes } => {
+                Some(PtyIntent::TmuxControlCommand(bytes.clone()))
+            }
+            Event::TmuxPaneInput { pane_id, bytes } => Some(PtyIntent::TmuxPaneInput {
+                pane_id: pane_id.clone(),
+                bytes: bytes.clone(),
+            }),
             Event::WriteAgentInputToPty { bytes, mode } => Some(PtyIntent::WriteAgentInput {
                 bytes: bytes.clone(),
                 mode: *mode,

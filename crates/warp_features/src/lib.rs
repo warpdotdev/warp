@@ -976,6 +976,9 @@ pub enum FeatureFlag {
     /// always forwarded unchanged and the harness process/sandbox are never
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
+
+    /// Gates the research prototype for a Warp-managed tmux control-mode workspace.
+    TmuxControlPrototype,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

@@ -11,15 +11,18 @@ use std::ops::DerefMut;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
+use instant::Instant;
 use log::error;
 use mio::{self, Events, Interest};
 use parking_lot::{FairMutex, FairMutexGuard};
+use warp_core::features::FeatureFlag;
 
 use super::mio_channel::Receiver;
 use crate::event::ExitReason;
 use crate::event_listener::ChannelEventListener;
 use crate::local_tty;
 use crate::model::ansi;
+use crate::tmux::{PaneId, TmuxFeedItem, TmuxIoState};
 use crate::writeable_pty::Message;
 
 /// The size of the buffer to read data into from the PTY.
@@ -39,6 +42,33 @@ pub const SIGNALS_TOKEN: mio::Token = mio::Token(2);
 /// state.
 pub trait ActiveTerminal: ansi::Handler + Send {
     fn exit(&mut self, reason: ExitReason);
+
+    fn on_tmux_control_mode(&mut self, _active: bool) {}
+    fn on_tmux_pane_output(&mut self, _pane_id: &PaneId, _bytes: &[u8]) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
+    fn on_tmux_focus(&mut self, _pane_id: &PaneId) {}
+    fn on_tmux_layout(
+        &mut self,
+        _window_id: &crate::tmux::WindowId,
+        _layout: &str,
+        _visible_layout: Option<&str>,
+        _flags: Option<&str>,
+    ) {
+    }
+    fn on_tmux_window_add(&mut self, _window_id: &crate::tmux::WindowId) {}
+    fn on_tmux_window_close(&mut self, _window_id: &crate::tmux::WindowId) {}
+    fn on_tmux_window_renamed(&mut self, _window_id: &crate::tmux::WindowId, _name: &str) {}
+    fn on_tmux_session_window_changed(&mut self, _window_id: &crate::tmux::WindowId) {}
+    fn on_tmux_command_end(
+        &mut self,
+        _number: u64,
+        _error: bool,
+        _payload: &[String],
+        _capture_pane: Option<&crate::tmux::PaneId>,
+    ) {
+    }
+    fn on_tmux_presentation_unready(&mut self) {}
 }
 
 pub struct EventLoop<P: local_tty::EventedPty, M: ActiveTerminal> {
@@ -69,6 +99,7 @@ pub struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
     writing: Option<Writing>,
     parser: ansi::Processor,
+    tmux: TmuxIoState,
 }
 
 impl Default for State {
@@ -77,6 +108,7 @@ impl Default for State {
             write_list: VecDeque::new(),
             parser: ansi::Processor::new(),
             writing: None,
+            tmux: TmuxIoState::new(),
         }
     }
 }
@@ -107,6 +139,145 @@ impl State {
     #[inline]
     fn set_current(&mut self, new: Option<Writing>) {
         self.writing = new;
+    }
+}
+
+fn enqueue_input(state: &mut State, input: Cow<'static, [u8]>) {
+    if !FeatureFlag::TmuxControlPrototype.is_enabled() {
+        state.write_list.push_back(input);
+        return;
+    }
+    for item in state.tmux.enqueue_input(input) {
+        state.write_list.push_back(item);
+    }
+}
+
+fn enqueue_tmux_control(state: &mut State, input: Cow<'static, [u8]>) {
+    if !FeatureFlag::TmuxControlPrototype.is_enabled() {
+        return;
+    }
+    for item in state.tmux.enqueue_control_command(input) {
+        state.write_list.push_back(item);
+    }
+}
+
+fn enqueue_tmux_pane_input(state: &mut State, pane_id: PaneId, input: Cow<'static, [u8]>) {
+    if !FeatureFlag::TmuxControlPrototype.is_enabled() {
+        state.write_list.push_back(input);
+        return;
+    }
+    for item in state.tmux.enqueue_pane_input(&pane_id, input) {
+        state.write_list.push_back(item);
+    }
+}
+
+fn feed_decoded_pty_bytes<M: ActiveTerminal, W: io::Write>(
+    state: &mut State,
+    terminal: &mut M,
+    writer: &mut W,
+    bytes: &[u8],
+) {
+    let items = state.tmux.feed(bytes);
+    apply_tmux_feed_items(state, terminal, writer, items);
+}
+
+fn apply_tmux_timeouts<M: ActiveTerminal>(
+    state: &mut State,
+    terminal: &Arc<FairMutex<M>>,
+    event_listener: &ChannelEventListener,
+    timeout_items: Vec<TmuxFeedItem>,
+) {
+    if timeout_items.is_empty() {
+        return;
+    }
+    let mut timeout_writer = Vec::new();
+    apply_tmux_feed_items(
+        state,
+        &mut *terminal.lock(),
+        &mut timeout_writer,
+        timeout_items,
+    );
+    if !timeout_writer.is_empty() {
+        state.write_list.push_back(Cow::Owned(timeout_writer));
+    }
+    event_listener.send_wakeup_event();
+}
+
+fn apply_tmux_feed_items<M: ActiveTerminal, W: io::Write>(
+    state: &mut State,
+    terminal: &mut M,
+    writer: &mut W,
+    items: Vec<TmuxFeedItem>,
+) {
+    for item in items {
+        match item {
+            TmuxFeedItem::Shell(shell) => {
+                state.parser.parse_bytes(terminal, &shell, writer);
+            }
+            TmuxFeedItem::EnteredControl { refresh_client } => {
+                terminal.on_tmux_control_mode(true);
+                if let Some(command) = refresh_client {
+                    state.write_list.push_back(Cow::Owned(command.into_bytes()));
+                }
+            }
+            TmuxFeedItem::PaneOutput { pane_id, bytes } => {
+                for command in terminal.on_tmux_pane_output(&pane_id, &bytes) {
+                    state.write_list.push_back(Cow::Owned(command));
+                }
+            }
+            TmuxFeedItem::Focused(pane_id) => {
+                terminal.on_tmux_focus(&pane_id);
+            }
+            TmuxFeedItem::LayoutChange {
+                window_id,
+                layout,
+                visible_layout,
+                flags,
+            } => {
+                terminal.on_tmux_layout(
+                    &window_id,
+                    &layout,
+                    visible_layout.as_deref(),
+                    flags.as_deref(),
+                );
+            }
+            TmuxFeedItem::EncodedPending(encoded) => {
+                state.write_list.push_back(Cow::Owned(encoded));
+            }
+            TmuxFeedItem::WindowAdd { window_id } => {
+                terminal.on_tmux_window_add(&window_id);
+            }
+            TmuxFeedItem::WindowClose { window_id } => {
+                terminal.on_tmux_window_close(&window_id);
+            }
+            TmuxFeedItem::WindowRenamed { window_id, name } => {
+                terminal.on_tmux_window_renamed(&window_id, &name);
+            }
+            TmuxFeedItem::SessionWindowChanged { window_id } => {
+                terminal.on_tmux_session_window_changed(&window_id);
+            }
+            TmuxFeedItem::CommandEnd {
+                number,
+                error,
+                payload,
+                capture_pane,
+            } => {
+                terminal.on_tmux_command_end(number, error, &payload, capture_pane.as_ref());
+            }
+            TmuxFeedItem::Exited { replay } => {
+                terminal.on_tmux_control_mode(false);
+                for pending in replay {
+                    state.write_list.push_back(pending);
+                }
+            }
+            TmuxFeedItem::OverflowRecovering { detach } => {
+                state.write_list.push_back(detach);
+            }
+            TmuxFeedItem::PresentationUnready { detach } => {
+                state.write_list.push_back(detach);
+                terminal.on_tmux_presentation_unready();
+            }
+        }
     }
 }
 
@@ -167,13 +338,25 @@ where
     fn drain_recv_channel(&mut self, state: &mut State) -> ChannelResult {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                Message::Input(input) => state.write_list.push_back(input),
+                Message::Input(input) => enqueue_input(state, input),
+                Message::TmuxControlCommand(input) => enqueue_tmux_control(state, input),
+                Message::TmuxPaneInput { pane_id, bytes } => {
+                    enqueue_tmux_pane_input(state, pane_id, bytes)
+                }
                 Message::Shutdown => {
                     return ChannelResult::TerminateLoop {
                         child_exited: false,
                     };
                 }
-                Message::Resize(size) => self.pty.on_resize(&size),
+                Message::Resize(size) => {
+                    self.pty.on_resize(&size);
+                    if FeatureFlag::TmuxControlPrototype.is_enabled()
+                        && let Some(command) =
+                            state.tmux.enqueue_resize(size.columns(), size.rows())
+                    {
+                        state.write_list.push_back(command);
+                    }
+                }
                 Message::ChildExited => return ChannelResult::TerminateLoop { child_exited: true },
             }
         }
@@ -252,11 +435,21 @@ where
 
             // Process the bytes read into the buffer.
             let mut terminal_response_sequences = Vec::new();
-            state.parser.parse_bytes(
-                terminal.deref_mut(),
-                &buf[..bytes_in_buffer],
-                &mut terminal_response_sequences,
-            );
+            let chunk = &buf[..bytes_in_buffer];
+            if FeatureFlag::TmuxControlPrototype.is_enabled() {
+                feed_decoded_pty_bytes(
+                    state,
+                    terminal.deref_mut(),
+                    &mut terminal_response_sequences,
+                    chunk,
+                );
+            } else {
+                state.parser.parse_bytes(
+                    terminal.deref_mut(),
+                    chunk,
+                    &mut terminal_response_sequences,
+                );
+            }
             if !terminal_response_sequences.is_empty() {
                 state
                     .write_list
@@ -372,7 +565,15 @@ where
                     // Wait for events, but only up to the remaining timeout for the synchronous output
                     // update (if any).
                     let sync_state_timeout = state.parser.sync_output_remaining_timeout();
-                    if let Err(err) = self.poll.poll(&mut events, sync_state_timeout) {
+                    let tmux_timeout = FeatureFlag::TmuxControlPrototype
+                        .is_enabled()
+                        .then(|| state.tmux.poll_timeout_remaining())
+                        .flatten();
+                    let poll_timeout = match (sync_state_timeout, tmux_timeout) {
+                        (Some(a), Some(b)) => Some(a.min(b)),
+                        (a, b) => a.or(b),
+                    };
+                    if let Err(err) = self.poll.poll(&mut events, poll_timeout) {
                         match err.kind() {
                             ErrorKind::Interrupted => continue,
                             _ => panic!("EventLoop polling error: {err:?}"),
@@ -391,6 +592,24 @@ where
                                 .write_list
                                 .push_back(Cow::Owned(terminal_response_sequences));
                         }
+                        if FeatureFlag::TmuxControlPrototype.is_enabled() {
+                            let timeout_items = state.tmux.check_start_timeout(Instant::now());
+                            apply_tmux_timeouts(
+                                &mut state,
+                                &self.terminal,
+                                &self.event_listener,
+                                timeout_items,
+                            );
+                        }
+                    }
+                    if FeatureFlag::TmuxControlPrototype.is_enabled() {
+                        let timeout_items = state.tmux.check_presentation_timeout(Instant::now());
+                        apply_tmux_timeouts(
+                            &mut state,
+                            &self.terminal,
+                            &self.event_listener,
+                            timeout_items,
+                        );
                     }
 
                     for event in events.iter() {

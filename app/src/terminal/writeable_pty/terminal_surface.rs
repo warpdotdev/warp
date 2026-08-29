@@ -27,6 +27,11 @@ pub enum PtyIntent {
     Interrupt,
     ShutdownPty,
     WriteBytes(Cow<'static, [u8]>),
+    TmuxControlCommand(Cow<'static, [u8]>),
+    TmuxPaneInput {
+        pane_id: String,
+        bytes: Cow<'static, [u8]>,
+    },
     WriteAgentInput {
         bytes: Cow<'static, [u8]>,
         mode: AIAgentPtyWriteMode,

@@ -4041,13 +4041,16 @@ impl Workspace {
                 self.check_and_trigger_onboarding(ctx);
             }
             NewWorkspaceSource::Session { options } => {
+                let skip_onboarding = options.tmux_presentation;
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(options),
                     Arc::new(HashMap::new()),
                     None,
                     ctx,
                 );
-                self.check_and_trigger_onboarding(ctx);
+                if !skip_onboarding {
+                    self.check_and_trigger_onboarding(ctx);
+                }
             }
             NewWorkspaceSource::SharedSessionAsViewer { session_id } => {
                 // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
@@ -5360,6 +5363,28 @@ impl Workspace {
             self.set_active_tab_index(index, ctx);
             self.focus_active_tab(ctx);
             self.update_window_title(ctx);
+            #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+            if self.is_tmux_owned_window(ctx)
+                && !self.tmux_runtime_is_applying(ctx)
+                && let Some(window_id) = self
+                    .tabs
+                    .get(index)
+                    .and_then(|tab| tab.tmux_window_id.clone())
+                && let Some(view) = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+            {
+                view.update(ctx, |view, ctx| {
+                    view.write_to_pty(
+                        crate::terminal::tmux::protocol::select_window_command(
+                            &crate::terminal::tmux::parser::WindowId::from(window_id.as_str()),
+                        )
+                        .into_bytes(),
+                        ctx,
+                    );
+                });
+            }
         }
     }
 
@@ -11690,73 +11715,76 @@ impl Workspace {
         } else {
             None
         };
-        let tabs: Vec<TabSnapshot> = self
-            .tab_views()
-            .enumerate()
-            .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
-            .map(|(tab_index, pane_group_view)| {
-                let resizable_data = ResizableData::handle(app);
-                let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
+        let tabs: Vec<TabSnapshot> = if self.is_tmux_owned_window(app) {
+            Vec::new()
+        } else {
+            self.tab_views()
+                .enumerate()
+                .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
+                .map(|(tab_index, pane_group_view)| {
+                    let resizable_data = ResizableData::handle(app);
+                    let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
 
-                let left_panel_width = modal_sizes.map(|ms| {
-                    ms.left_panel_width
-                        .lock()
-                        .expect("should be able to lock left panel handle")
-                        .size()
-                });
+                    let left_panel_width = modal_sizes.map(|ms| {
+                        ms.left_panel_width
+                            .lock()
+                            .expect("should be able to lock left panel handle")
+                            .size()
+                    });
 
-                let right_panel_width = modal_sizes.map(|ms| {
-                    ms.right_panel_width
-                        .lock()
-                        .expect("should be able to lock right panel handle")
-                        .size()
-                });
+                    let right_panel_width = modal_sizes.map(|ms| {
+                        ms.right_panel_width
+                            .lock()
+                            .expect("should be able to lock right panel handle")
+                            .size()
+                    });
 
-                let pane_group = pane_group_view.as_ref(app);
-                let root = pane_group.snapshot(app);
-                let left_panel =
-                    self.compute_left_panel_snapshot(pane_group_view, left_panel_width, app);
-                let right_panel =
-                    self.compute_right_panel_snapshot(pane_group_view, right_panel_width, app);
-                TabSnapshot {
-                    root,
-                    custom_title: pane_group.custom_title(app),
-                    default_directory_color: self
-                        .tabs
-                        .get(tab_index)
-                        .and_then(|tab| tab.default_directory_color),
-                    selected_color: self
-                        .tabs
-                        .get(tab_index)
-                        .map(|tab| tab.selected_color)
-                        .unwrap_or_default(),
-                    left_panel,
-                    right_panel,
-                    group_id: if FeatureFlag::GroupedTabs.is_enabled() {
-                        self.tabs.get(tab_index).and_then(|tab| tab.group_id)
-                    } else {
-                        None
-                    },
-                    // Only persist pinned state when the Pinned Tabs feature is
-                    // enabled.
-                    pinned: FeatureFlag::PinnedTabs.is_enabled()
-                        && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
-                }
-            })
-            .filter(|tab| {
-                // Filter out any tab that contains a single, read-only session.
-                !matches!(
-                    tab.root,
-                    PaneNodeSnapshot::Leaf(LeafSnapshot {
-                        contents: LeafContents::Terminal(TerminalPaneSnapshot {
-                            is_read_only: true,
+                    let pane_group = pane_group_view.as_ref(app);
+                    let root = pane_group.snapshot(app);
+                    let left_panel =
+                        self.compute_left_panel_snapshot(pane_group_view, left_panel_width, app);
+                    let right_panel =
+                        self.compute_right_panel_snapshot(pane_group_view, right_panel_width, app);
+                    TabSnapshot {
+                        root,
+                        custom_title: pane_group.custom_title(app),
+                        default_directory_color: self
+                            .tabs
+                            .get(tab_index)
+                            .and_then(|tab| tab.default_directory_color),
+                        selected_color: self
+                            .tabs
+                            .get(tab_index)
+                            .map(|tab| tab.selected_color)
+                            .unwrap_or_default(),
+                        left_panel,
+                        right_panel,
+                        group_id: if FeatureFlag::GroupedTabs.is_enabled() {
+                            self.tabs.get(tab_index).and_then(|tab| tab.group_id)
+                        } else {
+                            None
+                        },
+                        // Only persist pinned state when the Pinned Tabs feature is
+                        // enabled.
+                        pinned: FeatureFlag::PinnedTabs.is_enabled()
+                            && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
+                    }
+                })
+                .filter(|tab| {
+                    // Filter out any tab that contains a single, read-only session.
+                    !matches!(
+                        tab.root,
+                        PaneNodeSnapshot::Leaf(LeafSnapshot {
+                            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                                is_read_only: true,
+                                ..
+                            }),
                             ..
-                        }),
-                        ..
-                    })
-                )
-            })
-            .collect();
+                        })
+                    )
+                })
+                .collect()
+        };
 
         // Skip orphan groups whose members were all filtered out above.
         // This is a safety net and ensures empty groups are not saved/restored.
@@ -12294,6 +12322,45 @@ impl Workspace {
         add_to_undo_stack: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        if self.is_tmux_owned_window(ctx) && !self.tmux_runtime_is_applying(ctx) {
+            let is_last_tab = self.tabs.len() == 1;
+            if is_last_tab {
+                if let Some(view) = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.write_to_pty(
+                            crate::terminal::tmux::protocol::detach_client_command()
+                                .as_bytes()
+                                .to_vec(),
+                            ctx,
+                        );
+                    });
+                }
+            } else if let Some(window_id) = self
+                .tabs
+                .get(index)
+                .and_then(|tab| tab.tmux_window_id.clone())
+                && let Some(view) = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+            {
+                view.update(ctx, |view, ctx| {
+                    view.write_to_pty(
+                        crate::terminal::tmux::protocol::kill_window_command(
+                            &crate::terminal::tmux::parser::WindowId::from(window_id.as_str()),
+                        )
+                        .into_bytes(),
+                        ctx,
+                    );
+                });
+            }
+            return;
+        }
         let is_last_tab = self.tabs.len() == 1;
         if !ContextFlag::CloseWindow.is_enabled() && is_last_tab {
             return;
@@ -12684,6 +12751,813 @@ impl Workspace {
         );
     }
 
+    fn is_tmux_owned_window(&self, ctx: &AppContext) -> bool {
+        self.get_pane_group_view(self.active_tab_index)
+            .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx))
+            .is_some_and(|view| view.as_ref(ctx).model.lock().is_tmux_presentation())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_tmux_owned_window_for_tests(&self, ctx: &AppContext) -> bool {
+        self.is_tmux_owned_window(ctx)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clear_tabs_for_tests(&mut self) {
+        self.tabs.clear();
+        self.active_tab_index = 0;
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn tmux_runtime(
+        &self,
+        window_id: WindowId,
+    ) -> Option<std::sync::Arc<crate::terminal::tmux::bridge::TmuxRuntime>> {
+        use crate::terminal::tmux::bridge::TmuxRuntime;
+        TmuxRuntime::for_presentation(window_id).or_else(|| TmuxRuntime::for_gateway(window_id))
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn tmux_runtime_is_applying(&self, ctx: &ViewContext<Self>) -> bool {
+        self.tmux_runtime(ctx.window_id())
+            .is_some_and(|runtime| runtime.is_applying())
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn tmux_runtime_for_client_events(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> Option<std::sync::Arc<crate::terminal::tmux::bridge::TmuxRuntime>> {
+        use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+        TmuxRuntime::for_gateway(ctx.window_id()).or_else(|| {
+            self.get_pane_group_view(self.active_tab_index)
+                .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx))
+                .and_then(|view| view.as_ref(ctx).model.lock().tmux_instance_id())
+                .and_then(|id| TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)))
+        })
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn flush_buffered_tmux_client_events(
+        &mut self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+        let runtime = match instance_id {
+            Some(id) => TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)),
+            None => TmuxRuntime::for_gateway(ctx.window_id()),
+        };
+        let Some(runtime) = runtime else {
+            return;
+        };
+        let events = runtime.take_client_events();
+        if events.is_empty() {
+            return;
+        }
+        log::info!(
+            "tmux flushing {} buffered client events for instance {}",
+            events.len(),
+            runtime.id().as_u64()
+        );
+        let Some(presentation) = Self::presentation_workspace(ctx, runtime.gateway_window()) else {
+            if !runtime.buffer_client_events(&events) {
+                self.fail_tmux_presentation(ctx);
+            }
+            return;
+        };
+        presentation.update(ctx, |workspace, ctx| {
+            workspace.apply_tmux_client_events_inner(&events, ctx);
+        });
+    }
+
+    fn open_tmux_presentation_window(
+        &mut self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let gateway_window = ctx.window_id();
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        let _ = instance_id;
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+            if let Some(id) = instance_id {
+                let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)) else {
+                    log::info!(
+                        "tmux open presentation aborted: instance {id} is no longer registered"
+                    );
+                    return;
+                };
+                log::info!(
+                    "tmux open presentation: bind gateway window for instance {}",
+                    id
+                );
+                runtime.bind_gateway(gateway_window);
+                runtime.start_app_bind_deadline();
+            }
+        }
+        let (presentation_window, root) =
+            crate::root_view::open_new_with_workspace_source_without_activating(
+                crate::root_view::NewWorkspaceSource::Session {
+                    options: Box::new(NewTerminalOptions {
+                        tmux_presentation: true,
+                        tmux_gateway_window: Some(gateway_window),
+                        tmux_instance_id: instance_id,
+                        hide_homepage: true,
+                        ..Default::default()
+                    }),
+                },
+                ctx,
+            );
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+            if let Some(id) = instance_id
+                && let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(id))
+            {
+                runtime.bind_presentation(presentation_window);
+            }
+            self.flush_buffered_tmux_client_events(instance_id, ctx);
+            if self.tmux_presentation_is_ready(presentation_window, ctx) {
+                self.complete_tmux_presentation_open(instance_id, gateway_window, ctx);
+            } else {
+                self.schedule_tmux_app_bind_deadline(instance_id, ctx);
+            }
+            let _ = root;
+        }
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let _ = (presentation_window, root);
+            ctx.windows().hide_window(gateway_window);
+        }
+    }
+
+    fn close_tmux_presentation_windows(
+        &self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current_window = ctx.window_id();
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        let _ = instance_id;
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+            let runtime = match instance_id {
+                Some(id) => TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)),
+                None => self.tmux_runtime(ctx.window_id()),
+            };
+            let Some(runtime) = runtime else {
+                if let Some(id) = instance_id {
+                    self.clear_gateway_tmux_instance_id(id, None, ctx);
+                }
+                return;
+            };
+            let presentation = runtime.presentation_window();
+            let gateway = runtime.gateway_window();
+            let bound_id = runtime.id().as_u64();
+            if let Some(gateway) = gateway {
+                ctx.windows().show_window_and_focus_app(gateway);
+            }
+            if let Some(presentation) =
+                presentation.filter(|id| *id != current_window || gateway.is_some())
+            {
+                let windows: Vec<_> = crate::workspace::WorkspaceRegistry::as_ref(ctx)
+                    .all_workspaces(ctx)
+                    .into_iter()
+                    .filter(|(window_id, _)| *window_id == presentation)
+                    .collect();
+                for (_, workspace) in windows {
+                    workspace.update(ctx, |_workspace, ctx| {
+                        ctx.close_window();
+                    });
+                }
+            }
+            runtime.unregister();
+            self.clear_gateway_tmux_instance_id(bound_id, gateway, ctx);
+        }
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let windows: Vec<_> = crate::workspace::WorkspaceRegistry::as_ref(ctx)
+                .all_workspaces(ctx)
+                .into_iter()
+                .filter(|(window_id, workspace)| {
+                    *window_id != current_window
+                        && workspace.read(ctx, |workspace, ctx| workspace.is_tmux_owned_window(ctx))
+                })
+                .collect();
+            for (_, workspace) in windows {
+                workspace.update(ctx, |_workspace, ctx| {
+                    ctx.close_window();
+                });
+            }
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn clear_gateway_tmux_instance_id(
+        &self,
+        instance_id: u64,
+        gateway: Option<WindowId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let current = ctx.window_id();
+        if gateway.is_none_or(|g| g == current) {
+            self.clear_local_gateway_tmux_instance_id(instance_id, ctx);
+            return;
+        }
+        let Some(gateway) = gateway else {
+            return;
+        };
+        let Some(workspace) = crate::workspace::WorkspaceRegistry::as_ref(ctx)
+            .all_workspaces(ctx)
+            .into_iter()
+            .find(|(window_id, _)| *window_id == gateway)
+            .map(|(_, workspace)| workspace)
+        else {
+            return;
+        };
+        workspace.update(ctx, |workspace, ctx| {
+            workspace.clear_local_gateway_tmux_instance_id(instance_id, ctx);
+        });
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn clear_local_gateway_tmux_instance_id(&self, instance_id: u64, ctx: &mut ViewContext<Self>) {
+        let Some(view) = self
+            .get_pane_group_view(self.active_tab_index)
+            .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx))
+        else {
+            return;
+        };
+        let model = view.as_ref(ctx).model.clone();
+        let mut model = model.lock();
+        if !model.is_tmux_presentation() && model.tmux_instance_id() == Some(instance_id) {
+            model.set_tmux_instance_id(None);
+        }
+    }
+
+    fn write_tmux_to_gateway(
+        bytes: std::borrow::Cow<'static, [u8]>,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(view) = Self::gateway_view_for_tmux_control_write(instance_id, ctx) {
+            view.update(ctx, |view, ctx| {
+                view.write_tmux_control_command(bytes, ctx);
+            });
+        }
+    }
+
+    fn write_tmux_pane_input_to_gateway(
+        pane_id: String,
+        bytes: std::borrow::Cow<'static, [u8]>,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(view) = Self::gateway_view_for_tmux_control_write(instance_id, ctx) {
+            view.update(ctx, |view, ctx| {
+                view.write_tmux_pane_input(pane_id, bytes, ctx);
+            });
+        }
+    }
+
+    fn gateway_view_for_tmux_control_write(
+        instance_id: Option<u64>,
+        ctx: &AppContext,
+    ) -> Option<warpui::ViewHandle<crate::terminal::TerminalView>> {
+        let instance_id = instance_id?;
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            let runtime = crate::terminal::tmux::bridge::TmuxRuntime::for_id(
+                crate::terminal::tmux::bridge::TmuxInstanceId::from_u64(instance_id),
+            )?;
+            let gateway_window = runtime.gateway_window()?;
+            crate::workspace::WorkspaceRegistry::as_ref(ctx)
+                .all_workspaces(ctx)
+                .into_iter()
+                .find_map(|(window_id, workspace)| {
+                    if window_id != gateway_window {
+                        return None;
+                    }
+                    workspace.read(ctx, |workspace, ctx| {
+                        workspace
+                            .get_pane_group_view(workspace.active_tab_index)
+                            .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx))
+                            .filter(|view| {
+                                let model = view.as_ref(ctx).model.lock();
+                                model.is_tmux_control_mode()
+                                    && !model.is_tmux_presentation()
+                                    && model.tmux_instance_id() == Some(instance_id)
+                            })
+                    })
+                })
+        }
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let _ = (instance_id, ctx);
+            None
+        }
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn gateway_view_for_tmux_control_write_for_tests(
+        instance_id: Option<u64>,
+        ctx: &AppContext,
+    ) -> Option<warpui::ViewHandle<crate::terminal::TerminalView>> {
+        Self::gateway_view_for_tmux_control_write(instance_id, ctx)
+    }
+
+    fn presentation_workspace(
+        ctx: &AppContext,
+        gateway_window: Option<WindowId>,
+    ) -> Option<warpui::ViewHandle<Workspace>> {
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            let gateway = gateway_window?;
+            let runtime = crate::terminal::tmux::bridge::TmuxRuntime::for_gateway(gateway)?;
+            let presentation = runtime.presentation_window()?;
+            let workspace =
+                crate::workspace::WorkspaceRegistry::as_ref(ctx).get(presentation, ctx)?;
+            workspace
+                .read(ctx, |workspace, ctx| workspace.is_tmux_owned_window(ctx))
+                .then_some(workspace)
+        }
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let _ = (ctx, gateway_window);
+            None
+        }
+    }
+
+    fn apply_tmux_client_events(
+        &mut self,
+        events: &[crate::terminal::model::terminal_model::TmuxClientEvent],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if events.iter().any(|event| {
+            matches!(
+                event,
+                crate::terminal::model::terminal_model::TmuxClientEvent::PresentationUnready
+            )
+        }) {
+            log::info!(
+                "tmux presentation unready; rolling back gateway {}",
+                ctx.window_id()
+            );
+            self.fail_tmux_presentation(ctx);
+            return;
+        }
+        let Some(presentation) = Self::presentation_workspace(ctx, Some(ctx.window_id())) else {
+            #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+            if let Some(runtime) = self.tmux_runtime_for_client_events(ctx)
+                && !runtime.buffer_client_events(events)
+            {
+                self.fail_tmux_presentation(ctx);
+            }
+            return;
+        };
+        if presentation.id() == ctx.view_id() {
+            self.apply_tmux_client_events_inner(events, ctx);
+            return;
+        }
+        presentation.update(ctx, |workspace, ctx| {
+            workspace.apply_tmux_client_events_inner(events, ctx);
+        });
+    }
+
+    fn apply_tmux_client_events_inner(
+        &mut self,
+        events: &[crate::terminal::model::terminal_model::TmuxClientEvent],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        use crate::terminal::model::terminal_model::TmuxClientEvent;
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        let Some(runtime) = self.tmux_runtime(ctx.window_id()) else {
+            return;
+        };
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        runtime.with_applying(|| {
+            for event in events {
+                match event {
+                    TmuxClientEvent::WindowAdd { window_id } => {
+                        self.ensure_tmux_window_tab(window_id, ctx);
+                    }
+                    TmuxClientEvent::WindowClose { window_id } => {
+                        if let Some(index) = self.tabs.iter().position(|tab| {
+                            tab.tmux_window_id.as_deref() == Some(window_id.as_str())
+                        }) {
+                            self.close_tab(index, true, false, ctx);
+                        }
+                    }
+                    TmuxClientEvent::WindowRenamed { window_id, name } => {
+                        if let Some(tab) = self
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.tmux_window_id.as_deref() == Some(window_id.as_str()))
+                        {
+                            tab.pane_group.update(ctx, |pane_group, ctx| {
+                                pane_group.set_title(name, ctx);
+                            });
+                        }
+                    }
+                    TmuxClientEvent::SessionWindowChanged { window_id } => {
+                        self.ensure_tmux_window_tab(window_id, ctx);
+                        if let Some(index) = self.tabs.iter().position(|tab| {
+                            tab.tmux_window_id.as_deref() == Some(window_id.as_str())
+                        }) {
+                            self.activate_tab_internal(index, ctx);
+                        }
+                    }
+                    TmuxClientEvent::PresentationUnready => {}
+                    TmuxClientEvent::LayoutChange {
+                        window_id, layout, ..
+                    } => {
+                        self.apply_tmux_layout(window_id, layout, ctx);
+                    }
+                    TmuxClientEvent::CommandEnd {
+                        error,
+                        payload,
+                        capture_pane,
+                        ..
+                    } => {
+                        if !*error {
+                            self.apply_tmux_command_end(payload, capture_pane.as_deref(), ctx);
+                        }
+                    }
+                }
+            }
+        });
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let _ = (events, ctx);
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn ensure_tmux_window_tab(&mut self, window_id: &str, ctx: &mut ViewContext<Self>) {
+        if self
+            .tabs
+            .iter()
+            .any(|tab| tab.tmux_window_id.as_deref() == Some(window_id))
+        {
+            return;
+        }
+        if let Some(unbound) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.tmux_window_id.is_none())
+        {
+            unbound.tmux_window_id = Some(window_id.to_owned());
+            return;
+        }
+        let runtime = self.tmux_runtime(ctx.window_id());
+        let tmux_gateway_window = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.gateway_window());
+        let tmux_instance_id = runtime.as_ref().map(|runtime| runtime.id().as_u64());
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(NewTerminalOptions {
+                tmux_presentation: true,
+                tmux_gateway_window,
+                tmux_instance_id,
+                hide_homepage: true,
+                ..Default::default()
+            })),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+            tab.tmux_window_id = Some(window_id.to_owned());
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn apply_tmux_layout(&mut self, window_id: &str, layout: &str, ctx: &mut ViewContext<Self>) {
+        self.ensure_tmux_window_tab(window_id, ctx);
+        let Some(parsed) = warp_terminal::tmux::parse_window_layout(layout) else {
+            return;
+        };
+        let Some(tab_index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.tmux_window_id.as_deref() == Some(window_id))
+        else {
+            return;
+        };
+        let pane_group = self.tabs[tab_index].pane_group.clone();
+        let steps = warp_terminal::tmux::split_steps(&parsed);
+        let leaves = parsed.pane_ids();
+        pane_group.update(ctx, |pane_group, ctx| {
+            if let Some(first) = leaves.first() {
+                let focused = pane_group.focused_pane_id(ctx);
+                if pane_group
+                    .pane_id_for_tmux_pane(first.as_str(), ctx)
+                    .is_none()
+                {
+                    log::info!(
+                        "tmux bind presentation pane {} to window {}",
+                        first.as_str(),
+                        window_id
+                    );
+                    pane_group.bind_tmux_pane(focused, first.as_str(), ctx);
+                }
+            }
+            for step in &steps {
+                if pane_group
+                    .pane_id_for_tmux_pane(step.new_pane.as_str(), ctx)
+                    .is_some()
+                {
+                    continue;
+                }
+                let parent_leaves: Vec<_> = step
+                    .parent
+                    .iter()
+                    .filter_map(|id| pane_group.pane_id_for_tmux_pane(id.as_str(), ctx))
+                    .collect();
+                if parent_leaves.is_empty() {
+                    continue;
+                }
+                let direction = if step.side_by_side {
+                    PaneGroupDirection::Right
+                } else {
+                    PaneGroupDirection::Down
+                };
+                if let Some(new_pane) =
+                    pane_group.add_tmux_presentation_pane(direction, &parent_leaves, ctx)
+                {
+                    pane_group.bind_tmux_pane(new_pane, step.new_pane.as_str(), ctx);
+                    pane_group.set_tmux_split_flex(
+                        &parent_leaves,
+                        new_pane,
+                        step.parent_size as f32,
+                        step.new_size as f32,
+                    );
+                }
+            }
+            pane_group.reconcile_tmux_panes(&leaves, ctx);
+        });
+        self.maybe_complete_tmux_presentation(ctx);
+    }
+
+    fn fail_tmux_presentation(&mut self, ctx: &mut ViewContext<Self>) {
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        {
+            let instance_id = self
+                .tmux_runtime(ctx.window_id())
+                .map(|runtime| runtime.id().as_u64());
+            Self::write_tmux_to_gateway(
+                std::borrow::Cow::Borrowed(
+                    crate::terminal::tmux::protocol::detach_client_command().as_bytes(),
+                ),
+                instance_id,
+                ctx,
+            );
+            let window_id = ctx.window_id();
+            WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(
+                        "Failed to start tmux presentation. Restored the original session."
+                            .to_owned(),
+                    ),
+                    window_id,
+                    ctx,
+                );
+            });
+            self.close_tmux_presentation_windows(instance_id, ctx);
+        }
+        #[cfg(not(all(unix, feature = "local_tty", not(feature = "remote_tty"))))]
+        {
+            let _ = ctx;
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn tmux_presentation_is_ready(&self, presentation_window: WindowId, ctx: &AppContext) -> bool {
+        crate::workspace::WorkspaceRegistry::as_ref(ctx)
+            .get(presentation_window, ctx)
+            .is_some_and(|workspace| {
+                workspace.read(ctx, |workspace, ctx| {
+                    let (window_id, pane_id) = workspace.tmux_active_window_and_pane(ctx);
+                    window_id.is_some() && pane_id.is_some()
+                })
+            })
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn maybe_complete_tmux_presentation(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(runtime) = self.tmux_runtime(ctx.window_id()) else {
+            return;
+        };
+        if runtime.is_presentation_ready() {
+            return;
+        }
+        let (window_id, pane_id) = self.tmux_active_window_and_pane(ctx);
+        if window_id.is_none() || pane_id.is_none() {
+            return;
+        }
+        let gateway = runtime.gateway_window();
+        let presentation = runtime.presentation_window().or(Some(ctx.window_id()));
+        runtime.mark_presentation_ready();
+        self.activate_tmux_presentation_window(presentation, gateway, ctx);
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn complete_tmux_presentation_open(
+        &mut self,
+        instance_id: Option<u64>,
+        gateway_window: WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+        if let Some(id) = instance_id
+            && let Some(runtime) = TmuxRuntime::for_id(TmuxInstanceId::from_u64(id))
+        {
+            runtime.mark_presentation_ready();
+            self.activate_tmux_presentation_window(
+                runtime.presentation_window(),
+                Some(gateway_window),
+                ctx,
+            );
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn activate_tmux_presentation_window(
+        &mut self,
+        presentation: Option<WindowId>,
+        gateway: Option<WindowId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(presentation) = presentation else {
+            return;
+        };
+        ctx.windows().show_window_and_focus_app(presentation);
+        if presentation == ctx.window_id() {
+            self.focus_active_tab(ctx);
+        } else if let Some(workspace) =
+            crate::workspace::WorkspaceRegistry::as_ref(ctx).get(presentation, ctx)
+        {
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.focus_active_tab(ctx);
+            });
+        }
+        if let Some(gateway) = gateway.filter(|gateway| *gateway != presentation) {
+            ctx.windows().hide_window(gateway);
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn schedule_tmux_app_bind_deadline(
+        &self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::tmux::bridge::APP_BIND_TIMEOUT;
+        let Some(id) = instance_id else {
+            return;
+        };
+        ctx.spawn(
+            async move {
+                warpui::r#async::Timer::after(APP_BIND_TIMEOUT).await;
+            },
+            move |workspace, _, ctx| {
+                workspace.check_tmux_app_bind_deadline(Some(id), ctx);
+            },
+        );
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn check_tmux_app_bind_deadline(
+        &mut self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+        let Some(runtime) =
+            instance_id.and_then(|id| TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)))
+        else {
+            return;
+        };
+        if runtime.app_bind_deadline_elapsed(instant::Instant::now()) {
+            self.fail_tmux_presentation(ctx);
+        }
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn apply_tmux_client_events_for_tests(
+        &mut self,
+        events: &[crate::terminal::model::terminal_model::TmuxClientEvent],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.apply_tmux_client_events_inner(events, ctx);
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn apply_tmux_client_events_from_gateway_for_tests(
+        &mut self,
+        events: &[crate::terminal::model::terminal_model::TmuxClientEvent],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.apply_tmux_client_events(events, ctx);
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn flush_buffered_tmux_client_events_for_tests(
+        &mut self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.flush_buffered_tmux_client_events(instance_id, ctx);
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn open_tmux_presentation_window_for_tests(
+        &mut self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.open_tmux_presentation_window(instance_id, ctx);
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn close_tmux_presentation_windows_for_tests(
+        &self,
+        instance_id: Option<u64>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.close_tmux_presentation_windows(instance_id, ctx);
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn presentation_workspace_for_tests(
+        ctx: &AppContext,
+        gateway_window: Option<WindowId>,
+    ) -> Option<warpui::ViewHandle<Workspace>> {
+        Self::presentation_workspace(ctx, gateway_window)
+    }
+
+    #[cfg(all(test, unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn check_tmux_app_bind_deadline_at_for_tests(
+        &mut self,
+        instance_id: Option<u64>,
+        now: instant::Instant,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use crate::terminal::tmux::bridge::{TmuxInstanceId, TmuxRuntime};
+        let Some(runtime) =
+            instance_id.and_then(|id| TmuxRuntime::for_id(TmuxInstanceId::from_u64(id)))
+        else {
+            return;
+        };
+        if runtime.app_bind_deadline_elapsed(now) {
+            self.fail_tmux_presentation(ctx);
+        }
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    pub(crate) fn tmux_active_window_and_pane(
+        &self,
+        ctx: &AppContext,
+    ) -> (Option<String>, Option<String>) {
+        let window_id = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|tab| tab.tmux_window_id.clone());
+        let pane_id = self
+            .get_pane_group_view(self.active_tab_index)
+            .and_then(|pane_group| pane_group.as_ref(ctx).active_session_view(ctx))
+            .and_then(|view| {
+                view.read(ctx, |view, _| {
+                    view.model.lock().tmux_pane_id().map(str::to_owned)
+                })
+            });
+        (window_id, pane_id)
+    }
+
+    #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+    fn apply_tmux_command_end(
+        &mut self,
+        payload: &[String],
+        capture_pane: Option<&str>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let Some(pane_id) = capture_pane
+            && let Some(runtime) = self.tmux_runtime(ctx.window_id())
+        {
+            let bytes = payload.join("\n").into_bytes();
+            if !runtime.deliver_output(
+                &crate::terminal::tmux::parser::PaneId::from(pane_id),
+                &bytes,
+            ) {
+                self.fail_tmux_presentation(ctx);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn add_new_session_tab_internal_with_default_session_mode_behavior(
         &mut self,
@@ -12695,6 +13569,22 @@ impl Workspace {
         default_session_mode_behavior: DefaultSessionModeBehavior,
         ctx: &mut ViewContext<Self>,
     ) {
+        #[cfg(all(unix, feature = "local_tty"))]
+        if self.is_tmux_owned_window(ctx) {
+            if let Some(view) = self
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .active_session_view(ctx)
+            {
+                view.update(ctx, |view, ctx| {
+                    view.write_tmux_control_command(
+                        crate::terminal::tmux::protocol::new_window_command().into_bytes(),
+                        ctx,
+                    );
+                });
+            }
+            return;
+        }
         // Check if we should default to agent mode (only for new sessions, not restorations)
         let should_enter_agent_view = matches!(
             default_session_mode_behavior,
@@ -12825,6 +13715,28 @@ impl Workspace {
         custom_tab_title: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
+        #[cfg(all(unix, feature = "local_tty", not(feature = "remote_tty")))]
+        if self.is_tmux_owned_window(ctx) && !self.tmux_runtime_is_applying(ctx) {
+            let is_tmux_presentation = match &panes_layout {
+                PanesLayout::SingleTerminal(options) => options.tmux_presentation,
+                _ => false,
+            };
+            if !is_tmux_presentation {
+                if let Some(view) = self
+                    .active_tab_pane_group()
+                    .as_ref(ctx)
+                    .active_session_view(ctx)
+                {
+                    view.update(ctx, |view, ctx| {
+                        view.write_tmux_control_command(
+                            crate::terminal::tmux::protocol::new_window_command().into_bytes(),
+                            ctx,
+                        );
+                    });
+                }
+                return;
+            }
+        }
         // Remember whether the left panel was open on the current active pane group
         // before creating a new active pane group.
         let left_panel_was_open = if self.tabs.is_empty() {
@@ -16576,6 +17488,30 @@ impl Workspace {
             }
             #[cfg(not(feature = "local_fs"))]
             pane_group::Event::RemoteRepoNavigated { .. } => {}
+            pane_group::Event::OpenTmuxPresentationWindow { instance_id } => {
+                self.open_tmux_presentation_window(*instance_id, ctx);
+            }
+            pane_group::Event::CloseTmuxPresentationWindow { instance_id } => {
+                self.close_tmux_presentation_windows(*instance_id, ctx);
+            }
+            pane_group::Event::TmuxControlWrite { bytes, instance_id } => {
+                Self::write_tmux_to_gateway(bytes.clone(), *instance_id, ctx);
+            }
+            pane_group::Event::TmuxPaneInput {
+                pane_id,
+                bytes,
+                instance_id,
+            } => {
+                Self::write_tmux_pane_input_to_gateway(
+                    pane_id.clone(),
+                    bytes.clone(),
+                    *instance_id,
+                    ctx,
+                );
+            }
+            pane_group::Event::TmuxClientEvents(events) => {
+                self.apply_tmux_client_events(events, ctx);
+            }
             pane_group::Event::OpenChildAgentInNewTab { conversation_id } => {
                 // Move the existing child pane into a new tab so the live
                 // session stays intact.

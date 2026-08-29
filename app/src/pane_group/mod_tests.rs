@@ -763,6 +763,80 @@ fn test_pane_focus_on_close() {
 }
 
 #[test]
+fn tmux_feature_on_enter_in_normal_pane_does_not_reenter_terminal_view() {
+    let _tmux = FeatureFlag::TmuxControlPrototype.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let (pane_id, view) = pane_group.read(&app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let view = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("normal pane has a terminal view");
+            (pane_id, view)
+        });
+        view.update(&mut app, |_view, ctx| {
+            ctx.emit(crate::terminal::view::Event::FocusSession);
+        });
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(panes.focused_pane_id(ctx), pane_id);
+            assert!(panes.tmux_focus_select_pane_command(pane_id, ctx).is_none());
+        });
+    });
+}
+
+#[test]
+fn tmux_presentation_focus_routes_select_pane_without_reentering_view() {
+    let _tmux = FeatureFlag::TmuxControlPrototype.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let (first, second, first_view) = pane_group.update(&mut app, |panes, ctx| {
+            let first = get_newly_created_pane_id(panes, &[]);
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+            let second = get_newly_created_pane_id(panes, &[first]);
+            panes.focus_pane(first, true, ctx);
+
+            for (pane_id, tmux_id) in [(first, "%0"), (second, "%1")] {
+                let view = panes
+                    .terminal_view_from_pane_id(pane_id, ctx)
+                    .expect("presentation pane has a terminal view");
+                let model = view.as_ref(ctx).model.clone();
+                let mut model = model.lock();
+                model.set_tmux_presentation(true);
+                model.set_tmux_control_mode(true);
+                model.set_tmux_pane_id(Some(tmux_id.to_owned()));
+            }
+
+            let first_view = panes
+                .terminal_view_from_pane_id(first, ctx)
+                .expect("first pane has a terminal view");
+            (first, second, first_view)
+        });
+        first_view.update(&mut app, |_view, ctx| {
+            ctx.emit(crate::terminal::view::Event::FocusSession);
+        });
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(panes.focused_pane_id(ctx), first);
+            assert_eq!(
+                panes.tmux_focus_select_pane_command(first, ctx).as_deref(),
+                Some("select-pane -t %0\n")
+            );
+            assert_eq!(
+                panes.tmux_focus_select_pane_command(second, ctx).as_deref(),
+                Some("select-pane -t %1\n")
+            );
+        });
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.focus_pane(second, true, ctx);
+        });
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(panes.focused_pane_id(ctx), second);
+        });
+    });
+}
+
+#[test]
 fn test_insert_hidden_child_agent_pane_keeps_focus_and_active_session() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

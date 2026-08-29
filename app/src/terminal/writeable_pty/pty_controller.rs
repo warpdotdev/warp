@@ -107,7 +107,13 @@ impl<T: EventLoopSender> PtyController<T> {
             ModelEvent::Handler(AnsiHandlerEvent::InitShell {
                 pending_session_info,
             }) => {
-                me.initialize_shell(pending_session_info.as_ref(), ctx);
+                let skip_pty_bootstrap = {
+                    let model = me.terminal_model.lock();
+                    model.is_tmux_control_mode() || model.is_tmux_presentation()
+                };
+                if !skip_pty_bootstrap {
+                    me.initialize_shell(pending_session_info.as_ref(), ctx);
+                }
             }
             ModelEvent::Handler(AnsiHandlerEvent::Bootstrapped { is_subshell, .. }) => {
                 me.shell_bootstrapped(*is_subshell);
@@ -598,6 +604,29 @@ impl<T: EventLoopSender> PtyController<T> {
     ) {
         self.send_write_to_event_loop(
             PtyWrite::Bytes {
+                bytes: bytes.into(),
+            },
+            ctx,
+        );
+    }
+
+    pub fn write_tmux_control_command<B: Into<Cow<'static, [u8]>>>(
+        &self,
+        bytes: B,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.send_message_to_event_loop(Message::TmuxControlCommand(bytes.into()), ctx);
+    }
+
+    pub fn write_tmux_pane_input<B: Into<Cow<'static, [u8]>>>(
+        &self,
+        pane_id: String,
+        bytes: B,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.send_message_to_event_loop(
+            Message::TmuxPaneInput {
+                pane_id: warp_terminal::tmux::PaneId::from(pane_id.as_str()),
                 bytes: bytes.into(),
             },
             ctx,

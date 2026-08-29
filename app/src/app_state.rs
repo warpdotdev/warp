@@ -356,36 +356,48 @@ pub fn get_app_state(app: &AppContext) -> AppState {
     let quake_mode_id = quake_mode_window_id();
 
     let mut active_window_index = None;
-
     let mut windows = vec![];
+    let mut skipped_active = false;
 
-    for (index, window_id) in app.window_ids().enumerate() {
-        // Determine index of active window
-        if let Some(active_window_id) = active_window_id
-            && active_window_id == window_id
-        {
-            active_window_index = Some(index);
+    for window_id in app.window_ids() {
+        let is_active = active_window_id == Some(window_id);
+        let Some(workspace) = WorkspaceRegistry::as_ref(app).get(window_id, app) else {
+            if is_active {
+                skipped_active = true;
+            }
+            continue;
+        };
+        let ws = workspace.as_ref(app);
+        // Transient drag-preview windows are not real user-visible
+        // workspaces; skip them so they never end up in the persisted
+        // session. (Persistence is also short-circuited entirely while a
+        // cross-window drag is active; see `save_app` in
+        // `workspace/global_actions.rs`.)
+        if ws.is_tab_drag_preview() {
+            if is_active {
+                skipped_active = true;
+            }
+            continue;
         }
+        let snapshot = ws.snapshot(
+            window_id,
+            quake_mode_id.map(|id| id == window_id).unwrap_or(false),
+            app,
+        );
+        if snapshot.tabs.is_empty() {
+            if is_active {
+                skipped_active = true;
+            }
+            continue;
+        }
+        if is_active {
+            active_window_index = Some(windows.len());
+        }
+        windows.push(snapshot);
+    }
 
-        if let Some(workspace) = WorkspaceRegistry::as_ref(app).get(window_id, app) {
-            let ws = workspace.as_ref(app);
-            // Transient drag-preview windows are not real user-visible
-            // workspaces; skip them so they never end up in the persisted
-            // session. (Persistence is also short-circuited entirely while a
-            // cross-window drag is active; see `save_app` in
-            // `workspace/global_actions.rs`.)
-            if ws.is_tab_drag_preview() {
-                continue;
-            }
-            let snapshot = ws.snapshot(
-                window_id,
-                quake_mode_id.map(|id| id == window_id).unwrap_or(false),
-                app,
-            );
-            if !snapshot.tabs.is_empty() {
-                windows.push(snapshot);
-            }
-        }
+    if active_window_index.is_none() && skipped_active && windows.len() == 1 {
+        active_window_index = Some(0);
     }
 
     AppState {

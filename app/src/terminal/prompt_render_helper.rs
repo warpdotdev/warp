@@ -226,11 +226,8 @@ impl PromptRenderHelper {
     pub fn prompt_working_dir(&self, model: &TerminalModel, sessions: &Sessions) -> String {
         let block = self.prompt_block(model);
         let home_dir = block.and_then(|block| prompt::home_dir_for_block(block, sessions));
-        if model.block_list().is_bootstrapped() {
+        if model.is_tmux_presentation() || model.block_list().is_bootstrapped() {
             prompt::display_path_string(block.and_then(|b| b.pwd()), home_dir.as_deref())
-        // If the block list is not bootstrapped and there are SSH sessions in the current
-        // terminal session, we should display the "Starting shell..." message when
-        // fetching the login_shell information.
         } else {
             self.bootstrapping_shell_message(model, sessions)
         }

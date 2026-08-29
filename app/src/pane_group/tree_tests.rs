@@ -1,5 +1,97 @@
 use super::*;
 
+fn apply_tmux_layout(layout: &str) -> (PaneData, Vec<PaneId>) {
+    use std::collections::HashMap;
+
+    use warp_terminal::tmux::{parse_window_layout, split_steps};
+
+    let parsed = parse_window_layout(layout).unwrap();
+    let tmux_ids = parsed.pane_ids();
+    let panes: Vec<PaneId> = tmux_ids.iter().map(|_| PaneId::dummy_pane_id()).collect();
+    let mut tree = PaneData::new(panes[0]);
+    let mut warp_for_tmux = HashMap::from([(tmux_ids[0].as_str().to_owned(), panes[0])]);
+    for step in split_steps(&parsed) {
+        let parent_leaves: Vec<PaneId> = step
+            .parent
+            .iter()
+            .map(|id| warp_for_tmux[id.as_str()])
+            .collect();
+        let idx = tmux_ids.iter().position(|id| *id == step.new_pane).unwrap();
+        let new_pane = panes[idx];
+        warp_for_tmux.insert(step.new_pane.as_str().to_owned(), new_pane);
+        let direction = if step.side_by_side {
+            Direction::Right
+        } else {
+            Direction::Down
+        };
+        assert!(tree.split_beside_subtree(&parent_leaves, new_pane, direction));
+        assert!(tree.set_subtree_flex(&parent_leaves, step.parent_size as f32));
+        assert!(tree.set_pane_flex(new_pane, step.new_size as f32));
+    }
+    (tree, panes)
+}
+
+#[test]
+fn three_way_tmux_layout_preserves_visual_order_and_flex() {
+    let (tree, panes) = apply_tmux_layout("90x24,0,0{30x24,0,0,0,20x24,31,0,1,39x24,52,0,2}");
+    assert_eq!(tree.pane_ids(), vec![panes[0], panes[1], panes[2]]);
+    assert_eq!(
+        tree.leaf_flexes(),
+        vec![(panes[0], 30.0), (panes[1], 20.0), (panes[2], 39.0)]
+    );
+}
+
+#[test]
+fn nested_first_outer_child_places_subtree_beside_leaf() {
+    let (tree, panes) =
+        apply_tmux_layout("80x24,0,0{40x24,0,0[40x12,0,0,0,40x11,40,13,1],39x24,41,0,2}");
+    assert_eq!(tree.pane_ids(), vec![panes[0], panes[1], panes[2]]);
+    let root = tree.root.as_branch().expect("horizontal root");
+    assert_eq!(root.axis(), SplitDirection::Horizontal);
+    assert_eq!(root.nodes.len(), 2);
+    assert_eq!(root.nodes[0].0.0, 40.0);
+    assert_eq!(root.nodes[1].0.0, 39.0);
+    let nested = root.node(0).as_branch().expect("vertical subtree");
+    assert_eq!(nested.axis(), SplitDirection::Vertical);
+    assert_eq!(nested.direct_children(), vec![panes[0], panes[1]]);
+    assert_eq!(root.node(1).as_leaf(), Some(panes[2]));
+    assert_eq!(
+        tree.leaf_flexes(),
+        vec![(panes[0], 12.0), (panes[1], 11.0), (panes[2], 39.0)]
+    );
+}
+
+#[test]
+fn nested_middle_outer_child_keeps_subtree_as_sibling() {
+    let (tree, panes) = apply_tmux_layout(
+        "80x24,0,0{20x24,0,0,0,40x24,21,0[40x12,21,0,1,40x11,21,13,2],19x24,62,0,3}",
+    );
+    assert_eq!(
+        tree.pane_ids(),
+        vec![panes[0], panes[1], panes[2], panes[3]]
+    );
+    let root = tree.root.as_branch().expect("horizontal root");
+    assert_eq!(root.axis(), SplitDirection::Horizontal);
+    assert_eq!(root.nodes.len(), 3);
+    assert_eq!(root.node(0).as_leaf(), Some(panes[0]));
+    let nested = root.node(1).as_branch().expect("vertical subtree");
+    assert_eq!(nested.axis(), SplitDirection::Vertical);
+    assert_eq!(nested.direct_children(), vec![panes[1], panes[2]]);
+    assert_eq!(root.node(2).as_leaf(), Some(panes[3]));
+    assert_eq!(root.nodes[0].0.0, 20.0);
+    assert_eq!(root.nodes[1].0.0, 40.0);
+    assert_eq!(root.nodes[2].0.0, 19.0);
+    assert_eq!(
+        tree.leaf_flexes(),
+        vec![
+            (panes[0], 20.0),
+            (panes[1], 12.0),
+            (panes[2], 11.0),
+            (panes[3], 19.0),
+        ]
+    );
+}
+
 #[test]
 fn test_split_pane_layout() {
     let panes = [

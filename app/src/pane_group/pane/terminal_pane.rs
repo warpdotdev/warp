@@ -1463,6 +1463,64 @@ fn handle_terminal_view_event(
                 // emits `EnsureUnifiedViewerChildPane` instead.
                 group.ensure_shared_session_viewer_child_pane(*conversation_id, *session_id, ctx);
             }
+            Event::OpenTmuxPresentationWindow { instance_id } => {
+                ctx.emit(pane_group::Event::OpenTmuxPresentationWindow {
+                    instance_id: *instance_id,
+                });
+            }
+            Event::CloseTmuxPresentationWindow { instance_id } => {
+                ctx.emit(pane_group::Event::CloseTmuxPresentationWindow {
+                    instance_id: *instance_id,
+                });
+            }
+            Event::TmuxClientEvents(events) => {
+                ctx.emit(pane_group::Event::TmuxClientEvents(events.clone()));
+            }
+            #[cfg(all(unix, feature = "local_tty"))]
+            Event::TmuxControlCommand { bytes } => {
+                if let Some(binding) = group.tmux_presentation_binding(pane_id, ctx)
+                    && binding.is_presentation
+                {
+                    ctx.emit(pane_group::Event::TmuxControlWrite {
+                        bytes: bytes.clone(),
+                        instance_id: binding.instance_id,
+                    });
+                }
+            }
+            #[cfg(all(unix, feature = "local_tty"))]
+            Event::TmuxPaneInput {
+                pane_id: tmux_pane,
+                bytes,
+            } => {
+                if let Some(binding) = group.tmux_presentation_binding(pane_id, ctx)
+                    && binding.is_presentation
+                {
+                    ctx.emit(pane_group::Event::TmuxPaneInput {
+                        pane_id: tmux_pane.clone(),
+                        bytes: bytes.clone(),
+                        instance_id: binding.instance_id,
+                    });
+                }
+            }
+            #[cfg(all(unix, feature = "local_tty"))]
+            Event::Resize { size_update } => {
+                if let Some(binding) = group.tmux_presentation_binding(pane_id, ctx)
+                    && binding.is_presentation
+                    && let Some(tmux_pane) = binding.pane_id
+                {
+                    let size = size_update.new_size();
+                    ctx.emit(pane_group::Event::TmuxControlWrite {
+                        bytes: crate::terminal::tmux::protocol::resize_pane_command(
+                            &crate::terminal::tmux::parser::PaneId::from(tmux_pane.as_str()),
+                            size.columns(),
+                            size.rows(),
+                        )
+                        .into_bytes()
+                        .into(),
+                        instance_id: binding.instance_id,
+                    });
+                }
+            }
             Event::OpenChildAgentInNewTab { conversation_id } => {
                 // Pane group can't add tabs; forward to the workspace.
                 if group.ensure_hidden_child_agent_pane_for_conversation(*conversation_id, ctx) {
