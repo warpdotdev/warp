@@ -17,7 +17,7 @@ use super::ansi::{
     CommandFinishedValue, CompletionMetadata, Handler, PrecmdValue, PreexecValue, Processor,
     PromptMetadata,
 };
-use super::block::{Block, BlockId, BlockSize};
+use super::block::{Block, BlockId, BlockSize, SerializedBlockListItem};
 use super::blocks::BlockList;
 use super::bootstrap::BootstrapStage;
 use super::image_map::StoredImageMetadata;
@@ -28,7 +28,6 @@ use super::kitty::{
 };
 use super::terminal_model::BlockIndex;
 use super::{ObfuscateSecrets, TerminalModel};
-use crate::ai::blocklist::SerializedBlockListItem;
 use crate::terminal::color::{self, Colors};
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::{BlockPadding, SizeInfo};
@@ -136,7 +135,7 @@ fn block_padding() -> BlockPadding {
 ///     .build();
 ///
 /// // `.into()` produces the `SerializedBlockListItem` that `with_restored_blocks`
-/// // expects; its type lives in a private module so it can't be named directly.
+/// // expects.
 /// let block = SerializedBlock::new_for_test("test".into(), "test".into()).into();
 ///
 /// let block_list = TestBlockListBuilder::new()

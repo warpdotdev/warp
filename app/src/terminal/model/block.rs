@@ -21,6 +21,7 @@ pub use serialized_block::*;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
+use warp_terminal::block_banner::WithinBlockBanner;
 use warp_terminal::model::grid::Dimensions as _;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warp_util::lazy::Lazy;
@@ -43,7 +44,6 @@ use super::session::{Sessions, command_executor};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::redaction::redact_secrets;
 use crate::context_chips::prompt_snapshot::PromptSnapshot;
-use crate::server::block::DisplaySetting;
 use crate::server::ids::SyncId;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -65,7 +65,6 @@ use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::session::SessionId;
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
 use crate::terminal::shell::ShellType;
-use crate::terminal::view::WithinBlockBanner;
 use crate::terminal::{BlockPadding, ShellHost, SizeInfo};
 
 pub const LONG_RUNNING_COMMAND_DURATION_MS: u64 = 50;
@@ -1537,28 +1536,6 @@ impl Block {
     /// line prompt, we render on the same line for PS1, but not for Warp prompt!
     pub fn render_prompt_on_same_line(&self) -> bool {
         self.honor_ps1()
-    }
-
-    /// Used for determining the height of the block with `DisplaySettings` used when sharing a block.
-    pub fn full_content_height_with_display_options(
-        &self,
-        display_setting: &DisplaySetting,
-        show_prompt: bool,
-    ) -> Lines {
-        let mut height = self.padding_top();
-        if show_prompt && !self.render_prompt_on_same_line() {
-            height += self.prompt_height() + self.command_padding_top();
-        }
-
-        let command_height = self.prompt_and_command_height();
-
-        height += match display_setting {
-            DisplaySetting::Command => command_height,
-            DisplaySetting::Output => self.output_grid_full_content_height(),
-            _ => command_height + self.padding_middle() + self.output_grid_full_content_height(),
-        };
-        height += self.padding_bottom();
-        height
     }
 
     /// The last part of the lifecycle for the block. After this, its contents

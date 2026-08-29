@@ -41,7 +41,9 @@ use crate::editor::{
     EditOrigin, EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions,
 };
 use crate::send_telemetry_from_ctx;
-use crate::server::block::{Block as ServerBlock, DisplaySetting};
+use crate::server::block::{
+    Block as ServerBlock, DisplaySetting, full_content_height_with_display_options,
+};
 use crate::server::server_api::block::BlockClient;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{
@@ -1490,8 +1492,11 @@ impl Element for SingleBlock {
             self.native_prompt_text = Some(native_prompt_text);
         }
 
-        let block_height =
-            block.full_content_height_with_display_options(&self.display_setting, self.show_prompt);
+        let block_height = full_content_height_with_display_options(
+            block,
+            &self.display_setting,
+            self.show_prompt,
+        );
 
         let height = (block_height.to_pixels(size_info.cell_height_px()))
             .min(constraint.max.y().into_pixels())

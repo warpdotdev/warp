@@ -1,18 +1,17 @@
 use itertools::Itertools as _;
 use warp_errors::report_error;
-use warpui::{Entity, ModelContext, SingletonEntity};
-use warpui_extras::user_preferences::registry_backed::KEY_NOT_FOUND_ERR;
+use warpui_core::{Entity, SingletonEntity};
 use windows_registry::CURRENT_USER;
-use windows_result::Error as WindowsError;
-
-use crate::send_telemetry_from_ctx;
-use crate::server::telemetry::TelemetryEvent;
+use windows_result::{Error as WindowsError, HRESULT};
 
 const DOCKER_DESKTOP_WSL_DISTRO_PREFIX: &str = "docker-desktop";
 const RANCHER_DESKTOP_WSL_DISTRO_PREFIX: &str = "rancher-desktop";
 
+/// The registry reports this HRESULT when a key or value does not exist.
+const KEY_NOT_FOUND_ERR: HRESULT = HRESULT::from_win32(0x80070002);
+
 /// Contains information about WSL distributions available on the user's Windows machine.
-pub(crate) struct WslInfo {
+pub struct WslInfo {
     distributions: Vec<Distribution>,
 }
 
@@ -23,20 +22,25 @@ impl Entity for WslInfo {
 impl SingletonEntity for WslInfo {}
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Distribution {
+pub struct Distribution {
     uuid: String,
     pub name: String,
     pub is_default: bool,
 }
 
+impl Default for WslInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WslInfo {
-    pub(crate) fn new(ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new() -> Self {
         let distributions = match Self::find_available_distributions() {
             Ok(distributions) => distributions,
             // This error merely occurs when the user doesn't have WSL installed/enabled.
             Err(Error::MainKey(err)) => {
                 log::info!("{err:#}");
-                send_telemetry_from_ctx!(TelemetryEvent::WSLRegistryError, ctx);
                 Vec::new()
             }
             Err(err @ Error::DistributionIterator(_)) => {
@@ -47,7 +51,7 @@ impl WslInfo {
         Self { distributions }
     }
 
-    pub(crate) fn distributions(&self) -> impl Iterator<Item = &Distribution> {
+    pub fn distributions(&self) -> impl Iterator<Item = &Distribution> {
         self.distributions.iter()
     }
 

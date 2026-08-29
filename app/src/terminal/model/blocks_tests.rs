@@ -115,6 +115,12 @@ pub fn insert_block_with_prompt(
     insert_block(block_list, command, output)
 }
 
+/// Starts the active block. This wrapper exists because the inherent method is `pub(super)`,
+/// which tests outside the model module tree cannot call.
+pub fn start_active_block(block_list: &mut BlockList) {
+    block_list.start_active_block();
+}
+
 /// Calling `command_finished` is all that's necessary for tests that only
 /// advance the block list and check the state (e.g. like the length of the
 /// block list, the bootstrapped state). Tests that check for messages sent to the

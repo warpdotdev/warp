@@ -71,7 +71,6 @@ pub mod session_settings;
 pub mod settings;
 mod share_block_modal;
 pub mod shared_session;
-mod shell_launch_state;
 pub mod universal_developer_input;
 
 pub mod ssh;
@@ -83,9 +82,6 @@ mod waterfall_gap_element;
 mod writeable_pty;
 #[cfg(feature = "tui")]
 pub use writeable_pty::{PtyIntent, PtyIntentEvent, TerminalSurface};
-#[cfg(windows)]
-pub mod wsl;
-
 pub mod cli_agent;
 pub use cli_agent::CLIAgent;
 pub(crate) mod cli_agent_sessions;
@@ -95,12 +91,12 @@ pub use mock_terminal_manager::MockTerminalManager;
 use model_events::{ModelEvent, ModelEventDispatcher};
 pub use secret_regex_updater::CustomSecretRegexUpdater;
 pub use share_block_modal::{ShareBlockModal, ShareBlockModalEvent, ShareBlockType};
-pub use shell_launch_state::ShellLaunchState;
 pub use terminal_manager::TerminalManager;
 pub use view::{
     CANCEL_COMMAND_KEYBINDING, TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
     TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING, TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
 };
+pub use warp_terminal::shell_launch_state::ShellLaunchState;
 
 use crate::settings::SelectionSettings;
 /// The broadcast channel capacity for PTY reads.

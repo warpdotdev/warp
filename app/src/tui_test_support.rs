@@ -57,7 +57,7 @@ use crate::terminal::model::session::{
 use crate::terminal::model::terminal_model::HandlerEvent;
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::SafeModeSettings;
-use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::session_settings::{SessionSettings, ShellSettings};
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::{History, HistoryEntry, HistoryEvent};
 use crate::tui_onboarding_markers::TuiOnboardingMarkers;
@@ -416,6 +416,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.update(crate::terminal::general_settings::GeneralSettings::register);
     SafeModeSettings::register(app);
     SessionSettings::register(app);
+    ShellSettings::register(app);
 
     app.add_singleton_model(|_| repo_metadata::repositories::DetectedRepositories::default());
     app.add_singleton_model(watcher::HomeDirectoryWatcher::new_for_test);

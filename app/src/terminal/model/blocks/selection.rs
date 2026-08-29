@@ -7,23 +7,19 @@ use sum_tree::SeekBias;
 use vec1::{Vec1, vec1};
 use warp_core::semantic_selection::SemanticSelection;
 use warp_terminal::model::grid::CellType;
+use warpui::EntityId;
 use warpui::text::{IsRect, SelectionType};
 use warpui::units::{IntoLines as _, Lines};
-use warpui::{AppContext, EntityId, ViewAsRef as _};
 
 use super::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, RichContentItem,
 };
-use crate::ai::blocklist::AIBlock;
-use crate::ai::blocklist::block::PendingUserQueryBlock;
-use crate::env_vars::env_var_collection_block::EnvVarCollectionBlock;
 use crate::terminal::GridType;
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::model::block::BlockSection;
 use crate::terminal::model::index::{Direction, Point, Side};
 use crate::terminal::model::selection::{ExpandedSelectionRange, Selection, SelectionDirection};
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
-use crate::terminal::warpify::success_block::WarpifySuccessBlock;
 
 /// A selection that can span multiple blocks (and thus grids). Here row is the number of lines from
 /// the top of all blocks.
@@ -105,6 +101,16 @@ impl BlockListSelection {
         } else {
             tail
         }
+    }
+
+    /// The point of the selection's head anchor.
+    pub fn head_point(&self) -> BlockListPoint {
+        self.head.point
+    }
+
+    /// The point of the selection's tail anchor.
+    pub fn tail_point(&self) -> BlockListPoint {
+        self.tail.point
     }
 
     /// Given a block list position (offset from the top-left corner of the
@@ -312,9 +318,9 @@ impl BlockListSelection {
 }
 
 #[derive(Debug)]
-struct ExpandedSelection {
-    absolute_point: BlockListPoint,
-    within_grid_point: WithinBlock<Point>,
+pub struct ExpandedSelection {
+    pub absolute_point: BlockListPoint,
+    pub within_grid_point: WithinBlock<Point>,
 }
 
 impl ExpandedSelection {
@@ -921,228 +927,6 @@ impl BlockList {
         self.smart_select_override = None;
     }
 
-    pub fn selection_to_string(
-        &self,
-        semantic_selection: &SemanticSelection,
-        inverted_blocklist: bool,
-        app: &AppContext,
-    ) -> Option<String> {
-        match self.expand_selection(semantic_selection, inverted_blocklist) {
-            Some(ExpandedSelectionRange::Regular { start, end, .. }) => {
-                let start_within_grid_point = start.within_grid_point;
-                let end_within_grid_point = end.within_grid_point;
-
-                let mut selected_texts: Vec<String> = vec![];
-                let mut selection_start_cursor = self
-                    .block_heights()
-                    .cursor::<BlockHeight, BlockHeightSummary>();
-                let original_selection = self
-                    .selection
-                    .as_ref()
-                    .expect("Selection should exist if it can be expanded");
-                let mut top_row = original_selection.head.point.row;
-                let mut bottom_row = original_selection.tail.point.row;
-
-                // Ensure that top_row is always above bottom_row so we can loop based on block heights.
-                if original_selection.tail.point.row < original_selection.head.point.row {
-                    top_row = original_selection.tail.point.row;
-                    bottom_row = original_selection.head.point.row;
-                }
-                selection_start_cursor.seek(&BlockHeight::from(top_row), SeekBias::Right);
-
-                // Loop over each block, adding their contents to the output.
-                let transcript_scope = self.transcript_scope();
-                while bottom_row >= selection_start_cursor.start().height {
-                    let Some(item) = selection_start_cursor.item() else {
-                        // We reached the end of the block list.
-                        break;
-                    };
-                    // Otherwise, accumulate selection depending on block type.
-                    match item {
-                        BlockHeightItem::Block { .. } => {
-                            let block_index = selection_start_cursor.start().block_count.into();
-                            if let Some(command_block) = self.block_at(block_index) {
-                                // Don't copy hidden or empty blocks.
-                                if command_block.is_empty(transcript_scope) {
-                                    selection_start_cursor.next();
-                                    continue;
-                                }
-
-                                let start_point =
-                                    if block_index == start.within_grid_point.block_index {
-                                        start_within_grid_point.into()
-                                    } else {
-                                        command_block.start_point()
-                                    };
-                                let end_point = if block_index == end.within_grid_point.block_index
-                                {
-                                    end_within_grid_point.into()
-                                } else {
-                                    command_block.end_point()
-                                };
-
-                                selected_texts
-                                    .push(command_block.bounds_to_string(start_point, end_point));
-                            }
-                        }
-                        BlockHeightItem::RichContent(RichContentItem { view_id, .. }) => {
-                            if let Some(selected_text) =
-                                read_selected_text_from_ai_block(*view_id, app)
-                            {
-                                selected_texts.push(selected_text);
-                            }
-                            if let Some(selected_text) =
-                                read_selected_text_from_pending_user_query_block(*view_id, app)
-                            {
-                                selected_texts.push(selected_text);
-                            }
-
-                            if let Some(active_window_id) = app.windows().active_window()
-                                && let Some(ssh_block) = app
-                                    .view_with_id::<WarpifySuccessBlock>(active_window_id, *view_id)
-                            {
-                                let warpify_success_block = app.view(&ssh_block);
-                                if let Some(selected_text) = warpify_success_block.selected_text() {
-                                    selected_texts.push(selected_text);
-                                }
-                            }
-                        }
-                        BlockHeightItem::Gap(_)
-                        | BlockHeightItem::RestoredBlockSeparator { .. }
-                        | BlockHeightItem::InlineBanner { .. }
-                        | BlockHeightItem::SubshellSeparator { .. } => {}
-                    }
-
-                    selection_start_cursor.next();
-                }
-
-                if inverted_blocklist {
-                    selected_texts.reverse();
-                }
-
-                Some(selected_texts.join("\n"))
-            }
-            Some(ExpandedSelectionRange::Rect { rows }) => {
-                let mut selected_texts: Vec<String> = vec![];
-
-                let mut selection_start_cursor = self
-                    .block_heights()
-                    .cursor::<BlockHeight, BlockHeightSummary>();
-                let original_selection = self
-                    .selection
-                    .as_ref()
-                    .expect("Selection should exist if it can be expanded");
-
-                let head_row = original_selection.head.point.row;
-                let tail_row = original_selection.tail.point.row;
-                let top_row = head_row.min(tail_row);
-                let bottom_row = head_row.max(tail_row);
-
-                selection_start_cursor.seek(&BlockHeight::from(top_row), SeekBias::Right);
-
-                // Loop over each _command block_ row in the rect selection. Add the content to the selected_texts result.
-                // Note that there could be rich content blocks in between the command block rows. Therefore in each iteration
-                // we need to check and append the intermediate rich content selections.
-                for (start, end) in rows {
-                    let current_row = start.absolute_point.row;
-
-                    // Read rich content selected text in the intermediate rich content blocks.
-                    while current_row >= selection_start_cursor.start().height {
-                        if let Some(BlockHeightItem::RichContent(item)) =
-                            selection_start_cursor.item()
-                        {
-                            if let Some(selected_text) =
-                                read_selected_text_from_ai_block(item.view_id, app)
-                            {
-                                selected_texts.push(selected_text);
-                            }
-                            if let Some(selected_text) =
-                                read_selected_text_from_pending_user_query_block(item.view_id, app)
-                            {
-                                selected_texts.push(selected_text);
-                            }
-                        }
-                        selection_start_cursor.next();
-                    }
-                    let Some(command_block) = self.block_at(start.within_grid_point.block_index)
-                    else {
-                        continue;
-                    };
-                    let start_point = start.within_grid_point.into();
-                    let end_point = end.within_grid_point.into();
-                    selected_texts.push(command_block.bounds_to_string(start_point, end_point));
-                }
-
-                // Read AI block selected text in the trailing AI blocks.
-                while bottom_row >= selection_start_cursor.start().height {
-                    if let Some(BlockHeightItem::RichContent(item)) = selection_start_cursor.item()
-                    {
-                        if let Some(selected_text) =
-                            read_selected_text_from_ai_block(item.view_id, app)
-                        {
-                            selected_texts.push(selected_text);
-                        }
-                        if let Some(selected_text) =
-                            read_selected_text_from_pending_user_query_block(item.view_id, app)
-                        {
-                            selected_texts.push(selected_text);
-                        }
-                    }
-                    selection_start_cursor.next();
-                }
-
-                Some(selected_texts.join("\n"))
-            }
-            None => {
-                // Check if there are rich content blocks in the selection. This is to cover
-                // an edge case when selection only spans rich content blocks, expand_selection
-                // will return None.
-                let ids = self.rich_content_blocks_in_selection();
-
-                if ids.is_empty() {
-                    return None;
-                }
-
-                let mut selected_texts = vec![];
-                for view_id in ids {
-                    if let Some(selected_text) = read_selected_text_from_ai_block(view_id, app) {
-                        selected_texts.push(selected_text);
-                    }
-
-                    if let Some(active_window_id) = app.windows().active_window() {
-                        if let Some(env_var_block) =
-                            app.view_with_id::<EnvVarCollectionBlock>(active_window_id, view_id)
-                        {
-                            let block = app.view(&env_var_block);
-                            if let Some(selected_text) = block.selected_text(app) {
-                                selected_texts.push(selected_text);
-                            }
-                        }
-
-                        if let Some(ssh_block) =
-                            app.view_with_id::<WarpifySuccessBlock>(active_window_id, view_id)
-                        {
-                            let warpify_success_block = app.view(&ssh_block);
-                            if let Some(selected_text) = warpify_success_block.selected_text() {
-                                selected_texts.push(selected_text);
-                            }
-                        }
-                    }
-
-                    if let Some(selected_text) =
-                        read_selected_text_from_pending_user_query_block(view_id, app)
-                    {
-                        selected_texts.push(selected_text);
-                    }
-                }
-
-                // TODO: If `selected_texts` is empty, should we return `None` instead of `Some("")`?
-                // As of 02/18/2025, this scenario can be reproduced by single-clicking anywhere on an AI response block.
-                Some(selected_texts.join("\n"))
-            }
-        }
-    }
-
     /// Whether there is a renderable selection with the current blocklist config.
     pub fn has_renderable_selection(
         &self,
@@ -1252,7 +1036,7 @@ impl BlockList {
 
     /// Return the list of corresponding rich content block view ids contained in the active
     /// text selection.
-    fn rich_content_blocks_in_selection(&self) -> Vec<EntityId> {
+    pub fn rich_content_blocks_in_selection(&self) -> Vec<EntityId> {
         let Some(original_selection) = self.selection.as_ref() else {
             // Without a point-based selection, a selection may still be active
             // inside a rich content (AI) block, which manages its own selection
@@ -1293,7 +1077,7 @@ impl BlockList {
     /// Converts the underlying selection into a pair of ordered WithinBlock<Point>s
     /// Takes a (head, tail) pair and returns a (start, end) pair, which as an invariant
     /// of this function are now ordered.
-    fn expand_selection(
+    pub fn expand_selection(
         &self,
         semantic_selection: &SemanticSelection,
         inverted_blocklist: bool,
@@ -1565,28 +1349,6 @@ impl BlockList {
         }
         end.absolute_point
     }
-}
-
-/// Given the view id of an AI block, return the active selected text in that block.
-fn read_selected_text_from_ai_block(view_id: EntityId, app: &AppContext) -> Option<String> {
-    let active_window_id = app.windows().active_window()?;
-
-    let ai_block = app.view_with_id::<AIBlock>(active_window_id, view_id)?;
-    let ai_block_view = app.view(&ai_block);
-    ai_block_view.selected_text(app)
-}
-
-/// Given the view id of a pending user query block, return the active selected text in that block.
-fn read_selected_text_from_pending_user_query_block(
-    view_id: EntityId,
-    app: &AppContext,
-) -> Option<String> {
-    let active_window_id = app.windows().active_window()?;
-
-    let pending_user_query_block =
-        app.view_with_id::<PendingUserQueryBlock>(active_window_id, view_id)?;
-    let pending_user_query_block_view = app.view(&pending_user_query_block);
-    pending_user_query_block_view.selected_text(app)
 }
 
 #[cfg(test)]

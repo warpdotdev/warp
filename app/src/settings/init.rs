@@ -34,7 +34,9 @@ use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
 use crate::terminal::ligature_settings::LigatureSettings;
 use crate::terminal::safe_mode_settings::SafeModeSettings;
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::session_settings::{
+    SessionSettings, SessionSettingsChangedEvent, ShellSettings,
+};
 use crate::terminal::settings::TerminalSettings;
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::warpify::settings::WarpifySettings;
@@ -60,6 +62,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     BlockVisibilitySettings::register(ctx);
     DebugSettings::register(ctx);
     SessionSettings::register(ctx);
+    ShellSettings::register(ctx);
     KeysSettings::register(ctx);
     FontSettings::register(ctx);
     TabSettings::register(ctx);

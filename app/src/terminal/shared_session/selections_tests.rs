@@ -9,6 +9,7 @@ use crate::terminal::model::blocks::BlockListPoint;
 use crate::terminal::model::index::{Point, Side};
 use crate::terminal::model::terminal_model::WithinBlock;
 use crate::terminal::shared_session::tests::terminal_model_for_viewer;
+use crate::terminal::view::selection::selection_to_string;
 use crate::terminal::{GridType, SizeInfo, SizeUpdate, SizeUpdateReason, TerminalModel};
 
 /// Creates a [`SelectionType::Simple`], left-to-right text selection
@@ -105,9 +106,7 @@ fn test_selections_across_different_filtered_blocklists() {
                 },
             );
             assert_eq!(
-                sharer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&sharer_model, &semantic_selection, false, ctx).unwrap(),
                 "bar"
             );
 
@@ -137,9 +136,7 @@ fn test_selections_across_different_filtered_blocklists() {
             .unwrap();
             create_simple_text_selection(&mut viewer_model, viewer_start, viewer_end);
             assert_eq!(
-                viewer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&viewer_model, &semantic_selection, false, ctx).unwrap(),
                 "bar"
             );
 
@@ -166,9 +163,7 @@ fn test_selections_across_different_filtered_blocklists() {
             .unwrap();
             create_simple_text_selection(&mut viewer_model, viewer_start, viewer_end);
             assert_eq!(
-                viewer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&viewer_model, &semantic_selection, false, ctx).unwrap(),
                 "bar"
             );
         })
@@ -221,9 +216,7 @@ fn test_selection_of_undisplayed_row() {
                 },
             );
             assert_eq!(
-                sharer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&sharer_model, &semantic_selection, false, ctx).unwrap(),
                 "foo"
             );
 
@@ -313,9 +306,7 @@ fn test_selections_from_larger_grid_to_smaller_grid() {
                 },
             );
             assert_eq!(
-                sharer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&sharer_model, &semantic_selection, false, ctx).unwrap(),
                 "line"
             );
 
@@ -345,9 +336,7 @@ fn test_selections_from_larger_grid_to_smaller_grid() {
             .unwrap();
             create_simple_text_selection(&mut viewer_model, viewer_start, viewer_end);
             assert_eq!(
-                viewer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&viewer_model, &semantic_selection, false, ctx).unwrap(),
                 "line"
             );
         })
@@ -410,9 +399,7 @@ fn test_selections_from_smaller_grid_to_larger_grid() {
                 },
             );
             assert_eq!(
-                sharer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&sharer_model, &semantic_selection, false, ctx).unwrap(),
                 "line"
             );
 
@@ -442,9 +429,7 @@ fn test_selections_from_smaller_grid_to_larger_grid() {
             .unwrap();
             create_simple_text_selection(&mut viewer_model, viewer_start, viewer_end);
             assert_eq!(
-                viewer_model
-                    .selection_to_string(&semantic_selection, false, ctx)
-                    .unwrap(),
+                selection_to_string(&viewer_model, &semantic_selection, false, ctx).unwrap(),
                 "line"
             );
         })

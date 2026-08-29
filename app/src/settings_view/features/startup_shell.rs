@@ -10,7 +10,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 use crate::terminal::local_tty::shell::is_valid_path_or_command_for_supported_shell;
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::session_settings::{ShellSettings, ShellSettingsChangedEvent};
 use crate::view_components::dropdown::TOP_MENU_BAR_HEIGHT;
 use crate::view_components::{Dropdown, DropdownItem};
 
@@ -68,10 +68,10 @@ impl StartupShellView {
             shells.get_user_preferred_shell(ctx).get_custom_path()
         });
 
-        ctx.subscribe_to_model(&SessionSettings::handle(ctx), |me, _, event, ctx| {
+        ctx.subscribe_to_model(&ShellSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
-                SessionSettingsChangedEvent::StartupShellOverride { .. }
+                ShellSettingsChangedEvent::StartupShellOverride { .. }
             ) {
                 Self::update_dropdown_state(me.shell_dropdown.clone(), ctx);
                 me.maybe_update_editor_state(ctx);

@@ -579,36 +579,14 @@ impl TryFrom<PersistedAIAgentActionType> for AIAgentActionType {
     }
 }
 
-/// The types of "blocks" we can store in our SQLite database for session restoration. Only command
-/// blocks are true [`crate::terminal::model::block::Block`]s.
-///
-/// TODO(roland): now that there is no AI serialized block, consider removing this enum wrapper
-#[derive(Debug, Clone, PartialEq)]
-pub enum SerializedBlockListItem {
-    Command { block: Box<SerializedBlock> },
-}
+pub use crate::terminal::model::block::SerializedBlockListItem;
 
-impl SerializedBlockListItem {
-    pub(crate) fn start_ts(&self) -> Option<DateTime<Local>> {
-        match self {
-            Self::Command { block } => block.start_ts,
-        }
-    }
-}
-
-impl From<crate::persistence::model::Block> for SerializedBlockListItem {
-    fn from(value: crate::persistence::model::Block) -> Self {
-        Self::Command {
-            block: Box::new(SerializedBlock::from(value)),
-        }
-    }
-}
-
-impl From<SerializedBlock> for SerializedBlockListItem {
-    fn from(value: SerializedBlock) -> Self {
-        Self::Command {
-            block: Box::new(value),
-        }
+/// Converts a block row loaded from the SQLite database into a restored block-list item.
+pub(crate) fn block_list_item_from_persisted_block(
+    block: crate::persistence::model::Block,
+) -> SerializedBlockListItem {
+    SerializedBlockListItem::Command {
+        block: Box::new(SerializedBlock::from(block)),
     }
 }
 

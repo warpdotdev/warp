@@ -45,7 +45,7 @@ pub fn initialize_settings_for_tests_with_mode(
     use crate::terminal::keys_settings::KeysSettings;
     use crate::terminal::ligature_settings::LigatureSettings;
     use crate::terminal::safe_mode_settings::SafeModeSettings;
-    use crate::terminal::session_settings::SessionSettings;
+    use crate::terminal::session_settings::{SessionSettings, ShellSettings};
     use crate::terminal::settings::TerminalSettings;
     use crate::terminal::shared_session::settings::SharedSessionSettings;
     use crate::terminal::warpify::settings::WarpifySettings;
@@ -108,6 +108,7 @@ pub fn initialize_settings_for_tests_with_mode(
         WarpifySettings::register(ctx);
     });
     SessionSettings::register(app);
+    ShellSettings::register(app);
     SshSettings::register(app);
     TabSettings::register(app);
     TerminalSettings::register(app);

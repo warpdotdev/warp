@@ -1,15 +1,9 @@
-pub mod new_session_shell;
-pub mod startup_shell;
-pub mod working_directory_config;
-
 use instant::Duration;
 use lazy_static::lazy_static;
-pub use new_session_shell::*;
 use serde::{Deserialize, Serialize};
-pub use startup_shell::*;
 use warp_core::settings::macros::define_settings_group;
 use warp_core::settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
-pub use working_directory_config::*;
+pub use warp_terminal::shell_settings::*;
 
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::context_chips::ContextChipKind;
@@ -275,27 +269,6 @@ impl ToolbarChipSelection for CLIAgentToolbarChipSelection {
 }
 
 define_settings_group!(SessionSettings, settings: [
-    working_directory_config: WorkingDirectoryConfig,
-    startup_shell_override: StartupShellOverride {
-        type: StartupShell,
-        default: StartupShell::default(),
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Never,
-        surface: settings::SettingSurfaces::GUI,
-        private: false,
-        toml_path: "session.startup_shell_override",
-        description: "The shell to use when Warp starts up.",
-    },
-    new_session_shell_override: NewSessionShellOverride {
-        type: Option<NewSessionShell>,
-        default: None,
-        supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Never,
-        surface: settings::SettingSurfaces::GUI,
-        private: false,
-        toml_path: "session.new_session_shell_override",
-        description: "The shell to use when opening a new session.",
-    }
     honor_ps1: HonorPS1 {
         type: bool,
         default: false,
@@ -430,15 +403,3 @@ define_settings_group!(SessionSettings, settings: [
         private: true,
     },
 ]);
-
-settings::macros::implement_setting_for_enum!(
-    WorkingDirectoryConfig,
-    SessionSettings,
-    SupportedPlatforms::ALL,
-    SyncToCloud::Never,
-    surface: settings::SettingSurfaces::GUI,
-    private: false,
-    toml_path: "session.working_directory_config",
-    max_table_depth: 1,
-    description: "Controls the working directory used when opening new sessions.",
-);

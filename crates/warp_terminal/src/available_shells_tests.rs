@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use virtual_fs::{Stub, VirtualFS};
 use warp_core::features::FeatureFlag;
 
 use super::*;
-use crate::terminal::shell::ShellType;
-use crate::test_util::{Stub, VirtualFS};
+use crate::shell::ShellType;
 
 fn make_available_shells(shells: Vec<AvailableShell>) -> AvailableShells {
     AvailableShells {

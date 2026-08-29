@@ -1,6 +1,7 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use serde::{Deserialize, Serialize};
 use warp_graphql::mutations::share_block::DisplaySetting as GqlDisplaySetting;
+use warpui::units::Lines;
 
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::block::{Block as ClientBlock, BlockTime};
@@ -36,6 +37,28 @@ impl From<DisplaySetting> for GqlDisplaySetting {
             DisplaySetting::Other(s) => GqlDisplaySetting::Other(s),
         }
     }
+}
+
+/// Used for determining the height of the block with `DisplaySettings` used when sharing a block.
+pub fn full_content_height_with_display_options(
+    block: &ClientBlock,
+    display_setting: &DisplaySetting,
+    show_prompt: bool,
+) -> Lines {
+    let mut height = block.padding_top();
+    if show_prompt && !block.render_prompt_on_same_line() {
+        height += block.prompt_height() + block.command_padding_top();
+    }
+
+    let command_height = block.prompt_and_command_height();
+
+    height += match display_setting {
+        DisplaySetting::Command => command_height,
+        DisplaySetting::Output => block.output_grid_full_content_height(),
+        _ => command_height + block.padding_middle() + block.output_grid_full_content_height(),
+    };
+    height += block.padding_bottom();
+    height
 }
 
 /// A representation of a Block for the server.

@@ -39,6 +39,7 @@ mod pending_user_query;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_instructions_block;
 pub mod rich_content;
+pub(crate) mod selection;
 mod shared_session;
 mod shell_terminated_banner;
 pub mod ssh_file_upload;
@@ -460,7 +461,7 @@ use crate::terminal::recorder::PtyRecorder;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::session_settings::{
     DEFAULT_THRESHOLD_FOR_LONG_RUNNING_NOTIFICATION, NotificationsMode, NotificationsSettings,
-    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
+    SessionSettings, SessionSettingsChangedEvent, ShellSettings, ToolbarChipSelection,
 };
 use crate::terminal::settings::{TerminalSettings, TerminalSettingsChangedEvent};
 use crate::terminal::shared_session::manager::Manager;
@@ -14659,9 +14660,7 @@ impl TerminalView {
             .input_mode
             .value();
         let inverted = input_mode.is_inverted_blocklist();
-        self.model
-            .lock()
-            .selection_to_string(semantic_selection, inverted, ctx)
+        selection::selection_to_string(&self.model.lock(), semantic_selection, inverted, ctx)
     }
 
     /// Gets the selected text from the terminal input editor, if any.
@@ -16497,7 +16496,7 @@ impl TerminalView {
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
             .map(|session| session.shell().shell_type().into())
             .unwrap_or_else(|| {
-                SessionSettings::handle(ctx).read(ctx, |settings, _| {
+                ShellSettings::handle(ctx).read(ctx, |settings, _| {
                     settings
                         .new_session_shell_override
                         .value()
@@ -16621,7 +16620,8 @@ impl TerminalView {
         }
 
         let semantic_selection = SemanticSelection::as_ref(ctx);
-        if let Some(selected) = self.model.lock().selection_to_string(
+        if let Some(selected) = selection::selection_to_string(
+            &self.model.lock(),
             semantic_selection,
             self.is_inverted_blocklist(ctx),
             ctx,
@@ -17876,8 +17876,12 @@ impl TerminalView {
         let model = self.model.lock();
 
         let semantic_selection = SemanticSelection::as_ref(ctx);
-        let selection_string =
-            model.selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx);
+        let selection_string = selection::selection_to_string(
+            &model,
+            semantic_selection,
+            self.is_inverted_blocklist(ctx),
+            ctx,
+        );
         if selection_string.is_some() {
             menu_items.push(
                 MenuItemFields::new("Copy")
@@ -18141,9 +18145,7 @@ impl TerminalView {
 
             let selected_text = {
                 let semantic_selection = SemanticSelection::as_ref(ctx);
-                self.model
-                    .lock()
-                    .selection_to_string(semantic_selection, false, ctx)
+                selection::selection_to_string(&self.model.lock(), semantic_selection, false, ctx)
                     // It doesn't make sense to allow empty text as AI context.
                     .filter(|text| !text.is_empty())
             };
@@ -18454,8 +18456,12 @@ impl TerminalView {
         let selection_settings = SelectionSettings::handle(ctx);
         let semantic_selection = SemanticSelection::as_ref(ctx);
         let model = self.model.lock();
-        let selected_text =
-            model.selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx);
+        let selected_text = selection::selection_to_string(
+            &model,
+            semantic_selection,
+            self.is_inverted_blocklist(ctx),
+            ctx,
+        );
         if let Some(selected) = selected_text {
             selection_settings.update(ctx, |selection_settings, ctx| {
                 selection_settings
@@ -19526,7 +19532,8 @@ impl TerminalView {
     /// Assistant panel.
     fn ask_ai(&mut self, ask_source: &AskAISource, ctx: &mut ViewContext<Self>) {
         let semantic_selection = SemanticSelection::as_ref(ctx);
-        let selection_string = self.model.lock().selection_to_string(
+        let selection_string = selection::selection_to_string(
+            &self.model.lock(),
             semantic_selection,
             self.is_inverted_blocklist(ctx),
             ctx,
@@ -19749,7 +19756,7 @@ impl TerminalView {
         self.find_bar.update(ctx, |view, ctx| {
             let semantic_selection = SemanticSelection::as_ref(ctx);
             if let Some(selected) =
-                model.selection_to_string(semantic_selection, inverted_blocklist, ctx)
+                selection::selection_to_string(&model, semantic_selection, inverted_blocklist, ctx)
                 && !selected.is_empty()
             {
                 view.set_query_text(selected.as_str(), ctx);
@@ -20865,9 +20872,8 @@ impl TerminalView {
     /// Rich content blocks render and own their text selections independently of
     /// the point-based model selection used for regular command blocks, so the
     /// model can't derive this on its own. Mirroring it here is what allows the
-    /// copy/insert paths (which go through
-    /// [`BlockList::selection_to_string`](crate::terminal::model::TerminalModel))
-    /// to find text selected inside an AI block.
+    /// copy/insert paths (which go through `selection::selection_to_string` in the
+    /// view layer) to find text selected inside an AI block.
     fn sync_ai_block_model_selection(
         &mut self,
         block: &ViewHandle<AIBlock>,
@@ -21208,10 +21214,10 @@ impl TerminalView {
 
             let is_shell_mode = !self.ai_input_model.as_ref(ctx).is_ai_input_enabled();
             let are_blocks_selected = !self.selected_blocks.is_empty();
-            let is_text_selected = model
-                .selection_to_string(semantic_selection, false, ctx)
-                .filter(|text| !text.is_empty())
-                .is_some();
+            let is_text_selected =
+                selection::selection_to_string(&model, semantic_selection, false, ctx)
+                    .filter(|text| !text.is_empty())
+                    .is_some();
 
             // Leave the input box focused when selecting blocks or text as context in AI input
             // mode so users can quickly submit queries.
@@ -21293,7 +21299,8 @@ impl TerminalView {
             let semantic_selection = SemanticSelection::as_ref(ctx);
             // Note: we purposely separate this expression here, to avoid locking the TerminalModel for the duration of the `if let`
             // block, since downstream functions may need the lock (`Input::insert_internal`).
-            let selected_text = self.model.lock().selection_to_string(
+            let selected_text = selection::selection_to_string(
+                &self.model.lock(),
                 semantic_selection,
                 self.is_inverted_blocklist(ctx),
                 ctx,
@@ -21469,8 +21476,12 @@ impl TerminalView {
         {
             let semantic_selection = SemanticSelection::as_ref(ctx);
             let model = self.model.lock();
-            let selected_text =
-                model.selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx);
+            let selected_text = selection::selection_to_string(
+                &model,
+                semantic_selection,
+                self.is_inverted_blocklist(ctx),
+                ctx,
+            );
             if let Some(selected_text) = selected_text {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(selected_text));
@@ -26249,7 +26260,7 @@ impl TerminalView {
             .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
             .map(|session| session.shell().shell_type().into())
             .unwrap_or_else(|| {
-                SessionSettings::handle(ctx).read(ctx, |settings, _| {
+                ShellSettings::handle(ctx).read(ctx, |settings, _| {
                     settings
                         .new_session_shell_override
                         .value()
@@ -26555,14 +26566,18 @@ impl TypedActionView for TerminalView {
             BlockTextSelect(_) => {
                 let semantic_selection = SemanticSelection::as_ref(ctx);
                 let model = self.model.lock();
-                model
-                    .selection_to_string(semantic_selection, self.is_inverted_blocklist(ctx), ctx)
-                    .map_or(Empty, |selected| {
-                        Custom(AccessibilityContent::new_without_help(
-                            selected,
-                            WarpA11yRole::TextRole,
-                        ))
-                    })
+                selection::selection_to_string(
+                    &model,
+                    semantic_selection,
+                    self.is_inverted_blocklist(ctx),
+                    ctx,
+                )
+                .map_or(Empty, |selected| {
+                    Custom(AccessibilityContent::new_without_help(
+                        selected,
+                        WarpA11yRole::TextRole,
+                    ))
+                })
             }
             BlockSelect { .. }
             | SelectPriorBlock

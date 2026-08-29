@@ -413,7 +413,7 @@ use crate::terminal::resizable_data::{
 use crate::terminal::safe_mode_settings::SafeModeSettings;
 use crate::terminal::session_settings::{
     NewSessionSource, NotificationsMode, NotificationsSettings, SessionSettings,
-    SessionSettingsChangedEvent, WorkingDirectoryMode,
+    SessionSettingsChangedEvent, ShellSettings, WorkingDirectoryMode,
 };
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
 use crate::terminal::shared_session::SharedSessionActionSource;
@@ -12894,7 +12894,7 @@ impl Workspace {
             // preserve the current tab's default directory color when the new tab inherits the working directory
             // (otherwise the new tab's color flashes from no-color to default color during bootstrapping).
             if FeatureFlag::DirectoryTabColors.is_enabled() && is_new_terminal {
-                let wd_config = &SessionSettings::as_ref(ctx).working_directory_config;
+                let wd_config = &ShellSettings::as_ref(ctx).working_directory_config;
                 let inherits_cwd = wd_config.config_for_source(NewSessionSource::Tab).mode
                     == WorkingDirectoryMode::PreviousDir
                     || wd_config.config_for_source(NewSessionSource::Window).mode

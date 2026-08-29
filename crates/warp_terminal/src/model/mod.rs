@@ -22,6 +22,7 @@ pub mod index {
 }
 pub mod iterm_image;
 pub mod kitty;
+mod long_running_command;
 mod mode;
 pub mod mouse;
 pub mod secrets;
@@ -33,5 +34,6 @@ pub use block_index::BlockIndex;
 pub use grid::GridStorage;
 pub use grid_type::GridType;
 pub use indexing::*;
+pub use long_running_command::{LongRunningCommandControlState, UserTakeOverReason};
 pub use mode::{KeyboardModes, KeyboardModesApplyBehavior, TermMode};
 pub use secrets::{ObfuscateSecrets, Secret, SecretHandle};

@@ -4295,7 +4295,7 @@ fn test_insert() {
                 let semantic_selection = SemanticSelection::as_ref(ctx);
                 let model = view.model.lock();
                 let context_selected_text =
-                    model.selection_to_string(semantic_selection, false, ctx);
+                    selection::selection_to_string(&model, semantic_selection, false, ctx);
                 assert_eq!(context_selected_text, expected_text);
             });
         };
@@ -4621,9 +4621,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         // No selection should've occurred as we aren't intercepting mouse events.
         terminal.read(&app, |view, ctx| {
             let selected_text =
-                view.model
-                    .lock()
-                    .selection_to_string(&semantic_selection, false, ctx);
+                selection::selection_to_string(&view.model.lock(), &semantic_selection, false, ctx);
             assert_eq!(selected_text, None);
         });
 
@@ -4676,9 +4674,7 @@ fn test_alt_screen_select_with_sgr_mouse() {
         // This time we expect a selection since the Shift key had been held for this mouse drag.
         terminal.read(&app, |view, ctx| {
             let selected_text =
-                view.model
-                    .lock()
-                    .selection_to_string(&semantic_selection, false, ctx);
+                selection::selection_to_string(&view.model.lock(), &semantic_selection, false, ctx);
             assert_eq!(selected_text.as_ref().unwrap(), "JKLMNOPQRSTUVWXYZ[\\]^_`a");
         });
     })

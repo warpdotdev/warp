@@ -4,12 +4,12 @@ use chrono::{DateTime, Local, TimeZone as _};
 use serde::{Deserialize, Serialize};
 use serde_bytes_repr::{ByteFmtDeserializer, ByteFmtSerializer};
 use warp_core::command::ExitCode;
+use warp_terminal::model::LongRunningCommandControlState;
 
 use super::AgentInteractionMetadata;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
-use crate::ai::blocklist::block::cli_controller::LongRunningCommandControlState;
 use crate::terminal::ShellHost;
 use crate::terminal::model::BlockId;
 use crate::terminal::model::block::{
@@ -374,6 +374,31 @@ impl From<crate::persistence::model::Block> for SerializedBlock {
             agent_view_visibility: block
                 .agent_view_visibility
                 .and_then(|json| serde_json::from_str(&json).ok()),
+        }
+    }
+}
+
+/// The types of "blocks" we can store in our SQLite database for session restoration. Only command
+/// blocks are true [`crate::terminal::model::block::Block`]s.
+///
+/// TODO(roland): now that there is no AI serialized block, consider removing this enum wrapper
+#[derive(Debug, Clone, PartialEq)]
+pub enum SerializedBlockListItem {
+    Command { block: Box<SerializedBlock> },
+}
+
+impl SerializedBlockListItem {
+    pub fn start_ts(&self) -> Option<DateTime<Local>> {
+        match self {
+            Self::Command { block } => block.start_ts,
+        }
+    }
+}
+
+impl From<SerializedBlock> for SerializedBlockListItem {
+    fn from(value: SerializedBlock) -> Self {
+        Self::Command {
+            block: Box::new(value),
         }
     }
 }

@@ -15,7 +15,9 @@ pub use selection::SelectionRange;
 use sum_tree::{Dimension, Item, SeekBias, SumTree};
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_terminal::block_banner::WithinBlockBanner;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
+use warp_terminal::{InlineBannerId, InlineBannerItem, SeparatorId};
 use warpui::r#async::executor::Background;
 use warpui::color::ColorU;
 use warpui::units::{IntoLines, IntoPixels, Lines};
@@ -35,7 +37,7 @@ use super::selection::ScrollDelta;
 use super::terminal_model::RangeInModel;
 use crate::ai::agent::AIAgentActionId;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::blocklist::{AIBlock, SerializedBlockListItem};
+use crate::ai::blocklist::AIBlock;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::event::Event::{AfterBlockCompleted, TerminalClear};
@@ -48,7 +50,8 @@ use crate::terminal::model::ansi::{
     PromptMetadata, StandardCharset, TabulationClearMode,
 };
 use crate::terminal::model::block::{
-    AgentViewVisibility, Block, InteractionMode, SerializedBlock, TranscriptScope,
+    AgentViewVisibility, Block, InteractionMode, SerializedBlock, SerializedBlockListItem,
+    TranscriptScope,
 };
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::bootstrap::BootstrapStage;
@@ -57,7 +60,6 @@ use crate::terminal::model::index::{Point, VisibleRow};
 use crate::terminal::model::iterm_image::ITermImage;
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::terminal_model::{BlockIndex, WithinBlock};
-use crate::terminal::view::{InlineBannerId, InlineBannerItem, SeparatorId, WithinBlockBanner};
 use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 
 #[cfg(feature = "local_fs")]
@@ -4259,4 +4261,7 @@ mod tests;
 use warp_errors::report_error;
 
 #[cfg(test)]
-pub use self::tests::insert_block;
+pub use self::tests::{
+    command_finished_and_precmd, input_string, insert_block, new_bootstrapped_block_list,
+    start_active_block,
+};

@@ -7,6 +7,7 @@ use vec1::vec1;
 use warp_completer::completer::MatchedSuggestion;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_core::semantic_selection::SemanticSelection;
 use warp_terminal::model::ansi::ClearMode;
 use warpui::r#async::executor::Background;
 use warpui::text::{SelectionType, str_to_byte_vec};

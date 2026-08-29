@@ -31,6 +31,7 @@ pub mod suggested_rule_modal;
 mod suggestion_chip_view;
 pub mod summarization_cancel_dialog;
 pub(crate) mod telemetry;
+pub(crate) mod terminal_contents;
 pub mod usage;
 
 pub(crate) mod codebase_index_speedbump_banner;
@@ -129,7 +130,9 @@ pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedR
 pub(crate) use persistence::PersistedAIInputType;
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub use persistence::maybe_build_ai_query_upsert_event;
-pub(crate) use persistence::{PersistedAIInput, SerializedBlockListItem};
+pub(crate) use persistence::{
+    PersistedAIInput, SerializedBlockListItem, block_list_item_from_persisted_block,
+};
 pub(crate) use queued_query::{
     AutofireAction, QueuedQuery, QueuedQueryId, QueuedQueryOrigin, is_lrc_auto_queue_active,
 };

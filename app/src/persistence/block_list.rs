@@ -11,7 +11,10 @@ use itertools::Itertools;
 
 use super::model::Block;
 use super::{model, schema};
-use crate::ai::blocklist::{PersistedAIInput, PersistedAIInputType, SerializedBlockListItem};
+use crate::ai::blocklist::{
+    PersistedAIInput, PersistedAIInputType, SerializedBlockListItem,
+    block_list_item_from_persisted_block,
+};
 use crate::app_state::PaneUuid;
 use crate::persistence::schema::ai_queries;
 use crate::terminal::model::block::{SerializedAgentViewVisibility, SerializedBlock};
@@ -227,7 +230,10 @@ pub(super) fn get_all_restored_blocks(
         .map(|(blocks, terminal_pane)| {
             (
                 PaneUuid(terminal_pane.uuid),
-                blocks.into_iter().map(Into::into).collect(),
+                blocks
+                    .into_iter()
+                    .map(block_list_item_from_persisted_block)
+                    .collect(),
             )
         })
         .collect::<HashMap<_, Vec<SerializedBlockListItem>>>();

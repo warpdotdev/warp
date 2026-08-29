@@ -1,4 +1,5 @@
 use pathfinder_color::ColorU;
+pub use warp_terminal::block_banner::WarpifyBannerState;
 use warpui::Element;
 use warpui::elements::{
     Align, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement, Shrinkable,
@@ -17,48 +18,18 @@ use crate::ui_components::blended_colors;
 const CLOSE_BUTTON_DIAMETER: f32 = 20.0;
 const STANDARD_PADDING: f32 = 8.0;
 
-pub struct WarpifyBannerState {
-    /// The subshell command that triggered the banner.
-    pub command: String,
-    pub height: f32,
-    pub accept_button_mouse_state: MouseStateHandle,
-    pub dont_ask_button_mouse_state: MouseStateHandle,
-    pub dismiss_button_mouse_state: MouseStateHandle,
-
-    /// This keybinding gets rendered in the Warpification banner, but we can't look it up
-    /// during render as a &mut AppContext is not available then. This needs to get
-    /// looked up during action handling and cached here.
-    pub initialize_warpify_keybinding: Option<Keystroke>,
-    pub hover_state: MouseStateHandle,
+fn warpify_banner_action() -> TerminalAction {
+    TerminalAction::TriggerSubshellBootstrap
 }
 
-impl WarpifyBannerState {
-    pub fn new(command: String, initialize_warpify_keybinding: Option<Keystroke>) -> Self {
-        Self {
-            command,
-            height: 0.0,
-            initialize_warpify_keybinding,
-            accept_button_mouse_state: Default::default(),
-            dont_ask_button_mouse_state: Default::default(),
-            dismiss_button_mouse_state: Default::default(),
-            hover_state: Default::default(),
-        }
-    }
-
-    pub fn title(&self) -> &str {
-        "Warpify subshell"
-    }
-
-    pub fn action(&self) -> TerminalAction {
-        TerminalAction::TriggerSubshellBootstrap
-    }
-
-    fn remember_for_warpification(&self, should_remember: bool) -> RememberForWarpification {
-        if should_remember {
-            RememberForWarpification::RememberSubshellCommand(self.command.to_owned())
-        } else {
-            RememberForWarpification::DoNotRememberSubshellCommand
-        }
+fn remember_for_warpification(
+    state: &WarpifyBannerState,
+    should_remember: bool,
+) -> RememberForWarpification {
+    if should_remember {
+        RememberForWarpification::RememberSubshellCommand(state.command.to_owned())
+    } else {
+        RememberForWarpification::DoNotRememberSubshellCommand
     }
 }
 
@@ -76,7 +47,7 @@ pub fn render_warpification_banner(
         appearance,
     );
 
-    let remember = state.remember_for_warpification(true);
+    let remember = remember_for_warpification(state, true);
     let dont_ask_button = Container::new(
         appearance
             .ui_builder()
@@ -96,7 +67,7 @@ pub fn render_warpification_banner(
     .with_margin_right(16.)
     .finish();
 
-    let do_not_remember = state.remember_for_warpification(false);
+    let do_not_remember = remember_for_warpification(state, false);
     let close_button = appearance
         .ui_builder()
         .close_button(
@@ -175,7 +146,7 @@ fn render_yes_button(
                 ..Default::default()
             }),
     };
-    let action = state.action();
+    let action = warpify_banner_action();
     yes_button
         .build()
         .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.to_owned()))

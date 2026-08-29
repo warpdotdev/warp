@@ -9,7 +9,7 @@ use crate::terminal::ShellLaunchData;
 use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::available_shells::AvailableShells;
-use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
+use crate::terminal::session_settings::{NewSessionSource, ShellSettings};
 
 impl Workspace {
     /// Helper function to compute the initial directory for a new session
@@ -159,7 +159,7 @@ fn compute_startup_directory_from_prev_session(
     ignore_custom_directory: bool,
     ctx: &ViewContext<Workspace>,
 ) -> Option<PathBuf> {
-    SessionSettings::handle(ctx).read(ctx, |settings, _ctx| {
+    ShellSettings::handle(ctx).read(ctx, |settings, _ctx| {
         settings
             .working_directory_config
             .initial_directory_for_new_session(

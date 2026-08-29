@@ -16,13 +16,14 @@ use string_offset::CharOffset;
 use warp_completer::meta::Span;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
-use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
 pub use warp_terminal::event::ExitReason;
 use warp_terminal::event::validate_and_decode_in_band_command_output_to_bytes;
 pub use warp_terminal::model::{BlockIndex, RangeInModel};
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
-use warpui::AppContext;
+use warp_terminal::shared_session::{
+    SharedSessionSource, SharedSessionStatus, encode_agent_response_event,
+};
 use warpui::assets::asset_cache::Asset;
 use warpui::r#async::executor::Background;
 use warpui::image_cache::ImageType;
@@ -31,7 +32,7 @@ use super::super::{AltScreen, BlockList};
 use super::ansi::{BootstrappedValue, FinishUpdateValue, InputBufferValue, Mode, PendingHook};
 use super::block::{
     AgentInteractionMetadata, Block, BlockId, BlockMetadata, BlockSize, BlockState,
-    BlocklistEnvVarMetadata, SerializedBlock,
+    BlocklistEnvVarMetadata, SerializedBlock, SerializedBlockListItem,
 };
 use super::blockgrid::BlockGrid;
 use super::blocks::{ActiveBlockCompletion, BlockFilter};
@@ -53,7 +54,6 @@ use super::selection::ScrollDelta;
 use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionId};
 use super::{Secret, SecretHandle};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::SerializedBlockListItem;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;
@@ -77,8 +77,6 @@ use crate::terminal::model::index::VisibleRow;
 use crate::terminal::model::iterm_image::{ITermImage, ITermImageMetadata};
 use crate::terminal::model::secrets::ObfuscateSecrets;
 use crate::terminal::model::session::SessionInfo;
-use crate::terminal::shared_session::ai_agent::encode_agent_response_event;
-use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::shell::{ShellName, ShellType};
 use crate::terminal::ssh::util::{InteractiveSshCommand, SshLoginState};
 use crate::terminal::{
@@ -1847,22 +1845,6 @@ impl TerminalModel {
     /// Returns the grid containing the user's custom prompt.
     pub fn prompt_grid(&self) -> Option<&BlockGrid> {
         self.prompt_block().map(|block| block.prompt_grid())
-    }
-
-    /// Returns **all** selected text across the entire `TerminalView` view hierarchy.
-    /// This includes selected text within regular blocks, AI blocks, inline actions, etc.
-    pub fn selection_to_string(
-        &self,
-        semantic_selection: &SemanticSelection,
-        inverted_blocklist: bool,
-        app: &AppContext,
-    ) -> Option<String> {
-        if self.alt_screen_active {
-            self.alt_screen.selection_to_string(semantic_selection)
-        } else {
-            self.block_list
-                .selection_to_string(semantic_selection, inverted_blocklist, app)
-        }
     }
 
     /// Returns the underlying text string for the given range in the model.

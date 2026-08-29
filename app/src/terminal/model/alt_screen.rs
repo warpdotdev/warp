@@ -3,13 +3,13 @@ use std::io;
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-use itertools::Itertools;
 use num_traits::Float as _;
 use parking_lot::Mutex;
 use pathfinder_color::ColorU;
 use vec1::Vec1;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_errors::report_error;
+use warp_terminal::ColorSampler;
 use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::text::SelectionType;
 use warpui::units::Lines;
@@ -23,7 +23,6 @@ use super::secrets::RespectObfuscatedSecrets;
 use super::selection::{ExpandedSelectionRange, ScrollDelta};
 use crate::terminal::event::Event as TerminalEvent;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::grid_renderer::ColorSampler;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     Attr, CharsetIndex, ClearMode, CommandFinishedValue, CursorShape, CursorStyle, LineClearMode,
@@ -246,36 +245,6 @@ impl AltScreen {
         self.selection = None;
         self.event_proxy
             .send_app_event(TerminalEvent::TextSelectionChanged);
-    }
-
-    pub fn selection_to_string(&self, semantic_selection: &SemanticSelection) -> Option<String> {
-        let selection_range = self.selection_range(semantic_selection)?;
-        Some(match selection_range {
-            ExpandedSelectionRange::Regular { start, end, .. } => {
-                self.grid_handler.bounds_to_string(
-                    start,
-                    end,
-                    false, /* include_esc_sequences */
-                    RespectObfuscatedSecrets::Yes,
-                    false, /* force_obfuscated_secrets */
-                    RespectDisplayedOutput::No,
-                )
-            }
-            ExpandedSelectionRange::Rect { rows } => {
-                rows.into_iter()
-                    .map(|(start, end)| {
-                        self.grid_handler.bounds_to_string(
-                            start,
-                            end,
-                            false, /* include_esc_sequences */
-                            RespectObfuscatedSecrets::Yes,
-                            false, /* force_obfuscated_secrets */
-                            RespectDisplayedOutput::No,
-                        )
-                    })
-                    .join("\n")
-            }
-        })
     }
 
     pub fn possible_file_paths_at_point(

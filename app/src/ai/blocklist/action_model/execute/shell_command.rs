@@ -25,12 +25,13 @@ use crate::ai::agent::{
 use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::blocklist::permissions::CommandExecutionPermission;
+use crate::ai::blocklist::terminal_contents::{
+    CURSOR_MARKER, formatted_terminal_contents_for_input,
+};
 use crate::ai::execution_profiles::WriteToPtyPermission;
 use crate::terminal::TerminalModel;
 use crate::terminal::event::BlockMetadataReceivedEvent;
-use crate::terminal::model::block::{
-    Block, BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
-};
+use crate::terminal::model::block::{Block, BlockId};
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;

@@ -74,10 +74,10 @@ impl WorkingDirectoryView {
         let split_pane_working_directory_editor =
             create_editor(Some(NewSessionSource::SplitPane), ctx);
 
-        ctx.subscribe_to_model(&SessionSettings::handle(ctx), |me, _, event, ctx| {
+        ctx.subscribe_to_model(&ShellSettings::handle(ctx), |me, _, event, ctx| {
             if matches!(
                 event,
-                SessionSettingsChangedEvent::WorkingDirectoryConfig { .. }
+                ShellSettingsChangedEvent::WorkingDirectoryConfig { .. }
             ) {
                 me.working_directory_dropdown.update(ctx, |dropdown, ctx| {
                     init_top_level_dropdown(dropdown, ctx);
@@ -128,7 +128,7 @@ impl View for WorkingDirectoryView {
         let appearance = Appearance::as_ref(app);
         let ui_builder = appearance.ui_builder();
 
-        let settings = SessionSettings::as_ref(app);
+        let settings = ShellSettings::as_ref(app);
         let config = &settings.working_directory_config;
 
         let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -191,7 +191,7 @@ impl TypedActionView for WorkingDirectoryView {
 
         match action {
             SetGlobalWorkingDirectoryMode(mode) => {
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                ShellSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.working_directory_config.update_and_save_value(
                         |config| {
                             if let Some(mode) = mode {
@@ -216,7 +216,7 @@ impl TypedActionView for WorkingDirectoryView {
                 ctx.notify();
             }
             SetPerSourceWorkingDirectoryMode(source, mode) => {
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                ShellSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.working_directory_config.update_and_save_value(
                         |config| match source {
                             NewSessionSource::SplitPane => config.split_pane.mode = *mode,
@@ -230,7 +230,7 @@ impl TypedActionView for WorkingDirectoryView {
                 ctx.notify();
             }
             SetCustomWorkingDirectoryValue(source, value) => {
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                ShellSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.working_directory_config.update_and_save_value(
                         |config| match source {
                             Some(NewSessionSource::SplitPane) => {
@@ -316,7 +316,7 @@ fn init_top_level_dropdown(
     dropdown.set_items(items, ctx);
     dropdown.set_top_bar_max_width(200.);
 
-    let config = &SessionSettings::as_ref(ctx).working_directory_config;
+    let config = &ShellSettings::as_ref(ctx).working_directory_config;
     if config.advanced_mode {
         dropdown.set_selected_by_index(advanced_item_index, ctx);
     } else {
@@ -346,7 +346,7 @@ fn init_per_source_dropdown(
     dropdown.set_items(items, ctx);
     dropdown.set_top_bar_max_width(200.);
 
-    let config = &SessionSettings::as_ref(ctx).working_directory_config;
+    let config = &ShellSettings::as_ref(ctx).working_directory_config;
     let source_config = match source {
         NewSessionSource::SplitPane => &config.split_pane,
         NewSessionSource::Tab => &config.new_tab,
@@ -373,7 +373,7 @@ fn create_editor(
         })
     };
     let initial_value = {
-        let config = &SessionSettings::as_ref(ctx).working_directory_config;
+        let config = &ShellSettings::as_ref(ctx).working_directory_config;
         let source_config = match source {
             None => &config.global,
             Some(NewSessionSource::SplitPane) => &config.split_pane,

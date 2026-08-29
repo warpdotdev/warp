@@ -41,6 +41,7 @@ use super::orchestration_event_streamer::{
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
 use super::queued_query::{QueuedQueryId, QueuedQueryModel};
+use super::terminal_contents::{CURSOR_MARKER, formatted_terminal_contents_for_input};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
@@ -76,9 +77,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::ShellLaunchData;
-use crate::terminal::model::block::{
-    BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
-};
+use crate::terminal::model::block::BlockId;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::terminal_model::TerminalModel;

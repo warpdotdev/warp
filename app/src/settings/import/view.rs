@@ -24,7 +24,7 @@ use crate::settings::{
 };
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
 use crate::terminal::keys_settings::KeysSettings;
-use crate::terminal::session_settings::SessionSettings;
+use crate::terminal::session_settings::ShellSettings;
 use crate::themes::theme::{CustomTheme, SelectedSystemThemes, ThemeKind};
 use crate::ui_components::blended_colors;
 use crate::user_config::{self, WarpConfig};
@@ -603,7 +603,7 @@ impl SettingsImportView {
                 });
             }
             if let Some(Some(default_shell)) = config.default_shell.importable_value() {
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                ShellSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(
                         settings
                             .startup_shell_override
@@ -613,7 +613,7 @@ impl SettingsImportView {
             }
 
             if let Some(Some(working_directory)) = config.working_directory.importable_value() {
-                SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+                ShellSettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(
                         settings
                             .working_directory_config
@@ -720,7 +720,7 @@ impl SettingsImportView {
             report_if_error!(font_settings.monospace_font_size.set_value_to_default(ctx));
             report_if_error!(font_settings.monospace_font_name.set_value_to_default(ctx));
         });
-        SessionSettings::handle(ctx).update(ctx, |settings, ctx| {
+        ShellSettings::handle(ctx).update(ctx, |settings, ctx| {
             report_if_error!(settings.startup_shell_override.set_value_to_default(ctx));
             report_if_error!(settings.working_directory_config.set_value_to_default(ctx));
         });

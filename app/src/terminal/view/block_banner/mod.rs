@@ -8,6 +8,8 @@
 
 mod warpify;
 
+use warp_terminal::block_banner::{BANNER_TOP_MARGIN, CONSTRAINED_BANNER_HEIGHT};
+pub use warp_terminal::block_banner::{BLOCK_BANNER_HEIGHT, WithinBlockBanner};
 pub use warpify::*;
 use warpui::Element;
 use warpui::elements::{
@@ -17,24 +19,9 @@ use warpui::elements::{
 
 use crate::themes::theme::WarpTheme;
 
-const CONSTRAINED_BANNER_HEIGHT: f32 = 48.;
-const BANNER_TOP_MARGIN: f32 = 16.;
 const BANNER_SIDE_MARGIN: f32 = 20.;
 const BANNER_V_PADDING: f32 = 4.;
 const BANNER_H_PADDING: f32 = 8.;
-pub const BLOCK_BANNER_HEIGHT: f32 = CONSTRAINED_BANNER_HEIGHT + BANNER_TOP_MARGIN;
-
-pub enum WithinBlockBanner {
-    WarpifyBanner(WarpifyBannerState),
-}
-
-impl WithinBlockBanner {
-    pub fn banner_height(&self) -> f32 {
-        match self {
-            WithinBlockBanner::WarpifyBanner(_) => BLOCK_BANNER_HEIGHT,
-        }
-    }
-}
 
 /// These Elements should be common across all block banners. The specific content for each banner
 /// should be passed in here. This function also enforces the height invariant.

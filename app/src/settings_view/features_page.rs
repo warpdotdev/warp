@@ -91,12 +91,14 @@ use crate::terminal::keys_settings::{
     ActivationHotkeyEnabled, CtrlTabBehaviorSetting, KeysSettings, KeysSettingsChangedEvent,
 };
 #[cfg(feature = "local_tty")]
+use crate::terminal::session_settings::ShellSettingsChangedEvent;
+#[cfg(feature = "local_tty")]
 use crate::terminal::session_settings::StartupShellOverride;
 #[cfg(feature = "local_tty")]
 use crate::terminal::session_settings::WorkingDirectoryConfig;
 use crate::terminal::session_settings::{
     Notifications, NotificationsMode, NotificationsSettings, SessionSettings,
-    SessionSettingsChangedEvent, ShouldConfirmCloseSession,
+    SessionSettingsChangedEvent, ShellSettings, ShouldConfirmCloseSession,
 };
 use crate::terminal::settings::{
     AsyncFindEnabled, MaximumGridSize, Osc52ClipboardAccess, Osc52ClipboardAccessSetting,
@@ -2344,27 +2346,26 @@ impl FeaturesPageView {
                             );
                         });
                 }
-                SessionSettingsChangedEvent::NewSessionShellOverride { .. } => {
-                    #[cfg(feature = "local_tty")]
-                    {
-                        use super::features::startup_shell::NewSessionShellAction;
-                        use crate::terminal::session_settings::StartupShell;
-                        me.startup_shell_view.update(ctx, |_, ctx| {
-                            if matches!(
-                                *SessionSettings::as_ref(ctx).startup_shell_override.value(),
-                                StartupShell::Custom(_),
-                            ) {
-                                ctx.dispatch_typed_action(
-                                    &NewSessionShellAction::ShowCustomPathInput,
-                                );
-                            }
-                            ctx.notify();
-                        });
-                    }
-                }
                 _ => {}
             }
             ctx.notify()
+        });
+        ctx.subscribe_to_model(&ShellSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
+        #[cfg(feature = "local_tty")]
+        ctx.subscribe_to_model(&ShellSettings::handle(ctx), |me, _, event, ctx| {
+            if let ShellSettingsChangedEvent::NewSessionShellOverride { .. } = event {
+                use super::features::startup_shell::NewSessionShellAction;
+                use crate::terminal::session_settings::StartupShell;
+                me.startup_shell_view.update(ctx, |_, ctx| {
+                    if matches!(
+                        *ShellSettings::as_ref(ctx).startup_shell_override.value(),
+                        StartupShell::Custom(_),
+                    ) {
+                        ctx.dispatch_typed_action(&NewSessionShellAction::ShowCustomPathInput);
+                    }
+                    ctx.notify();
+                });
+            }
         });
         ctx.subscribe_to_model(
             &TerminalSettings::handle(ctx),
@@ -2855,13 +2856,14 @@ impl FeaturesPageView {
 
         #[cfg(feature = "local_tty")]
         {
-            if session_settings
+            let shell_settings = ShellSettings::as_ref(ctx);
+            if shell_settings
                 .startup_shell_override
                 .is_supported_on_current_platform()
             {
                 session_widgets.push(Box::new(StartupShellWidget::default()));
             }
-            if session_settings
+            if shell_settings
                 .working_directory_config
                 .is_supported_on_current_platform()
             {

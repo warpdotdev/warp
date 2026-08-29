@@ -134,7 +134,7 @@ use crate::terminal::model::session::Session;
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 #[cfg(feature = "remote_tty")]
 use crate::terminal::remote_tty::TerminalManager as RemoteTtyTerminalManager;
-use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
+use crate::terminal::session_settings::{NewSessionSource, SessionSettings, ShellSettings};
 use crate::terminal::shared_session::render_util::ParticipantAvatarParams;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeModal, RoleChangeModalEvent,
@@ -6660,7 +6660,7 @@ impl PaneGroup {
             let initial_directory_from_current_session =
                 self.startup_path_for_new_session(base_pane_id_for_context, ctx);
 
-            SessionSettings::handle(ctx).read(ctx, |settings, _ctx| {
+            ShellSettings::handle(ctx).read(ctx, |settings, _ctx| {
                 settings
                     .working_directory_config
                     .initial_directory_for_new_session(
