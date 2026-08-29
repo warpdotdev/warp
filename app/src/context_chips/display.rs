@@ -173,9 +173,9 @@ impl PromptDisplay {
             || new_chips.iter().enumerate().any(|(i, chip_result)| {
                 let existing_chip = &self.display_chips[i];
                 existing_chip.read(ctx, |chip, _| {
-                    chip.value() != chip_result.value.as_ref()
-                        || chip.chip_kind() != &chip_result.kind
-                        || chip.on_click_values() != chip_result.on_click_values.as_slice()
+                    chip.value() != chip_result.value()
+                        || chip.chip_kind() != chip_result.kind()
+                        || chip.on_click_values() != chip_result.on_click_values()
                 })
             })
     }
@@ -197,7 +197,7 @@ impl PromptDisplay {
             .as_ref(ctx)
             .chips(ctx)
             .into_iter()
-            .filter(|chip| chip.value.is_some())
+            .filter(|chip| chip.value().is_some())
             .collect()
     }
 
@@ -209,7 +209,7 @@ impl PromptDisplay {
         while let Some(chip_result) = display_chips.next() {
             let next_chip_kind = display_chips
                 .peek()
-                .map(|chip_result| chip_result.kind.clone());
+                .map(|chip_result| chip_result.kind().clone());
 
             let is_shared_session_viewer = self.is_shared_session_viewer;
 
@@ -336,8 +336,8 @@ impl PromptDisplay {
             prompt
                 .chips(ctx)
                 .iter()
-                .find(|chip_result| matches!(chip_result.kind, ContextChipKind::ShellGitBranch))
-                .and_then(|chip_result| chip_result.value.as_ref().map(|v| v.to_string()))
+                .find(|chip_result| matches!(chip_result.kind(), ContextChipKind::ShellGitBranch))
+                .and_then(|chip_result| chip_result.value().map(|v| v.to_string()))
         })
     }
 

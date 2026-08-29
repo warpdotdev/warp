@@ -292,6 +292,50 @@ impl ShellFamily {
     }
 }
 
+pub fn serialize_shell_variables<'s, V: ?Sized + 's, I, F>(
+    pairs: I,
+    prefix: &str,
+    separator: &str,
+    postfix: &str,
+    delimiter: &str,
+    shell_family: ShellFamily,
+    format_value: F,
+) -> String
+where
+    I: IntoIterator<Item = (&'s str, &'s V)>,
+    F: Fn(&V, ShellFamily) -> String,
+{
+    // Prefix — what's prepended to each variable
+    // Separator — what separates the variable name from the value
+    // Postfix — what's appended to the end of each variable
+    // Delimiter — what separates one variable from the next one
+    // set -x var_name var_value;   set -x name2 value2;
+    // ------     -             -   -
+    //   ^        ^             ^   ^
+    // prefix  separator   postfix  delimiter (in this case 4 spaces, usually one space or newline)
+    pairs
+        .into_iter()
+        .map(|(name, value)| {
+            format!(
+                "{}{}{}{}{}",
+                prefix,
+                shell_family.escape(name),
+                separator,
+                format_value(value, shell_family),
+                postfix
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(delimiter)
+}
+
+pub fn serialize_constant_shell_variable_value(value: &str, shell_family: ShellFamily) -> String {
+    match shell_family {
+        ShellFamily::Posix => shell_family.escape(value).into_owned(),
+        ShellFamily::PowerShell => format!("'{}'", value.replace("'", "''")),
+    }
+}
+
 /// Returns `true` iff the given string is a valid POSIX portable pathname.
 /// Source: https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/V1_chap03.html#tag_03_271
 pub fn is_posix_portable_pathname(s: &str) -> bool {

@@ -22,7 +22,8 @@ use crate::chip_configurator::{ChipConfigurator, ChipConfiguratorAction, ChipCon
 use crate::context_chips::prompt::{Prompt, PromptConfiguration, PromptSelection};
 use crate::context_chips::renderer::Renderer as ContextChipRenderer;
 use crate::context_chips::{
-    ChipAvailability, ChipRuntimeCapabilities, ContextChipKind, available_chips,
+    ChipAvailability, ChipRuntimeCapabilities, ContextChipKind, ContextChipKindAppExt,
+    available_chips,
 };
 use crate::server::telemetry::{PromptChoice, TelemetryEvent};
 use crate::settings::{FontSettings, WarpPromptSeparator};

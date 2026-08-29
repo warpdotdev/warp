@@ -28,7 +28,9 @@ use crate::context_chips::context_chip::{Environment, PromptGenerator};
 #[cfg(feature = "local_fs")]
 use crate::context_chips::display_chip::GitBranchTrackingStatus;
 use crate::context_chips::prompt::Prompt;
-use crate::context_chips::{ChipAvailability, ChipDisabledReason, ContextChipKind};
+use crate::context_chips::{
+    ChipAvailability, ChipDisabledReason, ContextChipKind, ContextChipKindAppExt,
+};
 use crate::features::FeatureFlag;
 use crate::menu::MenuItem;
 use crate::server::server_api::ServerApiProvider;

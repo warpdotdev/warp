@@ -23,12 +23,12 @@ use super::context_chip::{
 };
 use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
 use super::prompt::Prompt;
-use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string};
+use super::{ChipResult, ChipValue, ContextChipKind, ContextChipKindAppExt, chips_to_string};
 use crate::CLIAgentSessionsModel;
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
 use crate::code_review::github_repo_model::{GitHubRepoEvent, GitHubRepoModel};
-use crate::context_chips::display_chip::GitLineChanges;
+use crate::context_chips::display_chip::git_line_changes_from_diff_stats;
 use crate::editor::EditorView;
 use crate::features::FeatureFlag;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -1463,11 +1463,11 @@ impl CurrentPrompt {
             return None;
         }
 
-        Some(ChipResult {
-            kind: chip_kind.clone(),
-            value: state.last_computed_value.clone(),
-            on_click_values: state.last_on_click_values.clone().unwrap_or_default(),
-        })
+        Some(ChipResult::new(
+            chip_kind.clone(),
+            state.last_computed_value.clone(),
+            state.last_on_click_values.clone().unwrap_or_default(),
+        ))
     }
 
     /// Serializes the current prompt as an unstyled string.
@@ -1479,11 +1479,11 @@ impl CurrentPrompt {
                 .filter_map(|chip_kind| {
                     let value = &self.states.get(&chip_kind)?.last_computed_value;
                     let on_click_value = self.states.get(&chip_kind)?.last_on_click_values.clone();
-                    let chip_result = ChipResult {
-                        kind: chip_kind,
-                        value: value.clone(),
-                        on_click_values: on_click_value.unwrap_or_default(),
-                    };
+                    let chip_result = ChipResult::new(
+                        chip_kind,
+                        value.clone(),
+                        on_click_value.unwrap_or_default(),
+                    );
                     Some(chip_result)
                 }),
         )
@@ -1626,7 +1626,7 @@ impl CurrentPrompt {
         }
 
         // Update GitDiffStats with structured data directly.
-        let new_diff_stats = ChipValue::GitDiffStats(GitLineChanges::from_diff_stats(
+        let new_diff_stats = ChipValue::GitDiffStats(git_line_changes_from_diff_stats(
             &metadata.stats_against_head,
         ));
         let current_diff_stats = self

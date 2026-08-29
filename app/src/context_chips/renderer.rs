@@ -1,8 +1,8 @@
 //! The renderer for a single context chip.
 
-use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::Fill;
+pub use warp_terminal::context_chips::RendererStyles;
 use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, DraggableState, Flex, Hoverable,
     MouseStateHandle, OffsetPositioning, ParentElement, ParentOffsetBounds, Stack, Text,
@@ -14,7 +14,7 @@ use warpui::{Action, Element};
 
 use super::context_chip::ContextChip;
 use super::display_chip::{chip_container, udi_font_size};
-use super::{ChipAvailability, ChipValue, ContextChipKind, spacing};
+use super::{ChipAvailability, ChipValue, ContextChipKind, ContextChipKindAppExt, spacing};
 use crate::appearance::Appearance;
 use crate::ui_components::icons;
 
@@ -22,21 +22,6 @@ use crate::ui_components::icons;
 const CORNER_RADIUS_PIXELS: f32 = 4.;
 const ICON_MARGIN_RIGHT: f32 = 6.;
 const LABEL_MARGIN_BOTTOM: f32 = 6.;
-
-#[derive(Clone)]
-pub struct RendererStyles {
-    pub value_color: ColorU,
-    pub font_properties: Properties,
-}
-
-impl RendererStyles {
-    pub fn new(value_color: ColorU, font_properties: Properties) -> Self {
-        Self {
-            value_color,
-            font_properties,
-        }
-    }
-}
 
 #[derive(Clone, Copy)]
 pub enum ChipDragState {

@@ -1,10 +1,8 @@
+use ai_types::{AIAgentActionId, AIConversationId, TaskId};
 use anyhow::anyhow;
 use warp_terminal::model::{LongRunningCommandControlState, UserTakeOverReason};
 
 use super::{Block, SerializedAIMetadata};
-use crate::ai::agent::AIAgentActionId;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::task::TaskId;
 use crate::terminal::event::Event;
 
 impl Block {

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ai_types::WarpAiExecutionContext;
 use warp_core::SessionId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -8,9 +9,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::{Session, SessionType, Sessions};
-use crate::ai_assistant::execution_context::{
-    WarpAiExecutionContext, execution_context_for_session,
-};
+use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::model::session::SessionsEvent;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};

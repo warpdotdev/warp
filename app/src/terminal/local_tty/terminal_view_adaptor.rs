@@ -35,7 +35,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::context_chips::current_prompt::CurrentPrompt;
-use crate::context_chips::prompt_snapshot::PromptSnapshot;
+use crate::context_chips::prompt_snapshot::prompt_snapshot_from_current_prompt;
 use crate::context_chips::prompt_type::PromptType;
 use crate::editor::CrdtOperation;
 use crate::features::FeatureFlag;
@@ -265,7 +265,7 @@ fn wire_up_terminal_view_session_sharing(
             return
         }
         let prompt_snapshot = current_prompt.read(ctx, |current_prompt, ctx| {
-            PromptSnapshot::from_current_prompt(current_prompt, ctx)
+            prompt_snapshot_from_current_prompt(current_prompt, ctx)
         });
         if let Some(network) = session_sharer_clone.borrow().as_ref() {
             let Ok(serialized_prompt) = serde_json::to_string(&prompt_snapshot) else {

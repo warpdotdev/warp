@@ -2,6 +2,7 @@
 mod action_model;
 pub mod agent_view;
 pub mod block;
+mod block_list_ext;
 mod child_agent_launch;
 pub mod code_block;
 mod context_model;
@@ -76,6 +77,7 @@ pub use action_model::{
 pub(crate) use block::model::testing::FakeAIBlockModel;
 pub(crate) use block::{AIBlock, AIBlockEvent, RequestedEditResolution, init, model};
 pub use block::{keyboard_navigable_buttons, toggleable_items};
+pub(crate) use block_list_ext::BlockListAiViewExt;
 pub use child_agent_launch::inherit_child_agent_settings;
 #[cfg(not(target_family = "wasm"))]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]

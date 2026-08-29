@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use ai_types::{AIAgentActionId, AIConversationId, TaskId};
 use chrono::{DateTime, Local, TimeZone as _};
 use serde::{Deserialize, Serialize};
 use serde_bytes_repr::{ByteFmtDeserializer, ByteFmtSerializer};
@@ -7,9 +8,6 @@ use warp_core::command::ExitCode;
 use warp_terminal::model::LongRunningCommandControlState;
 
 use super::AgentInteractionMetadata;
-use crate::ai::agent::AIAgentActionId;
-use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::task::TaskId;
 use crate::terminal::ShellHost;
 use crate::terminal::model::BlockId;
 use crate::terminal::model::block::{

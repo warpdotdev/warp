@@ -4,6 +4,7 @@ mod block_list_items;
 mod block_padding;
 pub mod bootstrap;
 mod color_sampler;
+pub mod context_chips;
 pub mod event;
 pub mod event_listener;
 pub mod focus_env;

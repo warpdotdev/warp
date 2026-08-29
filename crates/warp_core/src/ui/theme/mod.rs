@@ -582,6 +582,49 @@ impl TerminalColors {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct PromptColors {
+    pub input_prompt_conversation_management: ColorU,
+    pub input_prompt_pwd: ColorU,
+    pub input_prompt_git: ColorU,
+    pub input_prompt_branch: ColorU,
+    pub input_prompt_agent_mode_hint: ColorU,
+    pub input_prompt_agent_mode_tasks: ColorU,
+    pub input_prompt_dirty_color: ColorU,
+    pub input_prompt_virtual_env: ColorU,
+    pub input_prompt_user_and_host: ColorU,
+    pub input_prompt_date: ColorU,
+    pub input_prompt_time: ColorU,
+    pub input_prompt_kubernetes: ColorU,
+    pub input_prompt_svn: ColorU,
+    pub input_prompt_separator: ColorU,
+    pub input_prompt_subshell: ColorU,
+    pub input_prompt_ssh: ColorU,
+}
+
+impl From<WarpTheme> for PromptColors {
+    fn from(theme: WarpTheme) -> Self {
+        PromptColors {
+            input_prompt_conversation_management: theme.terminal_colors().normal.white.into(),
+            input_prompt_pwd: theme.terminal_colors().normal.magenta.into(),
+            input_prompt_git: theme.terminal_colors().normal.green.into(),
+            input_prompt_agent_mode_hint: theme.terminal_colors().normal.yellow.into(),
+            input_prompt_agent_mode_tasks: theme.terminal_colors().normal.yellow.into(),
+            input_prompt_branch: theme.terminal_colors().normal.yellow.into(),
+            input_prompt_dirty_color: theme.terminal_colors().normal.green.into(),
+            input_prompt_virtual_env: theme.terminal_colors().normal.yellow.into(),
+            input_prompt_user_and_host: theme.terminal_colors().normal.green.into(),
+            input_prompt_date: theme.terminal_colors().normal.cyan.into(),
+            input_prompt_time: theme.terminal_colors().normal.red.into(),
+            input_prompt_kubernetes: theme.terminal_colors().normal.cyan.into(),
+            input_prompt_ssh: theme.terminal_colors().normal.blue.into(),
+            input_prompt_subshell: theme.terminal_colors().normal.blue.into(),
+            input_prompt_svn: theme.terminal_colors().normal.blue.into(),
+            input_prompt_separator: theme.terminal_colors().normal.magenta.into(),
+        }
+    }
+}
+
 #[derive(Serialize, Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct WarpTheme {
     background: Fill,

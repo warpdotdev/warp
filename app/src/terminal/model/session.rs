@@ -20,6 +20,8 @@ use futures::future::{BoxFuture, Shared};
 use instant::Instant;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
+#[cfg(feature = "local_tty")]
+use settings::Setting as _;
 use smol_str::SmolStr;
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use version_compare::Version;
@@ -41,6 +43,8 @@ use crate::features::FeatureFlag;
 #[cfg(feature = "local_tty")]
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
+#[cfg(feature = "local_tty")]
+use crate::settings::DebugSettings;
 use crate::terminal::event::{ExecutedExecutorCommandEvent, RemoteServerSetupState};
 use crate::terminal::shell::{Shell, ShellType};
 use crate::terminal::warpify::SubshellSource;
@@ -374,11 +378,37 @@ impl Sessions {
                 .as_ref()
                 .and_then(|session_id| self.sessions.get(session_id))
                 .map(|session| &session.info);
+            #[cfg(feature = "local_tty")]
+            let local_tty_config = {
+                let remote_server_client = if FeatureFlag::SshRemoteServer.is_enabled()
+                    && matches!(
+                        session_info.is_ssh_wrapper_session,
+                        IsSSHWrapperSession::Yes { .. }
+                    ) {
+                    RemoteServerManager::handle(ctx).read(ctx, |manager, _| {
+                        manager.client_for_session(session_info.session_id).cloned()
+                    })
+                } else {
+                    None
+                };
+                let debug_settings = DebugSettings::as_ref(ctx);
+                command_executor::LocalTtyCommandExecutorConfig {
+                    remote_server_client,
+                    are_in_band_generators_for_all_sessions_enabled: *debug_settings
+                        .are_in_band_generators_for_all_sessions_enabled
+                        .value(),
+                    should_force_disable_in_band_generators: *debug_settings
+                        .force_disable_in_band_generators
+                        .value(),
+                }
+            };
             command_executor::new_command_executor_for_session(
                 &session_info,
                 &self.executor_command_tx,
                 in_band_command_output_rx,
                 parent_session_info,
+                #[cfg(feature = "local_tty")]
+                local_tty_config,
                 ctx,
             )
         };

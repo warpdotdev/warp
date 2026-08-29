@@ -1,6 +1,7 @@
 use std::fs;
 use std::sync::Arc;
 
+use ai_types::{AIAgentActionId, AIConversationId};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Local};
 use vec1::vec1;
@@ -13,7 +14,6 @@ use warpui::r#async::executor::Background;
 use warpui::text::{SelectionType, str_to_byte_vec};
 
 use super::*;
-use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::color;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ObfuscateSecrets;
@@ -87,7 +87,7 @@ fn take_typeahead_for_input_advances_incremental_typeahead() {
 fn take_typeahead_for_input_ignores_agent_requested_commands() {
     let mut model = TerminalModel::mock(None, None);
     model.simulate_long_running_block("sleep 5", "");
-    let action_id: crate::ai::agent::AIAgentActionId = "action".to_owned().into();
+    let action_id: AIAgentActionId = "action".to_owned().into();
     model
         .block_list_mut()
         .active_block_mut()

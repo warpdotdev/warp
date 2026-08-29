@@ -2,8 +2,8 @@ use warp_errors::report_error;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::current_prompt::CurrentPrompt;
-use super::prompt_snapshot::PromptSnapshot;
-use super::{ChipResult, ChipValue, ContextChipKind};
+use super::prompt_snapshot::{PromptSnapshot, prompt_snapshot_from_current_prompt};
+use super::{ChipResult, ChipValue, ContextChipKind, ContextChipKindAppExt};
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::settings::WarpPromptSeparator;
 use crate::terminal::model::session::Sessions;
@@ -57,14 +57,14 @@ impl PromptType {
         self.chips(ctx)
             .into_iter()
             .filter_map(|chip_result| {
-                if chip_result.value.is_some() && chip_result.kind.is_copyable() {
-                    if let Some(chip) = chip_result.kind.to_chip() {
+                if chip_result.value().is_some() && chip_result.kind().is_copyable() {
+                    if let Some(chip) = chip_result.kind().to_chip() {
                         Some(
                             MenuItemFields::new(format!("Copy {}", chip.title()))
                                 .with_on_select_action(TerminalAction::ContextMenu(
                                     ContextMenuAction::CopyPrompt {
                                         position,
-                                        part: PromptPart::ContextChip(chip_result.kind),
+                                        part: PromptPart::ContextChip(chip_result.kind().clone()),
                                     },
                                 ))
                                 .into_item(),
@@ -72,7 +72,7 @@ impl PromptType {
                     } else {
                         report_error!(
                             "Missing definition for chip",
-                            extra: { "chip_kind" => ?chip_result.kind }
+                            extra: { "chip_kind" => ?chip_result.kind() }
                         );
                         None
                     }
@@ -104,7 +104,7 @@ impl PromptType {
     pub fn snapshot(&self, ctx: &AppContext) -> PromptSnapshot {
         match self {
             Self::Dynamic { prompt } => {
-                PromptSnapshot::from_current_prompt(prompt.as_ref(ctx), ctx)
+                prompt_snapshot_from_current_prompt(prompt.as_ref(ctx), ctx)
             }
             Self::Static { snapshot } => snapshot.clone(),
         }

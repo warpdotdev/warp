@@ -1,6 +1,6 @@
 use warpui::AppContext;
 
-use crate::context_chips::display_chip::GitLineChanges;
+use crate::context_chips::display_chip::{GitLineChanges, git_line_changes_from_diff_stats};
 use crate::context_chips::{ContextChipKind, git_line_changes_from_chips};
 use crate::terminal::TerminalView;
 
@@ -85,7 +85,7 @@ impl TerminalView {
         // chip display (display.rs) and agent footer (chips.rs).
         let from_model = self
             .git_status_metadata(ctx)
-            .map(|metadata| GitLineChanges::from_diff_stats(&metadata.stats_against_head));
+            .map(|metadata| git_line_changes_from_diff_stats(&metadata.stats_against_head));
 
         from_model
             .or_else(|| {

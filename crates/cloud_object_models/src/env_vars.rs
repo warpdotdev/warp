@@ -3,7 +3,9 @@ use cloud_objects::cloud_object::{
 };
 use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Serialize};
-use warp_util::path::ShellFamily;
+use warp_util::path::{
+    ShellFamily, serialize_constant_shell_variable_value, serialize_shell_variables,
+};
 
 use crate::{JsonModel, JsonSerializer};
 
@@ -137,7 +139,6 @@ impl EnvVarCollection {
         serialize_variables_internal(self.key_value_iter(), "", "=", "", delimiter, shell_family)
     }
 }
-
 pub fn serialize_variables_internal<'s, I: IntoIterator<Item = (&'s str, &'s EnvVarValue)>>(
     pairs: I,
     prefix: &str,
@@ -146,28 +147,15 @@ pub fn serialize_variables_internal<'s, I: IntoIterator<Item = (&'s str, &'s Env
     delimiter: &str,
     shell_family: ShellFamily,
 ) -> String {
-    // Prefix — what's prepended to each variable
-    // Separator — what separates the variable name from the value
-    // Postfix — what's appended to the end of each variable
-    // Delimiter — what separates one variable from the next one
-    // set -x var_name var_value;   set -x name2 value2;
-    // ------     -             -   -
-    //   ^        ^             ^   ^
-    // prefix  separator   postfix  delimiter (in this case 4 spaces, usually one space or newline)
-    pairs
-        .into_iter()
-        .map(|(name, value)| {
-            format!(
-                "{}{}{}{}{}",
-                prefix,
-                shell_family.escape(name),
-                separator,
-                get_init_command_for_env_var_value(value, shell_family),
-                postfix
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(delimiter)
+    serialize_shell_variables(
+        pairs,
+        prefix,
+        separator,
+        postfix,
+        delimiter,
+        shell_family,
+        get_init_command_for_env_var_value,
+    )
 }
 
 pub fn get_init_command_for_env_var_value(
@@ -175,10 +163,7 @@ pub fn get_init_command_for_env_var_value(
     shell_family: ShellFamily,
 ) -> String {
     match value {
-        EnvVarValue::Constant(val) => match shell_family {
-            ShellFamily::Posix => shell_family.escape(val).into_owned(),
-            ShellFamily::PowerShell => format!("'{}'", val.replace("'", "''")),
-        },
+        EnvVarValue::Constant(val) => serialize_constant_shell_variable_value(val, shell_family),
         EnvVarValue::Command(cmd) => format!("$({})", cmd.command),
         EnvVarValue::Secret(secret) => {
             format!("$({})", secret.get_secret_extraction_command(shell_family))

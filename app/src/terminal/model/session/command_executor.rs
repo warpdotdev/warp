@@ -36,6 +36,8 @@ use warp_errors::report_error;
 use warpui::ModelContext;
 
 use super::SessionInfo;
+#[cfg(feature = "local_tty")]
+use crate::remote_server::client::RemoteServerClient;
 use crate::terminal::event::ExecutedExecutorCommandEvent;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::shell::Shell;
@@ -91,17 +93,24 @@ pub trait CommandExecutor: Send + Sync + Debug {
     fn supports_parallel_command_execution(&self) -> bool;
 }
 
+#[cfg(feature = "local_tty")]
+pub struct LocalTtyCommandExecutorConfig {
+    pub remote_server_client: Option<Arc<RemoteServerClient>>,
+    pub are_in_band_generators_for_all_sessions_enabled: bool,
+    pub should_force_disable_in_band_generators: bool,
+}
 #[allow(unused_variables)]
 pub fn new_command_executor_for_session(
     session_info: &SessionInfo,
     executor_command_tx: &Sender<ExecutorCommandEvent>,
     in_band_command_output_rx: Receiver<ExecutedExecutorCommandEvent>,
     parent_session_info: Option<&SessionInfo>,
+    #[cfg(feature = "local_tty")] local_tty_config: LocalTtyCommandExecutorConfig,
     ctx: &mut ModelContext<Sessions>,
 ) -> Arc<dyn CommandExecutor> {
     cfg_if::cfg_if! {
         if #[cfg(feature = "local_tty")] {
-            new_command_executor_for_local_tty_session(session_info, executor_command_tx, in_band_command_output_rx, parent_session_info, ctx)
+            new_command_executor_for_local_tty_session(session_info, executor_command_tx, in_band_command_output_rx, parent_session_info, local_tty_config, ctx)
         } else if  #[cfg(feature = "remote_tty")]{
             new_command_executor_for_network_backed_pty(executor_command_tx, in_band_command_output_rx, ctx)
         } else {
@@ -146,18 +155,16 @@ fn new_command_executor_for_local_tty_session(
     executor_command_tx: &Sender<ExecutorCommandEvent>,
     in_band_command_output_rx: Receiver<ExecutedExecutorCommandEvent>,
     parent_session_info: Option<&SessionInfo>,
+    local_tty_config: LocalTtyCommandExecutorConfig,
     ctx: &mut ModelContext<Sessions>,
 ) -> Arc<dyn CommandExecutor> {
     use msys2_command_executor::MSYS2CommandExecutor;
     use remote_server_executor::RemoteServerCommandExecutor;
-    use settings::Setting as _;
     use warpui::SingletonEntity as _;
     use wsl_command_executor::WslCommandExecutor;
 
     use super::IsSSHWrapperSession;
     use crate::features::FeatureFlag;
-    use crate::remote_server::manager::RemoteServerManager;
-    use crate::settings::DebugSettings;
     use crate::terminal::available_shells::AvailableShells;
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
@@ -179,9 +186,7 @@ fn new_command_executor_for_local_tty_session(
         && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session
     {
         let session_id = session_info.session_id;
-        let maybe_client = RemoteServerManager::handle(ctx)
-            .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
-        if let Some(client) = maybe_client {
+        if let Some(client) = local_tty_config.remote_server_client {
             log::info!("creating a remote server executor for session {session_id:?}");
             return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
         }
@@ -190,13 +195,6 @@ fn new_command_executor_for_local_tty_session(
                  falling back to ControlMaster executor"
         );
     }
-
-    let debug_settings = DebugSettings::as_ref(ctx);
-    let are_in_band_generators_for_all_sessions_enabled_debug_setting = debug_settings
-        .are_in_band_generators_for_all_sessions_enabled
-        .value();
-    let should_force_disable_in_band_generators =
-        debug_settings.force_disable_in_band_generators.value();
 
     let is_ssh_wrapper_session = matches!(
         &session_info.is_ssh_wrapper_session,
@@ -224,7 +222,7 @@ fn new_command_executor_for_local_tty_session(
     );
     let force_use_in_band_generators = shell_needs_in_band_executor
         || launch_data_needs_in_band_executor
-        || *are_in_band_generators_for_all_sessions_enabled_debug_setting;
+        || local_tty_config.are_in_band_generators_for_all_sessions_enabled;
 
     match &session_info.session_type {
         BootstrapSessionType::Local if !force_use_in_band_generators => {
@@ -311,7 +309,7 @@ fn new_command_executor_for_local_tty_session(
             }
         }
         _ => {
-            if *should_force_disable_in_band_generators {
+            if local_tty_config.should_force_disable_in_band_generators {
                 // The user has manually disabled in-band generators via command
                 // modifying 'user defaults', so pass a no-op command executor.
                 //

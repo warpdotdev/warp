@@ -4,6 +4,7 @@ use std::ops::{Range, RangeInclusive};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ai_types::AmbientAgentTaskId;
 use async_channel::Sender;
 use base64::Engine;
 use itertools::Either;
@@ -53,7 +54,6 @@ use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
 use super::session::{BootstrapSessionType, InBandCommandOutputReceiver, SessionId};
 use super::{Secret, SecretHandle};
-use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::block_filter::BlockFilterQuery;
 use crate::terminal::block_list_element::GridType;

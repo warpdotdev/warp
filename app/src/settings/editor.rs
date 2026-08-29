@@ -4,6 +4,7 @@ use enum_iterator::{Sequence, all};
 use serde::{Deserialize, Serialize};
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, Setting as _, SupportedPlatforms, SyncToCloud};
+pub use warp_terminal::context_chips::WarpPromptSeparator;
 use warpui::ModelContext;
 
 #[derive(
@@ -124,56 +125,6 @@ impl TabBehavior {
             TabBehavior::Completions => "Open completions menu",
             TabBehavior::Autosuggestions => "Accept autosuggestion",
             TabBehavior::UserDefined => "User defined",
-        }
-    }
-}
-
-/// This enum is used to enforce options in the dropdown for selecting a separator with the Warp prompt.
-/// Note that these separators are added at the END of the Warp prompt (used in the case of same line prompt).
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    PartialEq,
-    Deserialize,
-    Serialize,
-    schemars::JsonSchema,
-    settings_value::SettingsValue,
-)]
-#[schemars(
-    description = "Trailing separator character displayed at the end of the prompt.",
-    rename_all = "snake_case"
-)]
-pub enum WarpPromptSeparator {
-    /// No separator for the prompt.
-    #[default]
-    None,
-    /// "%" separator for the prompt. Note this is the default separator used in zsh traditionally.
-    PercentSign,
-    /// "$" separator for the prompt. Note this is the default separator used in bash traditionally.
-    DollarSign,
-    /// ">" separator for the prompt. Note this is the default separator used in fish traditionally.
-    ChevronSymbol,
-}
-
-impl WarpPromptSeparator {
-    pub fn dropdown_item_label(&self) -> &'static str {
-        match self {
-            Self::None => "None",
-            Self::PercentSign => "%",
-            Self::DollarSign => "$",
-            Self::ChevronSymbol => ">",
-        }
-    }
-
-    pub fn renderable_string(&self) -> Option<&'static str> {
-        match self {
-            Self::None => None,
-            Self::PercentSign => Some("%"),
-            Self::DollarSign => Some("$"),
-            Self::ChevronSymbol => Some(">"),
         }
     }
 }

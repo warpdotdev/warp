@@ -5,12 +5,13 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use command::r#async::Command;
-use itertools::Itertools as _;
+use warp_util::path::{
+    ShellFamily, serialize_constant_shell_variable_value, serialize_shell_variables,
+};
 
 use super::shared::shell_escape_single_quotes;
 use super::{CommandExecutor, CommandOutput, ExecuteCommandOptions};
-use crate::env_vars::{EnvVarValue, serialize_variables_for_shell};
-use crate::terminal::shell::Shell;
+use crate::terminal::shell::{Shell, ShellType};
 
 /// `CommandExecutor` implementation that executes the given `command` in a forked process
 /// that establishes a one-off SSH session with the same remote host as the active SSH session
@@ -46,13 +47,22 @@ impl CommandExecutor for RemoteCommandExecutor {
         // ssh connection. That's why we explicitly set the path and cwd as part of command_str.
         let mut command_str = String::new();
         if let Some(environment_variables) = environment_variables {
-            let env_vars = environment_variables
-                .into_iter()
-                .map(|(key, value)| (key, EnvVarValue::Constant(value)))
-                .collect_vec();
-            let env_vars_str = serialize_variables_for_shell(
-                env_vars.iter().map(|(key, value)| (key.as_str(), value)),
-                shell.shell_type(),
+            let (prefix, separator, postfix) = match shell.shell_type() {
+                ShellType::Fish => ("set -x ", " ", ";"),
+                ShellType::Bash | ShellType::Zsh => ("", "=", ""),
+                ShellType::PowerShell => ("$env:", " = ", ";"),
+            };
+            let shell_family = ShellFamily::from(shell.shell_type());
+            let env_vars_str = serialize_shell_variables(
+                environment_variables
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+                prefix,
+                separator,
+                postfix,
+                " ",
+                shell_family,
+                serialize_constant_shell_variable_value,
             );
             command_str.push_str(&env_vars_str);
             command_str.push(';');

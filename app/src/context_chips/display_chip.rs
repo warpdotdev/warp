@@ -7,6 +7,7 @@ use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
+pub use warp_terminal::context_chips::{GitBranchTrackingStatus, GitLineChanges};
 use warpui::elements::{
     Border, ChildAnchor, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DEFAULT_UI_LINE_HEIGHT_RATIO, Empty, Flex, Hoverable, MouseStateHandle, OffsetPositioning,
@@ -365,250 +366,12 @@ pub struct DisplayChip {
     terminal_view_id: EntityId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct GitLineChanges {
-    pub files_changed: u32,
-    pub lines_added: u32,
-    pub lines_removed: u32,
-}
-
-impl GitLineChanges {
-    /// Convert GitDiffData to GitLineChanges
-    pub fn from_diff_stats(diff_stats: &DiffStats) -> Self {
-        Self {
-            files_changed: diff_stats.files_changed as u32,
-            lines_added: diff_stats.total_additions as u32,
-            lines_removed: diff_stats.total_deletions as u32,
-        }
-    }
-
-    /// Parse git diff --shortstat output into GitLineChanges struct
-    /// Input example: " 1 file changed, 2 insertions(+), 17 deletions(-)"
-    pub fn parse_from_git_output(raw_output: &str) -> Option<Self> {
-        let line = raw_output.trim();
-
-        if line.is_empty() {
-            return None;
-        }
-
-        let mut files_changed = 0;
-        let mut lines_added = 0;
-        let mut lines_removed = 0;
-
-        let words: Vec<&str> = line.split_whitespace().collect();
-        for (i, word) in words.iter().enumerate() {
-            if let Ok(num) = word.parse::<u32>()
-                && let Some(next_word) = words.get(i + 1)
-            {
-                if next_word.starts_with("file") {
-                    files_changed = num;
-                } else if next_word.starts_with("insertion") {
-                    lines_added = num;
-                } else if next_word.starts_with("deletion") {
-                    lines_removed = num;
-                }
-            }
-        }
-
-        Some(Self {
-            files_changed,
-            lines_added,
-            lines_removed,
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct GitBranchTrackingStatus {
-    pub branch: String,
-    pub upstream: Option<String>,
-    pub ahead: u32,
-    pub behind: u32,
-    pub counts_available: bool,
-    #[serde(default)]
-    pub rebased: bool,
-}
-
-impl GitBranchTrackingStatus {
-    pub fn new(branch: String, upstream: Option<String>, ahead: u32, behind: u32) -> Self {
-        let counts_available = upstream.is_some();
-        Self {
-            branch,
-            upstream,
-            ahead,
-            behind,
-            counts_available,
-            rebased: false,
-        }
-    }
-
-    pub fn without_counts(branch: String, upstream: Option<String>) -> Self {
-        Self {
-            branch,
-            upstream,
-            ahead: 0,
-            behind: 0,
-            counts_available: false,
-            rebased: false,
-        }
-    }
-
-    pub fn rebased(branch: String, upstream: String) -> Self {
-        Self {
-            branch,
-            upstream: Some(upstream),
-            ahead: 0,
-            behind: 0,
-            counts_available: true,
-            rebased: true,
-        }
-    }
-
-    pub fn from_display_text(text: &str) -> Option<Self> {
-        let text = text.trim();
-        if text.is_empty() {
-            return None;
-        }
-
-        let Some((branch, status_text)) = text.rsplit_once(" • ") else {
-            return Some(Self {
-                branch: text.to_string(),
-                upstream: None,
-                ahead: 0,
-                behind: 0,
-                counts_available: false,
-                rebased: false,
-            });
-        };
-
-        let Some((ahead, behind, rebased)) = Self::parse_display_status(status_text) else {
-            return Some(Self {
-                branch: text.to_string(),
-                upstream: None,
-                ahead: 0,
-                behind: 0,
-                counts_available: false,
-                rebased: false,
-            });
-        };
-
-        let branch = branch.trim();
-        if branch.is_empty() {
-            return None;
-        }
-
-        Some(Self {
-            branch: branch.to_string(),
-            upstream: None,
-            ahead,
-            behind,
-            counts_available: true,
-            rebased,
-        })
-    }
-
-    pub fn status_text(&self) -> Option<String> {
-        let mut parts = Vec::new();
-        if self.is_rebased() {
-            parts.push("⇅".to_string());
-        } else {
-            if let Some(ahead) = self.ahead_display_count() {
-                parts.push(format!("↑{ahead}"));
-            }
-            if let Some(behind) = self.behind_display_count() {
-                parts.push(format!("↓{behind}"));
-            }
-        }
-        (!parts.is_empty()).then(|| parts.join(" "))
-    }
-
-    pub fn display_text(&self) -> String {
-        match self.status_text() {
-            Some(status) => format!("{} • {status}", self.branch),
-            None => self.branch.clone(),
-        }
-    }
-
-    pub fn is_rebased(&self) -> bool {
-        self.counts_available && self.rebased
-    }
-
-    pub fn ahead_display_count(&self) -> Option<String> {
-        (!self.is_rebased() && self.counts_available && self.ahead > 0)
-            .then(|| Self::format_display_count(self.ahead))
-    }
-
-    pub fn behind_display_count(&self) -> Option<String> {
-        (!self.is_rebased() && self.counts_available && self.behind > 0)
-            .then(|| Self::format_display_count(self.behind))
-    }
-
-    fn format_display_count(count: u32) -> String {
-        const MAX_DISPLAY_COUNT: u32 = 999;
-        if count > MAX_DISPLAY_COUNT {
-            format!("{MAX_DISPLAY_COUNT}+")
-        } else {
-            count.to_string()
-        }
-    }
-
-    fn parse_display_count(count: &str) -> Option<u32> {
-        if let Some(capped_count) = count.strip_suffix('+') {
-            capped_count.parse::<u32>().ok()?.checked_add(1)
-        } else {
-            count.parse::<u32>().ok()
-        }
-    }
-
-    fn parse_display_status(status_text: &str) -> Option<(u32, u32, bool)> {
-        let mut ahead = 0;
-        let mut behind = 0;
-        let mut rebased = false;
-        let mut saw_status_token = false;
-
-        for part in status_text.split_whitespace() {
-            saw_status_token = true;
-            if part == "⇅" {
-                rebased = true;
-            } else if let Some(ahead_count) = part.strip_prefix('↑') {
-                ahead = Self::parse_display_count(ahead_count)?;
-            } else if let Some(behind_count) = part.strip_prefix('↓') {
-                behind = Self::parse_display_count(behind_count)?;
-            } else {
-                return None;
-            }
-        }
-
-        saw_status_token.then_some((ahead, behind, rebased))
-    }
-
-    fn tooltip_text(&self) -> String {
-        match &self.upstream {
-            Some(upstream) if self.is_rebased() => {
-                format!("Tracking {upstream} • branch was rebased")
-            }
-            Some(upstream) if self.counts_available => format!(
-                "Tracking {upstream} • ahead {}, behind {}",
-                self.ahead, self.behind
-            ),
-            Some(upstream) => {
-                format!("Tracking {upstream}; ahead/behind counts are unavailable")
-            }
-            None if self.is_rebased() => {
-                "Branch was rebased; upstream name is unavailable".to_string()
-            }
-            None if self.counts_available => format!(
-                "Ahead {}, behind {}; upstream name is unavailable",
-                self.ahead, self.behind
-            ),
-            None => "No upstream configured".to_string(),
-        }
-    }
-}
-
-impl std::fmt::Display for GitBranchTrackingStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.display_text())
+/// Converts `DiffStats` to `GitLineChanges`.
+pub fn git_line_changes_from_diff_stats(diff_stats: &DiffStats) -> GitLineChanges {
+    GitLineChanges {
+        files_changed: diff_stats.files_changed as u32,
+        lines_added: diff_stats.total_additions as u32,
+        lines_removed: diff_stats.total_deletions as u32,
     }
 }
 
@@ -892,7 +655,7 @@ impl DisplayChip {
             ctx.notify();
         });
 
-        let display_chip_kind = match chip_result.kind {
+        let display_chip_kind = match chip_result.kind() {
             ContextChipKind::AgentPlanAndTodoList => {
                 let context_model = config.ai_context_model.clone();
                 let view_id = config.terminal_view_id;
@@ -922,25 +685,23 @@ impl DisplayChip {
             }
             ContextChipKind::ShellGitBranch => DisplayChipKind::GitBranch {
                 menu_open: false,
-                menu: Self::git_branch_menu(&chip_result.on_click_values, ctx),
+                menu: Self::git_branch_menu(chip_result.on_click_values(), ctx),
             },
             ContextChipKind::GitDiffStats => DisplayChipKind::GitDiffStats {
                 line_changes_info: None,
             },
             ContextChipKind::GitBranchStatus => DisplayChipKind::GitBranchStatus {
                 tracking_status: chip_result
-                    .value
-                    .as_ref()
+                    .value()
                     .and_then(|value| value.as_git_branch_tracking_status())
                     .cloned(),
                 menu_open: false,
-                menu: Self::git_branch_menu(&chip_result.on_click_values, ctx),
+                menu: Self::git_branch_menu(chip_result.on_click_values(), ctx),
             },
             ContextChipKind::GithubPullRequest => DisplayChipKind::GithubPullRequest,
             ContextChipKind::WorkingDirectory => {
                 let dir_path = chip_result
-                    .value
-                    .as_ref()
+                    .value()
                     .map(|v| v.to_string())
                     .unwrap_or_default();
 
@@ -1056,7 +817,7 @@ impl DisplayChip {
             ContextChipKind::VirtualEnvironment => DisplayChipKind::VirtualEnvironment,
             ContextChipKind::CondaEnvironment => DisplayChipKind::CondaEnvironment,
             ContextChipKind::NodeVersion => {
-                let current_version = chip_result.value.as_ref().map(|v| v.to_string());
+                let current_version = chip_result.value().map(|v| v.to_string());
                 let model_events = &config.model_events;
                 let popup_view = ctx.add_typed_action_view(move |ctx| {
                     NodeVersionPopupView::new(current_version, model_events, ctx)
@@ -1153,19 +914,20 @@ impl DisplayChip {
             },
         );
 
+        let text = chip_result
+            .value()
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let (chip_kind, value, on_click_values) = chip_result.into_parts();
         Self {
             mouse_state: Default::default(),
             diff_stats_mouse_state: Default::default(),
-            text: chip_result
-                .value
-                .as_ref()
-                .map(|v| v.to_string())
-                .unwrap_or_default(),
-            value: chip_result.value,
-            chip_kind: chip_result.kind,
+            text,
+            value,
+            chip_kind,
             display_chip_kind,
             next_chip_kind,
-            on_click_values: chip_result.on_click_values,
+            on_click_values,
             quota_reset_popup,
             session_context: config.session_context,
             menu_positioning_provider: config.menu_positioning_provider,

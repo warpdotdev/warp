@@ -265,7 +265,7 @@ use crate::code_review::GlobalCodeReviewModel;
 use crate::code_review::diff_state::DiffStateModel;
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
-use crate::context_chips::ChipRuntimeCapabilities;
+use crate::context_chips::{ChipRuntimeCapabilities, ContextChipKindAppExt};
 use crate::default_terminal::DefaultTerminal;
 use crate::drive::export::ExportManager;
 use crate::drive::import::modal::{ImportModal, ImportModalEvent};
