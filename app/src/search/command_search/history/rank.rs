@@ -71,6 +71,8 @@ const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
 /// Synthetic "days per list position" used to derive an age for entries with no timestamp, so a
 /// commonly-typed command near the tail of an untracked history file still reads as recent
 /// instead of decaying to zero relevance. Reuses [`RECENCY_HALF_LIFE_DAYS`] as the decay rate.
+/// Raise to age untimestamped entries faster per newer-list-position step; lower to preserve
+/// their recency longer.
 const FALLBACK_AGE_DAYS_PER_POSITION: f64 = 1.0;
 
 /// Derived, not meant to be hand-tuned: theoretical lower bound of the weighted prior sum
@@ -91,9 +93,10 @@ const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + FREQUENCY_WEIGHT + SESSION_WEIGHT + 
 pub(crate) struct MatchQuality {
     /// Sum of every AND-ed token's raw Skim score (`fzf`-style term summation for a multi-word
     /// query) plus the [`CONSECUTIVE_BONUS_PER_CHAR`] correction, on the same raw scale every
-    /// other Command Search source's own Skim-based score lives on. [`rank`] multiplies this by
-    /// the prior multiplier to get the final score, so history's cross-source position is set by
-    /// this value, not by priors.
+    /// other Command Search source's own Skim-based score lives on. [`rank`] multiplies this by a
+    /// bounded prior multiplier (see [`PRIOR_MULTIPLIER_SWING`]) to get the final score, so this
+    /// value dominates a candidate's cross-source position, though priors can still shift it
+    /// within that multiplier's range.
     adjusted_skim: f64,
     /// `adjusted_skim` normalized by the query's character count. Used only to gate out junk
     /// matches via [`RAW_SKIM_FLOOR_PER_CHAR`]; the final score uses `adjusted_skim` directly so
@@ -226,10 +229,10 @@ pub(crate) struct RankInputs<'a> {
 ///
 /// The result is `adjusted_skim * f(priors)`, staying on the same raw Skim scale every other
 /// Command Search source's own score lives on: `f(priors)` is a narrow `[0.8, 1.2]` multiplier
-/// (see [`PRIOR_MULTIPLIER_SWING`]), so priors can only ever reorder candidates whose match
-/// quality is already comparable, never let a fresh weak match outrank an older strong one, or
-/// let history's position relative to other sources depend on how many priors it happens to
-/// satisfy. Higher is better, consistent with `SearchItem::score`.
+/// (see [`PRIOR_MULTIPLIER_SWING`]), so priors can reorder two candidates only when their raw
+/// match quality is already within that ~1.5x ratio of each other -- including a history
+/// candidate against another source's fixed (unscaled) score -- and can't let a fresh weak match
+/// outrank a meaningfully stronger old one. Higher is better, consistent with `SearchItem::score`.
 pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
     if inputs.is_blank_query {
         // Every blank-query candidate ties at the same score, so the mixer's stable sort leaves

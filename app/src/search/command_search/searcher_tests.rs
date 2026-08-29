@@ -376,13 +376,27 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        // Matches "test" as a clean, contiguous substring (raw Skim score 83): a strong match.
+        // Matches "test" as a clean, contiguous substring: a strong match.
         let history_command = "npm test -- widgets".to_owned();
 
-        // Buried deep in a long, mostly-irrelevant string, so "test" is a weak, scattered match
-        // (also raw Skim score 83, but discounted by each competitor's own field weighting below).
-        let weak_match_text =
-            "find . -name '*.tmp' -exec rm {} \\; # cleanup test artifacts occasionally";
+        // "test" is scattered across four separated words here, so its raw Skim score is
+        // genuinely lower than the history command's -- asserted below rather than assumed, so
+        // this fixture can't silently stop testing what it claims to.
+        let weak_match_text = "archive old logs then send email summary tonight";
+
+        let history_raw_score =
+            fuzzy_match::match_indices_case_insensitive(&history_command, "test")
+                .expect("the history command should fuzzy-match \"test\"")
+                .score;
+        let weak_raw_score = fuzzy_match::match_indices_case_insensitive(weak_match_text, "test")
+            .expect("the weak match text should fuzzy-match \"test\"")
+            .score;
+        assert!(
+            weak_raw_score < history_raw_score,
+            "fixture premise: the competitors' shared text must score lower on the raw Skim scale \
+             than the history command (weak={weak_raw_score}, history={history_raw_score}), not \
+             merely be discounted by field weighting"
+        );
 
         let weak_workflow = Workflow::Command {
             name: "Unrelated maintenance task".to_owned(),
