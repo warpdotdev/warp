@@ -5,87 +5,100 @@ use ordered_float::OrderedFloat;
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
 
-const MATCH_WEIGHT: f64 = 0.55;
+// ----- Tunable constants -----
+//
+// Everything below shapes `rank()`'s formula: `score = adjusted_skim * f(priors)`, where
+// `adjusted_skim` is the match-quality component (raw Skim score plus the corrections in
+// `adjusted_skim()`) and `f(priors)` is a bounded multiplier built from recency, frequency,
+// session, cwd, and exit status. Change a value, rebuild, and re-run
+// `cargo test -p warp --lib search::command_search::history` to see the effect against the
+// golden fixtures in `rank_tests.rs`.
+
+/// Bottom of `f(priors)`'s range. Raise to score history higher relative to every other Command
+/// Search source's own (unscaled) score, across the board; lower to score it lower.
+const PRIOR_MULTIPLIER_BASELINE: f64 = 0.8;
+
+/// Width added on top of [`PRIOR_MULTIPLIER_BASELINE`], so `f(priors)` ranges over `[0.8, 1.2]`.
+/// Raise to let priors reorder history results more aggressively relative to raw match quality;
+/// lower to let raw match quality dominate more. Too wide and a fresh weak match can outrank an
+/// older strong one (see `rank_tests.rs`'s `older_exact_match_outranks_fresher_weak_match` and
+/// `recency_breaks_ties_among_equal_quality_substring_matches`, which pin down the current width).
+const PRIOR_MULTIPLIER_SWING: f64 = 0.4;
+
+/// How much of `f(priors)` is driven by recency vs. the other priors below. Raise to make
+/// freshness matter more.
 const RECENCY_WEIGHT: f64 = 0.30;
+
+/// How much of `f(priors)` is driven by how often a command has been run. Raise to make
+/// frequently-used commands rank higher.
 const FREQUENCY_WEIGHT: f64 = 0.08;
+
+/// How much of `f(priors)` is driven by whether a command ran in the current session. Raise to
+/// favor the current session's own history more.
 const SESSION_WEIGHT: f64 = 0.05;
+
+/// How much of `f(priors)` is driven by whether a command ran in the current working directory.
+/// Raise to favor commands run from here more.
 const CWD_WEIGHT: f64 = 0.02;
+
+/// How much `f(priors)` is reduced for a command whose last run failed. Raise to penalize failed
+/// commands more.
 const EXIT_PENALTY_WEIGHT: f64 = 0.03;
 
-const MATCH_EXACT_WEIGHT: f64 = 0.45;
-const MATCH_SKIM_WEIGHT: f64 = 0.35;
-const MATCH_CONSECUTIVE_WEIGHT: f64 = 0.15;
-const MATCH_TIGHTNESS_WEIGHT: f64 = 0.05;
-
-const EXACT_WHOLE_LINE: f64 = 1.0;
-const EXACT_SUBSTRING: f64 = 0.85;
-const EXACT_PREFIX: f64 = 0.55;
-
-/// Divisor in the `skim / (skim + SKIM_SOFT_CAP)` curve used to normalize Skim's raw,
-/// query-length-scaled score into 0..1. Chosen so the per-character raw scores seen in the
-/// concrete fzf-comparison examples from APP-5650 (roughly 20-23) land mid-curve, leaving room
-/// for camelCase/boundary-bonus-heavy matches to approach 1.0 without a hard clamp.
-const SKIM_SOFT_CAP: f64 = 30.0;
-
-/// Half-life, in days, of the recency term. Also applied to the position-based age fallback used
-/// for entries with no timestamp (see `age_days`).
+/// Days for the recency term to decay by half. Lower makes recent commands matter more (and older
+/// ones fade faster); raise for a longer memory.
 const RECENCY_HALF_LIFE_DAYS: f64 = 3.0;
+
+/// Execution count at which the frequency term saturates (maxes out). Lower means fewer repeats
+/// are needed to count as "frequent"; raise to require more repeats.
+const FREQUENCY_SATURATION_COUNT: f64 = 20.0;
+
+/// Minimum adjusted-Skim score, per character of the query, for a match to be shown at all. Raise
+/// to filter out more loose/scattered matches; lower to show more borderline ones. Legitimate
+/// matches score in the high teens to twenties per character (see `rank_tests.rs`).
+const RAW_SKIM_FLOOR_PER_CHAR: f64 = 8.0;
+
+/// Per-character bonus for a run of contiguously-matched characters, folded into `adjusted_skim`.
+/// Raise to favor tight, contiguous matches over scattered ones more strongly (fixes issue #1810,
+/// where Skim's word-boundary bonus made a scattered match outscore a contiguous one).
+const CONSECUTIVE_BONUS_PER_CHAR: f64 = 4.0;
+
+/// Bonus added once to `adjusted_skim` when the query exactly matches the whole command. Raise to
+/// make an exact match harder to displace by a fresher partial match; needed because SkimMatcherV2
+/// scores a query identically whether it's the whole command or just a prefix of a longer one.
+const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
 
 /// Synthetic "days per list position" used to derive an age for entries with no timestamp, so a
 /// commonly-typed command near the tail of an untracked history file still reads as recent
-/// instead of decaying to zero relevance. Reuses `RECENCY_HALF_LIFE_DAYS` as the decay rate, so a
-/// commonly-typed command a few positions back still retains a majority of the recency term.
+/// instead of decaying to zero relevance. Reuses [`RECENCY_HALF_LIFE_DAYS`] as the decay rate.
 const FALLBACK_AGE_DAYS_PER_POSITION: f64 = 1.0;
 
-/// Count of executions beyond which the frequency term stops increasing. `ln(1 + 20)` is the
-/// normalizer, so exactly 20 executions maps to a frequency term of 1.0.
-const FREQUENCY_SATURATION_COUNT: f64 = 20.0;
+/// Derived, not meant to be hand-tuned: theoretical lower bound of the weighted prior sum
+/// (`RECENCY_WEIGHT * recency + ... - EXIT_PENALTY_WEIGHT * exit_pen`), reached when every
+/// positive prior is absent and the command's last run failed. Used to rescale that sum into
+/// `[0, 1]` before it becomes `f(priors)`'s swing; recomputes automatically if the weights above
+/// change.
+const PRIOR_SUM_MIN: f64 = -EXIT_PENALTY_WEIGHT;
 
-/// Minimum combined match quality (see [`MatchQuality::combined`]) a candidate must clear to be
-/// shown at all. Skim's DP will happily align a handful of scattered characters anywhere in a
-/// long string; this filters out alignments too loose to be a meaningful result rather than
-/// merely down-ranking them.
-const MATCH_SCORE_FLOOR: f64 = 0.12;
+/// Derived, not meant to be hand-tuned: theoretical upper bound of the weighted prior sum, reached
+/// when every positive prior is fully satisfied and the command's last run succeeded.
+const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + FREQUENCY_WEIGHT + SESSION_WEIGHT + CWD_WEIGHT;
 
-/// Width, in match-quality units, of each band in [`pack_sort_key`]'s ordering gate.
-const MATCH_BAND_GRANULARITY: f64 = 0.25;
+// ----- End tunable constants -----
 
-/// Score contribution per match-quality band in [`pack_sort_key`]. Must exceed the maximum
-/// possible span of `final_score` (bounded to +/-1 there) so bands never bleed into each other.
-const MATCH_BAND_SLOT: f64 = 3.0;
-
-/// Score contribution for a whole-line exact match in [`pack_sort_key`]. Must exceed the maximum
-/// possible total band contribution (5 bands * `MATCH_BAND_SLOT`) so an exact match always
-/// outranks a non-exact one regardless of any other term.
-const EXACT_LINE_SLOT: f64 = 100.0;
-
-/// Scale applied to the raw age (in days) used as the final tiebreaker in [`pack_sort_key`].
-/// Small enough that it never perturbs a genuine `final_score` difference, but still gives a
-/// deterministic, newer-wins resolution for otherwise-identical candidates.
-const AGE_TIE_BREAK_SCALE: f64 = 1e-9;
-
-/// The normalized quality of a fuzzy match, before history priors are applied. Each field is in
-/// `0..=1`; see [`Self::combined`] for how they are weighted together.
+/// The Skim-scale quality of a fuzzy match, before history priors are applied.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MatchQuality {
-    /// Whether the query is the whole command, a substring of it, or just a prefix-aligned fuzzy
-    /// match. See `EXACT_WHOLE_LINE`, `EXACT_SUBSTRING`, `EXACT_PREFIX`.
-    exact: f64,
-    /// Skim's raw score, normalized by query length and soft-capped to 0..1.
-    skim: f64,
-    /// Longest run of contiguously-matched characters, as a fraction of the query length.
-    consecutive: f64,
-    /// How tightly the matched characters are clustered together in the command text.
-    tightness: f64,
-}
-
-impl MatchQuality {
-    fn combined(self) -> f64 {
-        MATCH_EXACT_WEIGHT * self.exact
-            + MATCH_SKIM_WEIGHT * self.skim
-            + MATCH_CONSECUTIVE_WEIGHT * self.consecutive
-            + MATCH_TIGHTNESS_WEIGHT * self.tightness
-    }
+    /// Sum of every AND-ed token's raw Skim score (`fzf`-style term summation for a multi-word
+    /// query) plus the [`CONSECUTIVE_BONUS_PER_CHAR`] correction, on the same raw scale every
+    /// other Command Search source's own Skim-based score lives on. [`rank`] multiplies this by
+    /// the prior multiplier to get the final score, so history's cross-source position is set by
+    /// this value, not by priors.
+    adjusted_skim: f64,
+    /// `adjusted_skim` normalized by the query's character count. Used only to gate out junk
+    /// matches via [`RAW_SKIM_FLOOR_PER_CHAR`]; the final score uses `adjusted_skim` directly so
+    /// query length doesn't otherwise affect history's scale relative to other sources.
+    adjusted_skim_per_char: f64,
 }
 
 /// Splits `query` on whitespace for fzf-style space-AND matching. An empty (or all-whitespace)
@@ -126,12 +139,11 @@ pub(crate) fn match_history_command(
         .iter()
         .map(|token_match| token_match.score)
         .sum();
-
-    let match_quality = MatchQuality {
-        exact: exact_component(command, tokens, &token_matches),
-        skim: skim_component(raw_score_total, query_char_count),
-        consecutive: consecutive_component(&token_matches, query_char_count),
-        tightness: tightness_component(&merged_indices),
+    let adjusted_skim = adjusted_skim(command, tokens, &token_matches);
+    let adjusted_skim_per_char = if query_char_count == 0 {
+        0.0
+    } else {
+        adjusted_skim / query_char_count as f64
     };
 
     Some((
@@ -139,52 +151,35 @@ pub(crate) fn match_history_command(
             score: raw_score_total,
             matched_indices: merged_indices,
         },
-        match_quality,
+        MatchQuality {
+            adjusted_skim,
+            adjusted_skim_per_char,
+        },
     ))
 }
 
-fn exact_component(command: &str, tokens: &[&str], token_matches: &[FuzzyMatchResult]) -> f64 {
+/// Sums every token's raw Skim score (fzf-style term summation for a multi-word, AND-ed query)
+/// plus [`CONSECUTIVE_BONUS_PER_CHAR`] for each of that token's contiguously-matched characters
+/// beyond the first, plus [`EXACT_WHOLE_LINE_BONUS`] if `tokens` (rejoined) exactly equals
+/// `command`.
+fn adjusted_skim(command: &str, tokens: &[&str], token_matches: &[FuzzyMatchResult]) -> f64 {
+    let per_token_total: f64 = token_matches
+        .iter()
+        .map(|token_match| {
+            let longest_run = longest_consecutive_run(&token_match.matched_indices);
+            token_match.score as f64
+                + longest_run.saturating_sub(1) as f64 * CONSECUTIVE_BONUS_PER_CHAR
+        })
+        .sum();
+
     let query = tokens.join(" ");
-    if !query.is_empty() {
-        let command_lower = command.to_lowercase();
-        let query_lower = query.to_lowercase();
-        if command_lower == query_lower {
-            return EXACT_WHOLE_LINE;
-        }
-        if command_lower.contains(&query_lower) {
-            return EXACT_SUBSTRING;
-        }
-    }
-    // A match that isn't a literal substring anywhere still deserves partial credit for aligning
-    // with the very start of the command, which is what most shell commands key off of.
-    let first_token_starts_at_zero = token_matches
-        .first()
-        .and_then(|token_match| token_match.matched_indices.first())
-        == Some(&0);
-    if first_token_starts_at_zero {
-        EXACT_PREFIX
+    let exact_bonus = if !query.is_empty() && command.eq_ignore_ascii_case(&query) {
+        EXACT_WHOLE_LINE_BONUS
     } else {
         0.0
-    }
-}
+    };
 
-fn skim_component(raw_score_total: i64, query_char_count: usize) -> f64 {
-    if query_char_count == 0 {
-        return 0.0;
-    }
-    let normalized = (raw_score_total as f64 / query_char_count as f64).max(0.0);
-    normalized / (normalized + SKIM_SOFT_CAP)
-}
-
-fn consecutive_component(token_matches: &[FuzzyMatchResult], query_char_count: usize) -> f64 {
-    if query_char_count == 0 {
-        return 0.0;
-    }
-    let total_longest_run: usize = token_matches
-        .iter()
-        .map(|token_match| longest_consecutive_run(&token_match.matched_indices))
-        .sum();
-    (total_longest_run as f64 / query_char_count as f64).min(1.0)
+    per_token_total + exact_bonus
 }
 
 /// Longest run of consecutive (i.e. `idx, idx+1, idx+2, ...`) indices in `indices`, which is
@@ -203,16 +198,6 @@ fn longest_consecutive_run(indices: &[usize]) -> usize {
         previous = Some(index);
     }
     longest
-}
-
-fn tightness_component(merged_indices: &[usize]) -> f64 {
-    match (merged_indices.first(), merged_indices.last()) {
-        (Some(&first), Some(&last)) => {
-            let span = (last - first + 1) as f64;
-            merged_indices.len() as f64 / span
-        }
-        _ => 0.0,
-    }
 }
 
 /// Inputs to [`rank`] for a single history candidate that has already cleared the fuzzy-match
@@ -237,12 +222,14 @@ pub(crate) struct RankInputs<'a> {
 }
 
 /// Combines a candidate's match quality with its history priors into a single sortable score, or
-/// `None` if the match quality doesn't clear `MATCH_SCORE_FLOOR`.
+/// `None` if the match quality doesn't clear [`RAW_SKIM_FLOOR_PER_CHAR`].
 ///
-/// The result packs a `(exact_line, match_band, final_score, age)` ordering tuple into one
-/// `f64`: `exact_line` and `match_band` gate the ordering so that history priors can only ever
-/// break ties *within* a match-quality tier, never let a fresher weak match outrank an older
-/// exact one. Higher is better, consistent with `SearchItem::score`.
+/// The result is `adjusted_skim * f(priors)`, staying on the same raw Skim scale every other
+/// Command Search source's own score lives on: `f(priors)` is a narrow `[0.8, 1.2]` multiplier
+/// (see [`PRIOR_MULTIPLIER_SWING`]), so priors can only ever reorder candidates whose match
+/// quality is already comparable, never let a fresh weak match outrank an older strong one, or
+/// let history's position relative to other sources depend on how many priors it happens to
+/// satisfy. Higher is better, consistent with `SearchItem::score`.
 pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
     if inputs.is_blank_query {
         // Every blank-query candidate ties at the same score, so the mixer's stable sort leaves
@@ -251,8 +238,7 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
         return Some(OrderedFloat(0.0));
     }
 
-    let match_value = inputs.match_quality.combined();
-    if match_value < MATCH_SCORE_FLOOR {
+    if inputs.match_quality.adjusted_skim_per_char < RAW_SKIM_FLOOR_PER_CHAR {
         return None;
     }
 
@@ -271,18 +257,17 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
             .is_some_and(|code| !code.was_successful()),
     );
 
-    let final_score = MATCH_WEIGHT * match_value
-        + RECENCY_WEIGHT * recency
+    let prior_sum = RECENCY_WEIGHT * recency
         + FREQUENCY_WEIGHT * frequency
         + SESSION_WEIGHT * session
         + CWD_WEIGHT * cwd
         - EXIT_PENALTY_WEIGHT * exit_penalty;
+    let normalized_priors =
+        ((prior_sum - PRIOR_SUM_MIN) / (PRIOR_SUM_MAX - PRIOR_SUM_MIN)).clamp(0.0, 1.0);
+    let prior_multiplier = PRIOR_MULTIPLIER_BASELINE + PRIOR_MULTIPLIER_SWING * normalized_priors;
 
-    Some(pack_sort_key(
-        inputs.match_quality.exact,
-        match_value,
-        final_score,
-        age_days,
+    Some(OrderedFloat(
+        inputs.match_quality.adjusted_skim * prior_multiplier,
     ))
 }
 
@@ -295,24 +280,6 @@ fn age_days(entry: &HistoryEntry, now: DateTime<Local>, newer_candidate_count: u
         None => newer_candidate_count as f64 * FALLBACK_AGE_DAYS_PER_POSITION,
     }
     .max(0.0)
-}
-
-fn pack_sort_key(
-    exact: f64,
-    match_value: f64,
-    final_score: f64,
-    age_days: f64,
-) -> OrderedFloat<f64> {
-    let exact_line = f64::from(exact >= EXACT_WHOLE_LINE);
-    let match_band = (match_value / MATCH_BAND_GRANULARITY).floor();
-    // `final_score`'s weights sum to 1.0 (plus a small negative exit penalty), so it's already
-    // within a band-sized slot; clamp defensively so a future weight change can't overflow it.
-    let final_clamped = final_score.clamp(-1.0, 1.0);
-    let age_tie_break = -age_days * AGE_TIE_BREAK_SCALE;
-
-    OrderedFloat(
-        exact_line * EXACT_LINE_SLOT + match_band * MATCH_BAND_SLOT + final_clamped + age_tie_break,
-    )
 }
 
 #[cfg(test)]

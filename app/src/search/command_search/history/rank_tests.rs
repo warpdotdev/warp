@@ -98,8 +98,11 @@ impl Scenario {
 
 #[test]
 fn older_exact_match_outranks_fresher_weak_match() {
-    // Guard case: the ordering gate (exact_line, match_band) must stop history priors from
-    // ever letting a fresh weak match outrank an older exact one.
+    // Guard case for the +/-20% prior swing (PRIOR_MULTIPLIER_SWING): raw Skim already scores an
+    // exact whole-line match ("id" against "id", score 51) well above a scattered weak match
+    // ("id" against "list docker containers", score 33), and a swing this narrow can't overturn
+    // that gap even at its extremes (0.8x for the 30-day-old exact match vs 1.2x for the
+    // brand-new weak one). A wider swing (e.g. +/-50%) would flip this.
     let session = SessionId::from(1);
     let old_exact = Scenario::new("id", "id").days_ago(30);
     let new_weak = Scenario::new("list docker containers", "id").days_ago(0);
@@ -114,8 +117,9 @@ fn older_exact_match_outranks_fresher_weak_match() {
 fn recency_breaks_ties_among_equal_quality_substring_matches() {
     // Failure mode 1 (warp#6126, #3430, #5588, #6344): every `make *` candidate used to score
     // identically regardless of recency, so a fresh command could get buried. `OS=linux make
-    // bar` is a substring match just like the others (not at column 0), and being freshest
-    // should now win.
+    // bar` is a substring match just like the others (not at column 0, raw Skim score 83 vs 91
+    // for the others), and being freshest should now win: the prior multiplier's swing (0.8x for
+    // the 10-day-old matches vs 1.2x for the brand new one) outweighs that small raw gap.
     let session = SessionId::from(1);
     let make_foo = Scenario::new("make foo", "make").days_ago(10);
     let make_bar = Scenario::new("make bar", "make").days_ago(10);
@@ -147,15 +151,19 @@ fn whitespace_tokenization_ands_terms_across_the_command() {
 #[test]
 fn consecutive_substrings_beat_scattered_boundary_matches() {
     // Failure mode 3 (warp#1810): Skim's word-boundary bonus made "txjs-cli push" (a scattered
-    // match) outscore "adb tcpip 5000" (a tight, contiguous match) for query "tcp"; real fzf
-    // reverses this.
+    // match) outscore "adb tcpip 5000" (a tight, contiguous match) for query "tcp" on raw score
+    // alone (65 vs 63); real fzf reverses this. `adjusted_skim`'s consecutive-run bonus
+    // (CONSECUTIVE_BONUS_PER_CHAR) corrects it directly on the raw scale.
     let tokens = tokenize_query("tcp");
-    let (_, contiguous) = match_history_command("adb tcpip 5000", &tokens).unwrap();
-    let (_, scattered) = match_history_command("txjs-cli push", &tokens).unwrap();
+    let (contiguous_raw, contiguous) = match_history_command("adb tcpip 5000", &tokens).unwrap();
+    let (scattered_raw, scattered) = match_history_command("txjs-cli push", &tokens).unwrap();
 
-    assert!(contiguous.consecutive > scattered.consecutive);
     assert!(
-        contiguous.combined() > scattered.combined(),
+        contiguous_raw.score < scattered_raw.score,
+        "raw Skim alone should still get this backwards, confirming the bonus is load-bearing"
+    );
+    assert!(
+        contiguous.adjusted_skim > scattered.adjusted_skim,
         "a contiguous substring match should score higher overall than a scattered one: \
          contiguous={contiguous:?}, scattered={scattered:?}"
     );
@@ -228,12 +236,10 @@ fn missing_timestamp_falls_back_to_list_position_instead_of_reading_as_infinitel
 #[test]
 fn match_score_floor_filters_out_low_quality_matches() {
     let low_quality = MatchQuality {
-        exact: 0.0,
-        skim: 0.1,
-        consecutive: 0.1,
-        tightness: 0.1,
+        adjusted_skim: 3.0,
+        adjusted_skim_per_char: 3.0,
     };
-    assert!(low_quality.combined() < MATCH_SCORE_FLOOR);
+    assert!(low_quality.adjusted_skim_per_char < RAW_SKIM_FLOOR_PER_CHAR);
 
     let entry = HistoryEntry::command_only("noise".to_owned());
     let result = rank(RankInputs {
@@ -262,12 +268,10 @@ fn blank_query_ignores_priors_and_yields_a_result() {
     // chronological order. Two candidates with wildly different priors must therefore score
     // identically here, not just both clear the floor.
     let zero_quality = MatchQuality {
-        exact: 0.0,
-        skim: 0.0,
-        consecutive: 0.0,
-        tightness: 0.0,
+        adjusted_skim: 0.0,
+        adjusted_skim_per_char: 0.0,
     };
-    assert!(zero_quality.combined() < MATCH_SCORE_FLOOR);
+    assert!(zero_quality.adjusted_skim_per_char < RAW_SKIM_FLOOR_PER_CHAR);
 
     let mut frequent_recent = HistoryEntry::command_only("ls -la".to_owned());
     frequent_recent.start_ts = Some(now());

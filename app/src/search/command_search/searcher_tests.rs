@@ -9,22 +9,29 @@ use warpui::elements::Empty;
 use warpui::{App, AppContext, Element};
 
 use super::*;
+use crate::ai::blocklist::AIQueryHistoryOutputStatus;
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
+use crate::search::ai_queries::fuzzy_match::FuzzyMatchAIQueryResults;
+use crate::search::command_search::ai_queries::AIQuerySearchResultItem;
 use crate::search::command_search::history::{history_data_source, history_data_source_with_cwd};
 use crate::search::command_search::searcher::CommandSearchMixer;
+use crate::search::command_search::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::item::SearchItem;
 use crate::search::mixer::{
     AddAsyncSourceOptions, AsyncDataSource, BoxFuture, DataSourceRunErrorWrapper,
 };
 use crate::search::result_renderer::ItemHighlightState;
+use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 use crate::search::{QueryFilter, SyncDataSource};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
+use crate::workflows::workflow::Workflow;
+use crate::workflows::{WorkflowSource, WorkflowType};
 
 #[derive(Clone, Debug)]
 enum TestItemAction {
@@ -107,6 +114,25 @@ impl SyncDataSource for SlowDataSource {
         _: &AppContext,
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         Ok(vec![TestSearchItem { is_async: false }.into()])
+    }
+}
+
+/// A sync data source that returns a fixed, pre-built set of results, used to exercise the mixer
+/// against a real non-history `SearchItem` without needing that source's full production data
+/// source (which requires app-level model setup, e.g. `WorkflowsDataSource`).
+struct FixedResults<T>(Vec<T>);
+
+impl<T: SearchItem<Action = CommandSearchItemAction> + Clone + 'static> SyncDataSource
+    for FixedResults<T>
+{
+    type Action = CommandSearchItemAction;
+
+    fn run_query(
+        &self,
+        _: &Query,
+        _: &AppContext,
+    ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
+        Ok(self.0.iter().cloned().map(Into::into).collect())
     }
 }
 
@@ -331,6 +357,119 @@ fn test_current_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
                     command,
                     ..
                 })) if command == "npm test -- repo"
+            ));
+        });
+    });
+}
+
+#[test]
+fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
+    // Regression test for a cross-source ranking review finding: history's score used to be
+    // packed onto a narrow (roughly 0-13) scale while every other Command Search source returns
+    // raw Skim magnitudes in the tens to hundreds, so a solid history match could sink beneath a
+    // much weaker item from another source purely because of which source it came from. `rank`'s
+    // score now stays on that same raw Skim scale, so a clearly stronger history match must still
+    // outrank a much weaker item from any of the sources it actually competes against in Command
+    // Search: workflows, saved prompts (agent-mode workflows), and AI prompt history. (Env-var
+    // collections use the same weighted-field scoring as workflows; not covered here since wiring
+    // one through this mixer needs a full `CloudEnvVarCollection` object.)
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Matches "test" as a clean, contiguous substring (raw Skim score 83): a strong match.
+        let history_command = "npm test -- widgets".to_owned();
+
+        // Buried deep in a long, mostly-irrelevant string, so "test" is a weak, scattered match
+        // (also raw Skim score 83, but discounted by each competitor's own field weighting below).
+        let weak_match_text =
+            "find . -name '*.tmp' -exec rm {} \\; # cleanup test artifacts occasionally";
+
+        let weak_workflow = Workflow::Command {
+            name: "Unrelated maintenance task".to_owned(),
+            command: weak_match_text.to_owned(),
+            tags: vec![],
+            description: None,
+            arguments: vec![],
+            source_url: None,
+            author: None,
+            author_url: None,
+            shells: vec![],
+            environment_variables: None,
+        };
+        let fuzzy_matched_workflow =
+            FuzzyMatchWorkflowResult::try_match("test", &weak_workflow, "")
+                .expect("the workflow's command should fuzzy-match \"test\"");
+        let workflow_item = WorkflowSearchItem {
+            identity: WorkflowIdentity::Local(Box::new(WorkflowType::Local(weak_workflow))),
+            source: WorkflowSource::Local,
+            fuzzy_matched_workflow,
+        };
+
+        // Saved prompts reach Command Search as agent-mode workflows, scored by the same
+        // name/content/description/folder-weighted formula as command workflows.
+        let weak_saved_prompt = Workflow::AgentMode {
+            name: "Unrelated saved prompt".to_owned(),
+            query: weak_match_text.to_owned(),
+            description: None,
+            arguments: vec![],
+        };
+        let fuzzy_matched_saved_prompt =
+            FuzzyMatchWorkflowResult::try_match("test", &weak_saved_prompt, "")
+                .expect("the saved prompt's query should fuzzy-match \"test\"");
+        let saved_prompt_item = WorkflowSearchItem {
+            identity: WorkflowIdentity::Local(Box::new(WorkflowType::Local(weak_saved_prompt))),
+            source: WorkflowSource::Local,
+            fuzzy_matched_workflow: fuzzy_matched_saved_prompt,
+        };
+
+        // AI prompt history scores on the raw Skim scale directly (no discount), so it's the
+        // sharpest test of whether history keeps pace with an unscaled competitor.
+        let ai_prompt_item = AIQuerySearchResultItem {
+            query_text: weak_match_text.to_owned(),
+            start_time: Local::now(),
+            output_status: AIQueryHistoryOutputStatus::Completed,
+            working_directory: None,
+            fuzzy_match_results: FuzzyMatchAIQueryResults::try_match("test", weak_match_text)
+                .expect("the AI query text should fuzzy-match \"test\""),
+        };
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_sync_source(
+                FixedResults(vec![workflow_item, saved_prompt_item]),
+                HashSet::from([QueryFilter::Workflows]),
+            );
+            mixer.add_sync_source(
+                FixedResults(vec![ai_prompt_item]),
+                HashSet::from([QueryFilter::PromptHistory]),
+            );
+            mixer.add_async_source(
+                history_data_source(vec![HistoryEntry::command_only(history_command.clone())]),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("test".into(), ctx);
+        });
+
+        Timer::after(Duration::from_millis(200)).await;
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 4);
+
+            // The view renders highest-ranked items at the bottom (last index), so the stronger
+            // history match must be last, not buried beneath any of the three weaker competitors.
+            assert!(matches!(
+                results.last().map(|result| result.accept_result()),
+                Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                    command,
+                    ..
+                })) if command == history_command
             ));
         });
     });
