@@ -1917,6 +1917,7 @@ fn save_workspace(conn: &mut SqliteConnection, workspace: WorkspaceMetadata) -> 
         name: workspace.name,
         server_uid: workspace.uid.into(),
         is_selected: true,
+        feature_model_choice_json: serde_json::to_string(&workspace.feature_model_choice).ok(),
     };
 
     diesel::insert_into(workspaces)
@@ -1935,6 +1936,7 @@ fn save_workspace(conn: &mut SqliteConnection, workspace: WorkspaceMetadata) -> 
             name: team.name,
             server_uid: team.uid.into(),
             billing_metadata_json: serde_json::to_string(&team.billing_metadata).ok(),
+            feature_model_choice_json: serde_json::to_string(&team.feature_model_choice).ok(),
         };
         diesel::insert_into(teams)
             .values(&new_team)
@@ -1961,6 +1963,7 @@ fn save_workspace(conn: &mut SqliteConnection, workspace: WorkspaceMetadata) -> 
                 user_uid: member.uid.as_string(),
                 email: member.email.clone(),
                 role: serde_json::to_string(&member.role).unwrap_or_default(),
+                is_disabled: member.is_disabled,
             };
             diesel::insert_into(schema::team_members::dsl::team_members)
                 .values(&new_member)
@@ -2017,6 +2020,7 @@ fn save_workspaces(
             is_selected: current_workspace_uid
                 .map(|current_uid| workspace.uid == current_uid)
                 .unwrap_or(false),
+            feature_model_choice_json: serde_json::to_string(&workspace.feature_model_choice).ok(),
         })
         .collect();
     diesel::insert_or_ignore_into(workspaces)
@@ -2035,6 +2039,8 @@ fn save_workspaces(
                     server_uid: team.uid.into(),
                     name: team.name.clone(),
                     billing_metadata_json: serde_json::to_string(&team.billing_metadata).ok(),
+                    feature_model_choice_json: serde_json::to_string(&team.feature_model_choice)
+                        .ok(),
                 })
                 .collect::<Vec<NewTeam>>()
         })
@@ -2105,6 +2111,7 @@ fn save_workspaces(
                         user_uid: member.uid.as_string(),
                         email: member.email,
                         role: serde_json::to_string(&member.role).unwrap_or_default(),
+                        is_disabled: member.is_disabled,
                     })
                 })
             })
@@ -2754,6 +2761,7 @@ fn read_sqlite_data(
                     email: row.email,
                     role: serde_json::from_str(&row.role)
                         .unwrap_or(crate::workspaces::team::MembershipRole::User),
+                    is_disabled: row.is_disabled,
                 };
                 acc.entry(row.team_id).or_default().push(member);
                 acc
@@ -2780,12 +2788,18 @@ fn read_sqlite_data(
 
             let members = members_by_team_id.get(&team.id).cloned();
 
+            let feature_model_choice = team
+                .feature_model_choice_json
+                .as_ref()
+                .and_then(|json| serde_json::from_str(json).ok());
+
             TeamMetadata::from_local_cache(
                 ServerId::from_string_lossy(team.server_uid),
                 team.name,
                 team_settings,
                 billing_metadata,
                 members,
+                feature_model_choice,
             )
         })
         .collect();
@@ -2813,10 +2827,15 @@ fn read_sqlite_data(
                     })
                     .cloned()
                     .collect();
+                let feature_model_choice = workspace
+                    .feature_model_choice_json
+                    .as_ref()
+                    .and_then(|json| serde_json::from_str(json).ok());
                 WorkspaceMetadata::from_local_cache(
                     workspace.server_uid.into(),
                     workspace.name,
                     Some(teams_for_workspace),
+                    feature_model_choice,
                 )
             })
         })

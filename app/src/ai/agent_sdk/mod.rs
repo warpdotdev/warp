@@ -87,6 +87,7 @@ mod common;
 mod config_file;
 pub(crate) mod driver;
 mod environment;
+pub(crate) mod environment_snapshot;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
@@ -854,9 +855,13 @@ impl AgentDriverRunner {
         ))
         .await?
         .token;
-        ai_client
-            .get_task_git_credentials(task_id_str, workload_token)
-            .await
+        // Bootstrap has no prior credential store, so a one-host success would
+        // leave the other host unauthenticated for the first clone. Partial
+        // refresh is reserved for later cycles after stores exist.
+        let response = ai_client
+            .get_task_git_credentials(task_id_str, workload_token, false)
+            .await?;
+        driver::git_credentials::credentials_for_bootstrap(response)
     }
 
     async fn bootstrap_git_credentials_for_task(
@@ -1244,7 +1249,7 @@ impl AgentDriverRunner {
         };
 
         // Handoff snapshot attachments for follow-up executions are written to
-        // {attachments_dir}/handoff/{uuid} so the server-side rehydration prompt
+        // {attachments_dir}/handoff/{filename} so the server-side rehydration prompt
         // references resolve to real files.
         let handoff_snapshot_ai_client = ai_client.clone();
         let handoff_snapshot_server_api = server_api.clone();

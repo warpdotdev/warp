@@ -101,6 +101,7 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -411,11 +412,12 @@ pub async fn add_window_with_bootstrapped_terminal_and_window_id(
 ) -> (WindowId, ViewHandle<TerminalView>) {
     let tips_model = app.add_model(|_| TipsCompleted::default());
 
-    let shell_starter_source = ShellStarter::init(Default::default())
-        .expect("Could not create a shell starter source or wsl name")
-        .to_shell_starter_source()
-        .await
-        .expect("Could not create a shell starter source");
+    let shell_starter_source =
+        ShellStarter::init(crate::terminal::available_shells::AvailableShell::default())
+            .expect("Could not create a shell starter source or wsl name")
+            .to_shell_starter_source()
+            .await
+            .expect("Could not create a shell starter source");
     let shell_type = shell_starter_source.shell_type();
 
     let session_info = session_info
@@ -1523,8 +1525,10 @@ fn attach_ambient_view_model_builds_composer_selectors_for_fresh_cloud_pane_in_v
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1567,8 +1571,10 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1609,8 +1615,10 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
         });
 
@@ -2916,6 +2924,232 @@ fn build_suggestion_results<S: Into<Span>>(
         suggestions,
         match_strategy: matcher,
     })
+}
+
+#[test]
+fn native_completions_after_empty_specs_bails_when_stale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Fresh dispatch: the buffer still matches what the request was computed from, so the
+        // shell is asked and the abort handle is armed.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+        });
+        let snapshot_git = input.update(&mut app, |input, ctx| editor_model_snapshot(input, ctx));
+        input.update(&mut app, |input, ctx| {
+            input.dispatch_native_shell_completions(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_some(),
+                "a real dispatch arms the completions abort handle"
+            );
+        });
+
+        // Stale dispatch: the buffer moved on while the (async) spec pass was running, so this
+        // phase-two callback -- computed from the older snapshot -- must not ask the shell, and
+        // must leave the abort handle a newer request may already own untouched.
+        input.update(&mut app, |input, ctx| {
+            input.completions_abort_handle = None;
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git checkout", ctx);
+            input.dispatch_native_shell_completions(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_none(),
+                "a stale request must not ask the shell or arm/clobber the abort handle"
+            );
+        });
+    });
+}
+
+/// Yields until `condition` holds, then returns; panics if it never holds. The bound is an attempt
+/// count rather than a wall-clock deadline, so the wait cannot hang and does not depend on the test
+/// clock advancing with `Instant::now()`.
+async fn poll_until(app: &mut App, awaited: &str, mut condition: impl FnMut(&mut App) -> bool) {
+    const POLL_ATTEMPTS: usize = 600;
+    const POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+    for _ in 0..POLL_ATTEMPTS {
+        if condition(app) {
+            return;
+        }
+        warpui::r#async::Timer::after(POLL_INTERVAL).await;
+    }
+    panic!("gave up after {POLL_ATTEMPTS} attempts waiting for {awaited}");
+}
+
+fn count_native_shell_completions_dispatches(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+) -> Rc<RefCell<u32>> {
+    let count = Rc::new(RefCell::new(0));
+    let count_clone = count.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal, move |_, event: &TerminalViewEvent, _| {
+            if let TerminalViewEvent::RunNativeShellCompletions { .. } = event {
+                *count_clone.borrow_mut() += 1;
+            }
+        });
+    });
+    count
+}
+
+#[test]
+fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+            input.input_tab(ctx);
+        });
+
+        poll_until(
+            &mut app,
+            "the bundled-spec completions menu to open",
+            |app| {
+                input.read(app, |input, ctx| {
+                    input.suggestions_mode_model.as_ref(ctx).is_visible()
+                })
+            },
+        )
+        .await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            0,
+            "a command with a real bundled spec must never ask the shell"
+        );
+    });
+}
+
+#[test]
+fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("definitelynotarealcommand ", ctx);
+            input.input_tab(ctx);
+        });
+
+        let dispatched = dispatch_count.clone();
+        poll_until(&mut app, "the shell to be asked", move |_| {
+            *dispatched.borrow() == 1
+        })
+        .await;
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            1,
+            "an unrecognized command must reach the shell exactly once, not fall back to \
+             file-path completions"
+        );
+    });
+}
+
+#[test]
+fn native_shell_replacement_span_is_clamped_into_the_buffer_before_the_cursor() {
+    let buffer_text = "cd app/D";
+    let cursor_position = buffer_text.len();
+
+    let honored = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(3, 8)),
+        buffer_text,
+        cursor_position,
+    );
+    assert_eq!(
+        honored.replacement_span,
+        Span::new(3, 8),
+        "a span a shell can really report must survive untouched"
+    );
+
+    let out_of_range = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(1_000_000, 1_000_001)),
+        buffer_text,
+        cursor_position,
+    );
+    assert_eq!(out_of_range.replacement_span, Span::new(8, 8));
+
+    let saturated = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(usize::MAX, usize::MAX)),
+        buffer_text,
+        cursor_position,
+    );
+    assert_eq!(saturated.replacement_span, Span::new(8, 8));
+}
+
+#[test]
+fn native_shell_replacement_span_is_clamped_to_the_cursor_not_the_whole_buffer() {
+    let buffer_text = "cd app/Documents";
+    let cursor_position = "cd app/D".len();
+
+    let results = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(12, 16)),
+        buffer_text,
+        cursor_position,
+    );
+
+    assert_eq!(results.replacement_span, Span::new(8, 8));
+}
+
+#[test]
+fn native_shell_replacement_span_falls_back_to_the_whitespace_token_when_none_is_reported() {
+    let buffer_text = "cd app/D";
+
+    let results = native_shell_suggestion_results(Vec::new(), None, buffer_text, buffer_text.len());
+
+    assert_eq!(results.replacement_span, Span::new(3, 8));
 }
 
 #[test]
@@ -9718,9 +9952,6 @@ fn hash_trigger_enabled_by_default_opens_ai_command_search() {
     });
 }
 
-/// The `input:toggle_natural_language_command_search` hotkey action must still open AI Command
-/// Search even when the '#' character trigger has been disabled — only the typed-character
-/// shortcut is gated by the new setting.
 #[test]
 fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
     App::test((), |mut app| async move {
@@ -9756,4 +9987,100 @@ fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
             "the AI Command Search hotkey must still open the panel when the '#' trigger is disabled"
         );
     });
+}
+
+#[cfg(test)]
+mod completion_sources_resolution_tests {
+    use super::super::{CompletionSources, CompletionsTrigger, resolve_completion_sources};
+
+    #[test]
+    fn feature_flag_off_is_warp_only_regardless_of_toggles() {
+        for warp_completions_enabled in [true, false] {
+            for native_shell_completions_enabled in [true, false] {
+                assert_eq!(
+                    resolve_completion_sources(
+                        false,
+                        false,
+                        false,
+                        CompletionsTrigger::Keybinding,
+                        warp_completions_enabled,
+                        native_shell_completions_enabled,
+                    ),
+                    CompletionSources::WarpOnly,
+                    "flag off must resolve to WarpOnly (warp={warp_completions_enabled}, native={native_shell_completions_enabled})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ai_input_is_warp_only_regardless_of_flag_and_toggles() {
+        for feature_flag_enabled in [true, false] {
+            for warp_completions_enabled in [true, false] {
+                for native_shell_completions_enabled in [true, false] {
+                    assert_eq!(
+                        resolve_completion_sources(
+                            feature_flag_enabled,
+                            true,
+                            false,
+                            CompletionsTrigger::Keybinding,
+                            warp_completions_enabled,
+                            native_shell_completions_enabled,
+                        ),
+                        CompletionSources::WarpOnly,
+                        "AI input must resolve to WarpOnly (flag={feature_flag_enabled}, warp={warp_completions_enabled}, native={native_shell_completions_enabled})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn feature_flag_on_maps_the_four_toggle_states() {
+        let resolve = |warp_completions_enabled, native_shell_completions_enabled| {
+            resolve_completion_sources(
+                true,
+                false,
+                false,
+                CompletionsTrigger::Keybinding,
+                warp_completions_enabled,
+                native_shell_completions_enabled,
+            )
+        };
+        assert_eq!(resolve(true, true), CompletionSources::WarpThenNative);
+        assert_eq!(resolve(true, false), CompletionSources::WarpOnly);
+        assert_eq!(resolve(false, true), CompletionSources::NativeOnly);
+        assert_eq!(resolve(false, false), CompletionSources::None);
+    }
+
+    #[test]
+    fn as_you_type_never_selects_native_even_with_both_toggles_on() {
+        assert_eq!(
+            resolve_completion_sources(
+                true,  // feature flag on
+                false, // not AI input
+                false, // single-line
+                CompletionsTrigger::AsYouType,
+                true, // warp completions on
+                true, // native shell completions on
+            ),
+            CompletionSources::WarpOnly
+        );
+    }
+
+    // A multi-line buffer disables native completions even on a Tab trigger with both toggles on.
+    #[test]
+    fn multiline_buffer_never_selects_native() {
+        assert_eq!(
+            resolve_completion_sources(
+                true,  // feature flag on
+                false, // not AI input
+                true,  // multi-line
+                CompletionsTrigger::Keybinding,
+                true, // warp completions on
+                true, // native shell completions on
+            ),
+            CompletionSources::WarpOnly
+        );
+    }
 }

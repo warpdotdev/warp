@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use ::ai::api_keys::CustomEndpointDefinitions;
 use chrono::{DateTime, Utc};
 pub use cloud_object_models::{
     AgentModeCommandExecutionPredicate, DEFAULT_COMMAND_EXECUTION_ALLOWLIST,
@@ -25,13 +26,13 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::platform::OperatingSystem;
 use warpui::platform::keyboard::KeyCode;
-use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel};
+use warpui::{AppContext, Entity, ModelContext, SingletonEntity, UpdateModel, WeakViewHandle};
 
 use crate::ai::execution_profiles::ExecutionProfilesConfig;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::settings::PrivacySettings;
-use crate::terminal::CLIAgent;
+use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 pub enum FocusedTerminalInfoEvent {
@@ -43,16 +44,18 @@ pub enum FocusedTerminalInfoEvent {
 /// remote sessions.
 #[derive(Default, Clone, Debug)]
 pub struct FocusedTerminalInfo {
+    terminal: Option<WeakViewHandle<TerminalView>>,
     contains_any_remote_blocks: bool,
     contains_any_restored_remote_blocks: bool,
 }
 
 impl FocusedTerminalInfo {
     pub fn new(_: &mut ModelContext<Self>) -> Self {
-        Self {
-            contains_any_remote_blocks: false,
-            contains_any_restored_remote_blocks: false,
-        }
+        Self::default()
+    }
+
+    pub fn terminal(&self) -> Option<&WeakViewHandle<TerminalView>> {
+        self.terminal.as_ref()
     }
 
     pub fn contains_any_remote_blocks(&self) -> bool {
@@ -63,27 +66,31 @@ impl FocusedTerminalInfo {
         self.contains_any_restored_remote_blocks
     }
 
-    /// Updates both remote blocks and restored blocks status in a single atomic operation.
-    /// Only emits a TerminalInfoUpdated event if either value changes.
+    /// Records what the focused `terminal` contains, in a single atomic operation.
+    /// Only emits a TerminalInfoUpdated event if anything changes.
     /// Returns true if the event was emitted.
+    ///
+    /// The surface is written together with its flags rather than tracked separately so a
+    /// reader cannot resolve one terminal's team for another terminal's content.
     pub fn update(
         &mut self,
+        terminal: WeakViewHandle<TerminalView>,
         contains_any_remote_blocks: bool,
         contains_any_restored_remote_blocks: bool,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        let remote_changed = self.contains_any_remote_blocks != contains_any_remote_blocks;
-        let restored_changed =
-            self.contains_any_restored_remote_blocks != contains_any_restored_remote_blocks;
-
-        if remote_changed || restored_changed {
-            self.contains_any_remote_blocks = contains_any_remote_blocks;
-            self.contains_any_restored_remote_blocks = contains_any_restored_remote_blocks;
-            ctx.emit(FocusedTerminalInfoEvent::TerminalInfoUpdated);
-            return true;
+        let unchanged = self.terminal.as_ref().map(|held| held.id()) == Some(terminal.id())
+            && self.contains_any_remote_blocks == contains_any_remote_blocks
+            && self.contains_any_restored_remote_blocks == contains_any_restored_remote_blocks;
+        if unchanged {
+            return false;
         }
 
-        false
+        self.terminal = Some(terminal);
+        self.contains_any_remote_blocks = contains_any_remote_blocks;
+        self.contains_any_restored_remote_blocks = contains_any_restored_remote_blocks;
+        ctx.emit(FocusedTerminalInfoEvent::TerminalInfoUpdated);
+        true
     }
 }
 
@@ -666,6 +673,51 @@ settings::macros::implement_setting_for_enum!(
     toml_path: "agents.usage_display_mode",
     description: "Which unit the usage entry displays in Warp Agent CLI: credits or provider cost.",
 );
+
+/// Unit for GUI usage and spend displays.
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
+#[schemars(
+    description = "Which unit the GUI's usage/spend displays show: credits or dollars.",
+    rename_all = "snake_case"
+)]
+pub enum UsageDisplayUnit {
+    #[default]
+    Credits,
+    Dollars,
+}
+
+settings::macros::implement_setting_for_enum!(
+    UsageDisplayUnit,
+    AISettings,
+    SupportedPlatforms::ALL,
+    SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    surface: settings::SettingSurfaces::GUI,
+    private: false,
+    toml_path: "agents.warp_agent.other.usage_display_unit",
+    description: "Which unit the GUI's usage/spend displays show: credits or dollars.",
+    feature_flag: FeatureFlag::PricingTransparency,
+);
+
+impl UsageDisplayUnit {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            UsageDisplayUnit::Credits => "Credits",
+            UsageDisplayUnit::Dollars => "Dollars",
+        }
+    }
+}
+
 /// One configurable item in the Warp Agent CLI statusline.
 #[derive(
     Debug,
@@ -1461,11 +1513,25 @@ define_settings_group!(AISettings, settings: [
         max_table_depth: 2,
         description: "AI execution profiles and their permissions.",
     }
+    // Non-secret custom inference endpoint definitions shared by GUI and TUI.
+    // Credentials remain in each surface's secure-storage namespace.
+    custom_endpoints: CustomEndpoints {
+        type: CustomEndpointDefinitions,
+        default: CustomEndpointDefinitions::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::ALL,
+        private: false,
+        toml_path: "agents.custom_endpoints",
+        max_table_depth: 2,
+        description: "Custom inference endpoint definitions.",
+    }
     // Which unit the TUI footer's usage entry displays (credits or provider
     // cost), flipped by clicking the entry.
     //
     // TUI-only and file-backed so the choice persists across TUI sessions.
     usage_display_mode: TuiUsageDisplayMode,
+    usage_display_unit: UsageDisplayUnit,
     // Ordered visibility configuration for the TUI's bottom statusline.
     // TUI-only and local so separate devices can use different terminal layouts.
     tui_statusline: TuiStatusline {
@@ -2167,19 +2233,19 @@ impl AISettings {
     }
 
     pub fn is_ai_disabled_due_to_remote_session_org_policy(&self, app: &AppContext) -> bool {
-        let contains_remote_blocks = FocusedTerminalInfo::as_ref(app).contains_any_remote_blocks();
-
-        let contains_restored_remote_blocks =
-            FocusedTerminalInfo::as_ref(app).contains_any_restored_remote_blocks();
-
-        let is_ai_allowed_in_remote_sessions =
-            UserWorkspaces::as_ref(app).is_ai_allowed_in_remote_sessions();
-
-        if is_ai_allowed_in_remote_sessions {
+        let focused_terminal = FocusedTerminalInfo::as_ref(app);
+        let Some(terminal) = focused_terminal.terminal() else {
+            return false;
+        };
+        if !focused_terminal.contains_any_remote_blocks()
+            && !focused_terminal.contains_any_restored_remote_blocks()
+        {
             return false;
         }
 
-        contains_remote_blocks || contains_restored_remote_blocks
+        let user_workspaces = UserWorkspaces::as_ref(app);
+        let scope = user_workspaces.team_context(terminal, app);
+        !user_workspaces.is_ai_allowed_in_remote_sessions(&scope)
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {

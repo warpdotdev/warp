@@ -9,11 +9,13 @@ use super::convert_to::convert_input;
 use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
 use crate::ai::agent::redaction;
 use crate::server::server_api::{AIApiError, ServerApi};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::SessionType;
 
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,
     mut params: RequestParams,
+    team_scope: RequestTeamScope,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
     let supported_tools = params
@@ -78,6 +80,7 @@ pub async fn generate_multi_agent_output(
             use_anthropic_text_editor_tools: false,
             planning_enabled: params.planning_enabled,
             supports_create_files: true,
+            supports_create_file_overwrite: true,
             supported_tools: supported_tools.into_iter().map(Into::into).collect(),
             supports_long_running_commands: true,
             should_preserve_file_content_in_history: true,
@@ -138,8 +141,12 @@ pub async fn generate_multi_agent_output(
         mcp_context: params.mcp_context.map(Into::into),
     };
 
-    let response_stream =
-        warp_multi_agent_client::generate_multi_agent_output(server_api.as_ref(), &request).await;
+    let response_stream = warp_multi_agent_client::generate_multi_agent_output(
+        server_api.as_ref(),
+        &request,
+        team_scope.team_uid().map(|uid| uid.uid()),
+    )
+    .await;
     match response_stream {
         Ok(stream) => {
             let output_stream = stream

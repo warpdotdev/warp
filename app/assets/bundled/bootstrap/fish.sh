@@ -68,6 +68,27 @@ function warp_hex_encode_string
   printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
 end
 
+# fish has no byte-safe string indexing, so `od` is still needed to reach the raw UTF-8 bytes.
+function warp_completions_hex_encode
+  set -l od_output (printf '%s' "$argv" | od -An -v -tx1)
+  string replace -a -- ' ' '' (string join '' $od_output)
+end
+
+function warp_hex_decode_string
+    if test (count $argv) -eq 0 -o -z "$argv[1]"
+        return
+    end
+    set -l hex $argv[1]
+    set -l escaped ''
+    set -l i 1
+    while test $i -le (string length -- $hex)
+        set -l pair (string sub -s $i -l 2 -- $hex)
+        set escaped "$escaped\\x$pair"
+        set i (math $i + 2)
+    end
+    printf '%b' $escaped
+end
+
 # A list of PIDs for running in-band command(s). This is used to kill running
 # in-band commands in preexec for a user command, so they do not interfere with
 # user command output.
@@ -154,6 +175,32 @@ function warp_run_generator_command
     # command or a user command has just completed.
     set -g _WARP_GENERATOR_COMMAND 1
     _warp_run_generator_command_internal $argv
+end
+
+# Computes native shell completions for the given (hex-encoded) command line and emits them over the
+# completions OSC protocol.
+function warp_run_generator_command_native_completions
+    set -g _WARP_GENERATOR_COMMAND 1
+    set -l line
+    if test (count $argv) -gt 0
+        set line (warp_hex_decode_string $argv[1] 2>/dev/null)
+    end
+
+    printf '\e]9280;A\a'
+    set -l trimmed_line (string trim -- "$line")
+    if test -n "$trimmed_line"
+        for entry in (complete -C "$line")
+            set -l parts (string split -m 1 \t -- $entry)
+            # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+            # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL,
+            # or ESC in a match or description would otherwise corrupt the sequence.
+            printf '\e]9280;C;%s\a' (warp_completions_hex_encode $parts[1])
+            if test (count $parts) -gt 1 -a -n "$parts[2]"
+                printf '\e]9280;D?description;%s\a' (warp_completions_hex_encode $parts[2])
+            end
+        end
+    end
+    printf '\e]9280;B\a'
 end
 
 # Run before a command is executed.

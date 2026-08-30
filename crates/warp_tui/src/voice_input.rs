@@ -5,9 +5,9 @@ use std::time::Duration;
 use warp::settings::{AISettings, TuiVoiceSettings};
 pub(crate) use warp::tui_export::VoiceInputLifecycleState as TuiVoiceInputState;
 use warp::tui_export::{
-    AIRequestUsageModel, BlocklistAIInputModel, StartListeningError, TelemetryEvent,
-    TranscribeError, UserWorkspaces, VoiceInput, VoiceInputToggledFrom, VoiceSessionResult,
-    VoiceTranscriber,
+    AIRequestUsageModel, BlocklistAIInputModel, RequestTeamScope, StartListeningError,
+    TeamContextResolver, TelemetryEvent, TranscribeError, UserWorkspaces, VoiceInput,
+    VoiceInputToggledFrom, VoiceSessionResult, VoiceTranscriber,
 };
 use warp_core::settings::Setting as _;
 use warp_errors::report_error;
@@ -78,6 +78,9 @@ pub(crate) struct TuiVoiceInputModel {
     animation_clock: AnimationClock,
     recording_handle: Option<SpawnedFutureHandle>,
     transcription_handle: Option<SpawnedFutureHandle>,
+    /// Resolves this model's team context on demand, so transcription requests are scoped to
+    /// the owning input view's window rather than an ambient, unscoped workspace read.
+    team_context_resolver: TeamContextResolver,
 }
 
 impl Entity for TuiVoiceInputModel {
@@ -87,6 +90,7 @@ impl Entity for TuiVoiceInputModel {
 impl TuiVoiceInputModel {
     pub(crate) fn new(
         input_mode: ModelHandle<BlocklistAIInputModel>,
+        team_context_resolver: TeamContextResolver,
         _ctx: &mut ModelContext<Self>,
     ) -> Self {
         Self {
@@ -96,6 +100,7 @@ impl TuiVoiceInputModel {
             animation_clock: AnimationClock::starting_at(Duration::ZERO),
             recording_handle: None,
             transcription_handle: None,
+            team_context_resolver,
         }
     }
 
@@ -317,11 +322,16 @@ impl TuiVoiceInputModel {
         let language = AISettings::as_ref(ctx)
             .voice_input_language_code()
             .map(str::to_owned);
+        let team_scope = RequestTeamScope::from_scope(&(self.team_context_resolver)(ctx));
         VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
             voice_input.set_transcribing_active(true);
         });
         self.transcription_handle = Some(ctx.spawn(
-            async move { transcriber.transcribe(wav_base64, language).await },
+            async move {
+                transcriber
+                    .transcribe(wav_base64, language, team_scope)
+                    .await
+            },
             Self::handle_transcription_result,
         ));
     }

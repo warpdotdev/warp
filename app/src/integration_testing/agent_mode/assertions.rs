@@ -18,6 +18,7 @@ use crate::ai::agent::{
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::integration_testing::view_getters::terminal_view;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 type TextAssertion = Box<dyn Fn(&str) -> bool + 'static>;
 type ActionAssertion = Box<dyn Fn(&AIAgentActionType) -> bool + 'static>;
@@ -808,13 +809,16 @@ pub fn validate_agent_mode_llm_step(model: &'static str) -> TestStep {
     let llm_id = LLMId::from(model);
     TestStep::new(&format!("Validate judge model '{model}'")).add_named_assertion(
         "Judge model is an available agent-mode LLM",
-        move |app, _window_id| {
+        move |app, window_id| {
             let llm_id = llm_id.clone();
             let (is_available, list_unavailable) =
-                LLMPreferences::handle(app).read(app, |llm_preferences, _| {
+                LLMPreferences::handle(app).read(app, |llm_preferences, ctx| {
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+                    );
                     (
-                        llm_preferences.is_available_agent_mode_llm(&llm_id),
-                        llm_preferences.agent_mode_models_unavailable(),
+                        llm_preferences.is_available_agent_mode_llm(&scope, &llm_id, ctx),
+                        llm_preferences.agent_mode_models_unavailable(&scope),
                     )
                 });
             if is_available {

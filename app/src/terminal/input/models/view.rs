@@ -34,7 +34,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ActionButton, ActionButtonTheme, ButtonSize};
 use crate::view_components::alert::{Alert, AlertConfig};
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 struct ManageDefaultsTheme;
 
@@ -453,14 +453,16 @@ impl InlineModelSelectorView {
     }
 
     fn active_model_id_for_current_tab(&self, ctx: &ViewContext<Self>) -> LLMId {
+        let scope =
+            ResolvedTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
         let llm_preferences = LLMPreferences::as_ref(ctx);
         match self.active_tab(ctx) {
             InlineModelSelectorTab::BaseAgent => llm_preferences
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model(&scope, ctx, Some(self.terminal_view_id))
                 .id
                 .clone(),
             InlineModelSelectorTab::FullTerminalUse => llm_preferences
-                .get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
+                .get_active_cli_agent_model(&scope, ctx, Some(self.terminal_view_id))
                 .id
                 .clone(),
         }

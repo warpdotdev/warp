@@ -167,6 +167,7 @@ struct StartupConfig {
     universal_developer_input_context: UniversalDeveloperInputContext,
     lifetime: Lifetime,
     selected_model_id: String,
+    share_with_team_uid: Option<crate::server::ids::ServerId>,
 }
 
 #[derive(Debug)]
@@ -251,6 +252,17 @@ impl StartupFailure {
             Self::ServerRejected(FailedToInitializeSessionReason::UserNotFound) => "user_not_found",
         }
     }
+}
+
+#[cfg(test)]
+fn share_with_team_uid_for_init_payload(
+    scope: &(impl crate::workspaces::user_workspaces::TeamScope + ?Sized),
+) -> Option<String> {
+    use crate::workspaces::user_workspaces::TeamScope;
+
+    crate::workspaces::user_workspaces::ResolvedTeamScope::from_scope(scope)
+        .team_uid()
+        .map(String::from)
 }
 
 #[cfg_attr(any(test, feature = "integration_tests"), allow(dead_code))]
@@ -384,6 +396,7 @@ impl Network {
         selection: Selection,
         input_replica_id: ReplicaId,
         terminal_view_id: warpui::EntityId,
+        team_uid: Option<crate::server::ids::ServerId>,
         universal_developer_input_context: UniversalDeveloperInputContext,
         lifetime: Lifetime,
         source: SharedSessionSource,
@@ -404,7 +417,7 @@ impl Network {
             }
         };
         let selected_model_id: String = crate::ai::llms::LLMPreferences::as_ref(ctx)
-            .get_active_base_model(ctx, Some(terminal_view_id))
+            .get_active_base_model_for_team_uid(team_uid, ctx, Some(terminal_view_id))
             .id
             .clone()
             .into();
@@ -417,6 +430,7 @@ impl Network {
             universal_developer_input_context: universal_developer_input_context.clone(),
             lifetime,
             selected_model_id,
+            share_with_team_uid: team_uid,
         };
 
         let mut network = Network {
@@ -862,6 +876,7 @@ impl Network {
                             supports_full_role: true,
                             supports_full_role_for_real: true,
                         },
+                        share_with_team_uid: config.share_with_team_uid.map(String::from),
                     });
                     if let Err(e) = network.ws_proxy_tx.try_send(message) {
                         sharer_error!(network, "Sharer failed to send initialization message: {e}");

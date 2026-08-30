@@ -48,6 +48,7 @@ impl TerminalView {
             if block.finished()
                 && !block.is_background()
                 && !block.is_static()
+                && !block.is_in_band_command_block()
                 && (block.bootstrap_stage().is_done() || block.is_restored())
             {
                 let cmd = block.command_to_string();

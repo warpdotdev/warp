@@ -15,7 +15,6 @@ use super::user_workspaces::{
     CreateTeamResponse, UserWorkspaces, WorkspacesMetadataResponse, WorkspacesMetadataWithPricing,
 };
 use super::workspace::WorkspaceUid;
-use crate::ai::llms::LLMPreferences;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::CloudObjectEventEntrypoint;
@@ -125,7 +124,6 @@ impl TeamUpdateManager {
                     workspaces: vec![],
                     joinable_teams: vec![],
                     experiments: None,
-                    feature_model_choices: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 },
@@ -508,13 +506,6 @@ impl TeamUpdateManager {
                 if let Some(experiments) = experiments {
                     ServerApiProvider::handle(ctx).update(ctx, |provider, ctx| {
                         provider.handle_experiments_fetched(experiments, ctx);
-                    });
-                }
-
-                if let Some(feature_model_choices) = user_workspaces_access.feature_model_choices {
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences
-                            .update_feature_model_choices(feature_model_choices.try_into(), ctx);
                     });
                 }
 

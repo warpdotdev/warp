@@ -131,6 +131,9 @@ def classify(relative: str) -> tuple[str, str]:
         return ("scorer", segments[1]) if _valid_name(segments[1]) else ("invalid", "")
     if len(segments) == 2 and segments[0] == "scorers" and segments[1].endswith(".md"):
         return "invalid", ""
+    if len(segments) == 2 and segments[0] == "webhooks" and segments[1].endswith(".yaml"):
+        name = segments[1][: -len(".yaml")]
+        return ("webhook", name) if _valid_name(name) else ("invalid", "")
     base = segments[-1]
     if segments[0] == "agents" and base == "agent.md":
         return "invalid", ""
@@ -139,6 +142,8 @@ def classify(relative: str) -> tuple[str, str]:
     if segments[0] == "runners" and base.endswith(".yaml"):
         return "invalid", ""
     if segments[0] == "scorers" and base == "scorer.md":
+        return "invalid", ""
+    if segments[0] == "webhooks" and base.endswith(".yaml"):
         return "invalid", ""
     return "unrelated", ""
 
@@ -149,7 +154,7 @@ def _valid_name(name: str) -> bool:
 
 def _resource_files(root: Path) -> list[Path]:
     files = [root / "factory.yaml"]
-    for directory_name in ("agents", "automations", "runners", "scorers"):
+    for directory_name in ("agents", "automations", "runners", "scorers", "webhooks"):
         resource_root = root / directory_name
         if not resource_root.is_dir():
             continue

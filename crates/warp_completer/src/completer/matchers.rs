@@ -69,6 +69,12 @@ impl MatchStrategy {
                     return case_insensitive_match;
                 }
 
+                // Only fall back to a subsequence match for a query with at least one alphanumeric
+                // character. Fuzzy matches on punctuation produce poor results.
+                if !partial.chars().any(|c| c.is_alphanumeric()) {
+                    return None;
+                }
+
                 match_indices_case_insensitive(from, partial)
                     .map(|match_result| Fuzzy { match_result })
             }

@@ -345,6 +345,11 @@ pub enum FeatureFlag {
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
 
+    /// Names the model doing the work in the warping indicator (e.g. "Warping with
+    /// Claude Sonnet 4.5.") once the server reports which model a response is
+    /// running on, rather than only naming it when the model is a fallback.
+    WarpingModelName,
+
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
 
@@ -755,10 +760,6 @@ pub enum FeatureFlag {
     /// adopt the configured color when their working directory matches.
     DirectoryTabColors,
 
-    /// Enables the new settings to control visibility of Warp Drive, Code Review Panel,
-    /// and Project Explorer & Global Search features.
-    OpenWarpNewSettingsModes,
-
     /// Enables vertical tab layout as an alternative to the horizontal tab bar.
     VerticalTabs,
 
@@ -1022,6 +1023,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Projects,
     FeatureFlag::ProviderCommand,
     FeatureFlag::MarkdownImages,
+    FeatureFlag::NativeShellCompletions,
     FeatureFlag::FileAndDiffSetComments,
     FeatureFlag::FileGlobV2Warnings,
     FeatureFlag::SummarizationViaMessageReplacement,
@@ -1055,6 +1057,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
 ];
 

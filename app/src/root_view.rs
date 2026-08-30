@@ -42,8 +42,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::onboarding::{
-    build_onboarding_models, current_onboarding_auth_state, onboarding_credit_packs,
-    onboarding_pricing_promotion_message,
+    build_onboarding_models, current_onboarding_auth_state, onboarding_pricing_promotion_message,
 };
 use crate::ai::request_usage_model::AIRequestUsageModelEvent;
 use crate::app_state::{AppState, PaneUuid, WindowSnapshot};
@@ -77,7 +76,6 @@ use crate::pane_group::{NewTerminalOptions, PanesLayout};
 use crate::persistence::ModelEvent;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::experiments::ServerExperiments;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::auth::UserAuthenticationError;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
@@ -109,7 +107,7 @@ use crate::workspace::view::OnboardingTutorial;
 use crate::workspace::{PaneViewLocator, Workspace, WorkspaceAction, WorkspaceRegistry};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::FtueAccountClass;
 use crate::{
     ChannelState, GlobalResourceHandles, GlobalResourceHandlesProvider, UpdateQuakeModeEventArg,
@@ -146,47 +144,6 @@ fn offer_variant_for_account_class(account_class: FtueAccountClass) -> Option<Of
     }
 }
 
-/// Relays the outcome of an onboarding-initiated credit purchase back to the
-/// onboarding view. On the checkout path the credits arrive asynchronously, so
-/// this only opens the browser; completion is detected later from the server's
-/// AI credit availability decision.
-fn handle_onboarding_credit_purchase_event(
-    onboarding_view: &ViewHandle<AgentOnboardingView>,
-    event: &UserWorkspacesEvent,
-    ctx: &mut ViewContext<RootView>,
-) {
-    if !onboarding_view
-        .as_ref(ctx)
-        .is_awaiting_purchased_credits(ctx)
-    {
-        return;
-    }
-    match event {
-        UserWorkspacesEvent::PurchaseAddonCreditsSuccess => {
-            onboarding_view.update(ctx, |onboarding_view, ctx| {
-                onboarding_view.on_credit_purchase_completed(ctx);
-            });
-        }
-        UserWorkspacesEvent::PurchaseAddonCreditsCheckoutRequired { checkout_url } => {
-            let checkout_url = checkout_url.clone();
-            onboarding_view.update(ctx, |onboarding_view, ctx| {
-                onboarding_view.on_credit_purchase_checkout_opened(ctx);
-            });
-            ctx.open_url(&checkout_url);
-        }
-        UserWorkspacesEvent::PurchaseAddonCreditsRejected(err) => {
-            safe_error!(
-                safe: ("Onboarding add-on credits purchase failed"),
-                full: ("Onboarding add-on credits purchase failed: {err}")
-            );
-            onboarding_view.update(ctx, |onboarding_view, ctx| {
-                onboarding_view.on_credit_purchase_failed(ctx);
-            });
-        }
-        _ => {}
-    }
-}
-
 /// Whether the team selected in `ctx`'s window imposes any AI autonomy policy, which is
 /// what decides whether onboarding offers the user an autonomy choice at all.
 fn team_enforces_autonomy(ctx: &ViewContext<RootView>) -> bool {
@@ -203,11 +160,14 @@ fn team_enforces_autonomy(ctx: &ViewContext<RootView>) -> bool {
 /// advances off, so every path that could follow a purchase goes through here
 /// rather than refreshing its own subset.
 fn refresh_onboarding_account_state(ctx: &mut ViewContext<RootView>) {
+    let scope = ResolvedTeamScope::from_scope(
+        &UserWorkspaces::as_ref(ctx).team_context(&ctx.handle(), ctx),
+    );
     AIRequestUsageModel::handle(ctx).update(ctx, |usage, ctx| {
         usage.request_availability_refresh(ctx);
     });
     LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-        prefs.refresh_available_models(ctx);
+        prefs.refresh_available_models(&scope, ctx);
     });
     TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
         drop(manager.refresh_workspace_metadata(ctx));
@@ -666,10 +626,9 @@ fn requires_post_onboarding_login(
     warp_drive_enabled: bool,
 ) -> bool {
     !is_logged_in
-        && (FeatureFlag::AccountFirstOnboarding.is_enabled()
-            || ((ai_enabled || warp_drive_enabled)
-                && FeatureFlag::OpenWarpNewSettingsModes.is_enabled()))
+        && (FeatureFlag::AccountFirstOnboarding.is_enabled() || ai_enabled || warp_drive_enabled)
 }
+
 /// Replaces the settings and tutorial snapshots consumed when post-auth
 /// onboarding eventually completes.
 ///
@@ -1733,6 +1692,17 @@ impl NewWorkspaceSource {
 
         UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(source_window_id)
     }
+
+    /// Whether this source points at specific content (e.g. a shared session or a cloud
+    /// conversation) that a new window should reach directly, rather than being deferred
+    /// behind product onboarding.
+    pub(crate) fn is_content_deep_link(&self) -> bool {
+        matches!(
+            self,
+            NewWorkspaceSource::SharedSessionAsViewer { .. }
+                | NewWorkspaceSource::FromCloudConversationId { .. }
+        )
+    }
 }
 
 /// Args needed to construct a `Workspace`.
@@ -1764,8 +1734,8 @@ enum AccountFirstCompletion {
     PaidTeam,
     FreeIcpSetupLater,
     FreeStandardSetupLater,
-    /// The user bought a one-time credit pack on the offer slide instead of
-    /// subscribing. They stay on the free plan, so they remain free-standard.
+    /// The user gained AI usage from the offer without ending up on a plan,
+    /// so they remain free-standard.
     FreeStandardCreditsPurchased,
     UpgradeCompleted,
 }
@@ -1881,6 +1851,8 @@ pub struct RootView {
     /// settings to apply after a new user login / initial cloud load completes
     pending_post_auth_onboarding_settings: Option<SelectedSettings>,
     pending_account_first_settings_class: Option<FtueAccountClass>,
+    /// Prevents onboarding on a new device from overwriting an existing preference.
+    pending_account_first_is_new_account: bool,
     pending_account_first_tutorial_after_settings: bool,
     pending_account_first_sso_login: Option<AccountFirstLoginContext>,
     account_first_refresh_in_flight: bool,
@@ -1939,20 +1911,14 @@ impl RootView {
                 if #[cfg(target_family = "wasm")] {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
-                    // Account-first onboarding and the current settings-modes flow both run before
-                    // login for users who have not completed onboarding locally.
-                    let pre_login_onboarding_enabled =
-                        FeatureFlag::AccountFirstOnboarding.is_enabled()
-                            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-                    let has_completed_local_onboarding = pre_login_onboarding_enabled
-                        && has_completed_local_onboarding(ctx);
-                    let should_show_pre_login_onboarding = pre_login_onboarding_enabled
-                        && FeatureFlag::AgentOnboarding.is_enabled()
-                        && !has_completed_local_onboarding;
+
                     if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
                         AuthOnboardingState::Auth(workspace_args.into())
-                    } else if should_show_pre_login_onboarding {
+                    } else if FeatureFlag::AgentOnboarding.is_enabled()
+                        && !has_completed_local_onboarding(ctx)
+                        && !workspace_args.workspace_setting.is_content_deep_link()
+                    {
                         let workspace_args_box: Box<WorkspaceArgs> = workspace_args.into();
                         let onboarding_view = Self::create_agent_onboarding_view(ctx);
                         onboarding_view.update(ctx, |view, ctx| {
@@ -1997,6 +1963,7 @@ impl RootView {
             pending_tutorial: None,
             pending_post_auth_onboarding_settings: None,
             pending_account_first_settings_class: None,
+            pending_account_first_is_new_account: false,
             pending_account_first_tutorial_after_settings: false,
             pending_account_first_sso_login: None,
             account_first_refresh_in_flight: false,
@@ -2193,8 +2160,11 @@ impl RootView {
     fn create_agent_onboarding_view(
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<AgentOnboardingView> {
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context(&ctx.handle(), ctx),
+        );
         LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.refresh_available_models(ctx);
+            prefs.refresh_available_models(&scope, ctx);
         });
 
         let themes = onboarding_theme_picker_themes();
@@ -2213,24 +2183,20 @@ impl RootView {
                 models,
                 default_model_id,
                 enforces_autonomy,
-                FeatureFlag::AgentView.is_enabled(),
                 auth_state,
                 ctx,
             );
-            view.set_credit_pack_options(onboarding_credit_packs(ctx), ctx);
             view.set_pricing_promotion_message(onboarding_pricing_promotion_message(ctx), ctx);
             view
         });
-        // Keep the offer slide's credit packs and promotion in sync with server pricing.
+        // Keep the offer slide's promotion in sync with server pricing.
         let onboarding_view_for_pricing = onboarding_view.clone();
         ctx.subscribe_to_model(
             &PricingInfoModel::handle(ctx),
             move |_, _pricing, event, ctx| {
                 let PricingInfoModelEvent::PricingInfoUpdated = event;
-                let options = onboarding_credit_packs(ctx);
                 let promotion_message = onboarding_pricing_promotion_message(ctx);
                 onboarding_view_for_pricing.update(ctx, |onboarding_view, ctx| {
-                    onboarding_view.set_credit_pack_options(options, ctx);
                     onboarding_view.set_pricing_promotion_message(promotion_message, ctx);
                 });
             },
@@ -2266,25 +2232,15 @@ impl RootView {
                             .set_workspace_enforces_autonomy(workspace_enforces_autonomy, ctx);
                     });
                 }
-                handle_onboarding_credit_purchase_event(
-                    &onboarding_view_for_workspaces,
-                    event,
-                    ctx,
-                );
                 let auth_state = current_onboarding_auth_state(ctx);
-                let credit_pack_options = onboarding_credit_packs(ctx);
                 onboarding_view_for_workspaces.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.set_auth_state(auth_state, ctx);
-                    // The purchase policy (and so the premium) comes from the
-                    // user's workspace, so a metadata refresh can move the
-                    // displayed prices.
-                    onboarding_view.set_credit_pack_options(credit_pack_options, ctx);
                 });
             },
         );
 
-        // Browser checkout doesn't report back to the app, so the purchase is
-        // only complete once the user can actually make an AI request.
+        // Browser checkout doesn't report back to the app, so the offer is only
+        // satisfied once the user can actually make an AI request.
         let onboarding_view_for_usage = onboarding_view.clone();
         ctx.subscribe_to_model(
             &AIRequestUsageModel::handle(ctx),
@@ -2292,7 +2248,11 @@ impl RootView {
                 if !matches!(event, AIRequestUsageModelEvent::CreditAvailabilityUpdated) {
                     return;
                 }
-                let available = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+                let available = {
+                    let user_workspaces = UserWorkspaces::as_ref(ctx);
+                    let scope = user_workspaces.team_context_for_view(ctx);
+                    AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(&scope, ctx)
+                };
                 onboarding_view_for_usage.update(ctx, |onboarding_view, ctx| {
                     onboarding_view.on_ai_credit_availability_observed(available, ctx);
                 });
@@ -2419,21 +2379,6 @@ impl RootView {
         ctx.notify();
     }
 
-    /// The REV-1939 offer arm for the in-flight account-first offer, read from
-    /// the onboarding view. `None` outside the arm-experiment offer.
-    fn account_first_offer_experiment_arm(&self, ctx: &AppContext) -> Option<String> {
-        let onboarding_view = match &self.auth_onboarding_state {
-            AuthOnboardingState::PostAuthOnboarding {
-                onboarding_view, ..
-            }
-            | AuthOnboardingState::LoginSlide {
-                onboarding_view, ..
-            } => onboarding_view,
-            _ => return None,
-        };
-        onboarding_view.as_ref(ctx).offer_experiment_arm(ctx)
-    }
-
     fn resolve_account_first_post_auth(
         &mut self,
         fresh_request_limit: Option<usize>,
@@ -2463,10 +2408,6 @@ impl RootView {
                 let variant = offer_variant_for_account_class(account_class)
                     .expect("free account classes have an offer");
                 context.onboarding_view.update(ctx, |view, ctx| {
-                    // Snapshot the server-assigned arm just before the offer is
-                    // shown, then freeze it for this exposure (REV-1939).
-                    let arm = ServerExperiments::as_ref(ctx).choose_how_to_start_experiment_arm();
-                    view.set_choose_how_to_start_experiment_arm(arm, ctx);
                     view.show_post_auth_offer(variant, ctx);
                 });
                 self.auth_onboarding_state = AuthOnboardingState::PostAuthOnboarding {
@@ -2503,7 +2444,6 @@ impl RootView {
         }
 
         if upgrade_started {
-            let experiment_arm = self.account_first_offer_experiment_arm(ctx);
             send_telemetry_from_ctx!(
                 OnboardingEvent::OnboardingUpgradeCompleted {
                     source_slide: match account_class {
@@ -2513,7 +2453,6 @@ impl RootView {
                     }
                     .to_string(),
                     account_class: account_class.as_str().to_string(),
-                    experiment_arm,
                 },
                 ctx
             );
@@ -2542,6 +2481,10 @@ impl RootView {
         if FeatureFlag::HOAOnboardingFlow.is_enabled() {
             mark_hoa_onboarding_completed(ctx);
         }
+        let is_new_account = !AuthStateProvider::as_ref(ctx)
+            .get()
+            .is_onboarded()
+            .unwrap_or(true);
         if AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             AuthManager::handle(ctx).update(ctx, |model, ctx| model.set_user_onboarded(ctx));
         }
@@ -2556,6 +2499,7 @@ impl RootView {
                 apply_account_first_onboarding_settings(
                     &selected_settings,
                     account_class,
+                    is_new_account,
                     team_context,
                     ctx,
                 );
@@ -2563,6 +2507,7 @@ impl RootView {
             true
         } else {
             self.pending_account_first_settings_class = account_class;
+            self.pending_account_first_is_new_account = is_new_account;
             false
         };
 
@@ -2572,11 +2517,9 @@ impl RootView {
         self.pending_account_first_tutorial_after_settings =
             completion.starts_agent_tutorial() && !settings_applied;
 
-        let experiment_arm = self.account_first_offer_experiment_arm(ctx);
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingCompleted {
                 completion_type: completion.completion_type().to_string(),
-                experiment_arm,
             },
             ctx
         );
@@ -2611,6 +2554,7 @@ impl RootView {
                 self.pending_tutorial = None;
                 self.pending_post_auth_onboarding_settings = None;
                 self.pending_account_first_settings_class = None;
+                self.pending_account_first_is_new_account = false;
                 self.pending_account_first_tutorial_after_settings = false;
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
                 self.focus(ctx);
@@ -2682,9 +2626,6 @@ impl RootView {
                     let variant = offer_variant_for_account_class(account_class)
                         .expect("free account classes have an offer");
                     onboarding_view.update(ctx, |view, ctx| {
-                        let arm =
-                            ServerExperiments::as_ref(ctx).choose_how_to_start_experiment_arm();
-                        view.set_choose_how_to_start_experiment_arm(arm, ctx);
                         view.show_post_auth_offer(variant, ctx);
                     });
                     self.focus(ctx);
@@ -2845,7 +2786,6 @@ impl RootView {
                     AuthOnboardingState::WebImport(_) => None,
                 };
                 if let Some(account_class) = upgrade_started {
-                    let experiment_arm = self.account_first_offer_experiment_arm(ctx);
                     send_telemetry_from_ctx!(
                         OnboardingEvent::OnboardingUpgradeStarted {
                             source_slide: match account_class {
@@ -2855,7 +2795,6 @@ impl RootView {
                             }
                             .to_string(),
                             account_class: account_class.as_str().to_string(),
-                            experiment_arm,
                         },
                         ctx
                     );
@@ -3003,18 +2942,11 @@ impl RootView {
                     self.complete_account_first(AccountFirstCompletion::FreeStandardSetupLater, ctx)
                 }
             },
-            AgentOnboardingEvent::PurchaseCreditsRequested { credits } => {
-                let credits = *credits;
-                let team_uid = UserWorkspaces::as_ref(ctx).team_uid_for_window(ctx.window_id());
-                UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
-                    user_workspaces.purchase_addon_credits(team_uid, credits, ctx);
-                });
-            }
-            AgentOnboardingEvent::OfferCreditsPurchased { variant } => match variant {
-                // Only the free-standard offer surfaces credit packs.
+            AgentOnboardingEvent::OfferAiSellSatisfied { variant } => match variant {
+                // Only the free-standard offer sells AI usage.
                 OfferVariant::ChooseHowToStart => {
-                    // The offer sells a plan alongside the packs, so the user
-                    // may have subscribed instead; record whichever they did.
+                    // The user may have bought a plan or one-time credits;
+                    // record whichever they did.
                     let completion = if Self::account_first_is_paid(ctx) {
                         AccountFirstCompletion::UpgradeCompleted
                     } else {
@@ -3274,14 +3206,17 @@ impl RootView {
                 // Generic session link: ambient-ness (if any) is discovered at SessionJoined.
                 workspace.add_tab_for_joining_shared_session(*session_id, false, ctx);
             });
-            let window_id = ctx.window_id();
-            ctx.windows().show_window_and_focus_app(window_id);
-            ctx.notify();
-            true
-        } else {
+        } else if !self
+            .auth_onboarding_state
+            .retarget_pending_workspace_for_shared_session(*session_id)
+        {
             log::warn!("Auth not complete before trying to join shared session");
-            false
+            return false;
         }
+        let window_id = ctx.window_id();
+        ctx.windows().show_window_and_focus_app(window_id);
+        ctx.notify();
+        true
     }
 
     /// Opens a cloud conversation in an existing window.
@@ -3933,11 +3868,13 @@ impl RootView {
             return;
         }
         if let Some(account_class) = self.pending_account_first_settings_class.take() {
+            let is_new_account = self.pending_account_first_is_new_account;
             if let Some(selected_settings) = self.pending_post_auth_onboarding_settings.take() {
                 let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 apply_account_first_onboarding_settings(
                     &selected_settings,
                     Some(account_class),
+                    is_new_account,
                     team_context,
                     ctx,
                 );
@@ -3976,9 +3913,7 @@ impl RootView {
             return;
         };
 
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            && FeatureFlag::TabConfigs.is_enabled()
-        {
+        if FeatureFlag::TabConfigs.is_enabled() {
             let intention = tutorial.intention();
             if matches!(intention, OnboardingIntention::AgentDrivenDevelopment) {
                 workspace.update(ctx, |view, ctx| {
@@ -4212,9 +4147,15 @@ impl AuthOnboardingState {
     fn try_open_onboarding_slides(&mut self, ctx: &mut ViewContext<RootView>) {
         let target = match self {
             AuthOnboardingState::Auth(args) | AuthOnboardingState::ConfirmIncomingAuth(args) => {
+                if args.workspace_setting.is_content_deep_link() {
+                    return;
+                }
                 AuthOnboardingTarget::Workspace(args.clone())
             }
             AuthOnboardingState::Terminal(workspace) => {
+                if workspace.as_ref(ctx).opened_from_content_deep_link() {
+                    return;
+                }
                 AuthOnboardingTarget::Terminal(workspace.clone())
             }
             _ => {
@@ -4350,6 +4291,34 @@ impl AuthOnboardingState {
                 ctx.emit(RootViewEvent::AuthOnboardingStateChanged);
             }
         }
+    }
+
+    /// Redirects a workspace that has not yet been created to join `session_id`.
+    fn retarget_pending_workspace_for_shared_session(&mut self, session_id: SessionId) -> bool {
+        let workspace_args = match self {
+            AuthOnboardingState::Auth(args) | AuthOnboardingState::ConfirmIncomingAuth(args) => {
+                args
+            }
+            AuthOnboardingState::Onboarding { target, .. }
+            | AuthOnboardingState::LoginSlide { target, .. }
+            | AuthOnboardingState::PostAuthOnboarding { target, .. }
+            | AuthOnboardingState::NeedsSsoLink(target) => {
+                let AuthOnboardingTarget::Workspace(args) = target else {
+                    return false;
+                };
+                args
+            }
+            #[cfg(target_family = "wasm")]
+            AuthOnboardingState::WebImport(target) => {
+                let AuthOnboardingTarget::Workspace(args) = target else {
+                    return false;
+                };
+                args
+            }
+            AuthOnboardingState::Terminal(_) => return false,
+        };
+        workspace_args.workspace_setting = NewWorkspaceSource::SharedSessionAsViewer { session_id };
+        true
     }
 }
 

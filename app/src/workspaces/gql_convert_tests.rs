@@ -13,9 +13,11 @@ fn team(name: &str, member_uids: &[&str]) -> Team {
                     uid: UserUid::new(uid),
                     email: format!("{uid}@example.com"),
                     role: MembershipRole::User,
+                    is_disabled: false,
                 })
                 .collect(),
         ),
+        None,
     )
 }
 
@@ -24,6 +26,7 @@ fn workspace(teams: Vec<Team>) -> Workspace {
         format!("{:0>22}", "workspace").into(),
         "workspace".to_string(),
         Some(teams),
+        None,
     )
 }
 
@@ -73,6 +76,52 @@ fn drop_every_team_when_user_has_no_team_membership() {
     retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
 
     assert!(team_names(&workspace).is_empty());
+}
+
+#[test]
+fn team_member_conversion_preserves_is_disabled() {
+    let enabled_member = GqlTeamMember {
+        uid: "user-1".into(),
+        email: "user1@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: false,
+    };
+    let disabled_member = GqlTeamMember {
+        uid: "user-2".into(),
+        email: "user2@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: true,
+    };
+
+    assert!(!TeamMember::from(enabled_member).is_disabled);
+    assert!(TeamMember::from(disabled_member).is_disabled);
+}
+
+#[test]
+fn workspace_member_conversion_preserves_is_disabled() {
+    let usage_info = || GqlWorkspaceMemberUsageInfo {
+        is_unlimited: false,
+        request_limit: 0,
+        requests_used_since_last_refresh: 0,
+        is_request_limit_prorated: false,
+    };
+    let enabled_member = GqlWorkspaceMember {
+        uid: "user-1".into(),
+        email: "user1@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: false,
+        usage_info: usage_info(),
+    };
+    let disabled_member = GqlWorkspaceMember {
+        uid: "user-2".into(),
+        email: "user2@example.com".to_string(),
+        role: GqlMembershipRole::User,
+        is_disabled: true,
+        usage_info: usage_info(),
+    };
+
+    assert!(!WorkspaceMember::from(enabled_member).is_disabled);
+    assert!(WorkspaceMember::from(disabled_member).is_disabled);
 }
 
 mod pending_email_invites_conversion {
@@ -279,7 +328,7 @@ mod team_settings_conversion {
             AdminEnablementSetting::Enable
         );
 
-        // AI permissions preserve the enforcement bit and the list split entries.
+        // AI permissions preserve the enforcement bit and compile the merged patterns.
         assert!(settings.ai_permissions.allow_ai_in_remote_sessions.value);
         assert!(
             settings
@@ -288,22 +337,15 @@ mod team_settings_conversion {
                 .is_enforced_by_workspace
         );
         assert_eq!(
-            settings.ai_permissions.remote_session_regex_list.values,
-            vec!["foo.*".to_string()]
-        );
-        assert_eq!(
             settings
                 .ai_permissions
                 .remote_session_regex_list
-                .workspace_entries,
-            vec!["ws.*".to_string()]
-        );
-        assert_eq!(
-            settings
-                .ai_permissions
-                .remote_session_regex_list
-                .team_entries,
-            vec!["team.*".to_string()]
+                .iter()
+                .map(|regex| regex.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo.*"],
+            "only the merged `values` compile into the effective list; the workspace/team \
+             split entries have no Rust-client reader to preserve them for"
         );
 
         // Secret redaction keeps the merged values and the workspace split entries.
@@ -372,6 +414,26 @@ mod team_settings_conversion {
         assert_eq!(
             settings.sandboxed_agent.execute_commands_denylist.values,
             vec!["danger".to_string()]
+        );
+    }
+
+    #[test]
+    fn drops_an_uncompilable_remote_session_pattern_without_failing_the_rest() {
+        // Compilation now happens at convert time (mirroring the workspace-level path), so an
+        // org's one bad pattern must not take down the rest of its list.
+        let mut gql = sample_gql_team_settings();
+        gql.ai_permissions.remote_session_regex_list = str_list(&["foo.*", "("], &[], &[]);
+
+        let settings = team_settings_from_gql(gql);
+
+        assert_eq!(
+            settings
+                .ai_permissions
+                .remote_session_regex_list
+                .iter()
+                .map(|regex| regex.as_str())
+                .collect::<Vec<_>>(),
+            vec!["foo.*"]
         );
     }
 

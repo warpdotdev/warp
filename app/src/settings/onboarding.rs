@@ -1,7 +1,6 @@
 use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
 use onboarding::{SelectedSettings, SessionDefault, UICustomizationSettings};
 use settings::Setting as _;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_if_error;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -9,7 +8,7 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{ActionPermission, WriteToPtyPermission};
 use crate::drive::settings::WarpDriveSettings;
 use crate::settings::ai::DefaultSessionMode;
-use crate::settings::{AISettings, CodeSettings};
+use crate::settings::{AISettings, CodeSettings, UsageDisplayUnit};
 use crate::workspace::tab_settings::TabSettings;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::workspaces::workspace::FtueAccountClass;
@@ -17,6 +16,7 @@ use crate::workspaces::workspace::FtueAccountClass;
 pub(crate) fn apply_account_first_onboarding_settings(
     selected_settings: &SelectedSettings,
     account_class: Option<FtueAccountClass>,
+    is_new_account: bool,
     team_context: TeamContextForOperation,
     app: &mut AppContext,
 ) {
@@ -29,6 +29,17 @@ pub(crate) fn apply_account_first_onboarding_settings(
             FtueAccountClass::Paid | FtueAccountClass::FreeIcp | FtueAccountClass::FreeStandard,
         ) => true,
     };
+
+    // Preserve an existing account's synced preference on a new device.
+    if account_class.is_some() && is_new_account {
+        AISettings::handle(app).update(app, |settings, ctx| {
+            report_if_error!(
+                settings
+                    .usage_display_unit
+                    .set_value(UsageDisplayUnit::Dollars, ctx)
+            );
+        });
+    }
 
     match selected_settings {
         SelectedSettings::AgentDrivenDevelopment {
@@ -101,35 +112,28 @@ pub(crate) fn apply_onboarding_settings(
             cli_agent_toolbar_enabled,
             show_agent_notifications,
         } => {
-            // In old onboarding, there's nothing to set for terminal intent.
-            if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-                true
-            } else {
-                if let Some(ui) = ui_customization {
-                    apply_ui_customization_settings(ui, false, app);
-                }
-                AISettings::handle(app).update(app, |settings, ctx| {
-                    report_if_error!(
-                        settings
-                            .should_render_cli_agent_footer
-                            .set_value(*cli_agent_toolbar_enabled, ctx)
-                    );
-                    report_if_error!(
-                        settings
-                            .show_agent_notifications
-                            .set_value(*show_agent_notifications, ctx)
-                    );
-                });
-                false
+            if let Some(ui) = ui_customization {
+                apply_ui_customization_settings(ui, false, app);
             }
+            AISettings::handle(app).update(app, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .should_render_cli_agent_footer
+                        .set_value(*cli_agent_toolbar_enabled, ctx)
+                );
+                report_if_error!(
+                    settings
+                        .show_agent_notifications
+                        .set_value(*show_agent_notifications, ctx)
+                );
+            });
+            false
         }
     };
 
-    if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-        AISettings::handle(app).update(app, |settings, ctx| {
-            report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
-        });
-    }
+    AISettings::handle(app).update(app, |settings, ctx| {
+        report_if_error!(settings.is_any_ai_enabled.set_value(is_ai_enabled, ctx));
+    });
 }
 
 /// Applies the explicit UI customization settings chosen during the
@@ -139,12 +143,6 @@ fn apply_ui_customization_settings(
     is_agent_intent: bool,
     app: &mut AppContext,
 ) {
-    // Customize UI slide should only exist with this flag enabled.
-    if !FeatureFlag::AccountFirstOnboarding.is_enabled()
-        && !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-    {
-        return;
-    }
     TabSettings::handle(app).update(app, |settings, ctx| {
         report_if_error!(
             settings

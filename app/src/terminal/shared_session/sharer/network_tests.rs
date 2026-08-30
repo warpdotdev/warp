@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_channel::Sender;
 use byte_unit::Byte;
@@ -19,7 +20,8 @@ use websocket::{Message, WebsocketMessage as _};
 
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
-    Stage, StartupFailure, StartupRetryState, startup_max_attempts,
+    Stage, StartupFailure, StartupRetryState, share_with_team_uid_for_init_payload,
+    startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -39,6 +41,26 @@ fn is_upstream_message_pty_bytes_read(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
     }) if event_no == expected_event_no && bytes == compressed_bytes)
+}
+
+#[test]
+fn test_share_with_team_uid_for_init_payload_includes_team_scoped_view() {
+    let team_uid = crate::server::ids::ServerId::from(123);
+    let scope = crate::workspaces::user_workspaces::TeamContextForOperation::new_for_test(team_uid);
+    assert_eq!(
+        share_with_team_uid_for_init_payload(&scope),
+        Some(String::from(team_uid))
+    );
+}
+
+#[test]
+fn test_share_with_team_uid_for_init_payload_omits_personal_view() {
+    assert_eq!(
+        share_with_team_uid_for_init_payload(
+            &crate::workspaces::user_workspaces::TeamlessScopeForTest,
+        ),
+        None
+    );
 }
 
 #[test]
@@ -412,6 +434,25 @@ fn test_handle_pty_read_event_while_not_batching() {
     });
 }
 
+/// Waits until the mock terminal model reports its active block as bootstrapped.
+///
+/// `start_ordered_terminal_events_listener` silently drops ordered events until this is
+/// true, so callers must wait for it instead of racing it: sending an event beforehand can
+/// flake if the listener task hasn't observed the bootstrapped state yet. Uses the same
+/// generous 2s budget as the `recv()` timeouts below it, rather than the default
+/// `assert_eventually!` tick budget, so this wait can't reintroduce a fixed-window race of
+/// its own.
+async fn wait_for_bootstrapped(network: &ModelHandle<Network>, app: &App) {
+    assert_eventually!(
+        400 =>
+        network.read(app, |network, _ctx| network
+            .model
+            .lock()
+            .is_active_block_bootstrapped()),
+        "Mock terminal model should report the active block as bootstrapped"
+    );
+}
+
 #[test]
 fn test_handle_non_pty_read_event_while_batching() {
     App::test((), |mut app| async move {
@@ -427,6 +468,8 @@ fn test_handle_non_pty_read_event_while_batching() {
             };
         });
 
+        wait_for_bootstrapped(&network, &app).await;
+
         // Send a non PtyBytesRead event to the Network model.
         let event = OrderedTerminalEventType::CommandExecutionStarted {
             participant_id: Default::default(),
@@ -436,14 +479,14 @@ fn test_handle_non_pty_read_event_while_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
-            "Two messages should be sent to the server; got {}",
-            ws_proxy_rx.len()
-        );
-
+        // Await each flush directly rather than polling a fixed tick budget, so a scheduling
+        // delay under load can't race a fixed timeout window (which flaked on Windows CI).
         // Make sure that we flush the PtyBytesRead message first.
-        let item = ws_proxy_rx.recv().await;
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("PtyBytesRead flush message should be sent before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -451,8 +494,14 @@ fn test_handle_non_pty_read_event_while_batching() {
         ));
 
         // And that the non PtyBytesRead message follows suit.
-        let item = ws_proxy_rx.recv().await;
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Non-PtyBytesRead message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 1));
+
+        assert_eq!(ws_proxy_rx.len(), 0);
 
         // The batching status should be reset.
         network.read(&app, |network, _ctx| {
@@ -475,6 +524,8 @@ fn test_handle_non_pty_read_event_while_not_batching() {
             }
         });
 
+        wait_for_bootstrapped(&network, &app).await;
+
         // Send a non PtyBytesRead event to the Network model.
         let event = OrderedTerminalEventType::CommandExecutionStarted {
             participant_id: Default::default(),
@@ -484,13 +535,13 @@ fn test_handle_non_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        assert_eventually!(
-            ws_proxy_rx.len() == 1,
-            "One message should be sent to the server; got {}",
-            ws_proxy_rx.len()
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // Await the flush directly rather than polling a fixed tick budget; see
+        // test_handle_non_pty_read_event_while_batching for why.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 0));
 
         // The batching status should be unchanged.

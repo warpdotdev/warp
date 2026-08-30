@@ -13,78 +13,55 @@
 //! plan's own BYO entitlement.
 
 use std::rc::Rc;
+use std::sync::OnceLock;
 
+use regex::Regex;
+use settings::Setting;
+use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
-use super::{SoleTeamError, UserWorkspaces};
-use crate::ai::llms::{LLMId, LLMProvider};
+use super::UserWorkspaces;
+#[cfg(any(test, feature = "test-util"))]
+use crate::ai::llms::LLMInfo;
+use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider, ModelsByFeature};
+use crate::auth::AuthStateProvider;
 use crate::server::ids::ServerId;
-use crate::settings::AgentModeCommandExecutionPredicate;
+use crate::settings::{AISettings, AgentModeCommandExecutionPredicate};
 use crate::workspaces::gql_convert::ToAgentModeCommandExecutionPredicates;
 use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
-    AdminEnablementSetting, AiAutonomySettings, TeamByoSettings, Workspace,
+    AdminEnablementSetting, AiAutonomySettings, HostEnablementSetting, LlmHostSettings,
+    LlmSettings, TeamByoSettings, Workspace,
 };
 
-/// The team an operation is scoped to, captured once from the window that started it.
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
 ///
-/// A logical operation carries its `TeamContextForOperation` from start to finish instead of
-/// asking a window which team is selected now, so concurrent windows on different teams stay
-/// independent and a later team switch cannot retarget work already in flight.
+/// Either of [`TeamContextForOperation`] or [`TeamContext`] is the "key" external
+/// modules use to obtain a team-level setting. The only external modules can obtain
+/// this "key" is by exchanging a ViewContext or a ViewHandle for one. Once minted,
+/// both [`TeamContextForOperation`] or [`TeamContext`] cannot be copied, cloned, or
+/// moved. This ensures that the external operations which need TeamScopes (i.e. to
+/// exchange for a team setting) is scoped to the view (and therefore team-scoped
+/// window) that started the operation. External callers shouldn't copy a TeamContext
+/// to a Singleton model for example, risking leaking that TeamContext / team info to
+/// a different window with another team.
 ///
-/// Deliberately neither `Clone` nor `Copy`. Moves make the handoff between the parts of an
-/// operation explicit and reviewable, whereas copies let a scope leak sideways into work
-/// that never established it. Wanting to duplicate one is a sign the second consumer is
-/// really a separate operation that should capture its own scope; if the parts genuinely
-/// share a lifetime, restructure so they share the single owner instead.
-///
-/// This is scope, not authority: the server still authorizes every request made under it.
-///
-/// Prefer [`TeamContext`] when reasonable: convert a `ViewContext` to a `WeakViewHandle`,
-/// carry the handle through moved futures and callbacks, and mint the render context only at
-/// the point of use, so a policy read reflects the window's team at that moment. Reach for
-/// this type instead when the work's *destination* must not move once chosen -- e.g. creating
-/// a Drive object in the team the user was in when they clicked New -- and be ready to justify
-/// that choice; pinning is deliberate, not the default.
-///
-/// Only [`UserWorkspaces::team_context_for_operation`] mints one, always from a real window;
-/// there is no way to fabricate one without a window (there is deliberately no `teamless()`
-/// constructor). Its `team_uid` can still be `None` -- that means the minting window itself
-/// has no team selected, and a getter that accepts this scope should act as if the operation
-/// is not on a team. It must not read some other team's settings as a substitute: see
-/// [`TeamScope`]'s contract. Code with no window at all (e.g. background GEAP token refresh)
-/// is not this type's job -- it needs its own accessor that reads across every one of the
-/// user's teams explicitly, in the shape of `UserWorkspaces::teams_allow_codebase_context`.
+/// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
+/// outside [`UserWorkspaces`].
+#[allow(private_bounds)]
+pub trait TeamScope: sealed::Sealed {
+    fn team_uid(&self) -> Option<ServerId>;
+}
+
 pub(crate) struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
 
-/// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team, regardless of which one a
-/// caller was handed. Implemented only by those two types — see their docs for what each one
-/// promises about when it was resolved and what it can be used for.
-///
-/// The contract every settings getter built on this trait must follow: take a scope directly
-/// (`&impl TeamScope` or `&dyn TeamScope`), never an optional one (`Option<&dyn TeamScope>`).
-/// A caller with no scope to give has to confront that rather than pass `None` and inherit
-/// some fallback. `team_uid() == None` means the scope's own window/operation has no team, so
-/// the getter must not substitute some *other* team's settings.
-///
-/// `current_workspace().settings` is not such a substitute. It is a backwards-compatibility
-/// shape, from when a workspace held exactly one team, a user was in at most one workspace, and
-/// being in the workspace meant being in that team -- "the workspace's settings" was then
-/// unambiguously "your team's settings", and old clients read nothing else.
-///
-/// The server still has to populate it, so `GetEffectiveWorkspaceSettingsForWorkspace` elects a
-/// team to stand in: the first of the viewer's own teams in that workspace, or the workspace
-/// layer over default team settings when they are on none. So a user on one team reads that
-/// team, and a user on several reads an arbitrary one of theirs.
-///
-/// Code with no window at all must not construct a scope to route around this; it should read
-/// across every team explicitly, the way `UserWorkspaces::teams_allow_codebase_context` does.
-#[allow(dead_code)]
-pub trait TeamScope {
-    fn team_uid(&self) -> Option<ServerId>;
-}
+impl sealed::Sealed for TeamContextForOperation {}
 
 impl TeamScope for TeamContextForOperation {
     fn team_uid(&self) -> Option<ServerId> {
@@ -105,9 +82,10 @@ impl TeamContextForOperation {
 ///
 /// It is resolved at the point of use so policy reads follow the view between windows.
 pub struct TeamContext<'a> {
-    #[allow(dead_code)]
     team_uid: Option<&'a ServerId>,
 }
+
+impl sealed::Sealed for TeamContext<'_> {}
 
 impl TeamScope for TeamContext<'_> {
     fn team_uid(&self) -> Option<ServerId> {
@@ -115,31 +93,79 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-/// Resolves a [`TeamContext`] on demand from a view captured up front. See
-/// [`UserWorkspaces::team_context_resolver`] for when this is the right tool.
-pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
-
 /// The team a headless CLI invocation acts as, named on the command line instead of resolved
 /// from a window.
-///
-/// Deliberately cannot be teamless. The other two scopes can be, because a window genuinely may
-/// have no team selected; a CLI caller that cannot name one has instead failed to say what it
-/// meant, and is told to pass `--team=<UID>`. Minted only by
-/// [`UserWorkspaces::team_scope_for_cli`], which checks membership first.
+#[cfg(not(target_family = "wasm"))]
 pub struct TeamScopeForCli(ServerId);
 
+#[cfg(not(target_family = "wasm"))]
+impl sealed::Sealed for TeamScopeForCli {}
+
+#[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
         Some(self.0)
     }
 }
 
+pub struct ResolvedTeamScope(Option<ServerId>);
+
+impl ResolvedTeamScope {
+    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
+        Self(scope.team_uid())
+    }
+
+    #[cfg(feature = "agent_mode_evals")]
+    pub(crate) fn teamless() -> Self {
+        Self(None)
+    }
+}
+
+impl sealed::Sealed for ResolvedTeamScope {}
+
+impl TeamScope for ResolvedTeamScope {
+    fn team_uid(&self) -> Option<ServerId> {
+        self.0
+    }
+}
+
+/// A teamless [`TeamScope`] for tests that pass a scope without standing up a window.
+#[cfg(test)]
+pub(crate) struct TeamlessScopeForTest;
+
+#[cfg(test)]
+impl sealed::Sealed for TeamlessScopeForTest {}
+
+#[cfg(test)]
+impl TeamScope for TeamlessScopeForTest {
+    fn team_uid(&self) -> Option<ServerId> {
+        None
+    }
+}
+
+/// Resolves a [`TeamContext`] on demand from a view captured up front. See
+/// [`UserWorkspaces::team_context_resolver`].
+pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
-pub enum CliTeamError {
-    #[error(transparent)]
-    NoSoleTeam(#[from] SoleTeamError),
-    #[error("you are not on team {team_uid}")]
-    NotAMember { team_uid: ServerId },
+#[error("you are not on team {team_uid}")]
+pub struct NotATeamMemberError {
+    pub team_uid: ServerId,
+}
+
+/// What windowless Gemini Enterprise credential minting should mint from. See
+/// [`UserWorkspaces::gemini_enterprise_host_for_any_enabling_team`].
+#[cfg(not(target_family = "wasm"))]
+pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
+    /// No team of the user's enables Gemini Enterprise, so there is nothing to mint.
+    NoneEnabled,
+    /// Teams enable it against different Google Cloud projects, named here so the caller can
+    /// tell the user which teams disagree. Nothing is minted -- there is one credential store
+    /// and no window to choose with -- but unlike [`Self::NoneEnabled`] this is a
+    /// misconfiguration an admin can fix, and the user should be told so.
+    Conflicting(Vec<&'a str>),
+    Enabled(&'a LlmHostSettings),
 }
 
 impl UserWorkspaces {
@@ -156,21 +182,37 @@ impl UserWorkspaces {
         }
     }
 
+    pub(crate) fn team_context<'a, T: Entity>(
+        &'a self,
+        view: &WeakViewHandle<T>,
+        app: &AppContext,
+    ) -> TeamContext<'a> {
+        let team_uid = self.team_for_view_handle(view, app).map(|team| &team.uid);
+        TeamContext { team_uid }
+    }
+
+    /// The scope a headless CLI invocation reads team policy through, for a team the caller has
+    /// already resolved.
+    ///
+    /// The sole exception to scopes being window-derived. *Which* team a CLI invocation acts as is
+    /// the caller's to settle; all this enforces is that the answer is a team the user is on, so a
+    /// scope can never name one whose policy [`Self::team_byo_for_scope`] would fail to find.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn team_scope_for_cli(
+        &self,
+        team_uid: ServerId,
+    ) -> Result<TeamScopeForCli, NotATeamMemberError> {
+        self.is_member_of_team(team_uid)
+            .then_some(TeamScopeForCli(team_uid))
+            .ok_or(NotATeamMemberError { team_uid })
+    }
+
+    pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {
+        self.team_context_for_window_id(ctx.window_id())
+    }
+
     /// Captures `view` as a reusable source of [`TeamContext`], for consumers that cannot name
     /// a view at the boundaries where they need one.
-    ///
-    /// Reach for this only when that is genuinely the case -- a model or executor several
-    /// layers below the view that owns it, such as `BlocklistAIActionModel` and the action
-    /// executors it builds, whose methods receive an [`AppContext`] and no handle. Threading a
-    /// `WeakViewHandle` of the owning view's type through those layers would make each of them
-    /// generic over a view they otherwise know nothing about.
-    ///
-    /// A view resolving *itself* is not that case: it should hold a `WeakViewHandle<Self>` and
-    /// call [`Self::team_context`] at the point of use, which costs the same one field and
-    /// keeps the resolution target visible in the struct rather than captured in a closure.
-    ///
-    /// The captured handle is resolved on each call, so the scope still follows the view's
-    /// window; it is the handle that is fixed here, not the team.
     pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
     }
@@ -181,56 +223,6 @@ impl UserWorkspaces {
         Rc::new(|_| TeamContext { team_uid: None })
     }
 
-    /// The team a CLI invocation acts as: the one it named, or its sole team when it named none.
-    ///
-    /// Membership is checked here so a mistyped uid fails loudly, rather than resolving to a team
-    /// whose policy [`Self::team_byo_for_scope`] cannot find and being denied everything for a
-    /// reason the user cannot see.
-    pub fn cli_team_uid(&self, requested: Option<ServerId>) -> Result<ServerId, CliTeamError> {
-        match requested {
-            Some(team_uid) => self
-                .team_from_uid(team_uid)
-                .map(|team| team.uid)
-                .ok_or(CliTeamError::NotAMember { team_uid }),
-            None => Ok(self.sole_team_uid()?),
-        }
-    }
-
-    /// [`Self::cli_team_uid`] as a scope, for the policy reads a CLI command makes. Both are fed
-    /// the same requested uid so an object's owner and the credentials it may use cannot disagree.
-    pub fn team_scope_for_cli(
-        &self,
-        requested: Option<ServerId>,
-    ) -> Result<TeamScopeForCli, CliTeamError> {
-        self.cli_team_uid(requested).map(TeamScopeForCli)
-    }
-
-    /// A view that has left its window resolves the same way as a window with no team: to no
-    /// team. Both mean there is no team to govern the read, and a caller on a render path has
-    /// no better answer to give than that.
-    pub(crate) fn team_context<'a, T: Entity>(
-        &'a self,
-        view: &WeakViewHandle<T>,
-        app: &AppContext,
-    ) -> TeamContext<'a> {
-        let team_uid = self.team_for_view_handle(view, app).map(|team| &team.uid);
-        TeamContext { team_uid }
-    }
-
-    /// [`Self::team_context`] for code holding a [`ViewContext`] rather than a
-    /// [`WeakViewHandle`]: a view inside its own constructor, where a handle would not yet
-    /// resolve, or a nested `update` closure over a child view whose own type is not worth
-    /// naming. [`ViewContext::window_id`] is a plain field valid in both cases, which is why
-    /// this takes the context.
-    ///
-    /// The exchange for a scope is deliberately a view or a `ViewContext`, never a raw
-    /// [`WindowId`]: an id-taking form would incentivise passing ids around, and an id is
-    /// weaker evidence than a live context because a pane dragged between windows carries its
-    /// models with it.
-    pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {
-        self.team_context_for_window_id(ctx.window_id())
-    }
-
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {
         TeamContext {
             team_uid: self
@@ -238,6 +230,10 @@ impl UserWorkspaces {
                 .and_then(|team_uid| self.team_from_uid(team_uid))
                 .map(|team| &team.uid),
         }
+    }
+
+    pub fn team_context_for_window(&self, window_id: WindowId) -> TeamContext<'_> {
+        self.team_context_for_window_id(window_id)
     }
 
     /// [`Self::team_context_for_view`] for tests, which build scopes for bare windows rather
@@ -402,6 +398,289 @@ impl UserWorkspaces {
         )
     }
 
+    pub(crate) fn is_anyone_with_link_sharing_enabled<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .link_sharing
+                    .anyone_with_link_sharing_enabled
+                    .value
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .link_sharing_settings
+                    .anyone_with_link_sharing_enabled
+            },
+            true,
+        )
+    }
+
+    pub(crate) fn is_direct_link_sharing_enabled<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| team.settings.link_sharing.direct_link_sharing_enabled.value,
+            |workspace| {
+                workspace
+                    .settings
+                    .link_sharing_settings
+                    .direct_link_sharing_enabled
+            },
+            true,
+        )
+    }
+
+    /// Every team the user belongs to, across all of their workspaces.
+    #[cfg(not(target_family = "wasm"))]
+    fn all_teams(&self) -> impl Iterator<Item = &Team> {
+        self.workspaces
+            .iter()
+            .flat_map(|workspace| workspace.teams.iter())
+    }
+
+    /// The LLM host settings (which hosts an admin has enabled, and how) that apply to
+    /// `scope`'s team. See [`Self::scoped_or_workspace_setting`] for the no-team fallback.
+    /// `llm_settings` lives on both [`crate::workspaces::workspace::WorkspaceSettings`] and
+    /// [`crate::workspaces::workspace::TeamSettings`] for exactly this reason: unlike a plan
+    /// entitlement, which host an admin enabled is per-team, not workspace-wide.
+    fn llm_settings_for_scope<S: TeamScope + ?Sized>(&self, scope: &S) -> Option<&LlmSettings> {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| Some(&team.settings.llm_settings),
+            |workspace| Some(&workspace.settings.llm_settings),
+            None,
+        )
+    }
+
+    fn host_settings_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        host: LLMModelHost,
+    ) -> Option<&LlmHostSettings> {
+        self.llm_settings_for_scope(scope)?.host_configs.get(&host)
+    }
+
+    pub(crate) fn aws_bedrock_host_settings<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> Option<&LlmHostSettings> {
+        self.host_settings_for_scope(scope, LLMModelHost::AwsBedrock)
+    }
+
+    pub(crate) fn gemini_enterprise_host_settings<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> Option<&LlmHostSettings> {
+        self.host_settings_for_scope(scope, LLMModelHost::GeminiEnterprise)
+    }
+
+    /// Did the admin enable AWS Bedrock for `scope`'s team?
+    pub(crate) fn is_aws_bedrock_available<S: TeamScope + ?Sized>(&self, scope: &S) -> bool {
+        self.llm_settings_for_scope(scope)
+            .is_some_and(|llm_settings| llm_settings.enabled)
+            && self
+                .aws_bedrock_host_settings(scope)
+                .is_some_and(|settings| settings.enabled)
+    }
+
+    pub(crate) fn aws_bedrock_host_enablement_setting<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> HostEnablementSetting {
+        self.aws_bedrock_host_settings(scope)
+            .map(|settings| settings.enablement_setting.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn is_aws_bedrock_credentials_enabled<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> bool {
+        // i.e. did the admin go and toggle on aws bedrock in the admin panel?
+        if !self.is_aws_bedrock_available(scope) {
+            return false;
+        }
+
+        match self.aws_bedrock_host_enablement_setting(scope) {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+                .aws_bedrock_credentials_enabled
+                .value(),
+        }
+    }
+
+    /// Whether *any* of the user's teams has AWS Bedrock credentials enabled, for work that
+    /// belongs to no window at all: loading the local AWS credential chain, and the "does this
+    /// user have any usable BYO path" check. A caller with a window must use
+    /// [`Self::is_aws_bedrock_credentials_enabled`] instead -- this deliberately answers for
+    /// the union of the user's teams, not for the team a window points at.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn is_aws_bedrock_credentials_enabled_for_any_team(&self, app: &AppContext) -> bool {
+        self.every_applicable_team_and_llm_settings()
+            .map(|(_, settings)| settings)
+            .any(|llm_settings| {
+                Self::host_credentials_enabled(llm_settings, &LLMModelHost::AwsBedrock, || {
+                    *AISettings::as_ref(app)
+                        .aws_bedrock_credentials_enabled
+                        .value()
+                })
+            })
+    }
+
+    /// Did the admin enable Gemini Enterprise (GEAP) for `scope`'s team?
+    pub(crate) fn is_gemini_enterprise_available_from_workspace<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        self.llm_settings_for_scope(scope)
+            .is_some_and(|llm_settings| llm_settings.enabled)
+            && self
+                .gemini_enterprise_host_settings(scope)
+                .is_some_and(|settings| settings.enabled)
+    }
+
+    pub(crate) fn gemini_enterprise_host_enablement_setting<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> HostEnablementSetting {
+        self.gemini_enterprise_host_settings(scope)
+            .map(|settings| settings.enablement_setting.clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn is_gemini_enterprise_credentials_toggleable<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        matches!(
+            self.gemini_enterprise_host_enablement_setting(scope),
+            HostEnablementSetting::RespectUserSetting
+        )
+    }
+
+    /// Whether Gemini Enterprise (GEAP) credentials should be minted and attached to requests
+    pub(crate) fn is_gemini_enterprise_credentials_enabled<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> bool {
+        if !FeatureFlag::GeminiEnterprise.is_enabled() {
+            return false;
+        }
+        if AuthStateProvider::as_ref(app)
+            .get()
+            .is_anonymous_or_logged_out()
+        {
+            return false;
+        }
+        // i.e. did the admin toggle on Gemini Enterprise in the admin panel?
+        if !self.is_gemini_enterprise_available_from_workspace(scope) {
+            return false;
+        }
+
+        match self.gemini_enterprise_host_enablement_setting(scope) {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => *AISettings::as_ref(app)
+                .gemini_enterprise_credentials_enabled
+                .value(),
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn every_applicable_team_and_llm_settings(
+        &self,
+    ) -> Box<dyn Iterator<Item = (Option<&Team>, &LlmSettings)> + '_> {
+        let mut teams = self.all_teams().peekable();
+        if teams.peek().is_none() {
+            return Box::new(
+                self.current_workspace()
+                    .into_iter()
+                    .map(|workspace| (None, &workspace.settings.llm_settings)),
+            );
+        }
+        Box::new(teams.map(|team| (Some(team), &team.settings.llm_settings)))
+    }
+
+    /// Did the admin turn `host` on, with its credentials resolved against `user_setting_enabled`?
+    #[cfg(not(target_family = "wasm"))]
+    fn host_credentials_enabled(
+        llm_settings: &LlmSettings,
+        host: &LLMModelHost,
+        user_setting_enabled: impl FnOnce() -> bool,
+    ) -> bool {
+        if !llm_settings.enabled {
+            return false;
+        }
+        let Some(host_settings) = llm_settings.host_configs.get(host) else {
+            return false;
+        };
+        if !host_settings.enabled {
+            return false;
+        }
+        match host_settings.enablement_setting {
+            HostEnablementSetting::Enforce => true,
+            HostEnablementSetting::RespectUserSetting => user_setting_enabled(),
+        }
+    }
+
+    /// What background, windowless Gemini Enterprise credential minting should mint from.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn gemini_enterprise_host_for_any_enabling_team(
+        &self,
+        app: &AppContext,
+    ) -> GeminiEnterpriseBackgroundHost<'_> {
+        if !FeatureFlag::GeminiEnterprise.is_enabled()
+            || AuthStateProvider::as_ref(app)
+                .get()
+                .is_anonymous_or_logged_out()
+        {
+            return GeminiEnterpriseBackgroundHost::NoneEnabled;
+        }
+        let enabling: Vec<(Option<&Team>, &LlmHostSettings)> = self
+            .every_applicable_team_and_llm_settings()
+            .filter(|(_, llm_settings)| {
+                Self::host_credentials_enabled(
+                    llm_settings,
+                    &LLMModelHost::GeminiEnterprise,
+                    || {
+                        *AISettings::as_ref(app)
+                            .gemini_enterprise_credentials_enabled
+                            .value()
+                    },
+                )
+            })
+            .filter_map(|(team, llm_settings)| {
+                llm_settings
+                    .host_configs
+                    .get(&LLMModelHost::GeminiEnterprise)
+                    .map(|settings| (team, settings))
+            })
+            .collect();
+
+        let Some((_, first)) = enabling.first().copied() else {
+            return GeminiEnterpriseBackgroundHost::NoneEnabled;
+        };
+        let agree = enabling.iter().all(|(_, settings)| {
+            settings.gcp_audience == first.gcp_audience
+                && settings.gcp_sa_email == first.gcp_sa_email
+        });
+        if agree {
+            GeminiEnterpriseBackgroundHost::Enabled(first)
+        } else {
+            GeminiEnterpriseBackgroundHost::Conflicting(
+                enabling
+                    .iter()
+                    .filter_map(|(team, _)| team.map(|team| team.name.as_str()))
+                    .collect(),
+            )
+        }
+    }
+
     /// The AI autonomy policy that applies to `scope`'s team. See
     /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
     pub(crate) fn ai_autonomy_settings<S: TeamScope + ?Sized>(
@@ -414,6 +693,78 @@ impl UserWorkspaces {
             |workspace| workspace.settings.ai_autonomy_settings.clone(),
             AiAutonomySettings::default(),
         )
+    }
+
+    pub(crate) fn feature_model_choice_for_scope<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> &ModelsByFeature {
+        static DEFAULT: OnceLock<ModelsByFeature> = OnceLock::new();
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| &team.feature_model_choice,
+            |workspace| &workspace.feature_model_choice,
+            self.workspaceless_models_by_feature
+                .as_ref()
+                .unwrap_or_else(|| DEFAULT.get_or_init(ModelsByFeature::default)),
+        )
+    }
+
+    pub(crate) fn feature_model_choice_for_team_uid(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> &ModelsByFeature {
+        self.feature_model_choice_for_scope(&TeamContextForOperation { team_uid })
+    }
+
+    pub(crate) fn set_feature_model_choice_for_team_uid(
+        &mut self,
+        team_uid: Option<ServerId>,
+        models: ModelsByFeature,
+    ) {
+        match team_uid {
+            Some(team_uid) => {
+                if let Some(workspace) = self.current_workspace_mut()
+                    && let Some(team) = workspace.teams.iter_mut().find(|t| t.uid == team_uid)
+                {
+                    team.feature_model_choice = models;
+                }
+            }
+            None => match self.current_workspace_mut() {
+                Some(workspace) => workspace.feature_model_choice = models,
+                None => self.set_workspaceless_models_by_feature(models),
+            },
+        }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn add_agent_mode_model_for_test_for_team_uid(
+        &mut self,
+        team_uid: Option<ServerId>,
+        llm: LLMInfo,
+    ) {
+        match team_uid {
+            Some(team_uid) => {
+                if let Some(workspace) = self.current_workspace_mut()
+                    && let Some(team) = workspace.teams.iter_mut().find(|t| t.uid == team_uid)
+                {
+                    team.feature_model_choice
+                        .agent_mode
+                        .push_choice_for_test(llm);
+                }
+            }
+            None => match self.current_workspace_mut() {
+                Some(workspace) => workspace
+                    .feature_model_choice
+                    .agent_mode
+                    .push_choice_for_test(llm),
+                None => self
+                    .workspaceless_models_by_feature
+                    .get_or_insert_with(ModelsByFeature::default)
+                    .agent_mode
+                    .push_choice_for_test(llm),
+            },
+        }
     }
 
     /// The organization-managed command denylist a sandboxed agent must obey, for `scope`'s
@@ -473,5 +824,65 @@ impl UserWorkspaces {
                 .ai_autonomy_policy
                 .is_some_and(|policy| policy.is_enabled)
         })
+    }
+
+    /// Whether AI is allowed in remote sessions under `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback. An unresolvable named
+    /// team denies rather than guessing, for a control gating AI in an environment the user
+    /// may not control.
+    ///
+    /// `current_workspace()` is only `None` when logged out or before the first metadata fetch
+    /// (an authenticated user, teamless or not, always has at least a personal workspace). There
+    /// is no admin policy to read in that state, so it permits, preserving the pre-refactor
+    /// default. The helper's single `absent` value cannot express both that and the
+    /// unresolvable-team deny, so the no-workspace case is handled explicitly first.
+    pub(crate) fn is_ai_allowed_in_remote_sessions<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> bool {
+        if scope.team_uid().is_none() && self.current_workspace().is_none() {
+            return true;
+        }
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .ai_permissions
+                    .allow_ai_in_remote_sessions
+                    .value
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .ai_permissions_settings
+                    .allow_ai_in_remote_sessions
+            },
+            false,
+        )
+    }
+
+    /// The remote-session command patterns configured by `scope`'s team. See
+    /// [`Self::scoped_or_workspace_setting`] for the no-team fallback.
+    pub(crate) fn get_remote_session_regex_list<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+    ) -> &[Regex] {
+        self.scoped_or_workspace_setting(
+            scope,
+            |team| {
+                team.settings
+                    .ai_permissions
+                    .remote_session_regex_list
+                    .as_slice()
+            },
+            |workspace| {
+                workspace
+                    .settings
+                    .ai_permissions_settings
+                    .remote_session_regex_list
+                    .as_slice()
+            },
+            &[],
+        )
     }
 }

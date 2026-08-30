@@ -1,6 +1,6 @@
 use ai::LLMId;
 use chrono::{DateTime, Utc};
-use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings, ProjectOnboardingSettings};
+use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
 use onboarding::{SelectedSettings, UICustomizationSettings};
 use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
@@ -20,8 +20,8 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{
-    AISettings, CodeSettings, PrivacySettings, apply_account_first_onboarding_settings,
-    apply_onboarding_settings,
+    AISettings, CodeSettings, PrivacySettings, UsageDisplayUnit,
+    apply_account_first_onboarding_settings, apply_onboarding_settings,
 };
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::tab_settings::TabSettings;
@@ -136,7 +136,6 @@ fn apply_onboarding_settings_preserves_existing_cloud_profile_on_existing_user_l
                 disable_oz: false,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: None,
         };
 
@@ -210,7 +209,6 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
                 disable_oz: false,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: Some(UICustomizationSettings {
                 use_vertical_tabs: false,
                 show_conversation_history: false,
@@ -231,6 +229,7 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
                 apply_account_first_onboarding_settings(
                     &selected_settings,
                     account_class,
+                    true,
                     team_context_for_test(),
                     ctx,
                 );
@@ -247,12 +246,88 @@ fn account_first_settings_enable_agent_for_authenticated_users_and_apply_ui_choi
     });
 }
 
+#[test]
+fn apply_account_first_onboarding_settings_sets_dollars_for_new_accounts_only() {
+    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+
+        let selected_settings = SelectedSettings::Terminal {
+            ui_customization: None,
+            cli_agent_toolbar_enabled: true,
+            show_agent_notifications: true,
+        };
+
+        app.update(|ctx| {
+            apply_account_first_onboarding_settings(
+                &selected_settings,
+                None,
+                true,
+                team_context_for_test(),
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                AISettings::as_ref(ctx).usage_display_unit,
+                UsageDisplayUnit::Credits,
+                "skipping account creation must leave the Credits default untouched"
+            );
+        });
+
+        app.update(|ctx| {
+            apply_account_first_onboarding_settings(
+                &selected_settings,
+                Some(FtueAccountClass::FreeStandard),
+                false,
+                team_context_for_test(),
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                AISettings::as_ref(ctx).usage_display_unit,
+                UsageDisplayUnit::Credits,
+                "an existing account logging in must not have its choice overwritten"
+            );
+        });
+
+        app.update(|ctx| {
+            apply_account_first_onboarding_settings(
+                &selected_settings,
+                Some(FtueAccountClass::FreeStandard),
+                true,
+                team_context_for_test(),
+                ctx,
+            );
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                AISettings::as_ref(ctx).usage_display_unit,
+                UsageDisplayUnit::Dollars,
+                "a freshly created account should default to Dollars"
+            );
+        });
+    });
+}
+
 /// Warp's AI features run on a Warp account. For third-party agent intent
 /// (`disable_oz = true`), AI is therefore off when the user skips creating an
 /// account and on once they have one.
 #[test]
 fn apply_onboarding_settings_gates_third_party_ai_on_account() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
@@ -277,7 +352,6 @@ fn apply_onboarding_settings_gates_third_party_ai_on_account() {
                 disable_oz: true,
                 show_agent_notifications: true,
             },
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: None,
         };
 

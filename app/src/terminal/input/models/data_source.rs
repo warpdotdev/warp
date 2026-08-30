@@ -292,15 +292,16 @@ impl SyncDataSource for ModelSelectorDataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let llm_preferences = LLMPreferences::as_ref(app);
         let is_full_terminal = query.filters.contains(&QueryFilter::FullTerminalUseModels);
+        let scope = (self.team_context)(app);
 
         let active_llm_id = if is_full_terminal {
             llm_preferences
-                .get_active_cli_agent_model(app, Some(self.terminal_view_id))
+                .get_active_cli_agent_model(&scope, app, Some(self.terminal_view_id))
                 .id
                 .clone()
         } else {
             llm_preferences
-                .get_active_base_model(app, Some(self.terminal_view_id))
+                .get_active_base_model(&scope, app, Some(self.terminal_view_id))
                 .id
                 .clone()
         };
@@ -308,7 +309,7 @@ impl SyncDataSource for ModelSelectorDataSource {
         let is_cloud_pane = self.ambient_agent_view_model.is_some();
         let choices = if is_full_terminal {
             llm_preferences
-                .get_cli_agent_llm_choices(app)
+                .get_cli_agent_llm_choices(&scope, app)
                 .filter(|llm| {
                     let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
                     Self::include_model_in_picker(is_cloud_pane, is_custom)
@@ -316,14 +317,13 @@ impl SyncDataSource for ModelSelectorDataSource {
                 .collect_vec()
         } else {
             llm_preferences
-                .get_base_llm_choices_for_agent_mode(app)
+                .get_base_llm_choices_for_agent_mode(&scope, app)
                 .filter(|llm| {
                     let is_custom = llm_preferences.custom_llm_info_for_id(&llm.id).is_some();
                     Self::include_model_in_picker(is_cloud_pane, is_custom)
                 })
                 .collect_vec()
         };
-        let scope = (self.team_context)(app);
         let upgrade_url = UserWorkspaces::as_ref(app).upgrade_link_for_scope(&scope, app);
         Ok(
             query_model_picker_choices(llm_preferences, choices, &query.text, &scope, app)
@@ -382,9 +382,9 @@ impl ModelSearchItem {
         let llm = &choice.llm;
         let is_custom_router = is_custom_router_id(llm.id.as_str());
         let is_auto = is_auto(llm);
-        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, app);
+        let is_using_bedrock = should_show_bedrock_icon_for_model(llm, scope, app);
         let is_using_gemini_enterprise_agent_platform =
-            should_show_gemini_enterprise_agent_platform_icon_for_model(llm, app);
+            should_show_gemini_enterprise_agent_platform_icon_for_model(llm, scope, app);
         let byo_key_source = byo_key_source_for_model(llm, scope, app);
         let leading_icon = model_leading_icon(
             llm,

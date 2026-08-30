@@ -295,7 +295,7 @@ fn initialize_custom_endpoint_usage_test_app(app: &mut App) {
 #[allow(deprecated)]
 fn custom_endpoint_usage_metadata(
     config_key: &str,
-    total_tokens: u32,
+    total_tokens: u64,
 ) -> api::response_event::stream_finished::ConversationUsageMetadata {
     let category = "primary_agent".to_string();
     api::response_event::stream_finished::ConversationUsageMetadata {

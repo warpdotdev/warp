@@ -333,8 +333,10 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "hex",
  "http_client",
  "ignore",
+ "indexmap 2.12.0",
  "instant",
  "itertools 0.14.0",
  "languages",
@@ -351,12 +353,14 @@ dependencies = [
  "regex",
  "repo_metadata",
  "rmcp",
+ "schemars 1.0.4",
  "sentry",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "serde_yaml 0.8.26",
  "serial_test",
+ "settings_value",
  "sha2 0.10.9",
  "shellexpand",
  "streaming-iterator",
@@ -370,6 +374,7 @@ dependencies = [
  "tokio",
  "typed-path 0.10.0",
  "unicode-width 0.1.14",
+ "url",
  "uuid",
  "virtual-fs",
  "warp_core",
@@ -3519,7 +3524,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.12.0"
-source = "git+https://github.com/warpdotdev/cosmic-text.git?rev=15198beba692162201c0ea8b15222cf5643ea068#15198beba692162201c0ea8b15222cf5643ea068"
+source = "git+https://github.com/warpdotdev/cosmic-text.git?rev=a7c7b71497542758e08f77390b8efce543b3181f#a7c7b71497542758e08f77390b8efce543b3181f"
 dependencies = [
  "bitflags 2.13.0",
  "fontdb",
@@ -11388,6 +11393,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
+name = "regex_dfas"
+version = "0.0.0"
+dependencies = [
+ "regex",
+ "regex-automata",
+]
+
+[[package]]
 name = "remote_server"
 version = "0.1.0"
 dependencies = [
@@ -12158,6 +12171,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "secret_redaction"
+version = "0.0.0"
+dependencies = [
+ "itertools 0.14.0",
+ "lazy_static",
+ "log",
+ "parking_lot",
+ "regex",
+ "regex-automata",
+ "regex_dfas",
+ "string-offset",
+ "warp_core",
+ "warp_errors",
+]
+
+[[package]]
 name = "security-framework"
 version = "2.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12615,7 +12644,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=b30fdd06379a3d073b398eabd106abed5b443aae#b30fdd06379a3d073b398eabd106abed5b443aae"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=fcd0fea35ab9f782043c8ec74fd81bce187ded9f#fcd0fea35ab9f782043c8ec74fd81bce187ded9f"
 dependencies = [
  "byte-unit",
  "serde",
@@ -15195,7 +15224,6 @@ dependencies = [
  "crc",
  "csv",
  "ctor",
- "cvt",
  "cynic",
  "dashmap",
  "deltae",
@@ -15216,7 +15244,6 @@ dependencies = [
  "event-listener",
  "field_mask",
  "firebase",
- "flate2",
  "float-cmp",
  "freedesktop-desktop-entry",
  "futures",
@@ -15224,7 +15251,6 @@ dependencies = [
  "futures-timer",
  "futures-util",
  "fuzzy_match",
- "gethostname",
  "getrandom 0.2.16",
  "getset",
  "git2",
@@ -15322,6 +15348,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "rustls",
  "schemars 1.0.4",
+ "secret_redaction",
  "security-framework-sys",
  "sentry",
  "sentry-log",
@@ -15343,7 +15370,6 @@ dependencies = [
  "shellexpand",
  "shlex",
  "signal-hook",
- "signal-hook-mio",
  "similar",
  "simple_logger",
  "siphasher 0.3.11",
@@ -15833,7 +15859,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=65ff6b9e1b9120eee2df0f79fa943a009820f4a3#65ff6b9e1b9120eee2df0f79fa943a009820f4a3"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=2bd5df2e3a73ada980d1e9c613ce369232e8c41d#2bd5df2e3a73ada980d1e9c613ce369232e8c41d"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15991,35 +16017,83 @@ name = "warp_terminal"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
+ "async-channel",
+ "async-io",
+ "base64 0.22.1",
+ "bimap",
+ "bincode",
  "bitflags 2.13.0",
  "bitflags-serde-legacy",
+ "bounded-vec-deque",
+ "byte-unit",
+ "bytemuck",
  "cfg-if",
  "channel_versions",
+ "command",
  "command-corrections",
+ "cvt",
  "enum-iterator",
+ "flate2",
+ "futures",
+ "futures-lite 1.13.0",
  "get-size",
+ "gethostname",
+ "hex",
+ "image",
+ "instant",
  "itertools 0.14.0",
  "lazy_static",
+ "libc",
  "log",
+ "memo-map",
+ "mio",
+ "nix 0.26.4",
+ "ordered-float 3.9.2",
+ "parking_lot",
  "pathfinder_color",
+ "pathfinder_geometry",
+ "rand 0.8.6",
+ "rangemap",
  "regex",
+ "regex-automata",
+ "regex_dfas",
+ "secret_redaction",
+ "sentry",
  "serde",
+ "serde_json",
+ "serial_test",
  "session-sharing-protocol",
+ "shellexpand",
+ "signal-hook",
+ "signal-hook-mio",
+ "smallvec 1.15.1",
  "smol_str",
  "static_assertions",
  "string-offset",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
+ "unicode-general-category",
  "unicode-segmentation",
  "unicode-width 0.1.14",
+ "urlocator",
  "uuid",
+ "vec1",
  "version-compare",
  "vte",
+ "warp_assets",
+ "warp_cli",
  "warp_completer",
  "warp_core",
  "warp_errors",
+ "warp_isolation_platform",
  "warp_util",
  "warpui_core",
+ "windows 0.62.2",
+ "windows-registry 0.2.0",
+ "windows-result 0.2.0",
+ "winreg",
 ]
 
 [[package]]
@@ -16090,6 +16164,7 @@ dependencies = [
  "anyhow",
  "command",
  "content_inspector",
+ "directories",
  "dirs 6.0.0",
  "dunce",
  "event-listener",
@@ -16097,6 +16172,8 @@ dependencies = [
  "futures-util",
  "gloo",
  "hex",
+ "is_executable",
+ "itertools 0.14.0",
  "lazy_static",
  "log",
  "mime_guess",
@@ -16107,6 +16184,8 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "serial_test",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
  "warp_errors",

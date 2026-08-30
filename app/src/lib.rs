@@ -847,7 +847,7 @@ fn run_worker_command(worker: &warp_cli::WorkerCommand) -> Result<()> {
     match worker {
         #[cfg(all(feature = "local_tty", unix))]
         warp_cli::WorkerCommand::TerminalServer(args) => {
-            crate::terminal::local_tty::server::run_terminal_server(args);
+            crate::terminal::local_tty::run_terminal_server(args);
             Ok(())
         }
         #[cfg(feature = "plugin_host")]
@@ -2298,6 +2298,7 @@ pub(crate) fn initialize_app(
             ctx,
         )
     });
+    ai::custom_endpoints::init(launch_mode, ctx);
 
     // LogManager must be registered before any subsystem (e.g. MCP, LSP) that creates file-based loggers.
     ctx.add_singleton_model(|_| simple_logger::manager::LogManager::new());

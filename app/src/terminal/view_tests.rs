@@ -32,6 +32,7 @@ use crate::ai::blocklist::agent_view::{
     ExitAgentViewError,
 };
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, FakeAIBlockModel, InputConfig, InputType,
     ResponseStream, ResponseStreamId,
@@ -4029,6 +4030,174 @@ fn test_clear_session_flag_state() {
                 !view.any_session_contains_restored_remote_blocks,
                 "Terminal should not have restored remote blocks after clearing"
             );
+        });
+    })
+}
+
+/// Regression: publishing only under a forbidding policy meant a later revocation found nothing
+/// published and left AI enabled mid-remote-session. The focused terminal must publish its
+/// remote content regardless of the current permission.
+#[test]
+fn focused_terminal_publishes_remote_blocks_while_remote_session_ai_is_still_permitted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team")
+                        .settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                },
+                ctx,
+            );
+            let team_uid = user_workspaces
+                .sole_team_uid()
+                .expect("the fixture workspace has exactly one team");
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context(&terminal.downgrade(), ctx);
+            assert!(
+                user_workspaces.is_ai_allowed_in_remote_sessions(&scope),
+                "precondition: the permissive policy that used to suppress publishing"
+            );
+            assert!(!FocusedTerminalInfo::as_ref(ctx).contains_any_remote_blocks());
+        });
+
+        terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(ctx.is_self_or_child_focused());
+            view.any_session_contains_remote_blocks = true;
+            view.update_focused_terminal_info(ctx);
+        });
+
+        app.read(|ctx| {
+            let focused_terminal = FocusedTerminalInfo::as_ref(ctx);
+            assert!(focused_terminal.contains_any_remote_blocks());
+            assert_eq!(
+                focused_terminal.terminal().map(|handle| handle.id()),
+                Some(terminal.id()),
+                "the flags name the surface they came from"
+            );
+        });
+    })
+}
+
+/// The permission is re-minted on every decision from the focused terminal's handle, so an
+/// admin revoking it takes effect immediately rather than waiting for a new session or a fresh
+/// publish.
+#[test]
+fn revoking_remote_session_ai_takes_effect_without_a_new_terminal_session() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team")
+                        .settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                },
+                ctx,
+            );
+            let team_uid = user_workspaces
+                .sole_team_uid()
+                .expect("the fixture workspace has exactly one team");
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+        });
+
+        terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+        terminal.update(&mut app, |view, ctx| {
+            view.any_session_contains_remote_blocks = true;
+            view.update_focused_terminal_info(ctx);
+        });
+
+        app.read(|ctx| {
+            assert!(!AISettings::as_ref(ctx).is_ai_disabled_due_to_remote_session_org_policy(ctx));
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team")
+                        .settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = false;
+                },
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(
+                AISettings::as_ref(ctx).is_ai_disabled_due_to_remote_session_org_policy(ctx),
+                "revocation takes effect on the next read, with no new session or fresh publish"
+            );
+        });
+    })
+}
+
+/// A block's remoteness is a question of fact, so the team's command patterns classify it even
+/// when that team currently permits AI in remote sessions.
+#[test]
+fn org_command_patterns_classify_a_block_remote_even_when_remote_session_ai_is_permitted() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    let team = workspace
+                        .teams
+                        .first_mut()
+                        .expect("the fixture workspace has a team");
+                    team.settings
+                        .ai_permissions
+                        .allow_ai_in_remote_sessions
+                        .value = true;
+                    team.settings.ai_permissions.remote_session_regex_list =
+                        vec![Regex::new("^kubectl").expect("test pattern should compile")];
+                },
+                ctx,
+            );
+            let team_uid = user_workspaces
+                .sole_team_uid()
+                .expect("the fixture workspace has exactly one team");
+            user_workspaces.set_team_for_window(window_id, team_uid, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context(&terminal.downgrade(), ctx);
+            assert!(
+                user_workspaces.is_ai_allowed_in_remote_sessions(&scope),
+                "precondition: the team permits AI and only configures patterns"
+            );
+            assert!(view.is_block_considered_remote(None, Some("kubectl get pods"), ctx));
+            assert!(!view.is_block_considered_remote(None, Some("ls -la"), ctx));
         });
     })
 }
@@ -8473,6 +8642,8 @@ fn cli_session_status_updates_active_child_conversation() {
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
+        let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
+            .expect("valid task id");
 
         let child_conversation_id = terminal.update(&mut app, |view, ctx| {
             let parent_conversation_id =
@@ -8481,14 +8652,19 @@ fn cli_session_status_updates_active_child_conversation() {
                 });
             let child_conversation_id =
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.start_new_child_conversation(
+                    let child_conversation_id = history_model.start_new_child_conversation(
                         view.view_id,
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
                         false,
                         ctx,
-                    )
+                    );
+                    history_model
+                        .conversation_mut(&child_conversation_id)
+                        .expect("child conversation should exist")
+                        .set_task_id(task_id);
+                    child_conversation_id
                 });
 
             view.enter_agent_view(
@@ -8497,6 +8673,13 @@ fn cli_session_status_updates_active_child_conversation() {
                 AgentViewEntryOrigin::ChildAgent,
                 ctx,
             );
+
+            // Status updates only route to a conversation whose `task_id` matches
+            // the ambient task this pane's CLI-harness session is registered
+            // under (see `TerminalView::conversation_id_for_cli_status_updates`).
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |sync_model, _ctx| {
+                sync_model.register_cli_session_for_test(view.view_id, task_id);
+            });
 
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.set_session(
@@ -8626,6 +8809,8 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
+        let task_id = AmbientAgentTaskId::from_str("123e4567-e89b-12d3-a456-426614174000")
+            .expect("valid task id");
 
         let child_conversation_id = terminal.update(&mut app, |view, ctx| {
             let parent_conversation_id =
@@ -8634,15 +8819,27 @@ fn cli_session_status_updates_single_child_conversation_without_agent_view() {
                 });
             let child_conversation_id =
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                    history_model.start_new_child_conversation(
+                    let child_conversation_id = history_model.start_new_child_conversation(
                         view.view_id,
                         "Agent 2".to_string(),
                         parent_conversation_id,
                         None,
                         false,
                         ctx,
-                    )
+                    );
+                    history_model
+                        .conversation_mut(&child_conversation_id)
+                        .expect("child conversation should exist")
+                        .set_task_id(task_id);
+                    child_conversation_id
                 });
+
+            // Status updates only route to a conversation whose `task_id` matches
+            // the ambient task this pane's CLI-harness session is registered
+            // under (see `TerminalView::conversation_id_for_cli_status_updates`).
+            LocalAgentTaskSyncModel::handle(ctx).update(ctx, |sync_model, _ctx| {
+                sync_model.register_cli_session_for_test(view.view_id, task_id);
+            });
 
             CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
                 sessions.set_session(
