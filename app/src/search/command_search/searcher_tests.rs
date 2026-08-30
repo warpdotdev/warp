@@ -189,8 +189,16 @@ fn test_exact_matches_rank_above_prefix_matches() {
 
         let mixer = app.add_model(|_| CommandSearchMixer::new());
         mixer.update(&mut app, |mixer, ctx| {
+            // `short_command`'s source is registered *first*, so on a raw-Skim tie (i.e. without
+            // the exact-whole-line bonus) the mixer's `source_order` tiebreak alone would place
+            // it *before* `long_command`, not after. Only the bonus, by giving `short_command` a
+            // strictly higher score, can make it outrank `long_command` here -- so this ordering
+            // can't pass by tiebreak coincidence the way registering it second would.
             mixer.add_async_source(
-                history_data_source(vec![HistoryEntry::command_only(long_command.clone())]),
+                history_data_source(vec![
+                    HistoryEntry::command_only(short_command.clone()),
+                    HistoryEntry::command_only(unrelated_command),
+                ]),
                 HashSet::from([QueryFilter::History]),
                 AddAsyncSourceOptions {
                     debounce_interval: None,
@@ -200,10 +208,7 @@ fn test_exact_matches_rank_above_prefix_matches() {
                 ctx,
             );
             mixer.add_async_source(
-                history_data_source(vec![
-                    HistoryEntry::command_only(short_command.clone()),
-                    HistoryEntry::command_only(unrelated_command),
-                ]),
+                history_data_source(vec![HistoryEntry::command_only(long_command.clone())]),
                 HashSet::from([QueryFilter::History]),
                 AddAsyncSourceOptions {
                     debounce_interval: None,
@@ -224,7 +229,8 @@ fn test_exact_matches_rank_above_prefix_matches() {
             // The view renders highest-ranked items at the bottom (last index) of the scrollable
             // panel. `short_command` is a whole-line exact match for the query while
             // `long_command` is only a substring match, so it outranks `long_command` and ends up
-            // last, independent of which data source was registered first.
+            // last, despite its source being registered first (an unfavorable tiebreak it can
+            // only overcome by actually scoring higher).
             assert_eq!(results.len(), 2);
 
             assert!(matches!(
