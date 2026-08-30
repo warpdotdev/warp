@@ -18,12 +18,3 @@ fn local_child_harnesses_are_local_only_by_default() {
     assert!(!DEBUG_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
     assert!(!DOGFOOD_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
 }
-
-#[test]
-fn history_search_prior_ranking_can_be_disabled_at_runtime_without_a_rebuild() {
-    // Ships enabled via `DOGFOOD_FLAGS`, so it must also be in `RUNTIME_FEATURE_FLAGS` --
-    // otherwise dogfood users would have no way to turn the new ranking off quickly if it
-    // doesn't work out, short of editing this array and shipping another dogfood build.
-    assert!(DOGFOOD_FLAGS.contains(&FeatureFlag::HistorySearchPriorRanking));
-    assert!(RUNTIME_FEATURE_FLAGS.contains(&FeatureFlag::HistorySearchPriorRanking));
-}

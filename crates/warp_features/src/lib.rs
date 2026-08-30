@@ -1089,12 +1089,7 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
-pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[
-    FeatureFlag::LocalClaudeCodexChildHarnesses,
-    // Lets dogfood users (who all have `RuntimeFeatureFlags` enabled via `DEBUG_FLAGS`) turn the
-    // new history ranking off from the running app if it doesn't work out, without a rebuild.
-    FeatureFlag::HistorySearchPriorRanking,
-];
+pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
 
 impl FeatureFlag {
     pub fn is_enabled(&self) -> bool {
