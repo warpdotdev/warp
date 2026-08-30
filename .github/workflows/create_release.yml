@@ -210,7 +210,7 @@ jobs:
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -384,7 +384,7 @@ jobs:
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -395,7 +395,7 @@ jobs:
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -404,7 +404,7 @@ jobs:
         # If the first attempt failed, try again.
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets_retry.outcome == 'failure' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -584,7 +584,7 @@ jobs:
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -804,7 +804,7 @@ jobs:
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1017,7 +1017,7 @@ jobs:
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1182,7 +1182,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.packages_dir }}"/*
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.packages_dir }}"/* --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1435,7 +1435,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_cli.outputs.packages_dir }}"/*
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_cli.outputs.packages_dir }}"/* --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1458,7 +1458,7 @@ jobs:
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1861,21 +1861,21 @@ jobs:
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.packages_dir }}"/*
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.packages_dir }}"/* --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_cli.outputs.packages_dir }}"/*
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_cli.outputs.packages_dir }}"/* --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1988,7 +1988,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.packages_dir }}"/*
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.packages_dir }}"/* --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -2220,7 +2220,7 @@ jobs:
       - name: Add TUI installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_tui.outputs.installer_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_tui.outputs.installer_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -2476,7 +2476,7 @@ jobs:
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.package_cli.outputs.package_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.package_cli.outputs.package_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -2739,7 +2739,7 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.installer_path }}"
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.installer_path }}" --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
