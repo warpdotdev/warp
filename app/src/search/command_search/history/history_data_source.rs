@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use chrono::Local;
 use futures_lite::future::yield_now;
+use ordered_float::OrderedFloat;
+use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
 use super::HistorySearchItem;
@@ -100,6 +102,10 @@ pub(crate) fn fuzzy_match_history(
     snapshot: HistorySnapshot,
 ) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
 {
+    if !FeatureFlag::HistorySearchPriorRanking.is_enabled() {
+        return fuzzy_match_history_legacy(snapshot);
+    }
+
     Box::pin(async move {
         let mut results = Vec::new();
         let now = Local::now();
@@ -133,6 +139,47 @@ pub(crate) fn fuzzy_match_history(
                 }) else {
                     continue;
                 };
+
+                results.push(
+                    HistorySearchItem {
+                        entry: candidate.entry.clone(),
+                        match_result,
+                        score,
+                    }
+                    .into(),
+                );
+            }
+            yield_now().await;
+        }
+
+        Ok(results)
+    })
+}
+
+/// The pre-[`FeatureFlag::HistorySearchPriorRanking`] matching behavior: the whole query as a
+/// single fuzzy pattern against each command (no whitespace tokenization), scored directly by
+/// Skim's raw match score with no history priors and no floor. This is the exact code path
+/// history search used before APP-5650, not an approximation of it, so disabling the flag is a
+/// genuine escape hatch back to the previous behavior.
+fn fuzzy_match_history_legacy(
+    snapshot: HistorySnapshot,
+) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
+{
+    Box::pin(async move {
+        let mut results = Vec::new();
+
+        // History entries are cheap to match (single short string), so we use a large chunk
+        // size to reduce yield overhead while still allowing cancellation of stale queries.
+        const CHUNK_SIZE: usize = 512;
+        for chunk in snapshot.candidates.chunks(CHUNK_SIZE) {
+            for candidate in chunk {
+                let Some(match_result) = fuzzy_match::match_indices_case_insensitive(
+                    candidate.entry.command.as_str(),
+                    snapshot.query_text.as_str(),
+                ) else {
+                    continue;
+                };
+                let score = OrderedFloat(match_result.score as f64);
 
                 results.push(
                     HistorySearchItem {

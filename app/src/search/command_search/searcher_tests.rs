@@ -4,6 +4,7 @@ use std::time::Duration;
 use chrono::Local;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
+use warp_core::features::FeatureFlag;
 use warpui::r#async::Timer;
 use warpui::elements::Empty;
 use warpui::{App, AppContext, Element};
@@ -174,14 +175,12 @@ fn test_add_source_to_mixer() {
 }
 
 #[test]
-fn test_recency_can_outrank_an_exact_match_of_equal_raw_quality() {
-    // Regression test for a product decision: history must not grant an exact whole-line match
-    // special credit purely for its provenance. SkimMatcherV2 scores a query identically whether
-    // it's the whole command or just a prefix of a longer one (`git` scores the same against
-    // `git` and `git checkout master`), and both get the same consecutive-run bonus, so these two
-    // candidates have identical match quality here. The only thing that can still tell them apart
-    // is priors -- so the fresher one must win, even though it's `git checkout master` and not
-    // the exact match `git`.
+fn test_exact_matches_rank_above_prefix_matches() {
+    // The exact-whole-line bonus that makes this ordering deterministic only exists behind
+    // `HistorySearchPriorRanking`; raw Skim alone scores a whole-line match identically to a
+    // prefix match of a longer command (see `EXACT_WHOLE_LINE_BONUS`'s doc comment).
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let short_command = "git".to_owned();
@@ -190,7 +189,6 @@ fn test_recency_can_outrank_an_exact_match_of_equal_raw_quality() {
 
         let mixer = app.add_model(|_| CommandSearchMixer::new());
         mixer.update(&mut app, |mixer, ctx| {
-            // The sole (and therefore freshest) candidate in its own source.
             mixer.add_async_source(
                 history_data_source(vec![HistoryEntry::command_only(long_command.clone())]),
                 HashSet::from([QueryFilter::History]),
@@ -201,7 +199,6 @@ fn test_recency_can_outrank_an_exact_match_of_equal_raw_quality() {
                 },
                 ctx,
             );
-            // One position older than a non-matching sibling in its own source.
             mixer.add_async_source(
                 history_data_source(vec![
                     HistoryEntry::command_only(short_command.clone()),
@@ -223,13 +220,20 @@ fn test_recency_can_outrank_an_exact_match_of_equal_raw_quality() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
-            assert_eq!(results.len(), 2);
 
             // The view renders highest-ranked items at the bottom (last index) of the scrollable
-            // panel.
+            // panel. `short_command` is a whole-line exact match for the query while
+            // `long_command` is only a substring match, so it outranks `long_command` and ends up
+            // last, independent of which data source was registered first.
+            assert_eq!(results.len(), 2);
+
             assert!(matches!(
-            results.last().map(|result| result.accept_result()),
-            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command, linked_workflow_data: None })) if command == long_command));
+            results.first().map(|result| result.accept_result()),
+            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command: long, linked_workflow_data: None })) if long == long_command));
+
+            assert!(matches!(
+            results.get(1).map(|result| result.accept_result()),
+            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command: short, linked_workflow_data: None })) if short == short_command));
         });
     })
 }
@@ -243,6 +247,8 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
     // last/closest to the input) -- e.g. an older command whose session_id happens to match
     // would leapfrog a newer one. Priors must be ignored entirely for a blank query, not just
     // let through the floor.
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -310,6 +316,8 @@ fn test_current_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
     // recently executed command's `pwd` reflects the directory it was run *from*, not the live
     // cwd after it runs (e.g. immediately after `cd /repo`). The cwd prior must use the live cwd
     // passed in from the caller, not fall back to guessing from history entries.
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -375,6 +383,8 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
     // Search: workflows, saved prompts (agent-mode workflows), and AI prompt history. (Env-var
     // collections use the same weighted-field scoring as workflows; not covered here since wiring
     // one through this mixer needs a full `CloudEnvVarCollection` object.)
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -493,6 +503,10 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
 
 #[test]
 fn test_no_query_filter_runs_all_data_sources() {
+    // See `test_exact_matches_rank_above_prefix_matches`: the exact-whole-line bonus that makes
+    // "git" deterministically outrank "git checkout" only exists behind this flag.
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let mixer = app.add_model(|_| CommandSearchMixer::new());
@@ -527,19 +541,14 @@ fn test_no_query_filter_runs_all_data_sources() {
         app.read(|app| {
             let results = mixer.as_ref(app).results();
 
-            // "git" and "git checkout" score identically here (same raw Skim score and
-            // consecutive-run bonus, no priors to break the tie), so their relative order is an
-            // unspecified implementation detail; only assert that a query with no filters ran
-            // both sources.
+            // "git" ranks above "git checkout" because it's a whole-line exact match for the
+            // query, not merely a substring match, so it appears last (closest to the input).
             assert_eq!(
                 results
                     .iter()
                     .map(|result| result.accessibility_label())
-                    .collect::<HashSet<_>>(),
-                HashSet::from([
-                    "History item: git".to_owned(),
-                    "History item: git checkout".to_owned()
-                ])
+                    .collect_vec(),
+                vec!["History item: git checkout", "History item: git"]
             );
         });
     });
@@ -547,6 +556,10 @@ fn test_no_query_filter_runs_all_data_sources() {
 
 #[test]
 fn test_query_filter_limits_data_sources() {
+    // See `test_exact_matches_rank_above_prefix_matches`: the exact-whole-line bonus that makes
+    // "git" deterministically outrank "git checkout" only exists behind this flag.
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let mixer = app.add_model(|_| CommandSearchMixer::new());
@@ -610,17 +623,14 @@ fn test_query_filter_limits_data_sources() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
-            // "git" and "git checkout" score identically here (see the no-filter case above), so
-            // only assert that specifying both filters produced results from both sources.
+            // "git" ranks above "git checkout" because it's a whole-line exact match for the
+            // query, not merely a substring match, so it appears last (closest to the input).
             assert_eq!(
                 results
                     .iter()
                     .map(|result| result.accessibility_label())
-                    .collect::<HashSet<_>>(),
-                HashSet::from([
-                    "History item: git".to_owned(),
-                    "History item: git checkout".to_owned()
-                ])
+                    .collect_vec(),
+                vec!["History item: git checkout", "History item: git"]
             );
         });
     });
@@ -866,6 +876,95 @@ fn test_async_source_without_include_in_unfiltered_skipped_on_empty_filters() {
         app.read(|app| {
             let results = mixer.as_ref(app).results();
             assert!(results.is_empty());
+        });
+    });
+}
+
+#[test]
+fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
+    // With `HistorySearchPriorRanking` disabled, history search must be a genuine return to the
+    // pre-APP-5650 behavior: the whole query matched as a single fuzzy pattern, not AND-ed
+    // whitespace-separated tokens. "cd hi orm" only matches "cd ~/projects/history_orm" via
+    // tokenization (see `rank_tests.rs`'s `whitespace_tokenization_ands_terms_across_the_command`),
+    // so it must produce no results when the flag is off.
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source(vec![HistoryEntry::command_only(
+                    "cd ~/projects/history_orm".to_owned(),
+                )]),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("cd hi orm".into(), ctx);
+        });
+
+        Timer::after(Duration::from_millis(200)).await;
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert!(
+                results.is_empty(),
+                "the legacy path shouldn't AND-tokenize \"cd hi orm\" against a single command"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_history_search_disabled_flag_scores_raw_skim_with_no_priors() {
+    // With `HistorySearchPriorRanking` disabled, a match's score must be exactly the raw Skim
+    // score fuzzy_match produces, unaffected by the exact-whole-line bonus or any history prior
+    // (recency, frequency, session, cwd, exit status) -- even for an old, low-priority entry.
+    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let command = "git status".to_owned();
+        let raw_score = fuzzy_match::match_indices_case_insensitive(&command, "git status")
+            .expect("the command should fuzzy-match itself")
+            .score;
+
+        let mut old_entry = HistoryEntry::command_only(command.clone());
+        old_entry.start_ts = Some(Local::now() - chrono::Duration::days(365));
+        old_entry.exit_code = Some(warp_core::command::ExitCode::from(1));
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source(vec![old_entry]),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("git status".into(), ctx);
+        });
+
+        Timer::after(Duration::from_millis(200)).await;
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 1);
+            assert_eq!(
+                results[0].score(),
+                OrderedFloat(raw_score as f64),
+                "the legacy path's score must be exactly the raw Skim score"
+            );
         });
     });
 }

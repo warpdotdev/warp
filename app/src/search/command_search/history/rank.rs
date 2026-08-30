@@ -63,6 +63,15 @@ const RAW_SKIM_FLOOR_PER_CHAR: f64 = 8.0;
 /// where Skim's word-boundary bonus made a scattered match outscore a contiguous one).
 const CONSECUTIVE_BONUS_PER_CHAR: f64 = 4.0;
 
+/// Bonus added once to `adjusted_skim` when the query exactly matches the whole command. Raise to
+/// make an exact match harder to displace by a fresher partial match; needed because SkimMatcherV2
+/// scores a query identically whether it's the whole command or just a prefix of a longer one.
+///
+/// This is a deliberate product policy, not an oversight: it intentionally lets an exact
+/// whole-line history match outrank an equally-matching item from another Command Search source,
+/// because history is Ctrl+R's primary result type. See APP-5650.
+const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
+
 /// Synthetic "days per list position" used to derive an age for entries with no timestamp, so a
 /// commonly-typed command near the tail of an untracked history file still reads as recent
 /// instead of decaying to zero relevance. Reuses [`RECENCY_HALF_LIFE_DAYS`] as the decay rate.
@@ -137,7 +146,7 @@ pub(crate) fn match_history_command(
         .iter()
         .map(|token_match| token_match.score)
         .sum();
-    let adjusted_skim = adjusted_skim(&token_matches);
+    let adjusted_skim = adjusted_skim(command, tokens, &token_matches);
     let adjusted_skim_per_char = if query_char_count == 0 {
         0.0
     } else {
@@ -158,21 +167,26 @@ pub(crate) fn match_history_command(
 
 /// Sums every token's raw Skim score (fzf-style term summation for a multi-word, AND-ed query)
 /// plus [`CONSECUTIVE_BONUS_PER_CHAR`] for each of that token's contiguously-matched characters
-/// beyond the first.
-///
-/// Deliberately doesn't add anything for an exact whole-command match beyond what this already
-/// gives it (raw Skim score plus the full consecutive-run bonus): a history item shouldn't
-/// outrank another Command Search source just because it happens to be an exact match, only
-/// because its underlying match quality and priors say so.
-fn adjusted_skim(token_matches: &[FuzzyMatchResult]) -> f64 {
-    token_matches
+/// beyond the first, plus [`EXACT_WHOLE_LINE_BONUS`] if `tokens` (rejoined) exactly equals
+/// `command`.
+fn adjusted_skim(command: &str, tokens: &[&str], token_matches: &[FuzzyMatchResult]) -> f64 {
+    let per_token_total: f64 = token_matches
         .iter()
         .map(|token_match| {
             let longest_run = longest_consecutive_run(&token_match.matched_indices);
             token_match.score as f64
                 + longest_run.saturating_sub(1) as f64 * CONSECUTIVE_BONUS_PER_CHAR
         })
-        .sum()
+        .sum();
+
+    let query = tokens.join(" ");
+    let exact_bonus = if !query.is_empty() && command.eq_ignore_ascii_case(&query) {
+        EXACT_WHOLE_LINE_BONUS
+    } else {
+        0.0
+    };
+
+    per_token_total + exact_bonus
 }
 
 /// Longest run of consecutive (i.e. `idx, idx+1, idx+2, ...`) indices in `indices`, which is
@@ -240,9 +254,12 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
     let frequency =
         ((inputs.frequency as f64 + 1.0).ln() / (FREQUENCY_SATURATION_COUNT + 1.0).ln()).min(1.0);
     let session = f64::from(inputs.entry.session_id == Some(inputs.current_session_id));
-    let cwd = f64::from(
-        matches!((inputs.entry.pwd.as_deref(), inputs.current_cwd), (Some(a), Some(b)) if a == b),
-    );
+    // If either side is unknown, we can't tell whether it would have matched, so treat it as
+    // neutral (the midpoint between a match and a mismatch) rather than scoring it as a mismatch.
+    let cwd = match (inputs.entry.pwd.as_deref(), inputs.current_cwd) {
+        (Some(entry_pwd), Some(current_cwd)) => f64::from(entry_pwd == current_cwd),
+        _ => 0.5,
+    };
     let exit_penalty = f64::from(
         inputs
             .entry

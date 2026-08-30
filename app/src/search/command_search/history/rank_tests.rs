@@ -211,6 +211,30 @@ fn cwd_prior_favors_the_current_directory() {
 }
 
 #[test]
+fn unknown_cwd_is_neutral_between_a_match_and_a_mismatch() {
+    // When we don't know the current cwd (e.g. it couldn't be determined), we can't tell whether
+    // a candidate's pwd would have matched it, so it shouldn't score as badly as a *confirmed*
+    // mismatch.
+    let session = SessionId::from(1);
+    let candidate = Scenario::new("npm test", "npm test")
+        .days_ago(1)
+        .pwd("/repo");
+
+    let unknown_current_cwd = candidate.rank(session, None);
+    let matching_current_cwd = candidate.rank(session, Some("/repo"));
+    let mismatched_current_cwd = candidate.rank(session, Some("/other"));
+
+    assert!(
+        unknown_current_cwd > mismatched_current_cwd,
+        "an unknown current cwd shouldn't score as badly as a confirmed mismatch"
+    );
+    assert!(
+        unknown_current_cwd < matching_current_cwd,
+        "an unknown current cwd shouldn't score as well as a confirmed match"
+    );
+}
+
+#[test]
 fn exit_failure_is_penalized() {
     let session = SessionId::from(1);
     let succeeded = Scenario::new("deploy prod", "deploy prod").days_ago(1);
