@@ -496,6 +496,113 @@ fn head_overrides_replace_checkout_ref_only_for_matching_repos() {
 }
 
 #[test]
+fn clone_requests_use_each_repository_host() {
+    let repos = vec![
+        SourceRepo::new(
+            CodeForge::GitHub,
+            "warpdotdev".to_string(),
+            "warp".to_string(),
+        ),
+        SourceRepo::new(
+            CodeForge::GitLab,
+            "platform/backend".to_string(),
+            "api".to_string(),
+        ),
+    ];
+
+    let prepared = repository_clone_requests(&repos, &[]).unwrap();
+    let command = build_parallel_clone_command(&prepared, ShellType::Bash);
+
+    assert_eq!(
+        prepared[0].repo.https_clone_url(),
+        "https://github.com/warpdotdev/warp.git"
+    );
+    assert_eq!(
+        prepared[1].repo.https_clone_url(),
+        "https://gitlab.com/platform/backend/api.git"
+    );
+    assert!(command.contains("https://github.com/warpdotdev/warp.git"));
+    assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
+}
+
+#[test]
+fn clone_requests_reject_a_mixed_repository_missing_forge() {
+    let repos = AmbientAgentEnvironment {
+        name: "mixed-omitted".into(),
+        description: None,
+        code_forge: Some(CodeForge::GitHub),
+        code_forges: Some(vec![CodeForge::GitHub, CodeForge::GitLab]),
+        github_repos: vec![],
+        source_repos: Some(vec![
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            ),
+            SourceRepo {
+                code_forge: None,
+                owner: "platform/backend".to_string(),
+                repo: "api".to_string(),
+                checkout_ref: None,
+            },
+        ]),
+        base_image: None,
+        setup_commands: vec![],
+        providers: Default::default(),
+        secrets: None,
+        default_runner_uid: None,
+    }
+    .effective_repos();
+
+    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "platform/backend/api"
+    ));
+}
+
+#[test]
+fn clone_requests_reject_an_omitted_forge_when_github_is_paired_with_an_unknown_forge() {
+    let repos = AmbientAgentEnvironment {
+        name: "github-plus-future".into(),
+        description: None,
+        code_forge: Some(CodeForge::GitHub),
+        code_forges: Some(vec![CodeForge::GitHub, CodeForge::Unknown]),
+        github_repos: vec![],
+        source_repos: Some(vec![
+            SourceRepo::new(
+                CodeForge::GitHub,
+                "warpdotdev".to_string(),
+                "warp".to_string(),
+            ),
+            SourceRepo {
+                code_forge: None,
+                owner: "acme".to_string(),
+                repo: "widgets".to_string(),
+                checkout_ref: None,
+            },
+        ]),
+        base_image: None,
+        setup_commands: vec![],
+        providers: Default::default(),
+        secrets: None,
+        default_runner_uid: None,
+    }
+    .effective_repos();
+
+    assert_eq!(repos[1].code_forge, None);
+    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::UnsupportedRepositoryForge { repo_name }
+            if repo_name == "acme/widgets"
+    ));
+}
+
+#[test]
 fn clone_requests_reject_a_repository_with_an_unrecognized_forge() {
     // An environment forge value newer than this client build (see
     // CodeForge::Unknown) can still be assigned to a real repository by a

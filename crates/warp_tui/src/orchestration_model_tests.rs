@@ -1,8 +1,9 @@
 use warp::tui_export::{
-    AIConversationId, BlocklistAIHistoryModel, CloudAgentStartupBlocker, CloudAgentStartupFailure,
-    CloudAgentStartupIssue, ConversationStatus, Harness, OrchestrationEventStreamerEvent,
-    RenderableAIError, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentOutcome, StartAgentRequest, register_tui_session_view_test_singletons,
+    AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
+    CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
+    OrchestrationEventStreamerEvent, RenderableAIError, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -11,7 +12,7 @@ use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
 
-use super::{ORCHESTRATOR_TAB_LABEL, TuiOrchestrationModel};
+use super::{MaterializedLocalOzChildSession, ORCHESTRATOR_TAB_LABEL, TuiOrchestrationModel};
 use crate::cloud_run::TuiCloudRunStartup;
 use crate::cloud_run_view::{TuiCloudRunAction, TuiCloudRunView};
 use crate::root_view::RootTuiView;
@@ -263,6 +264,78 @@ fn assert_failed_launch_cleaned_up(
         app.read_model(&fixture.sessions, |sessions, _| sessions.len()),
         expected_session_count,
     );
+}
+
+/// Regression for QUALITY-1902 (the TUI counterpart of QUALITY-1897):
+/// `register_local_oz_child_session` must index the run id through
+/// `assign_run_id_for_conversation`, not a bare `set_task_id`, so the SSE
+/// remote-child placeholder path's idempotency check
+/// (`conversation_id_for_agent_id`) can see it immediately. Drives
+/// `register_local_oz_child_session` itself (not just the shared helper it
+/// calls), so a regression at that call site fails this test.
+#[test]
+fn local_oz_child_session_indexes_run_id_immediately() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+
+        let (child_view, child_manager) = add_test_terminal_session(&mut app, fixture.window_id);
+        let child_session_id = app.update(|ctx| {
+            TuiSessions::register_session(
+                &fixture.sessions,
+                child_view.clone(),
+                child_manager,
+                false,
+                ctx,
+            )
+        });
+
+        let task_id: AmbientAgentTaskId = "44444444-4444-4444-4444-444444444444".parse().unwrap();
+        let request = StartAgentRequest {
+            id: Default::default(),
+            name: "verify-child".to_string(),
+            prompt: "echo hello".to_string(),
+            execution_mode: StartAgentExecutionMode::Local {
+                harness_type: None,
+                model_id: None,
+            },
+            lifecycle_subscription: None,
+            parent_conversation_id,
+            parent_run_id: Some("parent-run-1".to_string()),
+        };
+        app.update(|ctx| {
+            TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
+                orchestration.register_local_oz_child_session(
+                    MaterializedLocalOzChildSession {
+                        parent_session_id,
+                        session_id: child_session_id,
+                        session_view: child_view,
+                        request,
+                        model_id: None,
+                        task_id,
+                        conversation_name: "verify-child".to_string(),
+                    },
+                    ctx,
+                );
+            });
+        });
+
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let child_ids = history.child_conversation_ids_of(&parent_conversation_id);
+            assert_eq!(
+                child_ids.len(),
+                1,
+                "expected exactly one materialized child"
+            );
+            assert_eq!(
+                history.conversation_id_for_agent_id(&task_id.to_string()),
+                Some(child_ids[0]),
+                "run id must resolve immediately after register_local_oz_child_session"
+            );
+        });
+    });
 }
 
 #[test]

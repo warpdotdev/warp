@@ -558,7 +558,7 @@ impl ResponseStream {
             // xAI auth (there's no BYO xAI key), so a base model whose provider
             // is xAI is exactly a subscription request.
             let uses_grok_subscription = LLMPreferences::as_ref(ctx)
-                .get_llm_info(&params.model)
+                .get_llm_info(&params.model, ctx)
                 .is_some_and(|info| info.provider == LLMProvider::Xai);
             if uses_grok_subscription {
                 // Both halves, because this branch writes a member credential into `api_keys`,
@@ -614,7 +614,7 @@ impl ResponseStream {
             }
 
             let uses_geap = LLMPreferences::as_ref(ctx)
-                .get_llm_info(&params.model)
+                .get_llm_info(&params.model, ctx)
                 .is_some_and(|info| {
                     info.host_configs
                         .get(&LLMModelHost::GeminiEnterprise)
@@ -622,7 +622,8 @@ impl ResponseStream {
                 });
             if uses_geap
                 && let Some(binding) =
-                    crate::ai::geap_credentials::current_geap_policy(ctx).mint_binding()
+                    crate::ai::geap_credentials::current_geap_policy_for_any_team(ctx)
+                        .mint_binding()
             {
                 let refresh_binding = binding.clone();
                 let refresh_rx = ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {

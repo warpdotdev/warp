@@ -1613,6 +1613,27 @@ fn worker_injected_env_skips_entire_bedrock_secret() {
     unsafe { std::env::remove_var("AWS_REGION") };
 }
 
+#[test]
+#[serial_test::serial]
+fn docker_registry_secret_never_injected_as_env_var() {
+    let secrets = HashMap::from([(
+        "my-registry".to_string(),
+        ManagedSecretValue::docker_registry("us-docker.pkg.dev", "_json_key", "s3cret-pass"),
+    )]);
+    let env_vars = build_secret_env_vars(&secrets);
+    assert!(
+        env_vars.is_empty(),
+        "a registry credential authenticates an image pull, not the agent process, and must \
+         never appear in the terminal session's environment: {env_vars:?}"
+    );
+    assert!(!env_vars.contains_key(&OsString::from("my-registry")));
+    for value in env_vars.values() {
+        assert_ne!(value, &OsString::from("us-docker.pkg.dev"));
+        assert_ne!(value, &OsString::from("_json_key"));
+        assert_ne!(value, &OsString::from("s3cret-pass"));
+    }
+}
+
 // ── Skill-loading integration test ───────────────────────────────────────────
 
 /// Verifies that `load_environment_skills` loads every skill from an env repo

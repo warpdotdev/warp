@@ -195,6 +195,7 @@ fn team_with_link_sharing(uid: i64, name: &str, permitted: bool) -> Team {
             },
             ..Default::default()
         },
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -212,6 +213,7 @@ fn install_workspace_with_teams(app: &mut App, teams: Vec<Team>) {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: WorkspaceSettings::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,

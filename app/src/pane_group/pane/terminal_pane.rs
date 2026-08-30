@@ -34,7 +34,10 @@ use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryO
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::{apply_child_agent_model_override, prepare_local_oz_child_launch};
+use crate::ai::blocklist::{
+    apply_child_agent_model_override, finish_local_oz_child_conversation,
+    prepare_local_oz_child_launch,
+};
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
@@ -64,6 +67,8 @@ use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -936,13 +941,15 @@ fn handle_terminal_view_event(
                 }
             }
             Event::ShareModalOpened(block_id) => {
+                let Some(session) = group.terminal_view_from_pane_id(pane_id, ctx) else {
+                    return;
+                };
+                let model = session.read(ctx, |view, _| view.model.clone());
+
                 group.terminal_with_open_share_block_modal = Some(terminal_pane_id);
                 group.share_block_modal.update(ctx, |share_modal, ctx| {
-                    if let Some(session) = group.terminal_view_from_pane_id(pane_id, ctx) {
-                        let model = session.read(ctx, |view, _| view.model.clone());
-                        share_modal.open_with_model_update(model, *block_id, ctx);
-                        ctx.notify();
-                    }
+                    share_modal.open_with_model_update(model, *block_id, ctx);
+                    ctx.notify();
                 });
                 ctx.notify();
             }
@@ -1668,24 +1675,22 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
-
-                    // Stamp the task id on the child conversation directly
-                    // so the share-reporter in
-                    // `local_tty/terminal_manager.rs` can resolve it from
-                    // the selected conversation when the share handshake
-                    // succeeds. Mirrors how `OrchestrationViewerModel`
-                    // stamps run/task ids onto viewer child placeholders.
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-                        if let Some(conversation) = model.conversation_mut(&conversation_id) {
-                            conversation.set_task_id(child_task_id);
-                        }
-                        model.record_new_conversation_request_complete(
-                            request_id,
-                            conversation_id,
-                            ctx,
-                        );
-                    });
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    apply_child_agent_model_override(
+                        &scope,
+                        terminal_view_id,
+                        model_id.as_deref(),
+                        ctx,
+                    );
+                    finish_local_oz_child_conversation(
+                        conversation_id,
+                        terminal_view_id,
+                        child_task_id,
+                        request_id,
+                        ctx,
+                    );
 
                     new_terminal_view.update(ctx, |terminal_view, ctx| {
                         terminal_view
@@ -1800,6 +1805,7 @@ fn launch_local_harness_child(
                 } = launch;
                 let is_shared_session_creator =
                     inherit_share_for_local_child(host_source.as_ref(), task_id);
+
                 match create_hidden_child_agent_conversation(
                     group,
                     HiddenChildAgentConversationRequest {
@@ -1819,7 +1825,11 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
+                        let scope = ResolvedTeamScope::from_scope(
+                            &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                        );
                         apply_child_agent_model_override(
+                            &scope,
                             terminal_view_id,
                             model_id.as_deref(),
                             ctx,

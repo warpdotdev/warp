@@ -267,6 +267,135 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       (_warp_run_generator_command_internal "$@" &)
     }
 
+    # Computes native shell completions for the given (hex-encoded) command line and emits them over
+    # the completions OSC protocol.
+    warp_run_generator_command_native_completions() {
+      _WARP_GENERATOR_COMMAND=1
+      _USER_PRECMD_FUNCTIONS=("${precmd_functions[@]}")
+      precmd_functions=(warp_precmd)
+
+      local line
+      line="$(warp_hex_decode_string "$1")"
+
+      printf '\e]9280;A\a'
+      _warp_native_bash_completions "$line"
+      printf '\e]9280;B\a'
+    }
+
+    # Populates COMPREPLY for the given line using bash's own completion machinery (resolved via
+    # `complete -p`), then prints each entry via the completions OSC.
+    _warp_native_bash_completions() {
+      local line="$1"
+      # Force the default IFS; the session's may have been changed by a plugin or the user.
+      local IFS=$' \t\n'
+      local -a words
+      read -ra words <<< "$line"
+      # A trailing space means the user is completing a new, empty word.
+      if [[ "$line" == *[[:space:]] ]]; then
+        words+=("")
+      fi
+      (( ${#words[@]} == 0 )) && return
+      local cword=$(( ${#words[@]} - 1 ))
+      local cmd="${words[0]}"
+      [[ -z "$cmd" ]] && return
+
+      local compspec
+      compspec="$(complete -p "$cmd" 2>/dev/null)"
+      if [[ -z "$compspec" ]]; then
+        # Lazily load $cmd's completion (bash-completion's dynamic loader) and retry once.
+        # Different bash-completion versions expose the loader under different names.
+        if declare -F _comp_complete_load >/dev/null 2>&1; then
+          _comp_complete_load "$cmd" >/dev/null 2>&1
+        elif declare -F _comp_load >/dev/null 2>&1; then
+          _comp_load -- "$cmd" >/dev/null 2>&1
+        elif declare -F _completion_loader >/dev/null 2>&1; then
+          _completion_loader "$cmd" >/dev/null 2>&1
+        fi
+        compspec="$(complete -p "$cmd" 2>/dev/null)"
+      fi
+      [[ -z "$compspec" ]] && return
+
+      # Extract the function passed to `-F`, if any. We call it directly rather than
+      # `compgen -F`, which warns to stderr and returns unfiltered results.
+      local func=""
+      local -a compspec_words
+      read -ra compspec_words <<< "$compspec"
+      local i
+      for (( i = 0; i < ${#compspec_words[@]}; i++ )); do
+        if [[ "${compspec_words[$i]}" == "-F" ]]; then
+          func="${compspec_words[$((i + 1))]}"
+          break
+        fi
+      done
+      [[ -z "$func" ]] && return
+      declare -F "$func" >/dev/null 2>&1 || return
+
+      # $func expects COMP_WORDS/COMP_CWORD/etc. as ambient globals, the way bash's real
+      # completion machinery presents them. `local` makes them visible to $func via bash's
+      # dynamic scoping and auto-unsets them on return, leaving no stale values in the session.
+      local COMPREPLY=()
+      local -a COMP_WORDS=("${words[@]}")
+      local COMP_CWORD=$cword
+      local COMP_LINE="$line"
+      # COMP_POINT is a byte offset into COMP_LINE, not a character count: ${#line} counts
+      # characters under the session's locale, which undercounts for multibyte text.
+      local COMP_POINT=$(( $(LC_ALL=C printf '%s' "$line" | LC_ALL=C command wc -c) ))
+      # COMP_TYPE=9 (plain Tab), faithful to real interactive completion. cobra-generated
+      # "bash completion V2" scripts (kubectl, gh, most modern Go CLIs) bake a padded
+      # "name  (description)" string into each entry under this type when there's more than
+      # one match; that padding is split apart after the call below. 37 (menu-complete) would
+      # avoid it, but bash-completion's `make` completion branches on $COMP_TYPE and breaks
+      # prefixed-target completion under anything but 9.
+      local COMP_TYPE=9
+      local COMP_KEY=9
+
+      # compopt only works while readline is driving a completion; called here it fails to
+      # stderr, so swallow it along with the completion function's other stderr.
+      "$func" "$cmd" "${words[$cword]}" "${words[$((cword > 0 ? cword - 1 : 0))]}" 2>/dev/null
+
+      # cobra's padded shape: a name, a 2+-space run (readline's column alignment, never used
+      # by a real candidate alone), then a parenthesised description to the end. The first
+      # group matches single-space-separated tokens so it stops at the *first* 2+-space run
+      # rather than folding a description's own parenthesised aside into the name.
+      local cobra_padded_shape='^([^[:space:]]+([[:space:]][^[:space:]]+)*)[[:space:]]{2,}\((.*)\)$'
+
+      # cobra pads every entry of a multi-match reply or none, so decide once for the whole
+      # reply rather than per entry: a real candidate that happens to look padded is only
+      # mistakeable when it's the sole match, or when every other entry looks padded too.
+      local reply cobra_shaped_count=0 non_empty_count=0
+      for reply in "${COMPREPLY[@]}"; do
+        reply="${reply% }"
+        [[ -z "$reply" ]] && continue
+        non_empty_count=$((non_empty_count + 1))
+        [[ "$reply" =~ $cobra_padded_shape ]] && cobra_shaped_count=$((cobra_shaped_count + 1))
+      done
+      local split_cobra_padding=0
+      if (( non_empty_count > 1 && cobra_shaped_count == non_empty_count )); then
+        split_cobra_padding=1
+      fi
+
+      local __warp_hex_match __warp_hex_dscr
+      for reply in "${COMPREPLY[@]}"; do
+        # COMPREPLY entries can carry a trailing space (bash appends one when a completion
+        # is unambiguous); trim it so the client controls spacing.
+        reply="${reply% }"
+        [[ -z "$reply" ]] && continue
+
+        local reply_description=""
+        if (( split_cobra_padding )) && [[ "$reply" =~ $cobra_padded_shape ]]; then
+          reply_description="${BASH_REMATCH[3]}"
+          reply="${BASH_REMATCH[1]}"
+        fi
+
+        warp_completions_hex_encode_into __warp_hex_match "$reply"
+        printf '\e]9280;C;%s\a' "$__warp_hex_match"
+        if [[ -n "$reply_description" ]]; then
+          warp_completions_hex_encode_into __warp_hex_dscr "$reply_description"
+          printf '\e]9280;D?description;%s\a' "$__warp_hex_dscr"
+        fi
+      done
+    }
+
 
     # Note that this is very performance sensitive code, so try not to
     # invoke any external commands in here.
@@ -383,6 +512,12 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     warp_set_title_active_on_preexec () {
       # If the user wants to set the title themselves, they can set the WARP_DISABLE_AUTO_TITLE flag.
       if [ ! -z "$WARP_DISABLE_AUTO_TITLE" ]; then
+        return
+      fi
+
+      # Generator commands (including native-completions requests) are never user-facing;
+      # without this, one briefly sets the tab title to "warp_run_generator_comma...".
+      if [[ "$1" == warp_run_generator_command* ]]; then
         return
       fi
 
@@ -751,6 +886,42 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Accepts one argument: DCS JSON string
     warp_hex_encode_string () {
       printf '%s' "$1" | command -p od -An -v -tx1 | command -p tr -d ' \n'
+    }
+
+    warp_completions_hex_encode_into () {
+      # `LC_ALL=C` keeps indexing byte-wise, so it stays correct for UTF-8 text.
+      local LC_ALL=C
+      local __warp_hex_var="$1"
+      local __warp_hex_in="$2"
+      # This branch is faster for longer values.
+      if (( ${#__warp_hex_in} > 256 )); then
+        printf -v "$__warp_hex_var" '%s' \
+          "$(printf '%s' "$__warp_hex_in" | command -p od -An -v -tx1 | command -p tr -d ' \n')"
+        return
+      fi
+      # This branch is faster for shorter values. The "for" loop is O(n²) which is fine for short
+      # values, bad for long values. The case above avoids that at the cost of using piping into
+      # subprocesses instead.
+      local __warp_hex_i __warp_hex_byte __warp_hex_acc=""
+      for (( __warp_hex_i = 0; __warp_hex_i < ${#__warp_hex_in}; __warp_hex_i++ )); do
+        printf -v __warp_hex_byte '%02x' "'${__warp_hex_in:__warp_hex_i:1}"
+        # Keep only the low byte. bash 3.2, which macOS still ships, reads a character code above
+        # 0x7f as a negative number, and `%02x` then sign-extends it to sixteen digits.
+        __warp_hex_acc+="${__warp_hex_byte: -2}"
+      done
+      printf -v "$__warp_hex_var" '%s' "$__warp_hex_acc"
+    }
+
+    warp_hex_decode_string () {
+      if command -pv xxd >/dev/null 2>&1; then
+        printf '%s' "$1" | command -p xxd -p -r
+      else
+        local hex="$1" out="" i
+        for (( i = 0; i < ${#hex}; i += 2 )); do
+          out+="\x${hex:$i:2}"
+        done
+        printf '%b' "$out"
+      fi
     }
 
     # Returns encoded InitShell hook

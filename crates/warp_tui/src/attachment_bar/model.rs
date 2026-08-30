@@ -4,7 +4,7 @@ use warp::editor::CodeEditorModel;
 use warp::tui_export::{
     ActiveSession, BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIInputModel,
     InputType, InputTypeAutoDetectionSource, LLMPreferences, MAX_IMAGE_COUNT_FOR_QUERY,
-    PendingAttachmentSummary,
+    PendingAttachmentSummary, TeamContextResolver,
 };
 use warp_core::features::FeatureFlag;
 use warp_editor::model::CoreEditorModel;
@@ -56,6 +56,7 @@ pub(crate) struct TuiAttachmentModel {
     input_editor: ModelHandle<CodeEditorModel>,
     active_session: ModelHandle<ActiveSession>,
     terminal_surface_id: EntityId,
+    team_context_resolver: TeamContextResolver,
     selected_index: Option<usize>,
     /// Last observed shared-context count. Growth selects the newest item;
     /// shrinkage preserves and clamps the current selection.
@@ -73,6 +74,7 @@ impl TuiAttachmentModel {
         input_editor: ModelHandle<CodeEditorModel>,
         active_session: ModelHandle<ActiveSession>,
         terminal_surface_id: EntityId,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let initial_attachment_count = context_model.as_ref(ctx).pending_attachments().len();
@@ -88,6 +90,7 @@ impl TuiAttachmentModel {
             input_editor,
             active_session,
             terminal_surface_id,
+            team_context_resolver,
             selected_index: initial_attachment_count.checked_sub(1),
             last_attachment_count: initial_attachment_count,
             had_locking_attachment,
@@ -331,7 +334,11 @@ impl TuiAttachmentModel {
                 "Image attachment limit is {MAX_IMAGE_COUNT_FOR_QUERY} per query."
             ));
         }
-        if !LLMPreferences::as_ref(ctx).vision_supported(ctx, Some(self.terminal_surface_id)) {
+        if !LLMPreferences::as_ref(ctx).vision_supported(
+            &(self.team_context_resolver)(ctx),
+            ctx,
+            Some(self.terminal_surface_id),
+        ) {
             return Err("The selected model does not support image attachments.".to_owned());
         }
         Ok(())

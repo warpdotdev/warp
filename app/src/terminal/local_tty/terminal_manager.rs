@@ -48,7 +48,7 @@ use crate::terminal::local_tty::{Pty, PtyOptions};
 use crate::terminal::model::session::Sessions;
 #[cfg(unix)]
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model::terminal_model::ExitReason;
+use crate::terminal::model::terminal_model::{ExitReason, ShellProcessInfo};
 #[cfg(unix)]
 use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
 use crate::terminal::model_events::{ModelEventDispatcher, SshRemoteServerSupport};
@@ -717,10 +717,15 @@ fn on_shell_determined<S: TerminalSurface>(
         }
     };
 
-    #[cfg(feature = "integration_tests")]
     let pid = pty.get_pid();
     #[cfg(unix)]
     let fd = pty.get_fd();
+
+    model.lock().set_shell_process_info(ShellProcessInfo {
+        pid,
+        #[cfg(unix)]
+        pty_leader_fd: Some(fd),
+    });
 
     // Create the channel above and pass the receving side to the event loop.
     let event_loop_handle = TerminalManager::<S>::start_pty_event_loop(

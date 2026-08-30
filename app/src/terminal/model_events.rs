@@ -203,7 +203,9 @@ impl ModelEventDispatcher {
             Event::Handler(HandlerEvent::UnsetMode {
                 mode: ansi::Mode::BracketedPaste,
             }) => ModelEvent::Handler(AnsiHandlerEvent::UnsetBracketedPaste),
-            Event::CompletionsFinished(res) => ModelEvent::CompletionsFinished(res),
+            Event::CompletionsFinished(res, replacement_span) => {
+                ModelEvent::CompletionsFinished(res, replacement_span)
+            }
             Event::MouseCursorDirty => ModelEvent::MouseCursorDirty,
             Event::Title(title) => ModelEvent::Title(title),
             Event::VisibleBootstrapBlock => ModelEvent::VisibleBootstrapBlock,
@@ -267,7 +269,6 @@ impl ModelEventDispatcher {
             Event::ExternalCtrlTSelection(data) => ModelEvent::ExternalCtrlTSelection(data),
             Event::TextSelectionChanged => ModelEvent::SelectedTextChanged,
             Event::ShellSpawned(shell_type) => ModelEvent::ShellSpawned(shell_type),
-            Event::SendCompletionsPrompt => ModelEvent::SendCompletionsPrompt,
             Event::ImageReceived {
                 image_id,
                 image_data,
@@ -458,8 +459,7 @@ pub enum ModelEvent {
     ExternalCtrlTSelection(ExternalCtrlTSelectionValue),
     SelectedTextChanged,
     ShellSpawned(ShellType),
-    CompletionsFinished(Vec<ShellCompletion>),
-    SendCompletionsPrompt,
+    CompletionsFinished(Vec<ShellCompletion>, Option<warp_completer::meta::Span>),
     ImageReceived {
         image_id: u32,
         image_data: Vec<u8>,

@@ -187,6 +187,63 @@ impl Display for AIAgentActionResultType {
     }
 }
 
+/// Evidence, collected by the client while an agent monitors a long-running
+/// command, that the command is still doing work.
+///
+/// A command that redirects its output to a file, suppresses it entirely, or
+/// computes silently is indistinguishable from a hung one when judged from the
+/// terminal grid alone. Process-tree activity gives the agent something to look
+/// at besides the grid before deciding to cancel.
+///
+/// Best-effort: built only when the sampler actually took a reading, so every
+/// value carried here is a real measurement, including zeros. When nothing was
+/// collected, no `LrcActivity` exists at all — there is no in-band "signals
+/// unavailable" marker.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcActivity {
+    /// Time since the process tree last showed activity — CPU accrual, I/O
+    /// writes, or a change in the set of live processes.
+    ///
+    /// This is derived from a fixed-rate sampler rather than from the interval
+    /// between agent polls, so it stays accurate no matter how far apart the
+    /// agent's reads are.
+    pub since_last_activity: Option<Duration>,
+
+    /// Present whenever the process tree was actually inspected, including when
+    /// every reading in it is zero: an exited tree is a real answer. Optional
+    /// only for restoring conversations recorded by other client versions;
+    /// reports built by this client always populate it.
+    pub process: Option<LrcProcessActivity>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcProcessActivity {
+    /// CPU time consumed across the command's process tree since the previous
+    /// snapshot.
+    pub cpu_time_delta: Duration,
+
+    /// Coarse aggregate state of the process tree.
+    pub state: LrcProcessState,
+
+    pub live_process_count: u32,
+
+    /// Bytes written by the process tree since the previous snapshot, where the
+    /// OS reports it.
+    pub io_write_bytes_delta: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub enum LrcProcessState {
+    Running,
+    Sleeping,
+    /// Blocked in uninterruptible I/O, which is real progress rather than a hang.
+    DiskWait,
+    Stopped,
+    Zombie,
+    #[default]
+    Unknown,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum RequestCommandOutputResult {
     Completed {
@@ -203,6 +260,7 @@ pub enum RequestCommandOutputResult {
         grid_contents: String,
         cursor: String,
         is_alt_screen_active: bool,
+        activity: Option<LrcActivity>,
     },
     /// A running command canceled via ctrl-c
     /// would have Completed result with exit code 130.
@@ -272,6 +330,7 @@ pub enum WriteToLongRunningShellCommandResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     CommandFinished {
         block_id: BlockId,
@@ -588,6 +647,7 @@ pub enum ReadShellCommandOutputResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     Cancelled,
     Error(ShellCommandError),
@@ -1431,6 +1491,7 @@ pub enum TransferShellCommandControlToUserResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     CommandFinished {
         block_id: BlockId,

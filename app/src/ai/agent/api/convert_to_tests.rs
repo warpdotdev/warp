@@ -129,6 +129,7 @@ fn transfer_control_snapshot_result_converts_to_tool_call_result_input() {
                     cursor: "<|cursor|>".to_string(),
                     is_alt_screen_active: false,
                     is_preempted: false,
+                    activity: None,
                 },
             ),
         })

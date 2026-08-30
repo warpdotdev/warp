@@ -20,7 +20,8 @@ use websocket::{Message, WebsocketMessage as _};
 
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
-    Stage, StartupFailure, StartupRetryState, startup_max_attempts,
+    Stage, StartupFailure, StartupRetryState, share_with_team_uid_for_init_payload,
+    startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -40,6 +41,26 @@ fn is_upstream_message_pty_bytes_read(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
     }) if event_no == expected_event_no && bytes == compressed_bytes)
+}
+
+#[test]
+fn test_share_with_team_uid_for_init_payload_includes_team_scoped_view() {
+    let team_uid = crate::server::ids::ServerId::from(123);
+    let scope = crate::workspaces::user_workspaces::TeamContextForOperation::new_for_test(team_uid);
+    assert_eq!(
+        share_with_team_uid_for_init_payload(&scope),
+        Some(String::from(team_uid))
+    );
+}
+
+#[test]
+fn test_share_with_team_uid_for_init_payload_omits_personal_view() {
+    assert_eq!(
+        share_with_team_uid_for_init_payload(
+            &crate::workspaces::user_workspaces::TeamlessScopeForTest,
+        ),
+        None
+    );
 }
 
 #[test]

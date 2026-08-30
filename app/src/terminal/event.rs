@@ -28,7 +28,7 @@ use crate::terminal::shell::ShellType;
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.
 pub enum Event {
-    CompletionsFinished(Vec<ShellCompletion>),
+    CompletionsFinished(Vec<ShellCompletion>, Option<warp_completer::meta::Span>),
     MouseCursorDirty,
     Title(String),
     VisibleBootstrapBlock,
@@ -138,7 +138,6 @@ pub enum Event {
     ExternalCtrlTSelection(ExternalCtrlTSelectionValue),
     TextSelectionChanged,
     ShellSpawned(ShellType),
-    SendCompletionsPrompt,
     ImageReceived {
         image_id: u32,
         image_data: Vec<u8>,
@@ -418,7 +417,7 @@ impl UserBlockCompleted {
 impl Debug for Event {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Event::CompletionsFinished(_) => write!(f, "CompletionsFinished"),
+            Event::CompletionsFinished(..) => write!(f, "CompletionsFinished"),
             Event::MouseCursorDirty => write!(f, "MouseCursorDirty"),
             Event::BlockCompleted(_) => write!(f, "BlockCompleted"),
             Event::AfterBlockCompleted(_) => write!(f, "AfterBlockCompleted"),
@@ -504,7 +503,6 @@ impl Debug for Event {
             }
             Event::TextSelectionChanged => write!(f, "TextSelectionChanged"),
             Event::ShellSpawned(shell_type) => write!(f, "ShellSpawned({shell_type:?})"),
-            Event::SendCompletionsPrompt => write!(f, "SendCompletionsPrompt"),
             Event::ImageReceived { image_id, .. } => {
                 write!(f, "ImageReceived(image_id: {image_id})")
             }

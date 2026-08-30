@@ -23,6 +23,7 @@ use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 #[derive(Default)]
 pub(super) struct SharedSessionState {
@@ -199,6 +200,7 @@ impl BlocklistAIController {
         });
 
         // Eagerly create an exchange for this request (with empty inputs) and initialize output.
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         history.update(ctx, |history_model, ctx| {
             let _ = history_model.update_conversation_for_new_request_input(
                 RequestInput::for_task(
@@ -208,6 +210,7 @@ impl BlocklistAIController {
                     self.get_current_response_initiator(),
                     conversation_id,
                     self.terminal_surface_id,
+                    &scope,
                     ctx,
                 ),
                 stream_id.clone(),

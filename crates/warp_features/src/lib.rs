@@ -983,6 +983,11 @@ pub enum FeatureFlag {
     /// such as `external_ctrl_r_history` or `external_ctrl_t_file`), hands that keypress
     /// off to the tool's widget instead of Warp's own UI for it.
     ShellWidgetHandoff,
+
+    /// Attaches process-tree liveness signals to long-running command
+    /// snapshots, giving the agent evidence that a silent command is still
+    /// doing work before it decides to cancel.
+    LrcActivitySignal,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1060,11 +1065,12 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::ShellWidgetHandoff,
+    FeatureFlag::LrcActivitySignal,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::NativeShellCompletions];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

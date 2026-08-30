@@ -280,7 +280,9 @@ fn workspaces_for_permission_fixture(
                     None,
                     None,
                     None,
+                    None,
                 )]),
+                None,
             )]
         }
         ConversationPermissionFixture::CurrentUserOwner

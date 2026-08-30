@@ -209,11 +209,10 @@ jobs:
 
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.dmg_path }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -382,13 +381,12 @@ jobs:
       - name: Add DMG to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.dmg_path }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add DMG to GitHub release assets (retry 1/2)
         id: upload_github_assets_retry
@@ -396,21 +394,19 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets.outcome == 'failure' }}
         # Continue if the upload fails; the next step will retry it.
         continue-on-error: true
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.dmg_path }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add DMG to GitHub release assets (retry 2/2)
         id: upload_github_assets_retry2
         # If the first attempt failed, try again.
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.upload_github_assets_retry.outcome == 'failure' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.dmg_path }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.dmg_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -587,11 +583,10 @@ jobs:
 
       - name: Add CLI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -808,11 +803,10 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1022,11 +1016,10 @@ jobs:
 
       - name: Add TUI to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1188,11 +1181,11 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.packages_dir }}/*
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1442,11 +1435,11 @@ jobs:
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_cli.outputs.packages_dir }}/*
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload CLI packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1466,11 +1459,10 @@ jobs:
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-linux-x86_64.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload CLI tar.gz to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -1870,27 +1862,26 @@ jobs:
 
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.packages_dir }}/*
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_cli.outputs.packages_dir }}/*
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI tar.gz to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "oz-${{ steps.get-config.outputs.channel }}-linux-aarch64.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload app packages to Google Cloud Storage
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2000,11 +1991,11 @@ jobs:
       - name: Add packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.packages_dir }}/*
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2233,11 +2224,10 @@ jobs:
 
       - name: Add TUI installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_tui.outputs.installer_path }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_tui.outputs.installer_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2275,6 +2265,275 @@ jobs:
             ${{ steps.bundle_tui.outputs.installer_path }}
             ${{ steps.bundle_tui.outputs.pdb_file_path }}
           if-no-files-found: error
+
+  build_windows_cli_binaries:
+    name: Build Release Binary (Windows CLI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: prepare_release
+    if: ${{ inputs.build_windows != false }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest-large
+          # Namespace Windows runners are amd64-only for v1 (see REMOTE-2467), so the
+          # arm64 leg is left commented rather than built. Uncomment alongside
+          # release_windows_cli's matrix below if/when an arm64 CLI is needed.
+          # - arch: arm64
+          #   runner: windows-arm-latest-large
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: cli-${{ matrix.arch }}
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Build Windows CLI binary
+        id: build_cli
+        run: script/bundle --artifact cli --channel "$CHANNEL" --skip_build_installer --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      # actions/upload-artifact stores paths relative to the least common
+      # ancestor of everything it's given; binary_path and pdb_file_path live
+      # in the same directory, so uploading them directly would collapse the
+      # LCA to that directory and strip the target/<triple>/<profile> prefix
+      # that release_windows_cli's own script/bundle invocation expects to
+      # find them at. Tar with explicit relative paths instead, so the
+      # structure is guaranteed rather than an emergent property of which
+      # paths happen to be listed.
+      - name: Create tar archive with build artifacts
+        run: |
+          BINARY_PATH="$(realpath --relative-to="$(pwd)" "$(cygpath -u "$BINARY_PATH")")"
+          PDB_FILE_PATH="$(realpath --relative-to="$(pwd)" "$(cygpath -u "$PDB_FILE_PATH")")"
+          tar czfv build-artifacts.tar.gz "$BINARY_PATH" "$PDB_FILE_PATH"
+        shell: bash
+        env:
+          BINARY_PATH: ${{ steps.build_cli.outputs.binary_path }}
+          PDB_FILE_PATH: ${{ steps.build_cli.outputs.pdb_file_path }}
+
+      - name: Archive Windows CLI binary build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          retention-days: 1
+          # We compress the tar archive, so no need to re-compress.
+          compression-level: 0
+          path: build-artifacts.tar.gz
+          if-no-files-found: error
+
+  # Packages the CLI binary build_windows_cli_binaries built separately (in
+  # parallel), then signs it and tars it up alongside its resources dir. Unlike
+  # release_windows_tui, this never calls ISCC: the CLI ships as a bare binary
+  # plus a resources dir, matching the macOS and Linux `--artifact cli` builds,
+  # not an installer. bundle.ps1 enforces this itself (it exits right after
+  # preparing resources for the `cli` artifact), so no `-skip_build_installer`
+  # is needed on the final script/bundle call below.
+  release_windows_cli:
+    name: Build Release (Windows CLI ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: [prepare_release, build_windows_binaries, build_windows_cli_binaries]
+    if: ${{ inputs.build_windows != false }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            release_arch: x86_64
+            runner: windows-latest-large
+          # - arch: arm64
+          #   release_arch: aarch64
+          #   runner: windows-arm-latest-large
+    env:
+      TRUSTED_SIGNING_ENDPOINT: https://eus.codesigning.azure.net/
+      TRUSTED_SIGNING_ACCOUNT: warpdotdev
+      TRUSTED_SIGNING_CERT_PROFILE: warpterminal
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: windows
+          cache_key: cli-${{ matrix.arch }}
+          is_self_hosted: false
+          ref: ${{ needs.prepare_release.outputs.release_branch }}
+          install_release_deps: true
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Get channel configuration
+        id: get-config
+        uses: ./.github/actions/get_channel_config/
+        with:
+          config_file: ${{ env.CONFIG_FILE }}
+          channel: ${{ inputs.channel }}
+
+      - name: Download Windows CLI binary build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+
+      - name: Extract Windows CLI binary build
+        run: tar xzvf build-artifacts.tar.gz
+        shell: bash
+
+      - name: Download canonical Windows settings schema
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
+          path: .release-artifacts/settings-schema-windows
+
+      - name: Locate CLI binary build outputs
+        id: binary_paths
+        run: script/bundle --artifact cli --channel "$CHANNEL" --skip_build_binary --skip_build_installer --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+
+      - name: Sign the oz CLI executable and sidecar DLLs with Azure Trusted Signing
+        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ env.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ env.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ env.TRUSTED_SIGNING_CERT_PROFILE }}
+          files: ${{ steps.binary_paths.outputs.binary_path }}
+          files-folder: ${{ github.workspace }}\app\assets\windows\${{ matrix.arch }}
+          files-folder-filter: dll,exe
+          files-folder-recurse: true
+          files-folder-depth: 2
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          # The action's dependency cache is not keyed by runner architecture, so
+          # concurrent legs of this matrix can clobber each other's cached tools
+          # (Azure/artifact-signing-action#146).
+          cache-dependencies: false
+
+      - name: Bundle Windows CLI resources
+        id: bundle_cli
+        run: script/bundle --artifact cli --channel "$CHANNEL" --skip_build_binary --require_signatures --arch ${{ matrix.arch }}
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          SETTINGS_SCHEMA_SOURCE: ${{ github.workspace }}/.release-artifacts/settings-schema-windows/settings_schema.json
+
+      # ConPTY (plus its OpenConsole.exe console-host fallback) is required at
+      # runtime by any headless build: `local_tty` - and with it PTY spawning via
+      # conpty_api.rs - is compiled in for every non-wasm target regardless of the
+      # `gui` feature, since running shell commands is core agent functionality,
+      # not a GUI-only concern. The MSVC redistributable DLLs are bundled
+      # alongside it rather than assumed present, since it's unconfirmed whether
+      # the Namespace Windows base image ships the VC++ runtime. All five files
+      # copied below live under app/assets/windows/${WIN_ARCH}, so they're already
+      # covered by the recursive `files-folder` signing in the "Sign the oz CLI
+      # executable and sidecar DLLs" step above and don't need a separate signing
+      # pass here. dxcompiler.dll/dxil.dll are wgpu/rendering-only and are
+      # deliberately left out of this headless archive, mirroring the TUI
+      # installer (tui-installer.iss), which likewise omits them from its own
+      # standalone (non-`gui`) bundle.
+      - name: Package Windows CLI binary
+        id: package_cli
+        run: |
+          set -e
+          OZ_EXE="oz-${CHANNEL}.exe"
+          PKG_DIR="$(mktemp -d)"
+          cp "$BINARY_PATH" "$PKG_DIR/$OZ_EXE"
+          cp -r "$BUNDLED_RESOURCES_DIR" "$PKG_DIR/resources"
+          for asset in conpty.dll OpenConsole.exe vcruntime140.dll vcruntime140_1.dll msvcp140.dll; do
+            cp "app/assets/windows/${WIN_ARCH}/$asset" "$PKG_DIR/$asset"
+          done
+          PACKAGE_NAME="oz-${CHANNEL}-windows-${RELEASE_ARCH}.tar.gz"
+          tar czf "$PACKAGE_NAME" -C "$PKG_DIR" "$OZ_EXE" resources conpty.dll OpenConsole.exe vcruntime140.dll vcruntime140_1.dll msvcp140.dll
+          echo "package_path=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+        shell: bash
+        env:
+          BINARY_PATH: ${{ steps.bundle_cli.outputs.binary_path }}
+          BUNDLED_RESOURCES_DIR: ${{ steps.bundle_cli.outputs.bundled_resources_dir }}
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          RELEASE_ARCH: ${{ matrix.release_arch }}
+          WIN_ARCH: ${{ matrix.arch }}
+
+      - name: Add CLI to GitHub release assets
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.package_cli.outputs.package_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        with:
+          credentials_json: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+
+      - name: Upload CLI to Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: google-github-actions/upload-cloud-storage@6397bd7208e18d13ba2619ee21b9873edc94427a # v3.0.0
+        with:
+          path: ${{ steps.package_cli.outputs.package_path }}
+          destination: warp-releases/${{ steps.get-config.outputs.channel }}/${{ needs.prepare_release.outputs.release_tag }}/cli/windows/${{ matrix.release_arch }}
+          process_gcloudignore: false
+          headers: |-
+            cache-control: ${{ steps.get-config.outputs.gcs_cache_control_value }}
+
+      - name: Verify CLI package in Google Cloud Storage
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          package_name="$(basename "$PACKAGE_PATH")"
+          curl.exe --fail --silent --show-error --head \
+            "https://releases.warp.dev/${CHANNEL}/${RELEASE_TAG}/cli/windows/${RELEASE_ARCH}/${package_name}"
+        shell: bash
+        env:
+          PACKAGE_PATH: ${{ steps.package_cli.outputs.package_path }}
+          CHANNEL: ${{ steps.get-config.outputs.channel }}
+          RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+          RELEASE_ARCH: ${{ matrix.release_arch }}
+
+      - name: Upload CLI as workflow artifact
+        if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows-cli-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
+          path: |
+            ${{ steps.package_cli.outputs.package_path }}
+            ${{ steps.bundle_cli.outputs.pdb_file_path }}
+          if-no-files-found: error
+
+      - name: Set up Sentry CLI
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        uses: warpdotdev/setup-sentry-cli@8ae49c71bd731e547de697f75770727f86c95ecd # v2.0.0
+        with:
+          token: ${{ secrets.SENTRY_RELEASE_TOKEN }}
+          organization: warpdotdev
+          project: ${{ steps.get-config.outputs.sentry_project }}
+
+      - name: Upload debugging symbols to Sentry
+        if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
+        run: |
+          script/sentry_upload_dif.sh
+        shell: bash
+        env:
+          DEBUG_FILE_OR_FOLDER_PATH: ${{ steps.bundle_cli.outputs.pdb_file_path }}
 
   build_windows_binaries:
     name: Build Release Binary (Windows ${{ matrix.arch }})
@@ -2480,11 +2739,10 @@ jobs:
       - name: Add installer to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          tag_name: ${{ needs.prepare_release.outputs.release_tag }}
-          files: ${{ steps.bundle_app.outputs.installer_path }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${{ steps.bundle_app.outputs.installer_path }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
@@ -2538,6 +2796,7 @@ jobs:
       - release_web
       - release_windows_tui
       - release_windows
+      - release_windows_cli
     if: always()
     outputs:
       failed: ${{ steps.collect.outputs.failed }}
@@ -2569,6 +2828,7 @@ jobs:
           WEB_RESULT: ${{ needs.release_web.result }}
           WINDOWS_TUI_RESULT: ${{ needs.release_windows_tui.result }}
           WINDOWS_RESULT: ${{ needs.release_windows.result }}
+          WINDOWS_CLI_RESULT: ${{ needs.release_windows_cli.result }}
         run: |
           FAILED=()
 
@@ -2608,6 +2868,7 @@ jobs:
           check "WASM" "$WEB_RESULT" "$WEB_DISABLED"
           check "Windows TUI" "$WINDOWS_TUI_RESULT" "$WINDOWS_DISABLED"
           check "Windows" "$WINDOWS_RESULT" "$WINDOWS_DISABLED"
+          check "Windows CLI" "$WINDOWS_CLI_RESULT" "$WINDOWS_DISABLED"
 
           if (( ${#FAILED[@]} )); then
             printf -v FORMATTED "%s, " "${FAILED[@]}"
