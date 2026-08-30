@@ -192,15 +192,36 @@ fn bash_ctrl_t_detection_snippet() -> &'static str {
     &BASH_SH[start..start + end + end_marker.len()]
 }
 
-fn run_bash(script: &str) -> Option<String> {
-    let output = match command::blocking::Command::new("bash")
+fn spawn_bash(script: &str) -> Option<std::process::Output> {
+    match command::blocking::Command::new("bash")
         .args(["--noprofile", "--norc", "-c", script])
         .output()
     {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Ok(output) => Some(output),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => panic!("failed to run bash: {error}"),
-    };
+    }
+}
+
+/// Windows CI's `bash` is the WSL launcher stub: it exists, so `NotFound` never fires, then
+/// prints "no installed distributions" and exits 1. Require a sentinel so that stub is a skip
+/// and a real bash that exits non-zero on a later script is still a failure.
+fn posix_bash_is_usable() -> bool {
+    static USABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *USABLE.get_or_init(|| {
+        let Some(output) = spawn_bash("printf 'WARP_POSIX_BASH\\n'") else {
+            return false;
+        };
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout).contains("WARP_POSIX_BASH")
+    })
+}
+
+fn run_bash(script: &str) -> Option<String> {
+    if !posix_bash_is_usable() {
+        return None;
+    }
+    let output = spawn_bash(script)?;
     assert!(
         output.status.success(),
         "bash exited with {:?}\nstdout:\n{}\nstderr:\n{}",
@@ -249,19 +270,14 @@ fn bash_ctrl_t_bind_x_sed_program() -> &'static str {
 /// capability without also asserting the `case` match the tests below exist to check -- otherwise
 /// the gate would subsume the assertion and the tests could never fail.
 fn bash_can_extract_ctrl_t_binding() -> Option<bool> {
+    if !posix_bash_is_usable() {
+        return None;
+    }
     let extraction = bash_ctrl_t_bind_x_extraction();
     let script = format!(
         r#"bind -x '"\C-t": warp_bind_x_probe' 2>/dev/null; printf 'EXTRACTED:%s\n' "$({extraction})"; bind -X 2>/dev/null"#
     );
-
-    let output = match command::blocking::Command::new("bash")
-        .args(["--noprofile", "--norc", "-c", &script])
-        .output()
-    {
-        Ok(output) => output,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => panic!("failed to run bash: {error}"),
-    };
+    let output = spawn_bash(&script)?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
     let extracted = lines
@@ -287,10 +303,13 @@ fn bash_can_extract_ctrl_t_binding() -> Option<bool> {
 #[test]
 fn test_bash_bind_x_extraction_accepts_colon_and_space_formats() {
     let sed = bash_ctrl_t_bind_x_sed_program();
+    assert!(
+        sed.contains("[ :]"),
+        "ctrl-t bind -X sed must accept colon or space; got {sed:?}"
+    );
     let script = format!(
         r#"colon=$(printf '%s\n' '"\C-t": "fzf-file-widget"' | command -p sed -n '{sed}'); space=$(printf '%s\n' '"\C-t" "fzf-file-widget"' | command -p sed -n '{sed}'); printf 'colon=[%s] space=[%s]\n' "$colon" "$space""#
     );
-
     let Some(stdout) = run_bash(&script) else {
         return;
     };
@@ -301,10 +320,6 @@ fn test_bash_bind_x_extraction_accepts_colon_and_space_formats() {
     assert!(
         stdout.contains("space=[fzf-file-widget]"),
         "space layout should extract; got {stdout:?}"
-    );
-    assert!(
-        sed.contains("[ :]"),
-        "ctrl-t bind -X sed must accept colon or space; got {sed:?}"
     );
 }
 
