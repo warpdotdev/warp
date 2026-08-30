@@ -1,11 +1,9 @@
 use std::time::Duration;
 
 use instant::Instant;
-use sysinfo::Pid;
 
-use super::{
-    BlockActivity, LrcActivityMonitor, LrcProcessState, PidSample, ProcessSample, aggregate_state,
-};
+use super::sampler::aggregate_state;
+use super::{BlockActivity, LrcActivityMonitor, LrcProcessState, PidSample, ProcessSample};
 use crate::terminal::model::block::BlockId;
 
 /// A process tree sample from `(pid, cpu_ms)` pairs.
@@ -14,7 +12,7 @@ fn process_sample(pids: &[(u32, u64)]) -> ProcessSample {
         per_pid: pids
             .iter()
             .map(|(pid, cpu_ms)| PidSample {
-                pid: Pid::from_u32(*pid),
+                pid: *pid,
                 cpu_ms: *cpu_ms,
                 io_write_bytes: 0,
             })
@@ -29,7 +27,7 @@ fn io_sample(pids: &[(u32, u64)]) -> ProcessSample {
         per_pid: pids
             .iter()
             .map(|(pid, io_write_bytes)| PidSample {
-                pid: Pid::from_u32(*pid),
+                pid: *pid,
                 cpu_ms: 0,
                 io_write_bytes: *io_write_bytes,
             })
@@ -292,7 +290,7 @@ fn a_fully_quiet_process_tree_is_still_reported() {
         activity.apply_sample(
             ProcessSample {
                 per_pid: vec![PidSample {
-                    pid: Pid::from_u32(100),
+                    pid: 100,
                     cpu_ms: 0,
                     io_write_bytes: 0,
                 }],
@@ -368,9 +366,9 @@ fn a_local_terminal_starts_the_sampler_but_reports_nothing_before_sampling() {
 #[cfg(unix)]
 #[test]
 fn the_shell_joins_the_tree_when_it_holds_the_terminal() {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-    use super::{command_process_tree, process_group_of};
+    use super::sampler::{command_process_tree, process_group_of};
 
     let mut system = System::new();
     system.refresh_processes_specifics(
@@ -391,9 +389,9 @@ fn the_shell_joins_the_tree_when_it_holds_the_terminal() {
 #[cfg(unix)]
 #[test]
 fn the_shell_stays_out_of_the_tree_when_another_job_holds_the_terminal() {
-    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
-    use super::{command_process_tree, process_group_of};
+    use super::sampler::{command_process_tree, process_group_of};
 
     let mut system = System::new();
     system.refresh_processes_specifics(
