@@ -1614,8 +1614,9 @@ esac
     # Warp's own command search.
     #
     # Both fzf and (older versions of) atuin bind ctrl-r directly via `bind -x`, so `bind -X`
-    # reports it verbatim (e.g. `"\C-r": "__fzf_history__"`); the sed below extracts the bound
-    # command's name. Match against an exact allowlist of each integration's canonical bound
+    # reports it verbatim. bash 5.2 prints `"\C-r": "__fzf_history__"`; bash 5.3 prints
+    # `"\C-r" "__fzf_history__"` (space, no colon). The sed below accepts either layout.
+    # Match against an exact allowlist of each integration's canonical bound
     # function name -- not merely a name containing "fzf" or "atuin" -- since an RC can
     # legitimately bind ctrl-r to an unrelated fzf- or atuin-flavored command that isn't the
     # history search warp_run_external_ctrl_r_widget below knows how to invoke; rerouting that to
@@ -1629,7 +1630,7 @@ esac
     # from an arbitrary user macro; the fallback below handles that case.
     _WARP_EXTERNAL_CTRL_R_WIDGET=""
     if [ "$WARP_IN_MSYS2" = false ]; then
-      warp_ctrl_r_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-r": "\(.*\)"$/\1/p')"
+      warp_ctrl_r_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-r"[ :] *"\(.*\)"$/\1/p')"
       case "$warp_ctrl_r_binding" in
         __fzf_history__|__atuin_history)
           _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_binding"
@@ -1658,7 +1659,7 @@ esac
       # command substitution; that asymmetry is why ctrl-t doesn't need a flag-based fallback
       # the way ctrl-r's newer-atuin case does. atuin has no ctrl-t equivalent.
       _WARP_EXTERNAL_CTRL_T_WIDGET=""
-      warp_ctrl_t_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-t": "\(.*\)"$/\1/p')"
+      warp_ctrl_t_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-t"[ :] *"\(.*\)"$/\1/p')"
       case "$warp_ctrl_t_binding" in
         fzf-file-widget)
           # The bind -X entry has stayed "fzf-file-widget" across fzf versions, but only tag/

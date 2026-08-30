@@ -211,40 +211,49 @@ fn run_bash(script: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// The `bind -X` extraction pipeline the ctrl-t detection is built on, mirrored from
-/// `bash_body.sh` so the gate below can exercise the same capability the detection needs.
-/// `bash_can_extract_ctrl_t_binding` asserts the snippet still contains this, so the two cannot
-/// drift apart silently.
-const BIND_DASH_X_EXTRACTION: &str =
-    r#"bind -X 2>/dev/null | command -p sed -n 's/^"\\C-t": "\(.*\)"$/\1/p'"#;
+fn bash_ctrl_t_bind_x_extraction() -> &'static str {
+    let snippet = bash_ctrl_t_detection_snippet();
+    let start = snippet
+        .find("bind -X 2>/dev/null | command -p sed")
+        .expect("ctrl-t detection should pipe bind -X through sed");
+    let rest = &snippet[start..];
+    let quote = rest
+        .rfind('\'')
+        .expect("ctrl-t bind -X sed program should be single-quoted");
+    &rest[..=quote]
+}
 
-/// Whether this environment can read a `bind -x` binding back out through the pipeline above, run
-/// the way the tests below run it. `None` if bash isn't installed at all, mirroring `run_bash`'s
-/// "shell missing" skip convention.
+fn bash_ctrl_t_bind_x_sed_program() -> &'static str {
+    let extraction = bash_ctrl_t_bind_x_extraction();
+    let prefix = "sed -n '";
+    let start = extraction
+        .find(prefix)
+        .expect("extraction should invoke sed -n")
+        + prefix.len();
+    let end = extraction[start..]
+        .find("'")
+        .expect("sed program should be single-quoted");
+    &extraction[start..start + end]
+}
+
+/// Whether this environment can read a `bind -x` binding back out through the pipeline in
+/// `bash_body.sh`, run the way the tests below run it. `None` if bash isn't installed at all,
+/// mirroring `run_bash`'s "shell missing" skip convention.
 ///
-/// Detection depends on that end-to-end, and it does not hold everywhere. Three separate things
-/// can break it, all presenting identically as empty output: `bind -X` only arrived in bash 4.3
-/// (NEWS-4.3 item q); a non-interactive shell need not have line editing enabled, so the binding
-/// is never listable however new bash is; and `command -p` forces the system utility PATH, so the
-/// extraction runs under BSD sed on macOS rather than GNU sed. Probing the pipeline covers all
-/// three, where checking a version covers only the first and checking a raw listing only the
-/// first two.
+/// Skip only when `bind -X` does not list the probe at all: `bind -X` arrived in bash 4.3, and a
+/// non-interactive shell need not have line editing enabled, so the binding is never listable.
+/// If `bind -X` lists the probe but extraction is empty, panic -- that is a broken product
+/// extractor, not a reason to skip.
 ///
 /// Deliberately probes with a sentinel widget name rather than `fzf-file-widget`, so it tests the
 /// capability without also asserting the `case` match the tests below exist to check -- otherwise
 /// the gate would subsume the assertion and the tests could never fail.
-///
-/// Where extraction fails, those tests would either fail (the "tags" case) or pass vacuously
-/// without exercising the absent-function branch at all (the "declines" case just happens to
-/// expect the same empty result unusable extraction always produces). Skip both rather than let
-/// the latter masquerade as real coverage.
 fn bash_can_extract_ctrl_t_binding() -> Option<bool> {
-    assert!(
-        bash_ctrl_t_detection_snippet().contains(BIND_DASH_X_EXTRACTION),
-        "BIND_DASH_X_EXTRACTION no longer matches bash_body.sh's detection pipeline"
+    let extraction = bash_ctrl_t_bind_x_extraction();
+    let script = format!(
+        r#"bind -x '"\C-t": warp_bind_x_probe' 2>/dev/null; printf 'EXTRACTED:%s\n' "$({extraction})"; bind -X 2>/dev/null"#
     );
-    let script =
-        format!("bind -x '\"\\C-t\": warp_bind_x_probe' 2>/dev/null; {BIND_DASH_X_EXTRACTION}");
+
     let output = match command::blocking::Command::new("bash")
         .args(["--noprofile", "--norc", "-c", &script])
         .output()
@@ -253,7 +262,50 @@ fn bash_can_extract_ctrl_t_binding() -> Option<bool> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
         Err(error) => panic!("failed to run bash: {error}"),
     };
-    Some(String::from_utf8_lossy(&output.stdout).trim() == "warp_bind_x_probe")
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    let extracted = lines
+        .next()
+        .unwrap_or("")
+        .strip_prefix("EXTRACTED:")
+        .unwrap_or("")
+        .trim();
+    let raw: String = lines.collect();
+    if extracted == "warp_bind_x_probe" {
+        return Some(true);
+    }
+    if raw.contains("warp_bind_x_probe") {
+        panic!(
+            "bind -X listed warp_bind_x_probe but bash_body.sh extraction returned {extracted:?}; raw bind -X: {raw:?}"
+        );
+    }
+    Some(false)
+}
+
+/// The ctrl-t `bind -X` sed from `bash_body.sh` must accept both bash 5.2 colon and bash 5.3
+/// space layouts. Does not need `bind -X` or an interactive shell.
+#[test]
+fn test_bash_bind_x_extraction_accepts_colon_and_space_formats() {
+    let sed = bash_ctrl_t_bind_x_sed_program();
+    let script = format!(
+        r#"colon=$(printf '%s\n' '"\C-t": "fzf-file-widget"' | command -p sed -n '{sed}'); space=$(printf '%s\n' '"\C-t" "fzf-file-widget"' | command -p sed -n '{sed}'); printf 'colon=[%s] space=[%s]\n' "$colon" "$space""#
+    );
+
+    let Some(stdout) = run_bash(&script) else {
+        return;
+    };
+    assert!(
+        stdout.contains("colon=[fzf-file-widget]"),
+        "colon layout should extract; got {stdout:?}"
+    );
+    assert!(
+        stdout.contains("space=[fzf-file-widget]"),
+        "space layout should extract; got {stdout:?}"
+    );
+    assert!(
+        sed.contains("[ :]"),
+        "ctrl-t bind -X sed must accept colon or space; got {sed:?}"
+    );
 }
 
 /// Regression test for the ctrl-t equivalent of bash's `declare -F __atuin_history` guard on the
