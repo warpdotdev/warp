@@ -146,8 +146,8 @@ jobs:
         uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
         if: ${{ matrix.is_self_hosted == false }}
         with:
-          apt: zsh fish
-          brew: fish bash
+          apt: zsh fish fzf
+          brew: fish bash fzf
 
       - name: Echo Shells (UNIX)
         id: echo_shells_unix
@@ -180,6 +180,15 @@ jobs:
           POWERSHELL_VERSION=$(pwsh -version | awk '{print $2}')
           echo "powershell_path=$POWERSHELL_PATH" >> $GITHUB_OUTPUT
           echo "::notice title=${{ matrix.name }} Tests - Powershell Version::$POWERSHELL_VERSION"
+
+          FZF_PATH="$(command -v fzf || true)"
+          if [ -n "$FZF_PATH" ]; then
+            FZF_VERSION="$("$FZF_PATH" --version)"
+            echo "fzf_path=$FZF_PATH" >> $GITHUB_OUTPUT
+            echo "::notice title=${{ matrix.name }} Tests - fzf Version::$FZF_VERSION"
+          else
+            echo "::notice title=${{ matrix.name }} Tests - fzf Version::not installed"
+          fi
 
       - name: Echo Shells (Windows)
         id: echo_shells_windows
@@ -471,7 +480,7 @@ jobs:
       - name: Install Shells
         uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
         with:
-          apt: zsh fish
+          apt: zsh fish fzf
 
       - name: Echo default Bash
         id: echo_bash

@@ -1,6 +1,7 @@
 use std::fs::{OpenOptions, create_dir_all, write};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use itertools::Itertools as _;
 use strum::IntoEnumIterator;
@@ -221,6 +222,44 @@ pub fn per_shell_output(
 pub fn skip_if_powershell_core_2303() -> bool {
     let (starter, _) = current_shell_starter_and_version();
     !matches!(starter.shell_type(), ShellType::PowerShell)
+}
+
+/// True when `fzf` is on `PATH` and answers `--version`.
+pub fn fzf_is_installed() -> bool {
+    Command::new("fzf")
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Gate for live fzf ctrl-r / ctrl-t handoff tests: fzf must be installed, and the current shell
+/// must be one fzf ships key-bindings for. Bash older than 4.3 is skipped because detection uses
+/// `bind -X`, which that version does not have.
+pub fn should_run_fzf_widget_handoff_tests() -> bool {
+    if !fzf_is_installed() {
+        return false;
+    }
+    let (starter, version) = current_shell_starter_and_version();
+    match starter.shell_type() {
+        ShellType::Zsh | ShellType::Fish => true,
+        ShellType::Bash => bash_version_supports_bind_x(&version),
+        ShellType::PowerShell => false,
+    }
+}
+
+fn bash_version_supports_bind_x(version: &str) -> bool {
+    let numeric: String = version
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    let Some(actual) = Version::from(&numeric) else {
+        return false;
+    };
+    let Some(minimum) = Version::from("4.3") else {
+        return false;
+    };
+    actual >= minimum
 }
 
 /// Gets the name of the system user for which the test binary is running.
