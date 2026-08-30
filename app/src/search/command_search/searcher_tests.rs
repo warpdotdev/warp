@@ -174,7 +174,14 @@ fn test_add_source_to_mixer() {
 }
 
 #[test]
-fn test_exact_matches_rank_above_prefix_matches() {
+fn test_recency_can_outrank_an_exact_match_of_equal_raw_quality() {
+    // Regression test for a product decision: history must not grant an exact whole-line match
+    // special credit purely for its provenance. SkimMatcherV2 scores a query identically whether
+    // it's the whole command or just a prefix of a longer one (`git` scores the same against
+    // `git` and `git checkout master`), and both get the same consecutive-run bonus, so these two
+    // candidates have identical match quality here. The only thing that can still tell them apart
+    // is priors -- so the fresher one must win, even though it's `git checkout master` and not
+    // the exact match `git`.
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let short_command = "git".to_owned();
@@ -183,6 +190,7 @@ fn test_exact_matches_rank_above_prefix_matches() {
 
         let mixer = app.add_model(|_| CommandSearchMixer::new());
         mixer.update(&mut app, |mixer, ctx| {
+            // The sole (and therefore freshest) candidate in its own source.
             mixer.add_async_source(
                 history_data_source(vec![HistoryEntry::command_only(long_command.clone())]),
                 HashSet::from([QueryFilter::History]),
@@ -193,6 +201,7 @@ fn test_exact_matches_rank_above_prefix_matches() {
                 },
                 ctx,
             );
+            // One position older than a non-matching sibling in its own source.
             mixer.add_async_source(
                 history_data_source(vec![
                     HistoryEntry::command_only(short_command.clone()),
@@ -214,20 +223,13 @@ fn test_exact_matches_rank_above_prefix_matches() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
-
-            // The view renders highest-ranked items at the bottom (last index) of the scrollable
-            // panel. `short_command` is a whole-line exact match for the query while
-            // `long_command` is only a substring match, so it outranks `long_command` and ends up
-            // last, independent of which data source was registered first.
             assert_eq!(results.len(), 2);
 
+            // The view renders highest-ranked items at the bottom (last index) of the scrollable
+            // panel.
             assert!(matches!(
-            results.first().map(|result| result.accept_result()),
-            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command: long, linked_workflow_data: None })) if long == long_command));
-
-            assert!(matches!(
-            results.get(1).map(|result| result.accept_result()),
-            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command: short, linked_workflow_data: None })) if short == short_command));
+            results.last().map(|result| result.accept_result()),
+            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command, linked_workflow_data: None })) if command == long_command));
         });
     })
 }
@@ -525,14 +527,19 @@ fn test_no_query_filter_runs_all_data_sources() {
         app.read(|app| {
             let results = mixer.as_ref(app).results();
 
-            // "git" ranks above "git checkout" because it's a whole-line exact match for the
-            // query, not merely a substring match, so it appears last (closest to the input).
+            // "git" and "git checkout" score identically here (same raw Skim score and
+            // consecutive-run bonus, no priors to break the tie), so their relative order is an
+            // unspecified implementation detail; only assert that a query with no filters ran
+            // both sources.
             assert_eq!(
                 results
                     .iter()
                     .map(|result| result.accessibility_label())
-                    .collect_vec(),
-                vec!["History item: git checkout", "History item: git"]
+                    .collect::<HashSet<_>>(),
+                HashSet::from([
+                    "History item: git".to_owned(),
+                    "History item: git checkout".to_owned()
+                ])
             );
         });
     });
@@ -603,14 +610,17 @@ fn test_query_filter_limits_data_sources() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
-            // "git" ranks above "git checkout" because it's a whole-line exact match for the
-            // query, not merely a substring match, so it appears last (closest to the input).
+            // "git" and "git checkout" score identically here (see the no-filter case above), so
+            // only assert that specifying both filters produced results from both sources.
             assert_eq!(
                 results
                     .iter()
                     .map(|result| result.accessibility_label())
-                    .collect_vec(),
-                vec!["History item: git checkout", "History item: git"]
+                    .collect::<HashSet<_>>(),
+                HashSet::from([
+                    "History item: git".to_owned(),
+                    "History item: git checkout".to_owned()
+                ])
             );
         });
     });
