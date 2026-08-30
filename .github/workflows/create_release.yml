@@ -1182,12 +1182,8 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          assets=()
-          while IFS= read -r -d '' path; do
-            assets+=("$path")
-          done < <(find "${{ steps.bundle_app.outputs.packages_dir }}" -maxdepth 1 -type f -print0)
-          (( ${#assets[@]} > 0 ))
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${assets[@]}"
+          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
+          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1440,12 +1436,8 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          assets=()
-          while IFS= read -r -d '' path; do
-            assets+=("$path")
-          done < <(find "${{ steps.bundle_cli.outputs.packages_dir }}" -maxdepth 1 -type f -print0)
-          (( ${#assets[@]} > 0 ))
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${assets[@]}"
+          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
+          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1871,24 +1863,16 @@ jobs:
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          assets=()
-          while IFS= read -r -d '' path; do
-            assets+=("$path")
-          done < <(find "${{ steps.bundle_app.outputs.packages_dir }}" -maxdepth 1 -type f -print0)
-          (( ${#assets[@]} > 0 ))
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${assets[@]}"
+          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
+          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         run: |
-          assets=()
-          while IFS= read -r -d '' path; do
-            assets+=("$path")
-          done < <(find "${{ steps.bundle_cli.outputs.packages_dir }}" -maxdepth 1 -type f -print0)
-          (( ${#assets[@]} > 0 ))
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${assets[@]}"
+          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
+          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -2008,12 +1992,8 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          assets=()
-          while IFS= read -r -d '' path; do
-            assets+=("$path")
-          done < <(find "${{ steps.bundle_app.outputs.packages_dir }}" -maxdepth 1 -type f -print0)
-          (( ${#assets[@]} > 0 ))
-          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${assets[@]}"
+          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
+          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
