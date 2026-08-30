@@ -1,8 +1,8 @@
 use std::fs::{OpenOptions, create_dir_all, write};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use command::blocking::Command;
 use itertools::Itertools as _;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;

@@ -2,9 +2,9 @@
 //! shell is not bash/zsh/fish (the shells fzf ships key-bindings for).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
+use command::blocking::Command;
 use warp::features::FeatureFlag;
 use warp::integration_testing;
 use warp::integration_testing::step::new_step_with_default_assertions;
