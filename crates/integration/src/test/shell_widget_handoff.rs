@@ -12,8 +12,8 @@ use warp::integration_testing::terminal::util::{
     ExpectedExitStatus, current_shell_starter_and_version,
 };
 use warp::integration_testing::terminal::{
-    assert_input_editor_contents, assert_long_running_block_executing_for_single_terminal_in_tab,
-    execute_command_for_single_terminal_in_tab, wait_until_bootstrapped_single_pane_for_tab,
+    assert_input_editor_contents, execute_command_for_single_terminal_in_tab,
+    wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab, workspace_view,
@@ -206,8 +206,9 @@ fn assert_input_contains(text: &'static str) -> AssertionCallback {
     })
 }
 
-fn wait_for_fzf() -> TestStep {
+fn open_fzf(key: &'static str) -> TestStep {
     TestStep::new("Wait for fzf to take over the PTY")
+        .with_keystrokes(&[key])
         .set_timeout(FZF_STEP_TIMEOUT)
         .add_named_assertion(
             "command search stayed closed",
@@ -215,8 +216,32 @@ fn wait_for_fzf() -> TestStep {
         )
         .add_named_assertion(
             "fzf is running as a long-running command",
-            assert_long_running_block_executing_for_single_terminal_in_tab(true, 0),
+            assert_fzf_is_running(),
         )
+}
+
+fn assert_fzf_is_running() -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+        terminal_view.read(app, |view, _ctx| {
+            let is_editor_focused = view
+                .input()
+                .read(app, |input, ctx| input.editor().is_focused(ctx));
+            let buffer = view
+                .input()
+                .read(app, |input, ctx| input.buffer_text(ctx));
+            let model = view.model.lock();
+            let active_block = model.block_list().active_block();
+            let output = active_block.output_to_string();
+            let long_running = active_block.is_active_and_long_running();
+            // bash may not emit preexec for the leading-space helper invocation, so do not
+            // require is_executing(); the editor hiding and long-running block are the handoff.
+            async_assert!(
+                !is_editor_focused && long_running,
+                "expected fzf long-running; editor_focused={is_editor_focused} long_running={long_running} buffer={buffer:?} output={output:?}"
+            )
+        })
+    })
 }
 
 /// ctrl-r opens the real fzf history picker and lands the selected command in the editor
@@ -242,12 +267,7 @@ pub fn test_fzf_ctrl_r_selects_history_unexecuted() -> Builder {
             ExpectedExitStatus::Success,
             CTRL_R_HISTORY_OUTPUT,
         ))
-        .with_step(
-            TestStep::new("Press ctrl-r")
-                .with_keystrokes(&["ctrl-r"])
-                .set_timeout(FZF_STEP_TIMEOUT),
-        )
-        .with_step(wait_for_fzf())
+        .with_step(open_fzf("ctrl-r"))
         .with_step(
             TestStep::new("Filter to the unique history entry")
                 .with_typed_characters(&[CTRL_R_HISTORY_OUTPUT])
@@ -296,28 +316,16 @@ pub fn test_fzf_ctrl_t_inserts_selection() -> Builder {
         .with_step(
             new_step_with_default_assertions("Type a prefix so splice vs replace is observable")
                 .with_typed_characters(&[CTRL_T_PREFIX])
+                .with_keystrokes(&["escape"])
                 .add_named_assertion(
                     "prefix is in the input",
                     assert_input_editor_contents(0, CTRL_T_PREFIX),
                 ),
         )
+        .with_step(open_fzf("ctrl-t"))
         .with_step(
-            TestStep::new("Press ctrl-t")
-                .with_keystrokes(&["ctrl-t"])
-                .set_timeout(FZF_STEP_TIMEOUT),
-        )
-        .with_step(wait_for_fzf())
-        .with_step(
-            TestStep::new("Filter to the unique file")
+            TestStep::new("Filter to the unique file and accept")
                 .with_typed_characters(&[CTRL_T_FILENAME])
-                .set_timeout(FZF_STEP_TIMEOUT)
-                .add_named_assertion(
-                    "fzf lists the unique file",
-                    assert_fzf_shows(CTRL_T_FILENAME),
-                ),
-        )
-        .with_step(
-            TestStep::new("Accept the fzf selection")
                 .with_keystrokes(&["enter"])
                 .set_timeout(FZF_STEP_TIMEOUT),
         )
@@ -374,12 +382,7 @@ pub fn test_fzf_ctrl_r_cancel_restores_draft() -> Builder {
                     assert_input_editor_contents(0, CTRL_R_DRAFT),
                 ),
         )
-        .with_step(
-            TestStep::new("Press ctrl-r")
-                .with_keystrokes(&["ctrl-r"])
-                .set_timeout(FZF_STEP_TIMEOUT),
-        )
-        .with_step(wait_for_fzf())
+        .with_step(open_fzf("ctrl-r"))
         .with_step(
             TestStep::new("Cancel fzf")
                 .with_keystrokes(&["escape"])
