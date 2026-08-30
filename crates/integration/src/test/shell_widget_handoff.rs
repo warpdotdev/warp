@@ -19,8 +19,8 @@ use warp::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view_for_tab, workspace_view,
 };
 use warp::terminal::shell::ShellType;
-use warpui_core::async_assert;
 use warpui_core::integration::{AssertionCallback, TestStep};
+use warpui_core::{async_assert, async_assert_eq};
 
 use super::{TEST_ONLY_ASSETS, new_builder};
 use crate::Builder;
@@ -193,6 +193,26 @@ fn assert_fzf_shows(text: &'static str) -> AssertionCallback {
     })
 }
 
+fn assert_finished_command_count(needle: &'static str, expected: usize) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, 0);
+        terminal_view.read(app, |view, _ctx| {
+            let model = view.model.lock();
+            let count = model
+                .block_list()
+                .blocks()
+                .iter()
+                .filter(|block| block.finished() && block.command_to_string().contains(needle))
+                .count();
+            async_assert_eq!(
+                count,
+                expected,
+                "expected {expected} finished command(s) containing {needle:?}, found {count}"
+            )
+        })
+    })
+}
+
 fn assert_input_contains(text: &'static str) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let input = single_input_view_for_tab(app, window_id, 0);
@@ -291,6 +311,10 @@ pub fn test_fzf_ctrl_r_selects_history_unexecuted() -> Builder {
                 assert_command_search_is_closed(),
             )
             .add_named_assertion(
+                "selected command was not executed again",
+                assert_finished_command_count(CTRL_R_HISTORY_COMMAND, 1),
+            )
+            .add_named_assertion(
                 "input contains the selected command",
                 assert_input_editor_contents(0, CTRL_R_HISTORY_COMMAND),
             ),
@@ -335,6 +359,10 @@ pub fn test_fzf_ctrl_t_inserts_selection() -> Builder {
                 .add_named_assertion(
                     "input contains the selected filename",
                     assert_input_contains(CTRL_T_FILENAME),
+                )
+                .add_named_assertion(
+                    "selected file was not executed as a command",
+                    assert_finished_command_count(CTRL_T_FILENAME, 0),
                 )
                 .add_named_assertion("prefix is preserved on bash/zsh", move |app, window_id| {
                     if is_fish {
