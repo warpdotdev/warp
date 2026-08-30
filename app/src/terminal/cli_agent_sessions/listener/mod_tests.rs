@@ -247,6 +247,7 @@ fn droid_default_handler_forwards_permission_request() {
 
 #[test]
 fn hermes_end_to_end_parsing_and_handling() {
+    assert!(is_agent_supported(&CLIAgent::Hermes));
     let mut handler = create_handler(&CLIAgent::Hermes).expect("should create handler");
 
     let stop_body =
