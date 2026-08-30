@@ -9,7 +9,7 @@ user-invocable: true
 
 # Verify UI Change in Cloud
 
-Use this workflow to verify a user-facing client change by spawning a cloud agent with computer use capabilities. Do not invoke it automatically after every UI change: launch only when the user explicitly requested computer-use verification or accepted an offer to run it. This applies to any change that affects what the user sees or experiences in the running app — not just visual/UI changes, but also startup behavior, config handling, migration flows, and other client-side logic.
+Use this workflow to verify a user-facing client change by spawning a cloud agent with computer use capabilities. Do not invoke it automatically after every UI change: launch only when the user explicitly requested computer-use verification or accepted an offer to run it. After completing a user-facing change, you may briefly offer this verification; do not launch until the user says yes. This applies to any change that affects what the user sees or experiences in the running app — not just visual/UI changes, but also startup behavior, config handling, migration flows, and other client-side logic.
 
 ## Workflow
 
