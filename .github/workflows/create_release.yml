@@ -1182,8 +1182,8 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
-          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1436,8 +1436,8 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
-          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1863,16 +1863,16 @@ jobs:
       - name: Add app packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         run: |
-          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
-          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Add CLI packages to GitHub release assets
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' && steps.bundle_cli.outputs.packages_dir != steps.bundle_app.outputs.packages_dir }}
         run: |
-          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
-          find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_cli.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1992,8 +1992,8 @@ jobs:
         if: ${{ needs.prepare_release.outputs.should_publish == 'true' }}
         id: upload_github_assets
         run: |
-          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q .
-          find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -exec gh release upload "${{ needs.prepare_release.outputs.release_tag }}" {} +
+          mapfile -d '' -t FILES < <(find -L "${{ steps.bundle_app.outputs.packages_dir }}" -mindepth 1 -maxdepth 1 -type f -print0)
+          gh release upload "${{ needs.prepare_release.outputs.release_tag }}" "${FILES[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
