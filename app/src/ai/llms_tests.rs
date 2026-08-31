@@ -1311,3 +1311,15 @@ fn explicit_child_model_pin_preserves_gui_behavior_and_only_emits_for_effective_
         assert_eq!(active_model_events.get(), 1);
     });
 }
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn codex_app_server_model_is_registered_for_embedded_agent_mode() {
+    let model = codex_app_server_llm_info();
+
+    assert_eq!(model.id.as_str(), CODEX_APP_SERVER_MODEL_ID);
+    assert_eq!(model.display_name, "Codex (ChatGPT)");
+    assert_eq!(model.provider, LLMProvider::OpenAI);
+    assert!(is_codex_app_server_model_id(&model.id));
+    assert_eq!(local_agent_mode_llm_choices().count(), 1);
+}

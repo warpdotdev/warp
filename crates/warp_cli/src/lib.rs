@@ -21,6 +21,7 @@ pub use sort_order::SortOrderArg;
 
 pub mod agent;
 pub mod api_key;
+pub mod codex;
 pub mod completions;
 pub mod config_file;
 mod date_time;
@@ -657,6 +658,10 @@ pub enum Command {
     #[clap(flatten)]
     CommandLine(Box<CliCommand>),
 
+    /// Use ChatGPT-backed Codex through the local Codex app-server.
+    #[cfg(not(target_family = "wasm"))]
+    Codex(crate::codex::CodexArgs),
+
     /// Generate shell completions for your shell to stdout.
     ///
     ///
@@ -702,6 +707,8 @@ impl Command {
         match self {
             Command::Worker(_) => false,
             Command::CommandLine(_) | Command::DumpDebugInfo => true,
+            #[cfg(not(target_family = "wasm"))]
+            Command::Codex(_) => true,
             Command::Completions { .. } => true,
             #[cfg(not(target_family = "wasm"))]
             Command::DumpSettingsSchema { output_path } => output_path.is_none(),

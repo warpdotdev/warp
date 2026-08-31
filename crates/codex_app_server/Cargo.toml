@@ -1,0 +1,21 @@
+[package]
+name = "codex_app_server"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Native Codex app-server client used by Warp"
+
+[dependencies]
+anyhow.workspace = true
+command.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+async-process.workspace = true
+futures-lite.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

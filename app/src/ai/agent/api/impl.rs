@@ -8,6 +8,7 @@ use warp_multi_agent_api as api;
 use super::convert_to::convert_input;
 use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
 use crate::ai::agent::redaction;
+use crate::ai::llms::is_codex_app_server_model_id;
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::SessionType;
@@ -18,6 +19,29 @@ pub async fn generate_multi_agent_output(
     team_scope: RequestTeamScope,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    if params.should_redact_secrets {
+        redaction::redact_inputs(&mut params.input);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    if is_codex_app_server_model_id(&params.model) {
+        return super::codex::generate_codex_app_server_output(params, cancellation_rx).await;
+    }
+
+    // A Codex app-server thread id is local provider state, not a Warp-hosted
+    // conversation id. When the user switches back to a hosted model, preserve
+    // the task transcript but start a fresh hosted conversation token instead
+    // of leaking an incompatible local identifier to the server.
+    #[cfg(not(target_family = "wasm"))]
+    if params
+        .conversation_token
+        .as_ref()
+        .is_some_and(super::codex::is_codex_conversation_token)
+    {
+        params.conversation_token = None;
+        params.forked_from_conversation_token = None;
+    }
+
     let supported_tools = params
         .supported_tools_override
         .take()
@@ -49,10 +73,6 @@ pub async fn generate_multi_agent_output(
                 )),
             },
         );
-    }
-
-    if params.should_redact_secrets {
-        redaction::redact_inputs(&mut params.input);
     }
 
     let api_keys = api_keys_with_warp_credit_fallback_setting(

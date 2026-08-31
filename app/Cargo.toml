@@ -303,6 +303,7 @@ winit = { workspace = true }
 wgpu.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+codex_app_server.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true

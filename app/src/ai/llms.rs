@@ -79,6 +79,11 @@ pub fn byo_key_source_for_model(
     scope: &dyn TeamScope,
     app: &AppContext,
 ) -> Option<ByoKeySource> {
+    // The Codex app-server owns its ChatGPT credentials. It is intentionally
+    // not represented by Warp's BYO OpenAI API-key indicator.
+    if is_codex_app_server_model_id(&llm.id) {
+        return None;
+    }
     let workspaces = UserWorkspaces::as_ref(app);
     let is_custom_endpoint = LLMPreferences::as_ref(app)
         .custom_llm_info_for_id(&llm.id)
@@ -188,6 +193,61 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
 pub const MODELS_BY_FEATURE_CACHE_KEY: &str = "AvailableLLMs";
 const CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL: &str = "Custom endpoint";
 const CLOUD_FALLBACK_OZ_MODEL_ID: &str = "auto";
+
+/// Synthetic Agent Mode model that routes the embedded Warp Agent through the
+/// locally installed Codex app-server and its ChatGPT authentication.
+pub const CODEX_APP_SERVER_MODEL_ID: &str = "codex-app-server";
+
+/// Returns whether an Agent Mode model id selects the local Codex app-server
+/// provider rather than Warp's hosted multi-agent endpoint.
+pub fn is_codex_app_server_model_id(id: &LLMId) -> bool {
+    id.as_str() == CODEX_APP_SERVER_MODEL_ID
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn codex_app_server_llm_info() -> &'static LLMInfo {
+    static MODEL: OnceLock<LLMInfo> = OnceLock::new();
+    MODEL.get_or_init(|| LLMInfo {
+        display_name: "Codex (ChatGPT)".to_owned(),
+        base_model_name: "Codex (ChatGPT)".to_owned(),
+        id: LLMId::from(CODEX_APP_SERVER_MODEL_ID),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::OpenAI,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn local_agent_mode_llm_choices() -> std::iter::Once<&'static LLMInfo> {
+    std::iter::once(codex_app_server_llm_info())
+}
+
+#[cfg(target_family = "wasm")]
+fn local_agent_mode_llm_choices() -> std::iter::Empty<&'static LLMInfo> {
+    std::iter::empty()
+}
+
+fn local_agent_mode_llm_info_for_id(id: &LLMId) -> Option<&'static LLMInfo> {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        is_codex_app_server_model_id(id).then(codex_app_server_llm_info)
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = id;
+        None
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LLMUsageMetadata {
@@ -917,6 +977,7 @@ impl LLMPreferences {
         app: &'a AppContext,
     ) -> Option<&'a LLMInfo> {
         Self::server_info_for_id_router_gated(available, id)
+            .or_else(|| local_agent_mode_llm_info_for_id(id))
             .or_else(|| self.custom_llm_info_for_id_if_enabled(id, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -993,6 +1054,7 @@ impl LLMPreferences {
             .filter(move |llm| {
                 routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
             })
+            .chain(local_agent_mode_llm_choices())
             .chain(self.custom_llm_choices(app))
             .chain(self.custom_router_choices())
     }
@@ -1195,6 +1257,7 @@ impl LLMPreferences {
                     .feature_model_choice_for_team_uid(None)
                     .info_for_id(id)
             })
+            .or_else(|| local_agent_mode_llm_info_for_id(id))
             .or_else(|| self.custom_llm_info_for_id(id))
             .or_else(|| self.custom_router_llm_info_for_id(id))
     }
@@ -1221,7 +1284,8 @@ impl LLMPreferences {
     /// router entirely server-side (no local config or credentials needed), so
     /// they are treated as runnable here.
     pub fn is_cloud_runnable_oz_model_id(&self, id: &LLMId) -> bool {
-        !(self.custom_llm_info_for_id(id).is_some()
+        !(is_codex_app_server_model_id(id)
+            || self.custom_llm_info_for_id(id).is_some()
             || custom_model_routers::is_local_custom_router_id(id.as_str()))
     }
 

@@ -3143,6 +3143,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex_app_server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-process",
+ "command",
+ "futures-lite 1.13.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "collection_literals"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15210,6 +15223,7 @@ dependencies = [
  "cloud_object_persistence",
  "cloud_objects",
  "cocoa 0.26.0",
+ "codex_app_server",
  "comfy-table",
  "command",
  "command-corrections",

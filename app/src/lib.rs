@@ -16,6 +16,8 @@ mod chip_configurator;
 mod cloud_object;
 mod code;
 mod code_review;
+#[cfg(not(target_family = "wasm"))]
+mod codex_app_server;
 mod coding_entrypoints;
 mod coding_panel_enablement_state;
 mod command_palette;
@@ -788,6 +790,10 @@ pub fn run() -> Result<()> {
         }
         match command {
             warp_cli::Command::Worker(worker) => return run_worker_command(worker),
+            #[cfg(not(target_family = "wasm"))]
+            warp_cli::Command::Codex(codex_args) => {
+                return codex_app_server::run(codex_args);
+            }
             warp_cli::Command::Completions { shell } => {
                 return warp_cli::completions::generate_to_stdout(*shell);
             }

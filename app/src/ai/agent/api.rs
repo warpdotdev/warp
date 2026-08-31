@@ -1,3 +1,5 @@
+#[cfg(not(target_family = "wasm"))]
+mod codex;
 pub(crate) mod convert_conversation;
 mod convert_from;
 mod convert_to;

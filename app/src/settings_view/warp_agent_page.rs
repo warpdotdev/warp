@@ -18,6 +18,8 @@ use ::ai::grok_subscription::oauth::{
     self, ManualCodeExchange, OauthCancellationHandle, TokenResponse,
 };
 use chrono::{DateTime, Local};
+#[cfg(not(target_family = "wasm"))]
+use codex_app_server::{AccountStatus, ClientOptions};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use settings::{Setting, ToggleableSetting};
@@ -77,7 +79,9 @@ use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::geap_credentials::force_refresh_geap_credentials;
-use crate::ai::llms::{LLMId, LLMPreferences, LLMProvider, is_using_api_key_for_provider};
+use crate::ai::llms::{
+    LLMId, LLMPreferences, LLMProvider, is_codex_app_server_model_id, is_using_api_key_for_provider,
+};
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::auth::AuthStateProvider;
 use crate::editor::{
@@ -603,6 +607,30 @@ fn member_byo_keys_allowed_for_view(ctx: &ViewContext<WarpAgentPageView>) -> boo
     workspaces.are_member_byo_keys_allowed(&team_scope)
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Debug)]
+enum CodexAccountState {
+    Checking,
+    SignedOut,
+    SignedIn { summary: String },
+    Connecting,
+    Disconnecting,
+    Unavailable { error: String },
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl CodexAccountState {
+    fn from_status(status: AccountStatus) -> Self {
+        if status.account.is_some() {
+            Self::SignedIn {
+                summary: crate::codex_app_server::connected_account_message(&status),
+            }
+        } else {
+            Self::SignedOut
+        }
+    }
+}
+
 /// Object id shared by the SuperGrok connect-flow toasts, so a completion
 /// toast automatically replaces whichever one is currently showing.
 #[cfg(not(target_family = "wasm"))]
@@ -670,6 +698,9 @@ pub struct WarpAgentPageView {
     // Snapshot of the provider keys from the last `KeysUpdated`, used to detect a
     // newly added key and prompt the user to switch their default model.
     last_seen_provider_keys: ApiKeys,
+
+    #[cfg(not(target_family = "wasm"))]
+    codex_account_state: CodexAccountState,
 
     #[cfg(not(target_family = "wasm"))]
     grok_oauth_attempt: Option<GrokOauthAttempt>,
@@ -1160,7 +1191,7 @@ impl WarpAgentPageView {
             },
         );
 
-        Self {
+        let mut view = Self {
             page: Self::build_page(ctx),
             self_handle,
             voice_input_toggle_key_dropdown,
@@ -1186,10 +1217,81 @@ impl WarpAgentPageView {
             set_default_model_modal,
             last_seen_provider_keys,
             #[cfg(not(target_family = "wasm"))]
+            codex_account_state: CodexAccountState::Checking,
+            #[cfg(not(target_family = "wasm"))]
             grok_oauth_attempt: None,
             #[cfg(not(target_family = "wasm"))]
             grok_code_editor,
+        };
+        #[cfg(not(target_family = "wasm"))]
+        view.refresh_codex_account(ctx);
+        view
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_codex_account(&mut self, ctx: &mut ViewContext<Self>) {
+        self.codex_account_state = CodexAccountState::Checking;
+        ctx.notify();
+        ctx.spawn(
+            crate::codex_app_server::read_account(ClientOptions::default()),
+            |me, result, ctx| {
+                me.codex_account_state = match result {
+                    Ok(status) => CodexAccountState::from_status(status),
+                    Err(error) => CodexAccountState::Unavailable {
+                        error: error.to_string(),
+                    },
+                };
+                ctx.notify();
+            },
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn connect_codex_chatgpt(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            self.codex_account_state,
+            CodexAccountState::Connecting | CodexAccountState::Disconnecting
+        ) {
+            return;
         }
+        self.codex_account_state = CodexAccountState::Connecting;
+        ctx.notify();
+        ctx.spawn(
+            crate::codex_app_server::login_in_browser(ClientOptions::default()),
+            |me, result, ctx| {
+                me.codex_account_state = match result {
+                    Ok(status) => CodexAccountState::from_status(status),
+                    Err(error) => CodexAccountState::Unavailable {
+                        error: error.to_string(),
+                    },
+                };
+                ctx.notify();
+            },
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn disconnect_codex_chatgpt(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            self.codex_account_state,
+            CodexAccountState::Connecting | CodexAccountState::Disconnecting
+        ) {
+            return;
+        }
+        self.codex_account_state = CodexAccountState::Disconnecting;
+        ctx.notify();
+        ctx.spawn(
+            crate::codex_app_server::disconnect(ClientOptions::default()),
+            |me, result, ctx| {
+                me.codex_account_state = match result {
+                    Ok(status) => CodexAccountState::from_status(status),
+                    Err(error) => CodexAccountState::Unavailable {
+                        error: error.to_string(),
+                    },
+                };
+                ctx.notify();
+            },
+        );
     }
 
     fn update_voice_input_dropdown_enablement(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1297,9 +1399,10 @@ impl WarpAgentPageView {
             let active = prefs.get_active_base_model(&scope, ctx, None);
             (active.id.clone(), active.provider)
         };
-        if LLMPreferences::as_ref(ctx)
-            .custom_llm_info_for_id(&active_id)
-            .is_some()
+        if is_codex_app_server_model_id(&active_id)
+            || LLMPreferences::as_ref(ctx)
+                .custom_llm_info_for_id(&active_id)
+                .is_some()
         {
             return true;
         }
@@ -2154,7 +2257,13 @@ impl WarpAgentPageView {
                     }
                 },
             ),
-            vec![Box::new(ApiKeysWidget::new(ctx))],
+            {
+                let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = Vec::new();
+                #[cfg(not(target_family = "wasm"))]
+                widgets.push(Box::new(CodexChatGptWidget::default()));
+                widgets.push(Box::new(ApiKeysWidget::new(ctx)));
+                widgets
+            },
         ));
 
         categories.push(Category::new(
@@ -2361,6 +2470,12 @@ pub enum WarpAgentPageAction {
     OpenAddCustomRouter,
 
     // Custom inference
+    #[cfg(not(target_family = "wasm"))]
+    RefreshCodexAccount,
+    #[cfg(not(target_family = "wasm"))]
+    ConnectCodexChatGpt,
+    #[cfg(not(target_family = "wasm"))]
+    DisconnectCodexChatGpt,
     OpenAddCustomEndpointModal,
     OpenEditCustomEndpointModal(usize),
     ConnectGrokSubscription,
@@ -2869,6 +2984,12 @@ impl TypedActionView for WarpAgentPageView {
             WarpAgentPageAction::OpenAddCustomRouter => {
                 ctx.emit(WarpAgentPageEvent::OpenCustomRouterEditor(None));
             }
+            #[cfg(not(target_family = "wasm"))]
+            WarpAgentPageAction::RefreshCodexAccount => self.refresh_codex_account(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            WarpAgentPageAction::ConnectCodexChatGpt => self.connect_codex_chatgpt(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            WarpAgentPageAction::DisconnectCodexChatGpt => self.disconnect_codex_chatgpt(ctx),
             WarpAgentPageAction::OpenAddCustomEndpointModal => {
                 self.show_add_custom_endpoint_modal(ctx);
             }
@@ -4780,6 +4901,168 @@ struct ProviderApiKeyEditor {
     provider: LLMProvider,
     editor: ViewHandle<EditorView>,
     team_key_info_tooltip: MouseStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct CodexChatGptWidget {
+    button_mouse_state: MouseStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SettingsWidget for CodexChatGptWidget {
+    type View = WarpAgentPageView;
+
+    fn search_terms(&self) -> &str {
+        "codex chatgpt openai app server embedded agent provider login account"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        _app: &AppContext,
+    ) -> Box<dyn Element> {
+        let (status_text, button_label, action, disabled, button_variant) =
+            match &view.codex_account_state {
+                CodexAccountState::Checking => (
+                    "Checking the local Codex account…".to_owned(),
+                    "Checking…",
+                    None,
+                    true,
+                    ButtonVariant::Secondary,
+                ),
+                CodexAccountState::SignedOut => (
+                    "Not connected. Sign in with ChatGPT to use Codex in the embedded Warp Agent."
+                        .to_owned(),
+                    "Connect ChatGPT",
+                    Some(WarpAgentPageAction::ConnectCodexChatGpt),
+                    false,
+                    ButtonVariant::Accent,
+                ),
+                CodexAccountState::SignedIn { summary } => (
+                    summary.clone(),
+                    "Disconnect",
+                    Some(WarpAgentPageAction::DisconnectCodexChatGpt),
+                    false,
+                    ButtonVariant::Secondary,
+                ),
+                CodexAccountState::Connecting => (
+                    "Complete ChatGPT sign-in in your browser…".to_owned(),
+                    "Connecting…",
+                    None,
+                    true,
+                    ButtonVariant::Accent,
+                ),
+                CodexAccountState::Disconnecting => (
+                    "Disconnecting the Codex account…".to_owned(),
+                    "Disconnecting…",
+                    None,
+                    true,
+                    ButtonVariant::Secondary,
+                ),
+                CodexAccountState::Unavailable { error } => (
+                    format!("Codex app-server is unavailable: {error}"),
+                    "Retry",
+                    Some(WarpAgentPageAction::RefreshCodexAccount),
+                    false,
+                    ButtonVariant::Secondary,
+                ),
+            };
+
+        let foreground = appearance.theme().foreground();
+        let subtext = appearance
+            .theme()
+            .sub_text_color(appearance.theme().surface_1());
+        let title = Text::new(
+            "Codex with ChatGPT",
+            appearance.ui_font_family(),
+            CONTENT_FONT_SIZE,
+        )
+        .with_color(foreground.into())
+        .finish();
+        let status = Text::new(
+            status_text,
+            appearance.ui_font_family(),
+            appearance.ui_font_size(),
+        )
+        .with_color(subtext.into())
+        .finish();
+        let icon = ConstrainedBox::new(Icon::OpenAILogo.to_warpui_icon(foreground).finish())
+            .with_width(24.)
+            .with_height(24.)
+            .finish();
+
+        let mut button = appearance
+            .ui_builder()
+            .button(button_variant, self.button_mouse_state.clone())
+            .with_text_label(button_label.to_owned())
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                padding: Some(Coords::uniform(6.).left(12.).right(12.)),
+                ..Default::default()
+            });
+        if disabled {
+            button = button.disabled();
+        }
+        let button = button.build();
+        let button = if let Some(action) = action {
+            button
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(action.clone());
+                })
+                .finish()
+        } else {
+            button.finish()
+        };
+
+        let header = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Container::new(icon).with_margin_right(10.).finish())
+                    .with_child(
+                        Shrinkable::new(
+                            1.,
+                            Flex::column()
+                                .with_child(title)
+                                .with_child(Container::new(status).with_margin_top(3.).finish())
+                                .finish(),
+                        )
+                        .finish(),
+                    )
+                    .finish(),
+            )
+            .with_child(Container::new(button).with_margin_left(12.).finish())
+            .finish();
+
+        let description = appearance
+            .ui_builder()
+            .paragraph(
+                "Select `Codex (ChatGPT)` in the Cmd+Return Agent model picker. Warp routes that embedded conversation directly through the installed `codex app-server`; Codex owns the credentials and Warp does not copy its access or refresh tokens.",
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(appearance.ui_font_size()),
+                font_color: Some(subtext.into_solid()),
+                margin: Some(
+                    Coords::default()
+                        .top(8.)
+                        .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
+                        .right(styles::TOGGLE_WIDTH_MARGIN),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_child(header)
+            .with_child(description)
+            .finish()
+    }
 }
 
 struct ApiKeysWidget {
