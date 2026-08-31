@@ -74,7 +74,6 @@ function warp_completions_hex_encode
   string replace -a -- ' ' '' (string join '' $od_output)
 end
 
-# warp_hex_decode_string decodes a string hex-encoded by warp_hex_encode_string.
 function warp_hex_decode_string
     if test (count $argv) -eq 0 -o -z "$argv[1]"
         return
@@ -632,9 +631,7 @@ function warp_run_external_ctrl_t_widget
 end
 
 # Exclude the ctrl-r/ctrl-t external handoff helpers (see warp_run_external_ctrl_r_widget/
-# warp_run_external_ctrl_t_widget above) from the user's history: they're Warp-internal
-# invocations, not commands the user meant to run again later, and leaving the ctrl-r one in
-# history would otherwise pollute the very history list this feature searches on the next ctrl-r.
+# warp_run_external_ctrl_t_widget above) from the user's history.
 #
 # fish only supports a single fish_should_add_to_history function (unlike zsh's array of
 # zshaddhistory hooks or bash's PROMPT_COMMAND-style stacking), so compose with any

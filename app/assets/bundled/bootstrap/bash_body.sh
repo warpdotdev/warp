@@ -1449,13 +1449,6 @@ esac
     # Add patterns to ignore in-band commands in shell history, while preserving the user's
     # HISTIGNORE value which may been set in an RC file sourced above. It is important to
     # ensure that this happens _after_ the user's RC files have been sourced.
-    #
-    # This also excludes the ctrl-r/ctrl-t external handoff helpers (see
-    # warp_run_external_ctrl_r_widget/warp_run_external_ctrl_t_widget above): they're
-    # Warp-internal invocations, not commands the user meant to run again later, and leaving
-    # them in history would otherwise pollute the very history list ctrl-r searches (and, for
-    # the ctrl-t helper specifically, still show up as ordinary shell history noise even though
-    # ctrl-t itself doesn't search shell history).
     if [[ ! -z $HISTIGNORE ]]; then
         HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*:$HISTIGNORE"
     else
