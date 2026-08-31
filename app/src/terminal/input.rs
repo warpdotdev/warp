@@ -1878,97 +1878,35 @@ pub struct Input {
     /// completes and the buffer would normally be cleared.
     input_contents_before_prompt_chip_command: Option<String>,
 
-    /// State for an in-flight external ctrl-r handoff started by
-    /// [`Self::trigger_external_ctrl_r_history_search`], if any. `None` once the handoff's block
-    /// has completed (see [`Self::handle_block_completed_event`]) or no handoff is in flight.
-    pending_ctrl_r_handoff: Option<PendingCtrlRHandoff>,
-
-    /// State for an in-flight external ctrl-t handoff started by
-    /// [`Self::trigger_external_ctrl_t_file_search`], if any. `None` once the handoff's block
-    /// has completed (see [`Self::handle_block_completed_event`]) or no handoff is in flight.
-    pending_ctrl_t_handoff: Option<PendingCtrlTHandoff>,
+    pending_shell_widget_handoff: Option<PendingShellWidgetHandoff>,
 }
 
-/// State for an in-flight external ctrl-r handoff (see
-/// [`Input::trigger_external_ctrl_r_history_search`]). `session_id` and `token` let
-/// [`Input::set_external_ctrl_r_selection`] verify that an `ExternalCtrlRSelection` hook is
-/// actually the reply to this handoff, rather than an unsolicited write to the pty (e.g. from an
-/// unrelated command) or a stale reply to a handoff whose block has already completed.
-struct PendingCtrlRHandoff {
-    session_id: SessionId,
-    token: String,
-    /// Text to restore into the editor when the handoff's block completes: the buffer the user
-    /// had before ctrl-r, or the selected command once a matching selection is applied.
-    restore_text: String,
-    /// The block running the synthetic helper command. Hidden once it completes (see
-    /// [`Input::handle_block_completed_event`]) so it doesn't clutter scrollback.
-    block_id: BlockId,
-}
-
-impl PendingCtrlRHandoff {
-    /// Applies `selection` to `pending` if it matches an in-flight handoff for `session_id` and
-    /// `token`; otherwise leaves `pending` untouched. This covers both unsolicited selections (no
-    /// handoff was ever started, so `pending` is `None`) and stale ones (a reply to a handoff
-    /// whose block already completed -- clearing `pending` -- or to a different handoff).
-    fn maybe_apply_selection(
-        pending: &mut Option<Self>,
-        session_id: SessionId,
-        token: &str,
-        selection: &str,
-    ) {
-        let Some(handoff) = pending else {
-            return;
-        };
-        if handoff.session_id != session_id || handoff.token != token {
-            return;
-        }
-        if !selection.is_empty() {
-            handoff.restore_text = selection.to_string();
-        }
-    }
-}
-
-/// How a completed ctrl-t handoff's selection is landed into the editor buffer (see
-/// [`Input::trigger_external_ctrl_t_file_search`]). Chosen at trigger time from the session's
-/// shell type: fish's `fzf-file-widget` is invoked directly and already performs its own
-/// token-aware replacement, so it returns the whole new line rather than a fragment to splice in
-/// at a fixed offset the way bash/zsh's plain-path selection does.
+/// How a completed ctrl-t handoff lands its selection. Fish's widget already performs token-aware
+/// replacement and reports the whole line; bash/zsh report a path fragment to splice at the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CtrlTApplyMode {
-    /// Insert the selection into `original_buffer` at `cursor_offset` (bash, zsh).
     Splice,
-    /// Replace the buffer wholesale with the selection (fish).
     Replace,
 }
 
-/// State for an in-flight external ctrl-t handoff (see
-/// [`Input::trigger_external_ctrl_t_file_search`]). Unlike ctrl-r, which replaces the entire
-/// buffer with the selection, ctrl-t inserts the selection into the buffer the user had before
-/// the handoff, at the cursor position ctrl-t was pressed at -- so this snapshots the original
-/// buffer and cursor offset separately from the (initially absent) selection.
-struct PendingCtrlTHandoff {
-    session_id: SessionId,
-    token: String,
-    /// The buffer the user had before ctrl-t was pressed, restored verbatim on cancel (or as the
-    /// base the selection is inserted into, on a completed selection).
-    original_buffer: String,
-    /// The byte offset within `original_buffer` that the selection is inserted at.
-    cursor_offset: ByteOffset,
-    /// The selected path(s), once a matching `ExternalCtrlTSelection` hook supplies one. `None`
-    /// while no selection has arrived yet, or the user cancelled without selecting anything.
-    insertion: Option<String>,
-    /// The block running the synthetic helper command. Hidden once it completes (see
-    /// [`Input::handle_block_completed_event`]) so it doesn't clutter scrollback.
-    block_id: BlockId,
-    /// How `insertion` should be landed into the buffer once it arrives; see [`CtrlTApplyMode`].
-    apply_mode: CtrlTApplyMode,
+enum ShellWidgetHandoffKind {
+    CtrlR,
+    CtrlT {
+        apply_mode: CtrlTApplyMode,
+        cursor_offset: ByteOffset,
+    },
 }
 
-impl PendingCtrlTHandoff {
-    /// Applies `selection` to `pending` if it matches an in-flight handoff for `session_id` and
-    /// `token`; otherwise leaves `pending` untouched. Mirrors
-    /// [`PendingCtrlRHandoff::maybe_apply_selection`] -- see its comment for why this guards
-    /// against unsolicited and stale selections.
+struct PendingShellWidgetHandoff {
+    session_id: SessionId,
+    token: String,
+    original_buffer: String,
+    selection: Option<String>,
+    block_id: BlockId,
+    kind: ShellWidgetHandoffKind,
+}
+
+impl PendingShellWidgetHandoff {
     fn maybe_apply_selection(
         pending: &mut Option<Self>,
         session_id: SessionId,
@@ -1982,7 +1920,21 @@ impl PendingCtrlTHandoff {
             return;
         }
         if !selection.is_empty() {
-            handoff.insertion = Some(selection.to_string());
+            handoff.selection = Some(selection.to_string());
+        }
+    }
+
+    fn restore_text(&self) -> &str {
+        match (&self.kind, &self.selection) {
+            (ShellWidgetHandoffKind::CtrlR, Some(selection)) => selection,
+            (
+                ShellWidgetHandoffKind::CtrlT {
+                    apply_mode: CtrlTApplyMode::Replace,
+                    ..
+                },
+                Some(selection),
+            ) => selection,
+            _ => &self.original_buffer,
         }
     }
 }
@@ -4259,8 +4211,7 @@ impl Input {
             cloud_mode_composer_slash_command_data_source,
             ephemeral_message_model,
             input_contents_before_prompt_chip_command: None,
-            pending_ctrl_r_handoff: None,
-            pending_ctrl_t_handoff: None,
+            pending_shell_widget_handoff: None,
         };
 
         #[cfg(feature = "local_fs")]
@@ -7792,30 +7743,27 @@ impl Input {
             ctx,
         );
         if started {
-            self.pending_ctrl_r_handoff = Some(PendingCtrlRHandoff {
+            self.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
                 session_id,
                 token,
-                restore_text: current_input,
+                original_buffer: current_input,
+                selection: None,
                 block_id,
+                kind: ShellWidgetHandoffKind::CtrlR,
             });
         }
         started
     }
 
-    /// Called when the shell reports the command selected in the external ctrl-r history search
-    /// (fzf/atuin). Applies the selection only if `session_id` and `token` match an in-flight
-    /// handoff this session started (see [`PendingCtrlRHandoff`]); otherwise ignores it, including
-    /// unsolicited selections and stale replies to a handoff whose block already completed. A
-    /// no-op on an empty (but matching) `selection` -- the user cancelled without selecting
-    /// anything, so the previously snapshotted buffer stays queued for restoration.
+    /// Applies `selection` only if `session_id` and `token` match the in-flight handoff.
     pub fn set_external_ctrl_r_selection(
         &mut self,
         session_id: SessionId,
         token: &str,
         selection: &str,
     ) {
-        PendingCtrlRHandoff::maybe_apply_selection(
-            &mut self.pending_ctrl_r_handoff,
+        PendingShellWidgetHandoff::maybe_apply_selection(
+            &mut self.pending_shell_widget_handoff,
             session_id,
             token,
             selection,
@@ -7868,31 +7816,30 @@ impl Input {
             ctx,
         );
         if started {
-            self.pending_ctrl_t_handoff = Some(PendingCtrlTHandoff {
+            self.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
                 session_id,
                 token,
                 original_buffer,
-                cursor_offset,
-                insertion: None,
+                selection: None,
                 block_id,
-                apply_mode,
+                kind: ShellWidgetHandoffKind::CtrlT {
+                    apply_mode,
+                    cursor_offset,
+                },
             });
         }
         started
     }
 
-    /// Called when the shell reports the path(s) selected in the external ctrl-t file search
-    /// (fzf). Applies the selection only if `session_id` and `token` match an in-flight handoff
-    /// this session started (see [`PendingCtrlTHandoff`]); otherwise ignores it, mirroring
-    /// [`Self::set_external_ctrl_r_selection`].
+    /// Applies `selection` only if `session_id` and `token` match the in-flight handoff.
     pub fn set_external_ctrl_t_selection(
         &mut self,
         session_id: SessionId,
         token: &str,
         selection: &str,
     ) {
-        PendingCtrlTHandoff::maybe_apply_selection(
-            &mut self.pending_ctrl_t_handoff,
+        PendingShellWidgetHandoff::maybe_apply_selection(
+            &mut self.pending_shell_widget_handoff,
             session_id,
             token,
             selection,
@@ -15760,24 +15707,11 @@ impl Input {
                 && !cloud_setup_pre_first_exchange
                 && !self.has_queued_command_in_flight(ctx);
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
-            // Prefer a prompt-chip restore (e.g. `cd`) over a ctrl-r/ctrl-t handoff restore; these
-            // cannot both be pending for the same block in practice. Taking
-            // `pending_ctrl_r_handoff`/`pending_ctrl_t_handoff` here also ends that handoff: any
-            // `ExternalCtrlRSelection`/`ExternalCtrlTSelection` hook that arrives after this point
-            // is treated as stale and ignored (see `PendingCtrlRHandoff`/`PendingCtrlTHandoff`).
-            let completed_ctrl_r_handoff = self
-                .pending_ctrl_r_handoff
+            // Prefer a prompt-chip restore (e.g. `cd`) over a shell-widget handoff restore.
+            let completed_handoff = self
+                .pending_shell_widget_handoff
                 .take_if(|handoff| handoff.block_id == block_completed_event.block_id);
-            if let Some(handoff) = &completed_ctrl_r_handoff {
-                self.model
-                    .lock()
-                    .block_list_mut()
-                    .hide_block(&handoff.block_id);
-            }
-            let completed_ctrl_t_handoff = self
-                .pending_ctrl_t_handoff
-                .take_if(|handoff| handoff.block_id == block_completed_event.block_id);
-            if let Some(handoff) = &completed_ctrl_t_handoff {
+            if let Some(handoff) = &completed_handoff {
                 self.model
                     .lock()
                     .block_list_mut()
@@ -15786,18 +15720,10 @@ impl Input {
             let pending_input_restore = self
                 .input_contents_before_prompt_chip_command
                 .take()
-                .or_else(|| completed_ctrl_r_handoff.map(|handoff| handoff.restore_text))
                 .or_else(|| {
-                    completed_ctrl_t_handoff.as_ref().map(|handoff| {
-                        // In `Replace` mode the shell's own widget already performed the
-                        // token-aware replacement, so its selection *is* the finished buffer;
-                        // landing it as the base text (rather than `original_buffer`, then
-                        // splicing) avoids reconstructing what the widget already built.
-                        match (handoff.apply_mode, &handoff.insertion) {
-                            (CtrlTApplyMode::Replace, Some(insertion)) => insertion.clone(),
-                            _ => handoff.original_buffer.clone(),
-                        }
-                    })
+                    completed_handoff
+                        .as_ref()
+                        .map(|handoff| handoff.restore_text().to_string())
                 });
 
             if should_clear_buffer {
@@ -15815,28 +15741,34 @@ impl Input {
                     if let Some(restore_text) = pending_input_restore {
                         self.editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text(&restore_text, ctx);
-                            // A ctrl-t handoff restores the pre-handoff buffer above, then (unlike
-                            // ctrl-r) either splices its selection in at the captured cursor
-                            // offset, or -- for `Replace` mode -- leaves the already-finished
-                            // buffer set above as-is, since the widget placed its own cursor
-                            // position and there is nothing left to splice. Either mode instead
-                            // moves the cursor back to the captured offset on cancel.
-                            if let Some(handoff) = &completed_ctrl_t_handoff {
-                                match (handoff.apply_mode, &handoff.insertion) {
-                                    (CtrlTApplyMode::Splice, Some(insertion)) => editor
-                                        .select_and_replace(
-                                            insertion,
-                                            [handoff.cursor_offset..handoff.cursor_offset],
-                                            PlainTextEditorViewAction::InsertSelectedText,
-                                            ctx,
-                                        ),
-                                    (CtrlTApplyMode::Replace, Some(_)) => {}
-                                    (CtrlTApplyMode::Splice | CtrlTApplyMode::Replace, None) => {
+                            if let Some(handoff) = &completed_handoff {
+                                match (&handoff.kind, &handoff.selection) {
+                                    (
+                                        ShellWidgetHandoffKind::CtrlT {
+                                            apply_mode: CtrlTApplyMode::Splice,
+                                            cursor_offset,
+                                        },
+                                        Some(insertion),
+                                    ) => editor.select_and_replace(
+                                        insertion,
+                                        [*cursor_offset..*cursor_offset],
+                                        PlainTextEditorViewAction::InsertSelectedText,
+                                        ctx,
+                                    ),
+                                    (
+                                        ShellWidgetHandoffKind::CtrlT {
+                                            apply_mode: CtrlTApplyMode::Replace,
+                                            ..
+                                        },
+                                        Some(_),
+                                    ) => {}
+                                    (ShellWidgetHandoffKind::CtrlT { cursor_offset, .. }, None) => {
                                         editor.select_ranges_by_byte_offset(
-                                            [handoff.cursor_offset..handoff.cursor_offset],
+                                            [*cursor_offset..*cursor_offset],
                                             ctx,
                                         )
                                     }
+                                    (ShellWidgetHandoffKind::CtrlR, _) => {}
                                 }
                             }
                         });

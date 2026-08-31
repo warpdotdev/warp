@@ -76,7 +76,18 @@ end
 
 # warp_hex_decode_string decodes a string hex-encoded by warp_hex_encode_string.
 function warp_hex_decode_string
-  printf '%b' (string replace --all --regex '(..)' '\\\\x$1' -- "$argv")
+    if test (count $argv) -eq 0 -o -z "$argv[1]"
+        return
+    end
+    set -l hex $argv[1]
+    set -l escaped ''
+    set -l i 1
+    while test $i -le (string length -- $hex)
+        set -l pair (string sub -s $i -l 2 -- $hex)
+        set escaped "$escaped\\x$pair"
+        set i (math $i + 2)
+    end
+    printf '%b' $escaped
 end
 
 # A list of PIDs for running in-band command(s). This is used to kill running

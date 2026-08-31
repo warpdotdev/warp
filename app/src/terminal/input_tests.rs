@@ -116,179 +116,94 @@ use crate::{
     ReferralThemeStatus, experiments,
 };
 
-#[test]
-fn external_ctrl_r_selection_matching_session_and_token_is_applied() {
-    let mut pending = Some(PendingCtrlRHandoff {
+fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
+    PendingShellWidgetHandoff {
         session_id: SessionId::from(1),
         token: "tok-1".to_string(),
-        restore_text: "draft".to_string(),
+        original_buffer: "draft".to_string(),
+        selection: None,
         block_id: BlockId::new(),
-    });
-    PendingCtrlRHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(1),
-        "tok-1",
-        "echo selected",
-    );
-    assert_eq!(pending.unwrap().restore_text, "echo selected");
+        kind: ShellWidgetHandoffKind::CtrlR,
+    }
 }
 
-#[test]
-fn unsolicited_external_ctrl_r_selection_without_a_pending_handoff_is_ignored() {
-    // No handoff was ever started (e.g. a stray write to the pty unrelated to ctrl-r): there's
-    // nothing to apply the selection to, and no handoff gets created.
-    let mut pending: Option<PendingCtrlRHandoff> = None;
-    PendingCtrlRHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(1),
-        "tok-1",
-        "echo selected",
-    );
-    assert!(pending.is_none());
-}
-
-#[test]
-fn stale_external_ctrl_r_selection_with_mismatched_token_is_ignored() {
-    let mut pending = Some(PendingCtrlRHandoff {
-        session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
-        restore_text: "draft".to_string(),
-        block_id: BlockId::new(),
-    });
-    PendingCtrlRHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(1),
-        "some-other-token",
-        "echo selected",
-    );
-    assert_eq!(pending.unwrap().restore_text, "draft");
-}
-
-#[test]
-fn stale_external_ctrl_r_selection_with_mismatched_session_is_ignored() {
-    let mut pending = Some(PendingCtrlRHandoff {
-        session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
-        restore_text: "draft".to_string(),
-        block_id: BlockId::new(),
-    });
-    PendingCtrlRHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(2),
-        "tok-1",
-        "echo selected",
-    );
-    assert_eq!(pending.unwrap().restore_text, "draft");
-}
-
-#[test]
-fn cancelled_external_ctrl_r_selection_with_empty_buffer_keeps_original_draft() {
-    // An empty buffer means the handoff matched but the user cancelled without selecting
-    // anything, so the originally snapshotted draft text must be preserved, not cleared.
-    let mut pending = Some(PendingCtrlRHandoff {
-        session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
-        restore_text: "draft".to_string(),
-        block_id: BlockId::new(),
-    });
-    PendingCtrlRHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "tok-1", "");
-    assert_eq!(pending.unwrap().restore_text, "draft");
-}
-
-#[test]
-fn external_ctrl_t_selection_matching_session_and_token_is_applied() {
-    let mut pending = Some(PendingCtrlTHandoff {
+fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
+    PendingShellWidgetHandoff {
         session_id: SessionId::from(1),
         token: "tok-1".to_string(),
         original_buffer: "echo ".to_string(),
-        cursor_offset: ByteOffset::from(5),
-        insertion: None,
+        selection: None,
         block_id: BlockId::new(),
-        apply_mode: CtrlTApplyMode::Splice,
-    });
-    PendingCtrlTHandoff::maybe_apply_selection(
+        kind: ShellWidgetHandoffKind::CtrlT {
+            apply_mode: CtrlTApplyMode::Splice,
+            cursor_offset: ByteOffset::from(5),
+        },
+    }
+}
+
+#[test]
+fn matching_shell_widget_handoff_selection_is_applied() {
+    let mut pending = Some(pending_ctrl_r_handoff());
+    PendingShellWidgetHandoff::maybe_apply_selection(
+        &mut pending,
+        SessionId::from(1),
+        "tok-1",
+        "echo selected",
+    );
+    assert_eq!(pending.as_ref().unwrap().restore_text(), "echo selected");
+
+    let mut pending = Some(pending_ctrl_t_handoff());
+    PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(1),
         "tok-1",
         "selected/file.txt",
     );
     assert_eq!(
-        pending.unwrap().insertion,
+        pending.unwrap().selection,
         Some("selected/file.txt".to_string())
     );
 }
 
 #[test]
-fn unsolicited_external_ctrl_t_selection_without_a_pending_handoff_is_ignored() {
-    // No handoff was ever started (e.g. a stray write to the pty unrelated to ctrl-t): there's
-    // nothing to apply the selection to, and no handoff gets created.
-    let mut pending: Option<PendingCtrlTHandoff> = None;
-    PendingCtrlTHandoff::maybe_apply_selection(
+fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
+    let mut pending: Option<PendingShellWidgetHandoff> = None;
+    PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(1),
         "tok-1",
-        "selected/file.txt",
+        "echo selected",
     );
     assert!(pending.is_none());
-}
 
-#[test]
-fn stale_external_ctrl_t_selection_with_mismatched_token_is_ignored() {
-    let mut pending = Some(PendingCtrlTHandoff {
-        session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
-        original_buffer: "echo ".to_string(),
-        cursor_offset: ByteOffset::from(5),
-        insertion: None,
-        block_id: BlockId::new(),
-        apply_mode: CtrlTApplyMode::Splice,
-    });
-    PendingCtrlTHandoff::maybe_apply_selection(
+    let mut pending = Some(pending_ctrl_r_handoff());
+    PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(1),
         "some-other-token",
-        "selected/file.txt",
+        "echo selected",
     );
-    assert_eq!(pending.unwrap().insertion, None);
-}
+    assert_eq!(pending.as_ref().unwrap().restore_text(), "draft");
 
-#[test]
-fn stale_external_ctrl_t_selection_with_mismatched_session_is_ignored() {
-    let mut pending = Some(PendingCtrlTHandoff {
-        session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
-        original_buffer: "echo ".to_string(),
-        cursor_offset: ByteOffset::from(5),
-        insertion: None,
-        block_id: BlockId::new(),
-        apply_mode: CtrlTApplyMode::Splice,
-    });
-    PendingCtrlTHandoff::maybe_apply_selection(
+    let mut pending = Some(pending_ctrl_r_handoff());
+    PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(2),
         "tok-1",
-        "selected/file.txt",
+        "echo selected",
     );
-    assert_eq!(pending.unwrap().insertion, None);
+    assert_eq!(pending.unwrap().restore_text(), "draft");
 }
 
 #[test]
-fn cancelled_external_ctrl_t_selection_with_empty_buffer_leaves_insertion_unset() {
-    // An empty buffer means the handoff matched but the user cancelled without selecting
-    // anything, so `insertion` must stay `None` rather than becoming `Some("")`: the landing
-    // logic (see Input::handle_block_completed_event) treats `None` as "just restore the
-    // cursor position", which a `Some("")` would bypass by splicing in empty text instead.
-    let mut pending = Some(PendingCtrlTHandoff {
-        session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
-        original_buffer: "echo ".to_string(),
-        cursor_offset: ByteOffset::from(5),
-        insertion: None,
-        block_id: BlockId::new(),
-        apply_mode: CtrlTApplyMode::Splice,
-    });
-    PendingCtrlTHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "tok-1", "");
-    assert_eq!(pending.unwrap().insertion, None);
+fn empty_shell_widget_handoff_selection_keeps_original_buffer() {
+    let mut pending = Some(pending_ctrl_r_handoff());
+    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "tok-1", "");
+    assert_eq!(pending.unwrap().restore_text(), "draft");
+
+    let mut pending = Some(pending_ctrl_t_handoff());
+    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "tok-1", "");
+    assert_eq!(pending.unwrap().selection, None);
 }
 
 #[test]
@@ -2046,14 +1961,16 @@ async fn complete_ctrl_t_handoff(
     let input = terminal.read(app, |view, _| view.input().clone());
     let block_id = BlockId::new();
     input.update(app, |input, ctx| {
-        input.pending_ctrl_t_handoff = Some(PendingCtrlTHandoff {
+        input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
             session_id: SessionId::from(1),
             token: "tok-1".to_string(),
             original_buffer: original_buffer.to_string(),
-            cursor_offset: ByteOffset::from(cursor_offset),
-            insertion: insertion.map(str::to_string),
+            selection: insertion.map(str::to_string),
             block_id: block_id.clone(),
-            apply_mode,
+            kind: ShellWidgetHandoffKind::CtrlT {
+                apply_mode,
+                cursor_offset: ByteOffset::from(cursor_offset),
+            },
         });
         input.deferred_remote_operations.latest_block_id = BlockId::new();
         input.handle_block_completed_event(
@@ -2077,6 +1994,57 @@ async fn complete_ctrl_t_handoff(
                 .end_byte_index_of_last_selection(ctx),
         )
     })
+}
+
+async fn complete_ctrl_r_handoff(
+    app: &mut App,
+    original_buffer: &str,
+    selection: Option<&str>,
+) -> String {
+    let terminal = add_window_with_bootstrapped_terminal(app, None, None).await;
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let block_id = BlockId::new();
+    input.update(app, |input, ctx| {
+        input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
+            session_id: SessionId::from(1),
+            token: "tok-1".to_string(),
+            original_buffer: original_buffer.to_string(),
+            selection: selection.map(str::to_string),
+            block_id: block_id.clone(),
+            kind: ShellWidgetHandoffKind::CtrlR,
+        });
+        input.deferred_remote_operations.latest_block_id = BlockId::new();
+        input.handle_block_completed_event(
+            BlockCompletedEvent {
+                block_type: user_block_completed_for_test(original_buffer),
+                num_secrets_obfuscated: 0,
+                block_index: BlockIndex::zero(),
+                block_id,
+                session_id: None,
+                restored_block_was_local: None,
+            },
+            ctx,
+        );
+    });
+    input.read(app, |input, ctx| input.buffer_text(ctx))
+}
+
+#[test]
+fn ctrl_r_handoff_replace_lands_selection() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let buffer = complete_ctrl_r_handoff(&mut app, "draft", Some("echo selected")).await;
+        assert_eq!(buffer, "echo selected");
+    });
+}
+
+#[test]
+fn ctrl_r_handoff_cancel_restores_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let buffer = complete_ctrl_r_handoff(&mut app, "draft", None).await;
+        assert_eq!(buffer, "draft");
+    });
 }
 
 #[test]
