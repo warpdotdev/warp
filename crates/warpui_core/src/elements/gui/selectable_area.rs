@@ -14,7 +14,7 @@ use string_offset::ByteOffset;
 
 use super::{
     AfterLayoutContext, AppContext, ColorU, Element, Event, EventContext, LayoutContext,
-    PaintContext, Point, SelectionFragment, SizeConstraint,
+    PaintContext, Point, SelectionFragment, SizeConstraint, ZIndex,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::text::word_boundaries::WordBoundariesPolicy;
@@ -42,6 +42,14 @@ pub struct SelectableArea {
     smart_select_fn: Option<SmartSelectFn>,
 
     should_support_rect_select: bool,
+
+    // Upper bound of z-indexes painted by the child subtree. Mouse-down hit testing must use
+    // this instead of the origin's z-index: child content that starts its own layers (e.g. a
+    // clipped scrollable inside a collapsible reasoning block) hit-records at higher z-indexes,
+    // so testing at the origin z would treat clicks on that content as covered and refuse to
+    // start a selection. Overlays painted after this element land on even higher layers, so
+    // they still register as covering.
+    child_max_z_index: Option<ZIndex>,
 }
 
 /// Stores the selection start and end points. We include the option to store
@@ -233,6 +241,7 @@ impl SelectableArea {
             word_boundaries_policy: WordBoundariesPolicy::Default,
             smart_select_fn: None,
             should_support_rect_select: false,
+            child_max_z_index: None,
         }
     }
 
@@ -650,6 +659,7 @@ impl Element for SelectableArea {
         ctx.current_selection = self.get_current_selection_absolute();
         self.child.paint(origin, ctx, app);
         ctx.current_selection = None;
+        self.child_max_z_index = Some(ctx.scene.max_active_z_index());
     }
 
     fn dispatch_event(
@@ -675,7 +685,8 @@ impl Element for SelectableArea {
             event.raw_event(),
             Event::LeftMouseDown { .. } | Event::RightMouseDown { .. }
         ) && self
-            .z_index()
+            .child_max_z_index
+            .or_else(|| self.z_index())
             .is_some_and(|z_index| event.at_z_index(z_index, ctx).is_none())
         {
             return false;
@@ -755,3 +766,7 @@ impl Element for SelectableArea {
         self.origin
     }
 }
+
+#[cfg(test)]
+#[path = "selectable_area_tests.rs"]
+mod tests;
