@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartRecordingResult, StopRecordingResult, UseComputerResult,
+    RecordingStarted, RecordingStopped, RequestComputerUseResult, ScreenshotSource,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -1370,32 +1370,34 @@ pub(crate) fn convert_tool_call_result_to_input(
             let use_computer_result =
                 match &result.result {
                     Some(api::use_computer_result::Result::Success(success)) => {
-                        // A screenshot whose bytes were offloaded to object storage arrives
-                        // with the `StoredRef` source variant; it converts to no inline
-                        // image while the ref is carried alongside for on-demand fetching.
-                        let stored_screenshot_ref =
-                            success.screenshot.as_ref().and_then(|s| match &s.source {
-                                Some(api::raw_image::Source::StoredRef(stored_ref)) => {
-                                    Some(stored_ref.clone())
-                                }
-                                Some(api::raw_image::Source::Data(_)) | None => None,
-                            });
-                        let screenshot = success.screenshot.as_ref().and_then(|s| {
-                            let data = match &s.source {
-                                Some(api::raw_image::Source::Data(data)) => data.clone(),
-                                Some(api::raw_image::Source::StoredRef(_)) => return None,
-                                None => Vec::new(),
-                            };
+                        let screenshot = success.screenshot.as_ref().map(|s| {
                             // The original dimensions are not preserved through the API, so
                             // we use the current dimensions for both.
-                            Some(computer_use::Screenshot {
-                                width: s.width as usize,
-                                height: s.height as usize,
-                                original_width: s.width as usize,
-                                original_height: s.height as usize,
-                                data,
-                                mime_type: s.mime_type.clone().into(),
-                            })
+                            let inline = |data| {
+                                ScreenshotSource::Inline(computer_use::Screenshot {
+                                    width: s.width as usize,
+                                    height: s.height as usize,
+                                    original_width: s.width as usize,
+                                    original_height: s.height as usize,
+                                    data,
+                                    mime_type: s.mime_type.clone().into(),
+                                })
+                            };
+                            match &s.source {
+                                Some(api::raw_image::Source::Data(data)) => inline(data.clone()),
+                                // A screenshot whose bytes were offloaded to object storage
+                                // arrives with the `StoredRef` source variant; the ref is
+                                // carried for on-demand fetching.
+                                Some(api::raw_image::Source::StoredRef(stored_ref)) => {
+                                    ScreenshotSource::Stored {
+                                        stored_ref: stored_ref.clone(),
+                                        mime_type: s.mime_type.clone(),
+                                        width: s.width,
+                                        height: s.height,
+                                    }
+                                }
+                                None => inline(Vec::new()),
+                            }
                         });
                         let cursor_position = success
                             .cursor_position
@@ -1417,13 +1419,10 @@ pub(crate) fn convert_tool_call_result_to_input(
                             }
                         });
                         UseComputerResult::Success {
-                            result: computer_use::ActionResult {
-                                screenshot,
-                                cursor_position,
-                                windows,
-                                captured_window,
-                            },
-                            stored_screenshot_ref,
+                            screenshot,
+                            cursor_position,
+                            windows,
+                            captured_window,
                         }
                     }
                     Some(api::use_computer_result::Result::Error(error)) => {

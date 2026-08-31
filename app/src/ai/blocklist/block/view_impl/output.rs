@@ -3211,10 +3211,10 @@ fn render_use_computer(
                 &result.result,
                 AIAgentActionResultType::UseComputer(
                     crate::ai::agent::UseComputerResult::Success {
-                        result: action_result,
-                        stored_screenshot_ref,
+                        screenshot: Some(_),
+                        ..
                     }
-                ) if action_result.screenshot.is_some() || stored_screenshot_ref.is_some()
+                )
             )
         });
 

@@ -99,9 +99,9 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
     CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
     MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, ServerOutputId,
-    SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult, SuggestedLoggingId,
-    SummarizationType, TodoOperation,
+    RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource, SearchCodebaseResult,
+    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
+    SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -7147,16 +7147,13 @@ impl TypedActionView for AIBlock {
                         continue;
                     };
                     let AIAgentActionResultType::UseComputer(
-                        crate::ai::agent::UseComputerResult::Success {
-                            result: action_result,
-                            stored_screenshot_ref,
-                        },
+                        crate::ai::agent::UseComputerResult::Success { screenshot, .. },
                     ) = &result.result
                     else {
                         continue;
                     };
-                    match (&action_result.screenshot, stored_screenshot_ref) {
-                        (Some(screenshot), _) => {
+                    match screenshot {
+                        Some(ScreenshotSource::Inline(screenshot)) => {
                             let asset_id = screenshot_asset_id(action_id);
                             AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
                                 asset_cache.insert_raw_asset_bytes::<ImageType>(
@@ -7167,10 +7164,10 @@ impl TypedActionView for AIBlock {
                             });
                             screenshot_actions.push((action_id.clone(), None));
                         }
-                        (None, Some(stored_ref)) => {
+                        Some(ScreenshotSource::Stored { stored_ref, .. }) => {
                             screenshot_actions.push((action_id.clone(), Some(stored_ref.clone())));
                         }
-                        (None, None) => {}
+                        None => {}
                     }
                 }
 

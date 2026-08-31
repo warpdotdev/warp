@@ -1207,23 +1207,49 @@ impl Display for ReadSkillResult {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseComputerResult {
-    /// Computer use succeeded, with one result per requested action.
+    /// Computer use succeeded. Mirrors the wire `Success` message.
     Success {
-        result: computer_use::ActionResult,
-        /// Present when the screenshot bytes live in Warp-managed object
-        /// storage instead of inline in `result`.
-        stored_screenshot_ref: Option<StoredScreenshotRef>,
+        screenshot: Option<ScreenshotSource>,
+        cursor_position: Option<computer_use::Vector2I>,
+        /// The on-screen windows, refreshed after the actions ran, so the caller always has a
+        /// fresh list to target next. Empty on platforms without window enumeration.
+        windows: Vec<computer_use::WindowInfo>,
+        /// Metadata about the captured window, populated only when a window target was
+        /// screenshotted, so window-local coordinates map onto the screenshot image.
+        captured_window: Option<computer_use::CapturedWindow>,
     },
     Error(String),
     Cancelled,
 }
 
+/// Where a computer-use screenshot's bytes live, mirroring the wire's
+/// `RawImage.source` oneof.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenshotSource {
+    /// The bytes are inline on the client.
+    Inline(computer_use::Screenshot),
+    /// The bytes live in Warp-managed object storage and must be fetched via a
+    /// signed URL.
+    Stored {
+        stored_ref: StoredScreenshotRef,
+        /// MIME type of the stored image (e.g. "image/png").
+        mime_type: String,
+        /// The width of the stored image, in pixels.
+        width: i32,
+        /// The height of the stored image, in pixels.
+        height: i32,
+    },
+}
+
 impl UseComputerResult {
-    /// Builds a success result whose screenshot bytes (if any) are inline.
+    /// Builds a success result from a locally captured action result, whose
+    /// screenshot bytes (if any) are inline.
     pub fn success(result: computer_use::ActionResult) -> Self {
         Self::Success {
-            result,
-            stored_screenshot_ref: None,
+            screenshot: result.screenshot.map(ScreenshotSource::Inline),
+            cursor_position: result.cursor_position,
+            windows: result.windows,
+            captured_window: result.captured_window,
         }
     }
 }

@@ -7,8 +7,8 @@ use warp_multi_agent_api as api;
 use super::{ExtractMessagesError, Task, TaskMessageContext, UpdateTaskError};
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentExchange, AIAgentExchangeId, AIAgentInput,
-    AIAgentOutput, AIAgentOutputStatus, FinishedAIAgentOutput, MessageId, Shared, TaskId,
-    UseComputerResult,
+    AIAgentOutput, AIAgentOutputStatus, FinishedAIAgentOutput, MessageId, ScreenshotSource, Shared,
+    TaskId, UseComputerResult,
 };
 use crate::ai::llms::LLMId;
 use crate::test_util::ai_agent_tasks::{
@@ -697,20 +697,15 @@ fn test_upsert_message_cross_exchange_swaps_screenshot_bytes_for_stored_ref() {
     let AIAgentInput::ActionResult { result, .. } = &earlier_exchange.input[0] else {
         panic!("expected an action result input");
     };
-    let AIAgentActionResultType::UseComputer(UseComputerResult::Success {
-        result: action_result,
-        stored_screenshot_ref,
-    }) = &result.result
+    let AIAgentActionResultType::UseComputer(UseComputerResult::Success { screenshot, .. }) =
+        &result.result
     else {
         panic!("expected a use computer success result");
     };
-    assert!(action_result.screenshot.is_none());
-    assert_eq!(
-        stored_screenshot_ref
-            .as_ref()
-            .map(|stored_ref| stored_ref.screenshot_uid.as_str()),
-        Some("shot-1")
-    );
+    let Some(ScreenshotSource::Stored { stored_ref, .. }) = screenshot else {
+        panic!("expected a stored-ref screenshot source");
+    };
+    assert_eq!(stored_ref.screenshot_uid, "shot-1");
 }
 
 #[test]
