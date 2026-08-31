@@ -759,6 +759,7 @@ impl LocalRepoMetadataModel {
             .map(|repo_path| (repo_path, path.to_path_buf()))
     }
 
+    #[cfg(feature = "local_fs")]
     fn find_repository_for_path_string(&self, path_str: &str) -> Option<StandardizedPath> {
         self.repositories
             .iter()

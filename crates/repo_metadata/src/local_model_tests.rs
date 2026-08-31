@@ -3686,9 +3686,8 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
     });
 }
 
-/// Deletions reported through a symlinked (non-canonical) path are attributed
-/// to the repo registered under its canonicalized root and removed from the
-/// tree. Regression test for /tmp → /private/tmp on macOS.
+/// A deletion delivered through a symlinked alias must remove the canonical
+/// tree entry (regression for /tmp → /private/tmp on macOS).
 #[cfg(all(unix, feature = "local_fs"))]
 #[test]
 fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
