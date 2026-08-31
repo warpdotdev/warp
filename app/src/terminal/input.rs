@@ -6640,8 +6640,12 @@ impl Input {
                 let command = render_prompt_chip_shell_command(command, shell_type);
                 // Snapshot the current input so we can restore it after the command completes.
                 let current_input = self.buffer_text(ctx);
-                if self.try_execute_command_from_source(&command, CommandExecutionSource::User, ctx)
-                {
+                if self.try_execute_command_from_source(
+                    &command,
+                    CommandExecutionSource::User,
+                    true,
+                    ctx,
+                ) {
                     self.cancel_active_conversation(ctx, CancellationReason::UserCommandExecuted);
                     if !current_input.is_empty() {
                         self.input_contents_before_prompt_chip_command = Some(current_input);
@@ -7712,6 +7716,7 @@ impl Input {
                 ai_metadata: None,
                 preserve_input,
             },
+            true,
             ctx,
         )
     }
@@ -7779,8 +7784,13 @@ impl Input {
         let block_id = self.model.lock().block_list().active_block_id().clone();
         let token = Uuid::new_v4().to_string();
         let command = format!(" {helper_command} {token}");
-        let started =
-            self.try_execute_command_from_source(&command, CommandExecutionSource::User, ctx);
+        // Not a command the user ran: Warp's history is independent of the shell histfile.
+        let started = self.try_execute_command_from_source(
+            &command,
+            CommandExecutionSource::User,
+            false,
+            ctx,
+        );
         if started {
             self.pending_ctrl_r_handoff = Some(PendingCtrlRHandoff {
                 session_id,
@@ -7850,8 +7860,13 @@ impl Input {
                 ctrl_t_draft_arg(&original_buffer, cursor_offset)
             ));
         }
-        let started =
-            self.try_execute_command_from_source(&command, CommandExecutionSource::User, ctx);
+        // Not a command the user ran: Warp's history is independent of the shell histfile.
+        let started = self.try_execute_command_from_source(
+            &command,
+            CommandExecutionSource::User,
+            false,
+            ctx,
+        );
         if started {
             self.pending_ctrl_t_handoff = Some(PendingCtrlTHandoff {
                 session_id,
@@ -7927,10 +7942,11 @@ impl Input {
             self.try_execute_command_from_source(
                 command,
                 CommandExecutionSource::QueuedCommand,
+                true,
                 ctx,
             )
         } else {
-            self.try_execute_command_from_source(command, CommandExecutionSource::User, ctx)
+            self.try_execute_command_from_source(command, CommandExecutionSource::User, true, ctx)
         }
     }
 
@@ -7974,6 +7990,7 @@ impl Input {
         &mut self,
         command: &str,
         source: CommandExecutionSource,
+        should_add_command_to_history: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
@@ -8131,7 +8148,12 @@ impl Input {
                 });
             }
 
-            self.start_block_and_write_command_to_pty(command, source, ctx);
+            self.start_block_and_write_command_to_pty(
+                command,
+                source,
+                should_add_command_to_history,
+                ctx,
+            );
             did_execute = true;
         } else {
             // We don't want to submit the command if precmd has not
@@ -15975,6 +15997,7 @@ impl Input {
         &mut self,
         command: &str,
         source: CommandExecutionSource,
+        should_add_command_to_history: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         start_trace!("command_execution:start");
@@ -16050,7 +16073,7 @@ impl Input {
             workflow_id,
             session_id,
             workflow_command,
-            should_add_command_to_history: true,
+            should_add_command_to_history,
             source,
         })));
         end_trace!();
