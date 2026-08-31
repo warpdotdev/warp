@@ -262,3 +262,46 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
 }
+
+// Regression coverage for #15624: rich input over a CLI agent used to skip the
+// whole cursor cell, which dropped the glyph underneath the agent's own cursor
+// (Claude Code's `Press up to edit queued messages` rendered as `ress`). The
+// cell is now always painted; `hide_cursor_cell` only suppresses Warp's own
+// cursor — the overlay via `draw_cursor`, and the contrast colouring here.
+#[test]
+fn test_cursor_contrast_is_suppressed_only_where_warp_draws_the_cursor() {
+    use crate::terminal::model::ansi::CursorShape;
+    use grid_renderer::should_apply_cursor_contrast;
+
+    // Rich input closed: an on-cell block cursor is Warp's to draw, so the
+    // cell keeps its cursor colouring.
+    assert!(should_apply_cursor_contrast(
+        false,
+        true,
+        Some(CursorShape::Block)
+    ));
+
+    // Rich input open. Warp suppresses its cursor either way, so contrast must
+    // be off — whether the agent draws its own cursor (SHOW_CURSOR off, e.g.
+    // Claude Code) or relies on Warp's (SHOW_CURSOR on, e.g. OpenCode/Codex).
+    // Neither case may skip the cell itself; that is what #15624 was.
+    assert!(!should_apply_cursor_contrast(true, true, None));
+    assert!(!should_apply_cursor_contrast(
+        true,
+        true,
+        Some(CursorShape::Block)
+    ));
+
+    // No cursor on this cell, and non-block shapes never take the colouring.
+    assert!(!should_apply_cursor_contrast(
+        false,
+        false,
+        Some(CursorShape::Block)
+    ));
+    assert!(!should_apply_cursor_contrast(
+        false,
+        true,
+        Some(CursorShape::Underline)
+    ));
+    assert!(!should_apply_cursor_contrast(false, true, None));
+}
