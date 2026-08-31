@@ -1905,15 +1905,12 @@ struct PendingShellWidgetHandoff {
 }
 
 impl PendingShellWidgetHandoff {
-    fn maybe_apply_selection(pending: &mut Option<Self>, session_id: SessionId, selection: &str) {
-        let Some(handoff) = pending else {
-            return;
-        };
-        if handoff.session_id != session_id {
+    fn maybe_apply_selection(&mut self, session_id: SessionId, selection: &str) {
+        if self.session_id != session_id {
             return;
         }
         if !selection.is_empty() {
-            handoff.selection = Some(selection.to_string());
+            self.selection = Some(selection.to_string());
         }
     }
 
@@ -7747,11 +7744,10 @@ impl Input {
 
     /// Applies `selection` only if `session_id` matches the in-flight handoff.
     pub fn set_external_shell_widget_selection(&mut self, session_id: SessionId, selection: &str) {
-        PendingShellWidgetHandoff::maybe_apply_selection(
-            &mut self.pending_shell_widget_handoff,
-            session_id,
-            selection,
-        );
+        let Some(handoff) = self.pending_shell_widget_handoff.as_mut() else {
+            return;
+        };
+        handoff.maybe_apply_selection(session_id, selection);
     }
 
     /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and

@@ -141,54 +141,31 @@ fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
 
 #[test]
 fn matching_shell_widget_handoff_selection_is_applied() {
-    let mut pending = Some(pending_ctrl_r_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(1),
-        "echo selected",
-    );
-    assert_eq!(pending.as_ref().unwrap().restore_text(), "echo selected");
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "echo selected");
+    assert_eq!(handoff.restore_text(), "echo selected");
 
-    let mut pending = Some(pending_ctrl_t_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(1),
-        "selected/file.txt",
-    );
-    assert_eq!(
-        pending.unwrap().selection,
-        Some("selected/file.txt".to_string())
-    );
+    let mut handoff = pending_ctrl_t_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "selected/file.txt");
+    assert_eq!(handoff.selection, Some("selected/file.txt".to_string()));
 }
 
 #[test]
 fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
-    let mut pending: Option<PendingShellWidgetHandoff> = None;
-    PendingShellWidgetHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(1),
-        "echo selected",
-    );
-    assert!(pending.is_none());
-
-    let mut pending = Some(pending_ctrl_r_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(
-        &mut pending,
-        SessionId::from(2),
-        "echo selected",
-    );
-    assert_eq!(pending.unwrap().restore_text(), "draft");
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(2), "echo selected");
+    assert_eq!(handoff.restore_text(), "draft");
 }
 
 #[test]
 fn empty_shell_widget_handoff_selection_keeps_original_buffer() {
-    let mut pending = Some(pending_ctrl_r_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "");
-    assert_eq!(pending.unwrap().restore_text(), "draft");
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "");
+    assert_eq!(handoff.restore_text(), "draft");
 
-    let mut pending = Some(pending_ctrl_t_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "");
-    assert_eq!(pending.unwrap().selection, None);
+    let mut handoff = pending_ctrl_t_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "");
+    assert_eq!(handoff.selection, None);
 }
 
 #[test]
