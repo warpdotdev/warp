@@ -987,7 +987,7 @@ pub enum FeatureFlag {
     /// instead of Skim's raw fuzzy-match score against the whole query as a single pattern.
     /// Disabling this is a full return to the pre-APP-5650 history search behavior, not an
     /// approximation of it.
-    HistorySearchPriorRanking,
+    HistorySearchRankingV2,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1065,12 +1065,14 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
-    FeatureFlag::HistorySearchPriorRanking,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::NativeShellCompletions];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::NativeShellCompletions,
+    FeatureFlag::HistorySearchRankingV2,
+];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

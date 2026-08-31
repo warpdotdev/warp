@@ -102,7 +102,7 @@ pub(crate) fn fuzzy_match_history(
     snapshot: HistorySnapshot,
 ) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
 {
-    if !FeatureFlag::HistorySearchPriorRanking.is_enabled() {
+    if !FeatureFlag::HistorySearchRankingV2.is_enabled() {
         return fuzzy_match_history_legacy(snapshot);
     }
 
@@ -156,7 +156,7 @@ pub(crate) fn fuzzy_match_history(
     })
 }
 
-/// The pre-[`FeatureFlag::HistorySearchPriorRanking`] matching behavior: the whole query as a
+/// The pre-[`FeatureFlag::HistorySearchRankingV2`] matching behavior: the whole query as a
 /// single fuzzy pattern against each command (no whitespace tokenization), scored directly by
 /// Skim's raw match score with no history priors and no floor. This is the exact code path
 /// history search used before APP-5650, not an approximation of it, so disabling the flag is a

@@ -1035,6 +1035,7 @@ git_credential_refresh = []
 prompt_cache_expiry_warning = []
 osc_hyperlinks = []
 ctrl_c_cancels_third_party_harness = []
+history_search_ranking_v2 = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

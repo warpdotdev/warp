@@ -177,9 +177,9 @@ fn test_add_source_to_mixer() {
 #[test]
 fn test_exact_matches_rank_above_prefix_matches() {
     // The exact-whole-line bonus that makes this ordering deterministic only exists behind
-    // `HistorySearchPriorRanking`; raw Skim alone scores a whole-line match identically to a
+    // `HistorySearchRankingV2`; raw Skim alone scores a whole-line match identically to a
     // prefix match of a longer command (see `EXACT_WHOLE_LINE_BONUS`'s doc comment).
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -253,7 +253,7 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
     // last/closest to the input) -- e.g. an older command whose session_id happens to match
     // would leapfrog a newer one. Priors must be ignored entirely for a blank query, not just
     // let through the floor.
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -322,7 +322,7 @@ fn test_current_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
     // recently executed command's `pwd` reflects the directory it was run *from*, not the live
     // cwd after it runs (e.g. immediately after `cd /repo`). The cwd prior must use the live cwd
     // passed in from the caller, not fall back to guessing from history entries.
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -389,7 +389,7 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
     // Search: workflows, saved prompts (agent-mode workflows), and AI prompt history. (Env-var
     // collections use the same weighted-field scoring as workflows; not covered here since wiring
     // one through this mixer needs a full `CloudEnvVarCollection` object.)
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -511,7 +511,7 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
 fn test_no_query_filter_runs_all_data_sources() {
     // See `test_exact_matches_rank_above_prefix_matches`: the exact-whole-line bonus that makes
     // "git" deterministically outrank "git checkout" only exists behind this flag.
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -564,7 +564,7 @@ fn test_no_query_filter_runs_all_data_sources() {
 fn test_query_filter_limits_data_sources() {
     // See `test_exact_matches_rank_above_prefix_matches`: the exact-whole-line bonus that makes
     // "git" deterministically outrank "git checkout" only exists behind this flag.
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(true);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -888,12 +888,12 @@ fn test_async_source_without_include_in_unfiltered_skipped_on_empty_filters() {
 
 #[test]
 fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
-    // With `HistorySearchPriorRanking` disabled, history search must be a genuine return to the
+    // With `HistorySearchRankingV2` disabled, history search must be a genuine return to the
     // pre-APP-5650 behavior: the whole query matched as a single fuzzy pattern, not AND-ed
     // whitespace-separated tokens. "cd hi orm" only matches "cd ~/projects/history_orm" via
     // tokenization (see `rank_tests.rs`'s `whitespace_tokenization_ands_terms_across_the_command`),
     // so it must produce no results when the flag is off.
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(false);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -929,10 +929,10 @@ fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
 
 #[test]
 fn test_history_search_disabled_flag_scores_raw_skim_with_no_priors() {
-    // With `HistorySearchPriorRanking` disabled, a match's score must be exactly the raw Skim
+    // With `HistorySearchRankingV2` disabled, a match's score must be exactly the raw Skim
     // score fuzzy_match produces, unaffected by the exact-whole-line bonus or any history prior
     // (recency, frequency, session, cwd, exit status) -- even for an old, low-priority entry.
-    let _flag = FeatureFlag::HistorySearchPriorRanking.override_enabled(false);
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
