@@ -409,6 +409,31 @@ fn the_shell_stays_out_of_the_tree_when_another_job_holds_the_terminal() {
     assert!(!tree.contains(&shell_pid));
 }
 
+/// Non-unix targets have no notion of a foreground process group, so the
+/// sampler always calls `command_process_tree` with `None` there. The shell
+/// must still show up in the tree, or a builtin running in the shell looks
+/// like an empty, hung process tree.
+#[cfg(not(unix))]
+#[test]
+fn the_shell_joins_the_tree_on_the_no_pgid_path() {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+    use super::sampler::command_process_tree;
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true, /* remove_dead_processes */
+        ProcessRefreshKind::nothing(),
+    );
+
+    // This test's own process stands in for the shell.
+    let shell_pid = Pid::from_u32(std::process::id());
+
+    let tree = command_process_tree(&system, shell_pid, None);
+    assert!(tree.contains(&shell_pid));
+}
+
 #[test]
 fn aggregate_state_prefers_the_strongest_evidence_of_progress() {
     assert_eq!(

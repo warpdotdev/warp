@@ -140,7 +140,8 @@ cfg_if::cfg_if! {
         ///
         /// The shell itself joins the tree when it holds the terminal, since builtins
         /// and shell functions run in that process and would otherwise leave the tree
-        /// looking empty while the command is busy.
+        /// looking empty while the command is busy. See [`no_pgid_tree`] for how the
+        /// shell is folded in when no foreground process group is available at all.
         pub(super) fn command_process_tree(
             system: &System,
             shell_pid: Pid,
@@ -149,7 +150,7 @@ cfg_if::cfg_if! {
             let descendants = descendants_of(system, shell_pid);
 
             let Some(pgid) = foreground_pgid else {
-                return descendants.into_iter().collect();
+                return no_pgid_tree(descendants, shell_pid);
             };
 
             let mut in_foreground_group: Vec<Pid> = descendants
@@ -168,6 +169,24 @@ cfg_if::cfg_if! {
                 return descendants.into_iter().collect();
             }
             in_foreground_group
+        }
+
+        /// The tree to report when no foreground process group is available.
+        ///
+        /// On unix this means the pgid lookup itself failed, so the narrower
+        /// descendants-only set is kept rather than risking a stale group. Non-unix
+        /// targets have no notion of a foreground process group at all, so this is
+        /// the normal, only path there, and the shell is folded in unconditionally.
+        #[cfg(unix)]
+        fn no_pgid_tree(descendants: HashSet<Pid>, _shell_pid: Pid) -> Vec<Pid> {
+            descendants.into_iter().collect()
+        }
+
+        #[cfg(not(unix))]
+        fn no_pgid_tree(descendants: HashSet<Pid>, shell_pid: Pid) -> Vec<Pid> {
+            let mut tree: Vec<Pid> = descendants.into_iter().collect();
+            tree.push(shell_pid);
+            tree
         }
 
         /// Every process descended from `pid`, excluding `pid` itself.
