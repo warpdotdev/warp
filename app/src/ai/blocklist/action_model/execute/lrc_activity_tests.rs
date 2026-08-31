@@ -409,6 +409,48 @@ fn the_shell_stays_out_of_the_tree_when_another_job_holds_the_terminal() {
     assert!(!tree.contains(&shell_pid));
 }
 
+/// A missing foreground group on Unix is an unreadable pty, not evidence that
+/// the shell itself is the command, so the tree stays descendants-only.
+#[cfg(unix)]
+#[test]
+fn the_shell_stays_out_of_the_tree_when_the_foreground_group_is_unknown() {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+    use super::sampler::command_process_tree;
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true, /* remove_dead_processes */
+        ProcessRefreshKind::nothing(),
+    );
+
+    let shell_pid = Pid::from_u32(std::process::id());
+    let tree = command_process_tree(&system, shell_pid, None);
+    assert!(!tree.contains(&shell_pid));
+}
+
+/// Windows has no process groups, so `foreground_pgid` is always `None`. The
+/// shell must still join the tree; otherwise builtins look like an empty job.
+#[cfg(windows)]
+#[test]
+fn the_shell_joins_the_tree_when_process_groups_are_unavailable() {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+    use super::sampler::command_process_tree;
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true, /* remove_dead_processes */
+        ProcessRefreshKind::nothing(),
+    );
+
+    let shell_pid = Pid::from_u32(std::process::id());
+    let tree = command_process_tree(&system, shell_pid, None);
+    assert!(tree.contains(&shell_pid));
+}
+
 #[test]
 fn aggregate_state_prefers_the_strongest_evidence_of_progress() {
     assert_eq!(

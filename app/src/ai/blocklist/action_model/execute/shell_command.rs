@@ -1059,12 +1059,9 @@ enum ActionResult {
 
 /// Whether liveness signals are trustworthy enough to collect on this platform.
 ///
-/// Windows cannot narrow the process tree to the foreground job, and wasm has
-/// no local process table to read at all.
+/// Wasm has no local process table to read at all.
 fn lrc_activity_signals_supported() -> bool {
-    !cfg!(target_os = "windows")
-        && !cfg!(target_family = "wasm")
-        && FeatureFlag::LrcActivitySignal.is_enabled()
+    !cfg!(target_family = "wasm") && FeatureFlag::LrcActivitySignal.is_enabled()
 }
 
 /// Keeps liveness sampling armed for as long as an action that might report a
