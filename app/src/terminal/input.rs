@@ -1929,6 +1929,11 @@ impl PendingShellWidgetHandoff {
     }
 }
 
+/// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
+/// own external history widget. Must match the function name defined in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
+
 struct AmbientAgentViewState {
     view_model: ModelHandle<AmbientAgentViewModel>,
     #[allow(dead_code)]
@@ -7686,10 +7691,10 @@ impl Input {
         self.try_execute_command_with_options(command, false, ctx)
     }
 
-    /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and
-    /// submitted it, snapshotting the current buffer contents so they're restored once the
-    /// command's block completes -- unless [`Self::set_external_shell_widget_selection`] supplies
-    /// a selected command in the meantime. Returns `true` if the command was started.
+    /// Runs [`EXTERNAL_CTRL_R_HELPER_COMMAND`] (a bootstrap-installed shell function) as if the
+    /// user had typed and submitted it, snapshotting the current buffer contents so they're restored
+    /// once the command's block completes -- unless [`Self::set_external_shell_widget_selection`]
+    /// supplies a selected command in the meantime. Returns `true` if the command was started.
     ///
     /// The command is prefixed with a leading space, honoring the "ignorespace" convention that
     /// bash/zsh support and atuin explicitly implements itself (independent of the shell's own
@@ -7699,17 +7704,13 @@ impl Input {
     /// atuin records through its own preexec hook straight into its own database, which none of
     /// that touches, so without this it would otherwise show up in the very history list this
     /// feature exists to search.
-    pub fn trigger_external_ctrl_r_history_search(
-        &mut self,
-        helper_command: &str,
-        ctx: &mut ViewContext<Self>,
-    ) -> bool {
+    pub fn trigger_external_ctrl_r_history_search(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let Some(session_id) = self.active_block_session_id() else {
             return false;
         };
         let current_input = self.buffer_text(ctx);
         let block_id = self.model.lock().block_list().active_block_id().clone();
-        let command = format!(" {helper_command}");
+        let command = format!(" {EXTERNAL_CTRL_R_HELPER_COMMAND}");
         // Not a command the user ran: Warp's history is independent of the shell histfile.
         let started = self.try_execute_command_from_source(
             &command,

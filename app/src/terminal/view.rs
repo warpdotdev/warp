@@ -721,11 +721,6 @@ const WARP_MD_PATH: &str = "WARP.md";
 /// name used in `app/assets/bundled/bootstrap/zsh_body.sh`.
 const EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG: &str = "external_ctrl_r_history";
 
-/// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
-/// own external history widget. Must match the function name defined in
-/// `app/assets/bundled/bootstrap/zsh_body.sh`.
-const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
-
 /// `shell_plugins` tag reported by bootstrap when the shell's `^T` binding has been rebound away
 /// from its default line-editor binding to an external file-search widget (e.g. fzf). Independent
 /// of [`EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG`] -- a shell can have either, both, or neither, since
@@ -9256,7 +9251,7 @@ impl TerminalView {
         }
 
         self.input.update(ctx, |input, ctx| {
-            input.trigger_external_ctrl_r_history_search(EXTERNAL_CTRL_R_HELPER_COMMAND, ctx)
+            input.trigger_external_ctrl_r_history_search(ctx)
         })
     }
 
