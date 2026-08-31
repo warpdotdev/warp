@@ -430,11 +430,11 @@ fn the_shell_stays_out_of_the_tree_when_the_foreground_group_is_unknown() {
     assert!(!tree.contains(&shell_pid));
 }
 
-/// Windows has no process groups, so `foreground_pgid` is always `None`. The
-/// shell must still join the tree; otherwise builtins look like an empty job.
+/// Windows has no process groups, so `foreground_pgid` is always `None` and
+/// the tree is descendants-only — the same fallback as an unreadable Unix pgid.
 #[cfg(windows)]
 #[test]
-fn the_shell_joins_the_tree_when_process_groups_are_unavailable() {
+fn the_shell_stays_out_of_the_tree_when_process_groups_are_unavailable() {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
     use super::sampler::command_process_tree;
@@ -448,7 +448,7 @@ fn the_shell_joins_the_tree_when_process_groups_are_unavailable() {
 
     let shell_pid = Pid::from_u32(std::process::id());
     let tree = command_process_tree(&system, shell_pid, None);
-    assert!(tree.contains(&shell_pid));
+    assert!(!tree.contains(&shell_pid));
 }
 
 #[test]

@@ -140,9 +140,7 @@ cfg_if::cfg_if! {
         ///
         /// The shell itself joins the tree when it holds the terminal, since builtins
         /// and shell functions run in that process and would otherwise leave the tree
-        /// looking empty while the command is busy. Platforms without process groups
-        /// always include the shell for the same reason; a Unix `None` pgid is an
-        /// unreadable group and falls back to descendants only.
+        /// looking empty while the command is busy.
         pub(super) fn command_process_tree(
             system: &System,
             shell_pid: Pid,
@@ -151,16 +149,7 @@ cfg_if::cfg_if! {
             let descendants = descendants_of(system, shell_pid);
 
             let Some(pgid) = foreground_pgid else {
-                #[cfg(unix)]
-                {
-                    return descendants.into_iter().collect();
-                }
-                #[cfg(not(unix))]
-                {
-                    let mut tree: Vec<Pid> = descendants.into_iter().collect();
-                    tree.push(shell_pid);
-                    return tree;
-                }
+                return descendants.into_iter().collect();
             };
 
             let mut in_foreground_group: Vec<Pid> = descendants
