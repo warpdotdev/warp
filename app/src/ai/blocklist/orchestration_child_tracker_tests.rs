@@ -89,6 +89,7 @@ fn seed_row(task_id: AmbientAgentTaskId) -> Box<AmbientAgentTask> {
         is_sandbox_running: false,
         last_event_sequence: None,
         children: vec![],
+        state_changed_at: None,
     })
 }
 

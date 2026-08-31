@@ -247,6 +247,13 @@ pub struct AmbientAgentTask {
     /// driver case). Empty on older servers.
     #[serde(default)]
     pub children: Vec<String>,
+
+    /// When `state` last actually changed, as reported by the server. Unlike
+    /// `updated_at`, this does not move on writes that leave `state` alone. `None`
+    /// on a server that does not report it yet, or a task that has not transitioned
+    /// since the field was introduced.
+    #[serde(default)]
+    pub state_changed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

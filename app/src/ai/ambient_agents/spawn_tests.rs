@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 
 use super::{
@@ -10,13 +10,27 @@ use super::{
 };
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
+use crate::server::server_api::ai::{
+    MockAIClient, RunFollowupResponse, SpawnAgentResponse, TaskStatusMessage,
+};
 use crate::terminal::shared_session;
 
 fn task_with(
     state: AmbientAgentTaskState,
     session_id: Option<String>,
     session_link: Option<String>,
+) -> AmbientAgentTask {
+    task_with_state_changed_at(state, session_id, session_link, None)
+}
+
+/// Like [`task_with`], but lets a test set the server's authoritative
+/// `state_changed_at` so it can exercise the timestamp-driven follow-up gating
+/// directly instead of the older stale-poll-count fallback.
+fn task_with_state_changed_at(
+    state: AmbientAgentTaskState,
+    session_id: Option<String>,
+    session_link: Option<String>,
+    state_changed_at: Option<DateTime<Utc>>,
 ) -> AmbientAgentTask {
     AmbientAgentTask {
         task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
@@ -42,6 +56,7 @@ fn task_with(
         is_sandbox_running: true,
         last_event_sequence: None,
         children: vec![],
+        state_changed_at,
     }
 }
 
@@ -92,7 +107,9 @@ async fn followup_submits_before_polling_and_ignores_previous_session_id() {
             assert_eq!(observed_run_id.to_string(), run_id().to_string());
             assert_eq!(request.message, "continue from here");
             submitted.store(true, Ordering::SeqCst);
-            Ok(())
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
         }
     });
 
@@ -197,7 +214,11 @@ async fn followup_terminal_failure_surfaces_status_message() {
     let mut mock = MockAIClient::new();
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task().returning({
         let call_count = call_count.clone();
         move |_| {
@@ -269,7 +290,11 @@ async fn followup_without_previous_session_id_accepts_joinable_session() {
 
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task()
         .times(1)
         .returning(move |_| {
@@ -330,7 +355,11 @@ async fn followup_without_previous_session_id_errors_if_run_finishes_before_sess
 
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task().returning({
         let call_count = call_count.clone();
         move |_| {
@@ -404,7 +433,11 @@ async fn followup_skips_prior_terminal_state_until_working_then_attaches() {
     let mut mock = MockAIClient::new();
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task().returning({
         let call_count = call_count.clone();
         move |_| {
@@ -491,7 +524,11 @@ async fn followup_skips_prior_terminal_then_surfaces_real_failure() {
     let mut mock = MockAIClient::new();
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task().returning({
         let call_count = call_count.clone();
         move |_| {
@@ -579,7 +616,11 @@ async fn followup_cancelled_state_breaks_skip_loop() {
     let mut mock = MockAIClient::new();
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task()
         .times(1)
         .returning(|_| Ok(task_with(AmbientAgentTaskState::Cancelled, None, None)));
@@ -628,7 +669,11 @@ async fn followup_bounded_skip_for_server_stall() {
     let mut mock = MockAIClient::new();
     mock.expect_submit_run_followup()
         .times(1)
-        .returning(|_, _| Ok(()));
+        .returning(|_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(Utc::now()),
+            })
+        });
     mock.expect_get_ambient_agent_task().returning({
         let call_count = call_count.clone();
         move |_| {
@@ -674,6 +719,237 @@ async fn followup_bounded_skip_for_server_stall() {
     assert_eq!(
         call_count.load(Ordering::SeqCst),
         MAX_STALE_POLLS_BEFORE_FAILURE + 1
+    );
+}
+
+#[tokio::test]
+async fn followup_authoritative_timestamp_skips_stale_observation_immediately() {
+    use futures::StreamExt;
+
+    // With `state_changed_at` available, a residual observation of the prior run's
+    // terminal state is identified by its timestamp alone -- no need to wait for a
+    // working state to be observed first, and no reliance on the stale-poll budget.
+    let submitted_at = Utc::now();
+    let before_submission = submitted_at - chrono::Duration::seconds(30);
+    let after_submission = submitted_at + chrono::Duration::seconds(1);
+    let new_session_id = SessionId::new();
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let mut mock = MockAIClient::new();
+    // The server's response carries this exact timestamp, so the test controls
+    // `submitted_at` precisely rather than approximating it with a second `Utc::now()`
+    // call on the client side.
+    mock.expect_submit_run_followup()
+        .times(1)
+        .returning(move |_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(submitted_at),
+            })
+        });
+    mock.expect_get_ambient_agent_task().returning({
+        let call_count = call_count.clone();
+        move |_| {
+            let idx = call_count.fetch_add(1, Ordering::SeqCst);
+            match idx {
+                0 => {
+                    // The prior run's residual terminal state, timestamped before the
+                    // follow-up was submitted -- must be skipped without emitting it.
+                    let mut task = task_with_state_changed_at(
+                        AmbientAgentTaskState::Blocked,
+                        None,
+                        None,
+                        Some(before_submission),
+                    );
+                    task.status_message = Some(TaskStatusMessage {
+                        message: "prior agent question".to_string(),
+                        error_code: None,
+                    });
+                    Ok(task)
+                }
+                _ => Ok(task_with_state_changed_at(
+                    AmbientAgentTaskState::InProgress,
+                    Some(new_session_id.to_string()),
+                    Some("https://example.com/session/new".to_string()),
+                    Some(after_submission),
+                )),
+            }
+        }
+    });
+
+    let ai_client = Arc::new(mock);
+    let mut stream = Box::pin(submit_run_followup(
+        "continue".to_string(),
+        run_id(),
+        Some(SessionId::new()),
+        ai_client,
+        None,
+    ));
+
+    let event = stream
+        .next()
+        .await
+        .expect("expected state changed")
+        .expect("expected ok");
+    assert!(
+        matches!(
+            event,
+            AmbientAgentEvent::StateChanged {
+                state: AmbientAgentTaskState::InProgress,
+                ..
+            }
+        ),
+        "the residual Blocked observation must never surface; expected the first emission to be InProgress, got {event:?}"
+    );
+
+    let event = stream
+        .next()
+        .await
+        .expect("expected session started")
+        .expect("expected ok");
+    let AmbientAgentEvent::SessionStarted { session_join_info } = event else {
+        panic!("Expected SessionStarted event, got {event:?}");
+    };
+    assert_eq!(session_join_info.session_id, Some(new_session_id));
+    assert!(stream.next().await.is_none());
+    // Only two polls: the timestamp resolved the residual observation on sight, with no
+    // need to burn through the stale-poll budget.
+    assert_eq!(call_count.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn followup_authoritative_timestamp_surfaces_real_spawn_failure_after_followup() {
+    use futures::StreamExt;
+
+    // The motivating case: the follow-up's own execution fails to spawn. Because the new
+    // failure's `state_changed_at` is fresh (at/after submission), it must surface as the
+    // real error immediately -- never as the synthetic "did not start in time" message,
+    // and without ever having observed a working state in between.
+    let submitted_at = Utc::now();
+    let before_submission = submitted_at - chrono::Duration::seconds(30);
+    let after_submission = submitted_at + chrono::Duration::seconds(1);
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let mut mock = MockAIClient::new();
+    mock.expect_submit_run_followup()
+        .times(1)
+        .returning(move |_, _| {
+            Ok(RunFollowupResponse {
+                accepted_at: Some(submitted_at),
+            })
+        });
+    mock.expect_get_ambient_agent_task().returning({
+        let call_count = call_count.clone();
+        move |_| {
+            let idx = call_count.fetch_add(1, Ordering::SeqCst);
+            match idx {
+                0 => Ok(task_with_state_changed_at(
+                    AmbientAgentTaskState::Failed,
+                    None,
+                    None,
+                    Some(before_submission),
+                )),
+                _ => {
+                    let mut task = task_with_state_changed_at(
+                        AmbientAgentTaskState::Error,
+                        None,
+                        None,
+                        Some(after_submission),
+                    );
+                    task.status_message = Some(TaskStatusMessage {
+                        message: "failed to provision runtime".to_string(),
+                        error_code: None,
+                    });
+                    Ok(task)
+                }
+            }
+        }
+    });
+
+    let ai_client = Arc::new(mock);
+    let mut stream = Box::pin(submit_run_followup(
+        "continue".to_string(),
+        run_id(),
+        None,
+        ai_client,
+        None,
+    ));
+
+    let event = stream
+        .next()
+        .await
+        .expect("expected state changed")
+        .expect("expected ok");
+    assert!(matches!(
+        event,
+        AmbientAgentEvent::StateChanged {
+            state: AmbientAgentTaskState::Error,
+            ..
+        }
+    ));
+
+    let err = stream
+        .next()
+        .await
+        .expect("expected terminal error")
+        .expect_err("expected terminal error");
+    assert_eq!(
+        err.to_string(),
+        "failed to provision runtime",
+        "a genuine spawn failure after the follow-up must surface its real message, not the synthetic timeout"
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn followup_without_accepted_at_falls_back_to_working_state_heuristic() {
+    use futures::StreamExt;
+
+    // An older server accepts the follow-up but doesn't report `accepted_at` (either
+    // omitting the field or returning no body at all -- RunFollowupResponse::default()
+    // covers both). With no server timestamp to compare against, the client must fall
+    // back to the pre-timestamp heuristic (wait for a working state) instead of treating
+    // the missing timestamp as an error or misjudging the residual prior-run state.
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let mut mock = MockAIClient::new();
+    mock.expect_submit_run_followup()
+        .times(1)
+        .returning(|_, _| Ok(RunFollowupResponse::default()));
+    mock.expect_get_ambient_agent_task().returning({
+        let call_count = call_count.clone();
+        move |_| {
+            let idx = call_count.fetch_add(1, Ordering::SeqCst);
+            if idx == 0 {
+                // Residual observation of the prior run's terminal state. Without an
+                // `accepted_at` to compare against, the heuristic (not yet having seen a
+                // working state) must still identify this as stale and skip it.
+                Ok(task_with(AmbientAgentTaskState::Succeeded, None, None))
+            } else {
+                Ok(task_with(AmbientAgentTaskState::InProgress, None, None))
+            }
+        }
+    });
+
+    let ai_client = Arc::new(mock);
+    let mut stream = Box::pin(submit_run_followup(
+        "continue".to_string(),
+        run_id(),
+        Some(SessionId::new()),
+        ai_client,
+        None,
+    ));
+
+    let event = stream
+        .next()
+        .await
+        .expect("expected state changed")
+        .expect("expected ok");
+    assert!(
+        matches!(
+            event,
+            AmbientAgentEvent::StateChanged {
+                state: AmbientAgentTaskState::InProgress,
+                ..
+            }
+        ),
+        "the residual Succeeded observation must be skipped by the fallback heuristic; expected the first emission to be InProgress, got {event:?}"
     );
 }
 

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use chrono::{DateTime, Utc};
 use futures::{FutureExt, Stream, StreamExt, select};
 use session_sharing_protocol::common::SessionId;
 
@@ -25,12 +26,14 @@ const TASK_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(3);
 #[cfg(test)]
 const TASK_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(1);
 
-/// Maximum number of consecutive polls that may observe a non-working, non-cancelled task
-/// state for a follow-up before we give up and surface a failure. Bounds the worst-case
-/// wait when the server is wedged and never transitions the task off its prior terminal
-/// state. At the production `TASK_STATUS_POLL_INTERVAL` of 3s, 10 skipped observations
-/// is ~30s — comfortably longer than the dispatcher's `ProcessingInterval` plus typical
-/// worker claim latency.
+/// Maximum number of consecutive polls that may observe a follow-up's residual prior-run
+/// state before we give up and surface a failure. `state_changed_at` normally settles this
+/// in one poll; this is the backstop for a server that has not caught up yet (or does not
+/// report the timestamp at all, in which case it is the primary mechanism). Bounds the
+/// worst-case wait when the server is wedged and never transitions the task off its prior
+/// terminal state. At the production `TASK_STATUS_POLL_INTERVAL` of 3s, 10 skipped
+/// observations is ~30s — comfortably longer than the dispatcher's `ProcessingInterval`
+/// plus typical worker claim latency.
 const MAX_STALE_POLLS_BEFORE_FAILURE: usize = 10;
 
 /// Information about a session join link for an ambient agent task.
@@ -87,6 +90,17 @@ enum RunPollMode {
     InitialRun,
     Followup {
         previous_session_id: Option<SessionId>,
+        /// When this follow-up was accepted, by the server's own clock. Compared
+        /// against the server's `state_changed_at` on each poll so a residual
+        /// observation of the prior run's terminal state (reported before this
+        /// moment) can be told apart from a state change the follow-up's own
+        /// execution actually caused.
+        ///
+        /// `None` when an older server accepted the follow-up without reporting
+        /// `accepted_at` (either omitting the field or returning no body at all).
+        /// Without it there is nothing to compare `state_changed_at` against, so
+        /// polling falls back to the pre-timestamp heuristic instead.
+        submitted_at: Option<DateTime<Utc>>,
     },
 }
 
@@ -169,16 +183,27 @@ pub fn submit_run_followup(
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
     async_stream::stream! {
         let request = RunFollowupRequest { message };
-        if let Err(err) = ai_client.submit_run_followup(&run_id, request).await {
-            yield Err(err);
-            return;
-        }
+        // The server's own clock at acceptance: its synchronous requeue (if any) happens
+        // no earlier than this moment, so a `state_changed_at` at or after it can only
+        // belong to this follow-up's own execution, never to the prior run. Using the
+        // server's timestamp instead of a client-local one avoids misjudging that
+        // comparison when the client and server clocks have drifted apart. An older
+        // server that does not report `accepted_at` yields `None`, and polling falls
+        // back to the pre-timestamp heuristic below.
+        let submitted_at = match ai_client.submit_run_followup(&run_id, request).await {
+            Ok(response) => response.accepted_at,
+            Err(err) => {
+                yield Err(err);
+                return;
+            },
+        };
 
         let mut stream = Box::pin(poll_run_until_joinable_session(
             run_id,
             ai_client,
             RunPollMode::Followup {
                 previous_session_id,
+                submitted_at,
             },
             timeout,
         ));
@@ -203,17 +228,22 @@ fn poll_run_until_joinable_session(
             None => warpui::r#async::Timer::never(),
         });
         let mut last_state = None;
-        // For follow-ups, the server does NOT synchronously transition the task off its
-        // prior terminal state when `submit_run_followup` returns — the transition happens
-        // later, asynchronously, when the dispatcher loop picks up the newly enqueued
-        // execution and the worker claims it. If we treated the first observed state as
-        // the follow-up's outcome we'd misreport the prior run's `status_message` as a
-        // failure and end the stream, leaving the model permanently stuck in `Failed`
-        // even though the new run is actually about to start.
+        // For follow-ups, a poll can still observe the prior run's residual terminal
+        // state after the follow-up was accepted, because the server's own transition
+        // to the new execution's state may not have landed (or replicated to whatever
+        // this read hits) by the time this stream starts polling. If we treated that
+        // observation as the follow-up's outcome we'd misreport the prior run's
+        // `status_message` as a failure and end the stream, leaving the model
+        // permanently stuck in `Failed` even though the new run is actually about to
+        // start.
         //
-        // To avoid that, gate event emission for follow-ups on having observed at least
-        // one working state. Initial spawns don't need this — they start from a fresh
-        // task whose first observation reflects the spawn itself.
+        // `state_changed_at` is the authoritative signal: the server only moves it when
+        // `state` itself changes, so a value at or after `submitted_at` can only belong
+        // to a transition the follow-up caused, never to state left over from before it.
+        // A server that does not yet report it (`state_changed_at: None`) falls back to
+        // the older heuristic of waiting for a working state, kept for compatibility
+        // during rollout. Initial spawns don't need either check — they start from a
+        // fresh task whose first observation reflects the spawn itself.
         let mut seen_working_state = matches!(&mode, RunPollMode::InitialRun);
         let mut skipped_stale_polls: usize = 0;
         loop {
@@ -250,21 +280,34 @@ fn poll_run_until_joinable_session(
 
                             if task.state.is_working() {
                                 seen_working_state = true;
-                            } else if !seen_working_state
-                                && task.state != AmbientAgentTaskState::Cancelled
-                                && skipped_stale_polls < MAX_STALE_POLLS_BEFORE_FAILURE
-                            {
-                                // Likely the prior run's residual terminal state; the
-                                // server hasn't transitioned the task yet. Skip without
-                                // emitting events or ending the stream.
-                                //
-                                // Carve-outs:
-                                // - `Cancelled` always falls through: it's only reached
-                                //   via explicit user/admin/server cancellation and the
-                                //   server will never transition out of it on its own.
-                                // - After `MAX_STALE_POLLS_BEFORE_FAILURE` skipped polls
-                                //   we give up so a wedged server can't keep the stream
-                                //   alive indefinitely.
+                            }
+
+                            // A residual observation of the prior run's state: authoritatively
+                            // when both the server's `state_changed_at` and this follow-up's
+                            // `submitted_at` are known and the former predates the latter, or by
+                            // the fallback heuristic when either is unavailable (an older server
+                            // omitting one or the other). Never true for a working state, nor for
+                            // `InitialRun`.
+                            let residual_prior_state = !task.state.is_working()
+                                && match &mode {
+                                    RunPollMode::InitialRun => false,
+                                    RunPollMode::Followup { submitted_at, .. } => {
+                                        match (task.state_changed_at, submitted_at) {
+                                            (Some(state_changed_at), Some(submitted_at)) => {
+                                                state_changed_at < *submitted_at
+                                            }
+                                            _ => {
+                                                !seen_working_state
+                                                    && task.state != AmbientAgentTaskState::Cancelled
+                                            }
+                                        }
+                                    }
+                                };
+
+                            if residual_prior_state && skipped_stale_polls < MAX_STALE_POLLS_BEFORE_FAILURE {
+                                // Skip without emitting events or ending the stream: the server
+                                // hasn't reported the follow-up's own state yet. Bounded so a
+                                // wedged server can't keep the stream alive indefinitely.
                                 skipped_stale_polls += 1;
                                 continue;
                             }
@@ -279,9 +322,11 @@ fn poll_run_until_joinable_session(
 
                             if task.state.is_terminal() {
                                 if matches!(&mode, RunPollMode::Followup { .. }) {
-                                    let exhausted_stale_skips = !seen_working_state
-                                        && skipped_stale_polls >= MAX_STALE_POLLS_BEFORE_FAILURE;
-                                    let message = if exhausted_stale_skips {
+                                    // Only a residual observation that exhausted the bounded skip
+                                    // budget gets the synthetic message: everything else is a real
+                                    // outcome for the follow-up's own execution and must surface
+                                    // as such, including a genuine spawn failure.
+                                    let message = if residual_prior_state {
                                         "Cloud follow-up did not start in time".to_string()
                                     } else {
                                         task.status_message
@@ -306,9 +351,11 @@ fn poll_run_until_joinable_session(
                                         RunPollMode::InitialRun
                                         | RunPollMode::Followup {
                                             previous_session_id: None,
+                                            ..
                                         } => true,
                                         RunPollMode::Followup {
                                             previous_session_id: Some(previous_session_id),
+                                            ..
                                         } => session_join_info
                                             .session_id
                                             .as_ref()
