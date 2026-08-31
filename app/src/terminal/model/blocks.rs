@@ -1420,9 +1420,6 @@ impl BlockList {
         }
     }
 
-    /// Hides the given (possibly already-completed) block and refreshes the block heights
-    /// sumtree so the change is reflected immediately, even for a historical block whose height
-    /// entry was already committed to the sumtree.
     pub fn hide_block(&mut self, block_id: &BlockId) {
         if let Some(block) = self.mut_block_from_id(block_id) {
             block.hide();
@@ -1431,9 +1428,7 @@ impl BlockList {
         }
         self.update_blocks_and_sumtree(None, None, |_| {}, |_| {});
 
-        // update_blocks_and_sumtree doesn't itself trigger a re-draw (its other callers are
-        // driven by a GPUI context that already notifies the right view), so force one here,
-        // matching unhide_block and friends.
+        // Force a re-draw since the blocklist has changed.
         self.event_proxy.send_wakeup_event();
     }
 

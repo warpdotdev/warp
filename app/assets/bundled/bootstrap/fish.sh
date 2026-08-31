@@ -543,15 +543,9 @@ end
 
 # Reports the widget `^R` is bound to, if the user has rebound it away from fish's own
 # history search. Returns non-zero when `^R` is still on a fish default.
-#
-# `bind` lists fish's own defaults with a `--preset` flag, so any binding without it is one
-# the user (or a plugin like fzf or atuin) installed. The caller matches the reported name
-# against an exact allowlist of the widget names it knows how to invoke -- see
-# warp_run_external_ctrl_r_widget's comment.
 function warp_external_ctrl_r_widget
   # fish >= 4.0 renamed key specifications, so `bind` echoes back `ctrl-r` where earlier
-  # versions echo `\cr`. Both spellings are accepted as input by every supported version,
-  # so query with the older one and match either in the output.
+  # versions echo `\cr`.
   set -l widget ""
   for binding in (bind \cr 2>/dev/null)
     if string match --quiet -- 'bind --preset *' "$binding"
@@ -565,9 +559,7 @@ function warp_external_ctrl_r_widget
 end
 
 # Reports the widget `^T` is bound to, if the user has rebound it away from fish's default (no
-# binding at all). Returns non-zero when `^T` has no non-preset binding. See
-# warp_external_ctrl_r_widget above for why `bind` is queried with the pre-4.0 key spelling and
-# `--preset` bindings are skipped.
+# binding at all). Returns non-zero when `^T` has no non-preset binding.
 function warp_external_ctrl_t_widget
   set -l widget ""
   for binding in (bind \ct 2>/dev/null)
@@ -580,33 +572,7 @@ function warp_external_ctrl_t_widget
   echo "$widget"
 end
 
-# Runs the shell's own ctrl-r history tool (fzf or atuin, per the widget name captured in
-# $_WARP_EXTERNAL_CTRL_R_WIDGET during bootstrap) as a synthetic foreground command, so Warp's
-# existing long-running-command machinery hides the input editor and forwards keystrokes to the
-# tool's PTY-driven UI. Reports the selected command (or an empty buffer, if cancelled) via the
-# ExternalCtrlRSelection hook so Warp can insert it into the input editor without executing it.
-# The handoff token given as $argv[1] is echoed back unchanged, so Warp can confirm the hook is
-# the reply to the handoff it started rather than an unrelated write to the pty.
-#
-# For fzf, this calls the user's own bound fzf-history-widget directly (mirroring
-# warp_run_external_ctrl_t_widget's fzf-file-widget call below) rather than hand-rebuilding its
-# fzf invocation: fzf's own shell integration changes its available CLI flags and internal helper
-# functions across versions, and a hand-built invocation here previously broke outright on a
-# packaged fzf whose shell integration both lacked the `__fzf_defaults` helper it called and
-# rejected several of the flags it passed (`--wrap-sign`, `--highlight-line`, `--accept-nth`,
-# `--with-shell` are all absent from that version's own `fzf --help`) -- a version-compatibility
-# liability fzf-history-widget itself doesn't have, since it ships with the fzf release it
-# targets. fzf-history-widget replaces the whole commandline with its result, matching ctrl-r's
-# own "replace the whole input line" semantics exactly, and reads back as empty on cancel (it
-# only calls `commandline` on a successful selection); clearing the commandline afterward, as
-# warp_run_external_ctrl_t_widget's fzf-file-widget call already does, prevents its selection from
-# being queued for execution.
-#
-# $_WARP_EXTERNAL_CTRL_R_WIDGET is set during bootstrap (see warp_bootstrapped) to an exact
-# allowlist of each integration's canonical widget name -- not merely a name containing "fzf" or
-# "atuin" -- since an RC can legitimately bind ctrl-r to an unrelated fzf- or atuin-flavored
-# widget that isn't the history search below knows how to invoke. Adding another tool means
-# adding its widget name to both that allowlist and the case below.
+# Runs the shell's own ctrl-r history tool as a foreground command.
 function warp_run_external_ctrl_r_widget
   set -l warp_ctrl_r_token "$argv[1]"
   set -l result ""
@@ -614,9 +580,6 @@ function warp_run_external_ctrl_r_widget
     case 'fzf-history-widget'
       test -z "$fish_private_mode"; and builtin history merge
       fzf-history-widget
-      # Piped through `string collect`: a multi-line selection would otherwise make this `set`'s
-      # own command substitution split it into a list, which `warp_escape_json` below would then
-      # silently space-join instead of newline-join once quoted back down to a single argument.
       set result (commandline | string collect)
       commandline -r ''
     case '_atuin_search'
@@ -626,13 +589,6 @@ function warp_run_external_ctrl_r_widget
       # atuin prefixes the selection with __atuin_accept__: when `enter_accept` is on and the
       # user pressed enter. Warp always inserts without executing, so the prefix is dropped.
       set result (string replace "__atuin_accept__:" "" -- "$output" | string collect)
-      # The invocation is given a leading space (see
-      # trigger_external_ctrl_r_history_search), which atuin's own "ignorespace" exclusion
-      # honors independent of the fish_should_add_to_history exclusion above (which only keeps
-      # it out of fish's own history), so atuin never records this invocation into its own
-      # history database in the first place. We deliberately don't try to delete it after the
-      # fact if that exclusion somehow doesn't apply: `atuin search --delete` fuzzy-matches its
-      # query, so it can remove history entries we don't own.
   end
   set -l warp_escaped_selection (warp_escape_json "$result")
   set -l warp_escaped_token (warp_escape_json "$warp_ctrl_r_token")
@@ -643,30 +599,7 @@ function warp_ctrl_t_widget_result
   test "$argv[1]" = "$argv[2]"; or string collect -- "$argv[2]"
 end
 
-# Runs fzf directly against a find-style command as a synthetic foreground command, mirroring
-# warp_run_external_ctrl_r_widget above. Reports the selected path(s) (or an empty buffer, if
-# cancelled) via the ExternalCtrlTSelection hook so Warp can insert them into the input editor at
-# the cursor position, without executing anything. The handoff token given as $argv[1] is echoed
-# back unchanged, so Warp can confirm the hook is the reply to the handoff it started rather than
-# an unrelated write to the pty.
-#
-# Unlike warp_run_external_ctrl_r_widget above, this calls the user's own bound fzf-file-widget
-# directly rather than re-running fzf against an independent search command, since that function
-# is token-aware (see fzf's own __fzf_parse_commandline) and reproducing that parsing by hand
-# would either drop it or duplicate it badly.
-#
-# $argv[2] carries the real in-progress draft and cursor Warp seeds the widget with (see
-# Input::trigger_external_ctrl_t_file_search), as a single `{char_cursor}:{hex_draft}` token: hex
-# keeps the draft a single token, and combining it with the cursor avoids an empty hex field (an
-# empty draft) vanishing under the shell's own word-splitting when this invocation is typed into
-# the terminal as literal text for the shell to parse.
-#
-# fzf-file-widget has no way to report cancellation distinctly from a selection: on Escape it
-# leaves the commandline exactly as seeded, so its output is indistinguishable from a selection
-# that reproduces the original line. Collapse that case to an empty result, Warp's existing
-# convention for "nothing selected" -- a real selection can't trigger this false cancel, since
-# completing a token always appends a trailing space and reselecting an already-complete path
-# duplicates it rather than reproducing it (confirmed live).
+# Runs fzf directly against a find-style command as a foreground command.
 function warp_run_external_ctrl_t_widget
   set -l warp_ctrl_t_token "$argv[1]"
   set -l result ""
@@ -674,28 +607,10 @@ function warp_run_external_ctrl_t_widget
     case 'fzf-file-widget'
       set -l warp_ctrl_t_parts (string split -m 1 -- ':' "$argv[2]")
       set -l char_cursor $warp_ctrl_t_parts[1]
-      # --allow-empty: an empty draft (ctrl-t on a blank line) decodes to zero bytes, and
-      # `string collect` would otherwise collapse that to zero list elements rather than one
-      # empty string -- `commandline -r --` with no CMD argument at all is a *read*, not a
-      # write, so ctrl-t on a blank line would leave the synthetic helper invocation itself on
-      # the commandline instead of seeding a blank buffer.
       set -l original_line (warp_hex_decode_string $warp_ctrl_t_parts[2] | string collect --no-trim-newlines --allow-empty)
       commandline -r -- $original_line
       commandline -C -- $char_cursor
       fzf-file-widget
-      # (commandline | string collect), not plain (commandline): unquoted, a multi-line result
-      # would otherwise expand to multiple arguments here, truncating
-      # warp_ctrl_t_widget_result's $argv[2] comparison and return value to its first line alone.
-      # Plain `string collect` (not --no-trim-newlines) here: a bare `commandline` read always
-      # ends its own output in a line terminator regardless of the buffer's actual content, so
-      # trimming it is what recovers the real buffer text -- keeping it would make an unchanged
-      # draft compare unequal to itself, misreporting a plain cancel as a real selection.
-      #
-      # Captured into $cl_readback first, not passed as a nested command substitution directly:
-      # confirmed live that reading `commandline` in that nested form immediately after
-      # fzf-file-widget's own `commandline -f repaint` on cancel can race that repaint and read
-      # back a stale value, so the comparison below sometimes saw a false change on an untouched
-      # cancel. Assigning it first, as its own statement, reliably reads the settled buffer.
       set -l cl_readback (commandline | string collect)
       set result (warp_ctrl_t_widget_result "$original_line" "$cl_readback")
       commandline -r ''
@@ -727,8 +642,6 @@ end
 # as if it were the original would make every history check call itself.
 if functions -q fish_should_add_to_history
   and not functions fish_should_add_to_history | string match --quiet -- '*warp_run_external_ctrl_r_widget*'
-  # `functions -c` refuses to overwrite an existing destination, so erase any previous backup
-  # (e.g. an earlier accept-everything default, or a now-stale hook) before capturing this one.
   functions -q warp_original_fish_should_add_to_history; and functions -e warp_original_fish_should_add_to_history
   functions -c fish_should_add_to_history warp_original_fish_should_add_to_history
 else if not functions -q warp_original_fish_should_add_to_history
@@ -737,12 +650,7 @@ else if not functions -q warp_original_fish_should_add_to_history
   end
 end
 function fish_should_add_to_history
-  # Unanchored (not just a prefix match): the invocation is now given a leading space so atuin's
-  # own "ignorespace" exclusion also catches it (see trigger_external_ctrl_r_history_search), and
-  # that space must not defeat this match too.
   string match --quiet -- '*warp_run_external_ctrl_r_widget *' $argv[1]; and return 1
-  # The ctrl-t helper isn't given a leading space (it doesn't need atuin's ignorespace exclusion,
-  # since atuin has no ctrl-t equivalent), so match it without one.
   string match --quiet -- '*warp_run_external_ctrl_t_widget*' $argv[1]; and return 1
   warp_original_fish_should_add_to_history $argv
 end
@@ -760,8 +668,6 @@ function warp_bootstrapped
       set vi_mode_enabled "1"
   end
 
-  # Tags for shell configurations Warp needs to know about, matching the `shell_plugins`
-  # list bash and zsh already report. Newline-separated, one tag per line.
   set -l shell_plugins
   set -g _WARP_EXTERNAL_CTRL_R_WIDGET ""
   set -l warp_ctrl_r_widget (warp_external_ctrl_r_widget)
@@ -771,20 +677,10 @@ function warp_bootstrapped
       set -a shell_plugins external_ctrl_r_history
   end
 
-  # Detect whether ctrl-t has been rebound to fzf's file-search widget, independent of whichever
-  # tool (if any) owns ctrl-r above -- a user may have one binding without the other. fzf's
-  # widget name for ctrl-t is the same across shells ("fzf-file-widget"); atuin has no ctrl-t
-  # equivalent.
   set -g _WARP_EXTERNAL_CTRL_T_WIDGET ""
   set -l warp_ctrl_t_widget (warp_external_ctrl_t_widget)
   switch "$warp_ctrl_t_widget"
     case 'fzf-file-widget'
-      # warp_run_external_ctrl_t_widget calls fzf-file-widget directly, so the only real
-      # requirement is that the function itself exists. `bind` already reported this name as
-      # ctrl-t's binding, but only tag/intercept once that's confirmed callable, so a rebind to a
-      # nonexistent or renamed function can never claim ctrl-t and then have
-      # warp_run_external_ctrl_t_widget find nothing to call -- that would swallow the key with
-      # no picker shown instead of leaving ctrl-t alone.
       if functions -q fzf-file-widget
         set -g _WARP_EXTERNAL_CTRL_T_WIDGET "$warp_ctrl_t_widget"
         set -a shell_plugins external_ctrl_t_file

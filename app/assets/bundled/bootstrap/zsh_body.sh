@@ -710,18 +710,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
   }
   zle -N warp_report_input
 
-  # Runs the shell's own ctrl-r history widget (fzf or atuin, per the widget name captured in
-  # $_WARP_EXTERNAL_CTRL_R_WIDGET during bootstrap) as a synthetic foreground command, so Warp's
-  # existing long-running-command machinery hides the input editor and forwards keystrokes to the
-  # widget's PTY-driven UI. Reports the selected command (or an empty buffer, if cancelled) via
-  # the ExternalCtrlRSelection hook so Warp can insert it into the input editor without executing
-  # it. The handoff token given as $1 is echoed back unchanged, so Warp can confirm the hook is
-  # actually the reply to the handoff it started rather than an unrelated write to the pty.
-  #
-  # We re-run each tool's own underlying picker command rather than invoking its zle widget
-  # directly: those widgets rely on zle builtins (e.g. `zle vi-fetch-history`) that only work when
-  # the widget is actually bound to a key and invoked through zle, not when called as a plain
-  # command outside of that context.
+  # Runs the shell's own ctrl-r history widget as a foreground command.
   function warp_run_external_ctrl_r_widget () {
     local warp_ctrl_r_token="$1"
     local result=""
@@ -742,13 +731,6 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         # command, signaled by this prefix; we only ever want the selection, never to run it,
         # so strip the prefix in both cases (see atuin's _atuin_search for the same check).
         result="${result#__atuin_accept__:}"
-        # The invocation is given a leading space (see
-        # trigger_external_ctrl_r_history_search), which atuin's own "ignorespace" exclusion
-        # honors independent of the zshaddhistory exclusion above (which only keeps it out of
-        # zsh's own history), so atuin never records this invocation into its own history
-        # database in the first place. We deliberately don't try to delete it after the fact if
-        # that exclusion somehow doesn't apply: `atuin search --delete` fuzzy-matches its query,
-        # so it can remove history entries we don't own.
         ;;
     esac
     local warp_escaped_selection="$(warp_escape_json "$result")"
@@ -756,28 +738,15 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     warp_send_json_message "{ \"hook\": \"ExternalCtrlRSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"token\": \"$warp_escaped_token\", \"session_id\": $WARP_SESSION_ID } }"
   }
 
-  # Runs the shell's own ctrl-t file-search widget (fzf, per the widget name captured in
-  # $_WARP_EXTERNAL_CTRL_T_WIDGET during bootstrap) as a synthetic foreground command, mirroring
-  # warp_run_external_ctrl_r_widget above. Reports the selected path(s) (or an empty buffer, if
-  # cancelled) via the ExternalCtrlTSelection hook so Warp can insert them into the input editor
-  # at the cursor position, without executing anything. The handoff token given as $1 is echoed
-  # back unchanged, so Warp can confirm the hook is actually the reply to the handoff it started
-  # rather than an unrelated write to the pty.
+  # Runs the shell's own ctrl-t file-search widget as a foreground command.
   function warp_run_external_ctrl_t_widget () {
     local warp_ctrl_t_token="$1"
     local result=""
     case "$_WARP_EXTERNAL_CTRL_T_WIDGET" in
       fzf-file-widget)
-        # __fzf_select (current fzf) or __fsel (fzf < 0.48, still the packaged version on some
-        # distros) runs the same find|fzf pipeline fzf-file-widget itself uses, honoring
-        # $FZF_CTRL_T_COMMAND/$FZF_CTRL_T_OPTS if the user set them, and echoes the
-        # shell-quoted selection to stdout -- this is exactly what fzf-file-widget calls before
-        # splicing the result into LBUFFER at the cursor itself, which we don't want here since
-        # we land the selection ourselves. Detection below only tags this widget when one of the
-        # two is actually defined, so this case is never reached with neither present.
         if (( $+functions[__fzf_select] )); then
           result="$(__fzf_select)"
-        else
+        else  # fzf < 0.48
           result="$(__fsel)"
         fi
         ;;
@@ -1356,9 +1325,6 @@ esac
   # See https://zsh.sourceforge.io/Doc/Release/Functions.html for more context
   # on the zshaddhistory hook.
   _warp_zshaddhistory() {
-    # Also exclude the ctrl-r/ctrl-t external handoff helpers (see
-    # warp_run_external_ctrl_r_widget/warp_run_external_ctrl_t_widget above): they're
-    # Warp-internal invocations, not commands the user meant to run again later.
     _is_warp_generator_command "$1" && [[ "$1" != *"warp_run_external_ctrl_r_widget"* ]] && \
       [[ "$1" != *"warp_run_external_ctrl_t_widget"* ]]
   }
@@ -1434,14 +1400,7 @@ esac
     shell_plugins+=(vi)
   fi
 
-  # Detect whether ctrl-r has been rebound to fzf's or atuin's history widget, so Warp can
-  # hand ctrl-r off to it at an idle prompt instead of opening Warp's own command search.
-  # Matched against an exact allowlist of each integration's canonical widget names -- not
-  # merely a name containing "fzf" or "atuin" -- since an RC can legitimately bind ctrl-r to an
-  # unrelated fzf- or atuin-flavored widget that isn't the history search we know how to invoke;
-  # rerouting those to the hard-coded history picker would cost the user both their own binding
-  # and Warp's command search on every ctrl-r press. Adding another tool means adding its widget
-  # name to both this list and the case below.
+  # Detect whether ctrl-r has been rebound to fzf's or atuin's history widget.
   _WARP_EXTERNAL_CTRL_R_WIDGET=""
   warp_ctrl_r_binding="$(bindkey -M main '^R' 2>/dev/null)"
   if [[ "$warp_ctrl_r_binding" == '"^R" '* ]]; then
@@ -1454,23 +1413,13 @@ esac
     esac
   fi
 
-  # Detect whether ctrl-t has been rebound to fzf's file-search widget, independent of whichever
-  # tool (if any) owns ctrl-r above -- a user may have one binding without the other. fzf's zle
-  # widget name for ctrl-t is the same across shells ("fzf-file-widget"); atuin has no ctrl-t
-  # equivalent. See the ctrl-r detection above for why we match against an exact allowlist rather
-  # than a name containing "fzf".
+  # Detect whether ctrl-t has been rebound to fzf's file-search widget.
   _WARP_EXTERNAL_CTRL_T_WIDGET=""
   warp_ctrl_t_binding="$(bindkey -M main '^T' 2>/dev/null)"
   if [[ "$warp_ctrl_t_binding" == '"^T" '* ]]; then
     warp_ctrl_t_widget="${warp_ctrl_t_binding#\"^T\" }"
     case "$warp_ctrl_t_widget" in
       fzf-file-widget)
-        # The zle widget name has stayed "fzf-file-widget" across fzf versions, but the picker
-        # it delegates to was renamed from __fsel to __fzf_select along the way (fzf < 0.48
-        # still ships as the packaged version on several distros); only tag/intercept when one
-        # of the two invocable names actually exists, so a version mismatch here can never
-        # claim ctrl-t and then have warp_run_external_ctrl_t_widget find nothing to call --
-        # that would swallow the key with no picker shown instead of leaving ctrl-t alone.
         if (( $+functions[__fzf_select] )) || (( $+functions[__fsel] )); then
           _WARP_EXTERNAL_CTRL_T_WIDGET="$warp_ctrl_t_widget"
           shell_plugins+=(external_ctrl_t_file)

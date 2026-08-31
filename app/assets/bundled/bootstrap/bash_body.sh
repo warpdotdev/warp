@@ -970,47 +970,24 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         READLINE_LINE=""
     }
 
-    # Runs the shell's own ctrl-r history widget (fzf or atuin, per the function captured in
-    # $_WARP_EXTERNAL_CTRL_R_WIDGET during bootstrap) as a synthetic foreground command, so Warp's
-    # existing long-running-command machinery hides the input editor and forwards keystrokes to
-    # the widget's PTY-driven UI. Reports the selected command (or an empty buffer, if cancelled)
-    # via the ExternalCtrlRSelection hook so Warp can insert it into the input editor without
-    # executing it. The handoff token given as $1 is echoed back unchanged, so Warp can confirm
-    # the hook is actually the reply to the handoff it started rather than an unrelated write to
-    # the pty.
+    # Runs the shell's ctrl-r history widget as a foreground command.
     warp_run_external_ctrl_r_widget () {
         local warp_ctrl_r_token="$1"
         local result=""
         case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
           __fzf_history__)
-            # __fzf_history__ (installed by fzf's bash integration) normally writes the selection
-            # into $READLINE_LINE via `bind -x`, using $READLINE_POINT as a sentinel for that
-            # mode. Called here outside of that context, it echoes the selection to stdout
-            # instead -- see fzf's own fallback for that case.
             result="$(__fzf_history__)"
             ;;
           __atuin_history)
             # Bypass atuin's own bash key-binding machinery entirely and invoke the underlying
             # `atuin search` command directly, exactly as atuin's own integration does
             # (__atuin_search_cmd's non-tmux branch).
-            #
-            # atuin writes its TUI to stdout; under plain command substitution that's a pipe,
-            # and its cursor-position query (\x1b[6n) has nothing to answer it, so it bails
-            # during startup. Swap stdout/stderr through fd 3 so the TUI reaches the tty while
-            # the selection is still captured via command substitution.
             result="$(ATUIN_SHELL=bash atuin search -i 3>&1 1>&2 2>&3 3>&-)"
             # If the user has atuin's enter_accept config on, Enter both selects and runs the
             # command, signaled by this prefix; we only ever want the selection, never to run
             # it, so strip the prefix in both cases (see atuin's __atuin_history for the same
             # check).
             result="${result#__atuin_accept__:}"
-            # The invocation is given a leading space (see
-            # trigger_external_ctrl_r_history_search), which atuin's own "ignorespace"
-            # exclusion honors independent of HISTIGNORE (which only keeps it out of bash's own
-            # history), so atuin never records this invocation into its own history database in
-            # the first place. We deliberately don't try to delete it after the fact if that
-            # exclusion somehow doesn't apply: `atuin search --delete` fuzzy-matches its query,
-            # so it can remove history entries we don't own.
             ;;
         esac
         local warp_escaped_selection="$(warp_escape_json "$result")"
@@ -1018,23 +995,12 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         warp_send_json_message "{ \"hook\": \"ExternalCtrlRSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"token\": \"$warp_escaped_token\", \"session_id\": $WARP_SESSION_ID } }"
     }
 
-    # Runs the shell's own ctrl-t file-search widget (fzf, per the function captured in
-    # $_WARP_EXTERNAL_CTRL_T_WIDGET during bootstrap) as a synthetic foreground command, mirroring
-    # warp_run_external_ctrl_r_widget above. Reports the selected path(s) (or an empty buffer, if
-    # cancelled) via the ExternalCtrlTSelection hook so Warp can insert them into the input editor
-    # at the cursor position, without executing anything. The handoff token given as $1 is echoed
-    # back unchanged, so Warp can confirm the hook is actually the reply to the handoff it started
-    # rather than an unrelated write to the pty.
+    # Runs the shell's own ctrl-t file-search widget as a foreground command.
     warp_run_external_ctrl_t_widget () {
         local warp_ctrl_t_token="$1"
         local result=""
         case "$_WARP_EXTERNAL_CTRL_T_WIDGET" in
           fzf-file-widget)
-            # __fzf_select__ (installed by fzf's bash integration) runs the same find|fzf
-            # pipeline fzf-file-widget itself uses, honoring $FZF_CTRL_T_COMMAND/$FZF_CTRL_T_OPTS
-            # if the user set them, and echoes the space-escaped selection to stdout -- this is
-            # exactly what fzf-file-widget calls before splicing the result into READLINE_LINE at
-            # the cursor itself, which we don't want here since we land the selection ourselves.
             result="$(__fzf_select__)"
             ;;
         esac
@@ -1609,25 +1575,7 @@ esac
     shell_plugins=()
 
     # Detect whether ctrl-r has been rebound to fzf's or atuin's bash history widget, so Warp
-    # can hand ctrl-r off to it at an idle prompt instead of opening Warp's own command search.
-    # Not supported under MSYS2 (Git Bash on Windows), where ctrl-r always falls through to
-    # Warp's own command search.
-    #
-    # Both fzf and (older versions of) atuin bind ctrl-r directly via `bind -x`, so `bind -X`
-    # reports it verbatim. bash 5.2 prints `"\C-r": "__fzf_history__"`; bash 5.3 prints
-    # `"\C-r" "__fzf_history__"` (space, no colon). The sed below accepts either layout.
-    # Match against an exact allowlist of each integration's canonical bound
-    # function name -- not merely a name containing "fzf" or "atuin" -- since an RC can
-    # legitimately bind ctrl-r to an unrelated fzf- or atuin-flavored command that isn't the
-    # history search warp_run_external_ctrl_r_widget below knows how to invoke; rerouting that to
-    # the hard-coded history picker would cost the user both their own binding and Warp's command
-    # search. Reading this straight from `bind -X` also means detection reflects whatever ctrl-r
-    # is actually bound to at the end of RC processing, rather than a flag atuin's own init set
-    # earlier that a later `bind` in the RC can leave stale.
-    #
-    # Newer atuin (>= 18.10) instead binds ctrl-r to an intermediate key sequence dispatched
-    # through a separate widget-index binding, which `bind -X` alone can't reliably distinguish
-    # from an arbitrary user macro; the fallback below handles that case.
+    # can hand ctrl-r off to it.
     _WARP_EXTERNAL_CTRL_R_WIDGET=""
     if [ "$WARP_IN_MSYS2" = false ]; then
       warp_ctrl_r_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-r"[ :] *"\(.*\)"$/\1/p')"
@@ -1638,35 +1586,18 @@ esac
           ;;
       esac
       # atuin >= 18.10 binds ctrl-r through the indirect dispatcher above rather than a plain
-      # `bind -x`, so the exact-allowlist match above never fires for it. Rather than resolve
-      # that indirection, trust atuin's own init-time flag ($__atuin_bind_ctrl_r) plus
-      # __atuin_history actually being defined as sufficient evidence atuin owns ctrl-r. This
-      # is a deliberately looser check than the live-binding match above: a ctrl-r rebound
-      # after atuin's init runs (a rare sequencing) won't be detected, which is an accepted
-      # trade-off in favor of covering the common bash+atuin case at all. fzf has no equivalent
-      # flag and keeps using the live-binding match exclusively.
+      # `bind -x`. Instead use atuin's own init-time flag ($__atuin_bind_ctrl_r) plus
+        # __atuin_history being defined.
       if [ -z "$_WARP_EXTERNAL_CTRL_R_WIDGET" ] && [ "$__atuin_bind_ctrl_r" = true ] &&
         declare -F __atuin_history >/dev/null; then
         _WARP_EXTERNAL_CTRL_R_WIDGET="__atuin_history"
         shell_plugins+=(external_ctrl_r_history)
       fi
 
-      # Detect whether ctrl-t has been rebound to fzf's file-search widget, independent of
-      # whichever tool (if any) owns ctrl-r above -- a user may have one binding without the
-      # other. fzf binds ctrl-t directly via `bind -x` in every keymap (emacs, vi-insert, and
-      # vi-command all get their own `-x` binding to the same widget name), unlike alt-c, which
-      # has no `-x`-bindable form and instead uses a macro-chain trick to reach emacs mode's
-      # command substitution; that asymmetry is why ctrl-t doesn't need a flag-based fallback
-      # the way ctrl-r's newer-atuin case does. atuin has no ctrl-t equivalent.
       _WARP_EXTERNAL_CTRL_T_WIDGET=""
       warp_ctrl_t_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-t"[ :] *"\(.*\)"$/\1/p')"
       case "$warp_ctrl_t_binding" in
         fzf-file-widget)
-          # The bind -X entry has stayed "fzf-file-widget" across fzf versions, but only tag/
-          # intercept when the picker warp_run_external_ctrl_t_widget actually calls
-          # (__fzf_select__) exists -- a version mismatch here would otherwise claim ctrl-t and
-          # then have nothing to call, swallowing the key with no picker shown instead of
-          # leaving ctrl-t alone.
           if declare -F __fzf_select__ >/dev/null; then
             _WARP_EXTERNAL_CTRL_T_WIDGET="$warp_ctrl_t_binding"
             shell_plugins+=(external_ctrl_t_file)
@@ -1706,9 +1637,6 @@ esac
           shell_plugins+=("starship")
         fi
 
-        # Join into a newline-separated list (one tag per line, matching zsh's `print -l --`)
-        # before escaping -- "$shell_plugins" alone would only expand to the array's first
-        # element.
         local shell_plugins_list="$(printf '%s\n' "${shell_plugins[@]}")"
 
         if [ "$WARP_IN_MSYS2" = false ]; then

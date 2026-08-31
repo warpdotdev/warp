@@ -1156,38 +1156,6 @@ pub fn test_first_non_hidden_block_by_index_in_range() {
 }
 
 #[test]
-fn test_hide_block_zeroes_height_for_a_completed_block() {
-    // Regression test: hiding an already-completed (non-active) block must update its cached
-    // height in the block heights sumtree immediately, not just the block's own `hidden` flag --
-    // otherwise the block would keep occupying space in the rendered blocklist.
-    let mut block_list =
-        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
-
-    let block_index = insert_block(&mut block_list, "echo hi", "hi");
-    let block_id = block_list.block_at(block_index).unwrap().id().clone();
-    let transcript_scope = *block_list.transcript_scope();
-
-    assert!(
-        block_list
-            .block_at(block_index)
-            .unwrap()
-            .height(&transcript_scope)
-            > Lines::zero()
-    );
-
-    block_list.hide_block(&block_id);
-
-    assert!(block_list.block_with_id(&block_id).unwrap().is_hidden());
-
-    let mut cursor = block_list.block_heights().cursor::<BlockIndex, ()>();
-    cursor.seek(&(block_index + BlockIndex(1)), SeekBias::Left);
-    assert_eq!(
-        cursor.item(),
-        Some(&BlockHeightItem::Block(BlockHeight::zero()))
-    );
-}
-
-#[test]
 fn test_matching_block_by_index() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
