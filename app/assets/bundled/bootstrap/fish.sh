@@ -613,11 +613,21 @@ function warp_run_external_ctrl_r_widget
   switch "$_WARP_EXTERNAL_CTRL_R_WIDGET"
     case 'fzf-history-widget'
       test -z "$fish_private_mode"; and builtin history merge
+      # fzf 0.74+'s widget uses `(commandline)` as --query. This helper runs as a synthetic
+      # command, so clear the buffer first: otherwise the picker filters to the helper invocation
+      # instead of opening like an idle prompt.
+      commandline -r -- ''
       fzf-history-widget
       # Piped through `string collect`: a multi-line selection would otherwise make this `set`'s
       # own command substitution split it into a list, which `warp_escape_json` below would then
       # silently space-join instead of newline-join once quoted back down to a single argument.
+      #
+      # Same settle as warp_run_external_ctrl_t_widget: fzf-history-widget ends on
+      # `commandline -f repaint`, and a too-soon `commandline` read can come back empty after a
+      # real accept. Warp treats empty as cancel (restores the pre-ctrl-r draft, usually empty).
+      # Assign first; if that is empty, read once more.
       set result (commandline | string collect)
+      test -n "$result"; or set result (commandline | string collect)
       commandline -r ''
     case '_atuin_search'
       # atuin writes its TUI to stdout and the selection to fd 3, so the two are swapped here to
