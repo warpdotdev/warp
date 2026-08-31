@@ -409,6 +409,9 @@ function warp_send_json_message
 end
 set -g _test_commandline_value ''
 function commandline
+  if test (count $argv) -ge 1; and test "$argv[1]" = '-r'
+    return 0
+  end
   echo "$_test_commandline_value"
 end
 function fzf-history-widget
@@ -452,6 +455,52 @@ fn test_fish_ctrl_r_widget_reports_empty_buffer_when_widget_leaves_commandline_u
     assert!(stdout.contains(r#""buffer": """#), "{stdout}");
 }
 
+/// fzf 0.74+'s `fzf-history-widget` ends on `commandline -f repaint`. A too-soon `commandline`
+/// read after a real accept can come back empty; Warp treats empty as cancel and restores the
+/// pre-ctrl-r draft (usually empty), so the editor looks like the selection never landed. The
+/// wrapper must retry that read once rather than reporting the empty first read.
+#[test]
+fn test_fish_ctrl_r_widget_retries_empty_commandline_read_after_accept() {
+    let runner = fish_ctrl_r_widget_runner_fn();
+    let script = format!(
+        r#"
+function warp_escape_json
+  string join \n $argv
+end
+function warp_send_json_message
+  echo "$argv"
+end
+set -g _test_commandline_value 'echo selected_after_repaint'
+set -g _test_commandline_reads 0
+function commandline
+  if test (count $argv) -ge 1; and test "$argv[1]" = '-r'
+    return 0
+  end
+  set -g _test_commandline_reads (math $_test_commandline_reads + 1)
+  if test $_test_commandline_reads -eq 1
+    echo ''
+    return
+  end
+  echo "$_test_commandline_value"
+end
+function fzf-history-widget
+  true
+end
+set -g _WARP_EXTERNAL_CTRL_R_WIDGET fzf-history-widget
+set -g WARP_SESSION_ID 12345
+{runner}
+warp_run_external_ctrl_r_widget test-token
+"#
+    );
+    let Some(stdout) = run_fish(&script) else {
+        return;
+    };
+    assert!(
+        stdout.contains(r#""buffer": "echo selected_after_repaint""#),
+        "{stdout}"
+    );
+}
+
 fn fish_warp_escape_json_fn() -> &'static str {
     const FISH_SH: &str = include_str!("../../../app/assets/bundled/bootstrap/fish.sh");
     let start_marker = "function warp_escape_json\n";
@@ -483,6 +532,9 @@ function warp_send_json_message
 end
 set -g _test_commandline_value ''
 function commandline
+  if test (count $argv) -ge 1; and test "$argv[1]" = '-r'
+    return 0
+  end
   echo "$_test_commandline_value"
 end
 function fzf-history-widget
