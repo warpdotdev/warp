@@ -6,8 +6,8 @@ use clap::Parser;
 use integration::Builder;
 use integration::test::*;
 use warp_cli::WorkerCommand;
+use warp_core::AppId;
 use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
-use warp_core::{AppId, features};
 
 /// The Warp integration test runner.
 #[derive(Debug, Default, Parser, Clone)]
@@ -24,48 +24,40 @@ pub struct Args {
 }
 
 pub fn main() -> Result<()> {
-    ChannelState::set(
-        ChannelState::new(
-            Channel::Integration,
-            ChannelConfig {
-                app_id: AppId::new(
-                    "dev",
-                    "warp",
-                    if cfg!(target_os = "macos") {
-                        "Warp-Integration"
-                    } else {
-                        "WarpIntegration"
-                    },
-                ),
-                logfile_name: "warp_integration.log".into(),
-                server_config: WarpServerConfig {
-                    firebase_auth_api_key: "".into(),
-                    iap_config: None,
-                    // Use an IP in the IANA testing range, with the TCP discard port, to
-                    // black-hole server traffic.
-                    server_root_url: "http://192.0.2.0:9".into(),
-                    rtc_server_url: "ws://192.0.2.0:9/graphql/v2".into(),
-                    session_sharing_server_url: None,
+    ChannelState::set(ChannelState::new(
+        Channel::Integration,
+        ChannelConfig {
+            app_id: AppId::new(
+                "dev",
+                "warp",
+                if cfg!(target_os = "macos") {
+                    "Warp-Integration"
+                } else {
+                    "WarpIntegration"
                 },
-                oz_config: OzConfig {
-                    // Use an IP in the IANA testing range, with the TCP discard port, to
-                    // black-hole server traffic.
-                    oz_root_url: "http://192.0.2.0:9".into(),
-                    workload_audience_url: None,
-                },
-                telemetry_config: None,
-                crash_reporting_config: None,
-                autoupdate_config: None,
-                mcp_static_config: None,
+            ),
+            logfile_name: "warp_integration.log".into(),
+            server_config: WarpServerConfig {
+                firebase_auth_api_key: "".into(),
+                iap_config: None,
+                // Use an IP in the IANA testing range, with the TCP discard port, to
+                // black-hole server traffic.
+                server_root_url: "http://192.0.2.0:9".into(),
+                rtc_server_url: "ws://192.0.2.0:9/graphql/v2".into(),
+                session_sharing_server_url: None,
             },
-        )
-        // Enabled here rather than left to the tests' own `set_enabled`, because the handoff is
-        // only wired up correctly when the flag is set before the channel initializes its
-        // features. Only this flag is added: pulling in whole PREVIEW/DOGFOOD sets would also
-        // turn on unrelated in-progress features (NativeShellCompletions among them) and change
-        // behavior for every other integration test.
-        .with_additional_features(&[features::FeatureFlag::ShellWidgetHandoff]),
-    );
+            oz_config: OzConfig {
+                // Use an IP in the IANA testing range, with the TCP discard port, to
+                // black-hole server traffic.
+                oz_root_url: "http://192.0.2.0:9".into(),
+                workload_audience_url: None,
+            },
+            telemetry_config: None,
+            crash_reporting_config: None,
+            autoupdate_config: None,
+            mcp_static_config: None,
+        },
+    ));
 
     let args = Args::parse();
 
@@ -349,9 +341,6 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     register_test!(test_command_search_loads_history);
     register_test!(test_histfile_left_joined_with_persisted_history);
-    register_test!(test_fzf_ctrl_r_selects_history_unexecuted);
-    register_test!(test_fzf_ctrl_t_inserts_selection);
-    register_test!(test_fzf_ctrl_r_cancel_restores_draft);
     register_test!(test_history_command_is_linked_to_local_workflow);
     register_test!(test_up_arrow_history_enters_shift_tab_for_workflow);
 

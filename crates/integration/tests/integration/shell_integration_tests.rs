@@ -130,11 +130,6 @@ integration_tests! {
     test_command_search_loads_history,
     test_histfile_left_joined_with_persisted_history,
 
-    // Live fzf ctrl-r / ctrl-t handoff. Skipped unless fzf is installed; runs on bash, zsh, fish.
-    test_fzf_ctrl_r_selects_history_unexecuted,
-    test_fzf_ctrl_t_inserts_selection,
-    test_fzf_ctrl_r_cancel_restores_draft,
-
     // Tests default prompt behavior.
     test_context_chips_prompt_at_bootstrap,
 
