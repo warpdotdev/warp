@@ -385,15 +385,6 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             AgentTaskState::Failed,
             TaskStatusUpdate::message(error.to_string()),
         ),
-
-        // SIGTERM reaches the client from externally-originating shutdowns —
-        // server-initiated instance teardown, container-runtime stops, self-hosted
-        // worker termination — and the client cannot distinguish which initiated
-        // it. Not a Warp-side defect the user can act on, so report FAILED.
-        AgentDriverError::TerminatedBySignal => (
-            AgentTaskState::Failed,
-            TaskStatusUpdate::message(error.to_string()),
-        ),
     }
 }
 

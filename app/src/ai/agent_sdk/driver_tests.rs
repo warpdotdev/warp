@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::Local;
@@ -34,12 +34,14 @@ use warpui::{App, SingletonEntity as _};
 
 use super::{
     AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, IdleTimeoutSender,
-    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
+    InterruptFlags, InterruptSignal, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    PlatformErrorCode, RunEndCause, SDKConversationOutputStatus,
     WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
-    idle_window_for_cli_session_status, idle_window_for_terminal_status,
-    setup_failure_status_update, terminal_status_log_outcome,
+    idle_window_for_cli_session_status, idle_window_for_terminal_status, run_end_cause,
+    select_run_outcome, setup_failure_status_update, should_attempt_handoff_snapshot,
+    terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::ConversationStatus;
 use crate::ai::agent::task::TaskId;
@@ -2742,5 +2744,267 @@ fn openai_api_key_exports_only_api_key_not_base_url() {
     assert!(
         !env_vars.contains_key(&OsString::from("OPENAI_BASE_URL")),
         "OPENAI_BASE_URL should NOT be exported as an env var"
+    );
+}
+
+fn recorded_interrupt_flags(term: bool, int: bool) -> InterruptFlags {
+    InterruptFlags {
+        term: Arc::new(AtomicBool::new(term)),
+        int: Arc::new(AtomicBool::new(int)),
+    }
+}
+
+#[test]
+fn recorded_sigterm_wins_when_run_and_deadline_are_also_ready() {
+    let flags = recorded_interrupt_flags(true, false);
+    let selected = block_on(select_run_outcome(
+        std::future::ready(Ok(())),
+        std::future::ready(()),
+        std::future::pending::<InterruptSignal>(),
+        Some(&flags),
+        false,
+    ));
+    assert_eq!(
+        run_end_cause(&selected),
+        RunEndCause::Signal(InterruptSignal::Term)
+    );
+}
+
+#[test]
+fn select_biased_prefers_ready_sigint_over_ready_run() {
+    let selected = block_on(select_run_outcome(
+        std::future::ready(Ok(())),
+        std::future::pending::<()>(),
+        std::future::ready(InterruptSignal::Int),
+        None,
+        false,
+    ));
+    assert_eq!(
+        run_end_cause(&selected),
+        RunEndCause::Signal(InterruptSignal::Int)
+    );
+}
+
+#[test]
+fn deadline_timer_is_selected_when_no_interrupt_is_recorded() {
+    let selected = block_on(select_run_outcome(
+        std::future::pending::<Result<(), AgentDriverError>>(),
+        std::future::ready(()),
+        std::future::pending::<InterruptSignal>(),
+        None,
+        false,
+    ));
+    assert_eq!(run_end_cause(&selected), RunEndCause::SandboxDeadline);
+}
+
+#[test]
+fn handoff_snapshot_is_skipped_when_oz_handoff_is_disabled() {
+    assert!(!should_attempt_handoff_snapshot(false, true, false));
+}
+
+#[test]
+fn handoff_snapshot_is_skipped_without_a_task_id() {
+    assert!(!should_attempt_handoff_snapshot(true, false, false));
+}
+
+#[test]
+fn handoff_snapshot_is_skipped_when_no_snapshot_is_set() {
+    assert!(!should_attempt_handoff_snapshot(true, true, true));
+}
+
+#[cfg(unix)]
+#[test]
+fn unregistering_interrupt_watch_stops_the_fallback_waiter() {
+    let flags = recorded_interrupt_flags(false, false);
+    let closed = Arc::new(AtomicBool::new(false));
+    let (tx, rx) = oneshot::channel();
+    let waiter = super::spawn_poll_interrupt_waiter(flags, tx, Arc::clone(&closed));
+    super::InterruptWatch {
+        sig_ids: Vec::new(),
+        closed,
+        waiter,
+    }
+    .unregister();
+    assert!(
+        block_on(rx).is_err(),
+        "fallback waiter should exit without delivering a signal"
+    );
+}
+
+#[cfg(unix)]
+const SIGNAL_CHILD_ENV: &str = "WARP_AGENT_DRIVER_SIGNAL_CHILD";
+#[cfg(unix)]
+const SIGNAL_LOG_ENV: &str = "WARP_AGENT_DRIVER_SIGNAL_LOG";
+#[cfg(unix)]
+const SIGNAL_READY_ENV: &str = "WARP_AGENT_DRIVER_SIGNAL_READY";
+#[cfg(unix)]
+const SIGNAL_CONTINUE_ENV: &str = "WARP_AGENT_DRIVER_SIGNAL_CONTINUE";
+
+#[cfg(unix)]
+fn signal_lifecycle_child() -> ! {
+    use std::io::Write as _;
+
+    let kind = std::env::var(SIGNAL_CHILD_ENV).expect("child kind");
+    let expected = match kind.as_str() {
+        "term" => InterruptSignal::Term,
+        "int" | "int-hang" => InterruptSignal::Int,
+        other => panic!("unknown child kind {other}"),
+    };
+    let ready_path = std::env::var(SIGNAL_READY_ENV).unwrap();
+
+    let (signal_fut, flags, _watch) = super::watch_interrupt_signals();
+    fs::write(&ready_path, b"ready").unwrap();
+
+    let selected = block_on(select_run_outcome(
+        std::future::pending::<Result<(), AgentDriverError>>(),
+        std::future::pending::<()>(),
+        signal_fut,
+        Some(&flags),
+        false,
+    ));
+    assert_eq!(run_end_cause(&selected), RunEndCause::Signal(expected));
+
+    if kind == "int-hang" {
+        let log_path = std::env::var(SIGNAL_LOG_ENV).unwrap();
+        let mut log = fs::File::create(&log_path).unwrap();
+        writeln!(log, "shutdown_started").unwrap();
+        log.sync_all().unwrap();
+        let continue_path = std::env::var(SIGNAL_CONTINUE_ENV).unwrap();
+        while !Path::new(&continue_path).exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let RunEndCause::Signal(signal) = run_end_cause(&selected) else {
+        std::process::exit(1);
+    };
+    super::emulate_default_and_exit(signal);
+}
+
+#[cfg(unix)]
+fn spawn_signal_lifecycle_child(
+    kind: &str,
+    test_name: &str,
+    first_sig: i32,
+    second_sig: Option<i32>,
+    expected_sig: i32,
+    expected_log: Option<&str>,
+) {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if std::env::var_os(SIGNAL_CHILD_ENV).is_some() {
+        signal_lifecycle_child();
+    }
+
+    let dir = TempDir::new().unwrap();
+    let log_path = dir.path().join("steps.log");
+    let ready_path = dir.path().join("ready");
+    let continue_path = dir.path().join("continue");
+
+    let stderr_path = dir.path().join("stderr");
+    let mut cmd = command::blocking::Command::new(std::env::current_exe().unwrap());
+    cmd.arg(test_name)
+        .arg("--exact")
+        .arg("--nocapture")
+        .env(SIGNAL_CHILD_ENV, kind)
+        .env(SIGNAL_LOG_ENV, &log_path)
+        .env(SIGNAL_READY_ENV, &ready_path)
+        .env(SIGNAL_CONTINUE_ENV, &continue_path)
+        .env("RUST_TEST_THREADS", "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(fs::File::create(&stderr_path).unwrap());
+    for (key, _) in std::env::vars() {
+        if key.starts_with("NEXTEST") {
+            cmd.env_remove(&key);
+        }
+    }
+    let mut child = cmd.spawn().unwrap();
+
+    for _ in 0..1_000 {
+        if ready_path.exists() {
+            break;
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            panic!(
+                "signal child exited before becoming ready: status={status:?} stderr={}",
+                fs::read_to_string(&stderr_path).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        ready_path.exists(),
+        "signal child did not become ready; stderr={}",
+        fs::read_to_string(&stderr_path).unwrap_or_default()
+    );
+
+    // SAFETY: `child.id()` is this child's pid; the signal is sent only to it.
+    unsafe {
+        libc::kill(child.id() as libc::pid_t, first_sig);
+    }
+
+    if let Some(second_sig) = second_sig {
+        for _ in 0..1_000 {
+            if fs::read_to_string(&log_path)
+                .unwrap_or_default()
+                .contains("shutdown_started")
+            {
+                break;
+            }
+            if let Some(status) = child.try_wait().unwrap() {
+                panic!(
+                    "signal child exited before shutdown_started: status={status:?} stderr={}",
+                    fs::read_to_string(&stderr_path).unwrap_or_default()
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        unsafe {
+            libc::kill(child.id() as libc::pid_t, second_sig);
+        }
+    }
+
+    let status = child.wait().unwrap();
+    assert_eq!(status.signal(), Some(expected_sig), "status={status:?}");
+    if let Some(expected_log) = expected_log {
+        assert_eq!(fs::read_to_string(&log_path).unwrap(), expected_log);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sigterm_subprocess_exits_signaled() {
+    spawn_signal_lifecycle_child(
+        "term",
+        "ai::agent_sdk::driver::tests::sigterm_subprocess_exits_signaled",
+        libc::SIGTERM,
+        None,
+        libc::SIGTERM,
+        None,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sigint_subprocess_exits_signaled() {
+    spawn_signal_lifecycle_child(
+        "int",
+        "ai::agent_sdk::driver::tests::sigint_subprocess_exits_signaled",
+        libc::SIGINT,
+        None,
+        libc::SIGINT,
+        None,
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn second_sigint_kills_during_stuck_shutdown() {
+    spawn_signal_lifecycle_child(
+        "int-hang",
+        "ai::agent_sdk::driver::tests::second_sigint_kills_during_stuck_shutdown",
+        libc::SIGINT,
+        Some(libc::SIGINT),
+        libc::SIGINT,
+        Some("shutdown_started\n"),
     );
 }

@@ -350,17 +350,3 @@ fn sandbox_deadline_reached_on_free_plan_suggests_upgrading() {
         "Sandbox maximum runtime reached. Upgrade to a paid plan to remove this limit."
     );
 }
-
-// --- SIGTERM abort ---
-
-#[test]
-fn terminated_by_signal_is_failed_with_no_error_code() {
-    let (state, update) = classify_driver_error(&AgentDriverError::TerminatedBySignal);
-    assert_eq!(state, AgentTaskState::Failed);
-    assert!(update.error_code.is_none());
-    assert_eq!(
-        update.message,
-        "The agent process was terminated (SIGTERM) before the run completed, most likely \
-         because the instance or worker hosting the run was shut down."
-    );
-}
