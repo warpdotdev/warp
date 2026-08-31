@@ -3686,13 +3686,9 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
     });
 }
 
-/// Deletions reported through a non-canonical (symlinked) path must still be
-/// attributed to the repo registered under its canonicalized root. On macOS
-/// `/tmp` is a symlink to `/private/tmp`, so a workspace opened as `/tmp/foo`
-/// is indexed under its canonical `/private/tmp/foo`, but the watcher can
-/// report the deletion as `/tmp/foo/bar.txt`. Previously this mismatch made
-/// `find_repository_for_path_string` drop the event and the file lingered in
-/// the Project Explorer until restart.
+/// Deletions reported through a symlinked (non-canonical) path are attributed
+/// to the repo registered under its canonicalized root and removed from the
+/// tree. Regression test for /tmp → /private/tmp on macOS.
 #[cfg(all(unix, feature = "local_fs"))]
 #[test]
 fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
@@ -3706,8 +3702,6 @@ fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
             return;
         }
 
-        // Open the workspace through the alias, exactly like opening `/tmp/foo`
-        // on macOS. The lazy root is registered under its canonical path.
         let root = StandardizedPath::from_local_canonicalized(&alias_dir).unwrap();
         let deleted_file_local = alias_dir.join("a.txt");
         let deleted_file_std =
@@ -3722,7 +3716,6 @@ fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
             });
             await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
 
-            // The file starts present in the tree under its canonical path.
             model_handle.read(&app, |model, _ctx| {
                 let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
                     panic!("expected indexed lazy-loaded path");
@@ -3730,13 +3723,8 @@ fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
                 assert!(state.entry.contains(&deleted_file_std));
             });
 
-            // Delete the file on disk, then deliver a deletion event whose path
-            // is spelled through the alias (as the watcher reports it). The
-            // event must still be attributed to the canonicalized repo root.
             std::fs::remove_file(&deleted_file_local).unwrap();
 
-            // Wait for the async mutation to land by listening for the tree
-            // update the spawned handler emits.
             let (tx, rx) = oneshot::channel();
             let sender = Rc::new(RefCell::new(Some(tx)));
             let root_for_event = root.clone();

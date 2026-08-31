@@ -596,11 +596,9 @@ impl LocalRepoMetadataModel {
             }
         }
 
-        // Process deleted files. The deleted path may be reported under a
-        // non-canonical root (e.g. `/tmp` symlinked to `/private/tmp` on macOS),
-        // so we canonicalize it through its closest existing ancestor. The tree
-        // is keyed by canonical paths, so the mutation must use that canonical
-        // spelling for the `Remove` to land.
+        // Deleted paths may be reported under a non-canonical root (e.g. `/tmp`
+        // → `/private/tmp` on macOS); the tree is keyed by canonical paths, so
+        // canonicalize before building the Remove mutation.
         for path in &event.deleted {
             let Some((repo_path, canonical_path)) =
                 self.find_repository_and_canonical_for_deleted_path(path)
@@ -726,31 +724,16 @@ impl LocalRepoMetadataModel {
     }
 
     #[cfg(feature = "local_fs")]
-    /// Finds the repository for a deleted file and the canonical path to remove
-    /// from its tree.
+    /// Finds the repository for a deleted file and its canonical removal path.
     ///
-    /// Unlike `find_repository_for_watcher_entry_path`, a deleted path can no
-    /// longer be canonicalized, but the watcher may report it through a path
-    /// that differs from the repo's canonicalized root (e.g. `/tmp` on macOS is
-    /// a symlink to `/private/tmp`). Attribution must therefore canonicalize
-    /// the path's closest still-existing ancestor and match repos against that,
-    /// otherwise deletions under such a path are silently dropped and the file
-    /// lingers in the Explorer. The canonical spelling must also be used for
-    /// the resulting `Remove` mutation since the tree is keyed by canonical
-    /// paths.
+    /// Deleted paths can't be canonicalized directly (the file is gone), so
+    /// canonicalize the closest still-existing ancestor and re-attach the tail
+    /// before matching against the canonicalized repo roots. Returns the
+    /// canonical spelling so the `Remove` mutation lands on the tree's keys.
     fn find_repository_and_canonical_for_deleted_path(
         &self,
         path: &Path,
     ) -> Option<(StandardizedPath, PathBuf)> {
-        // Canonicalize the deleted path through its closest still-existing
-        // ancestor. Deleted files can't be canonicalized directly, but the
-        // watcher may report them under a non-canonical root (e.g. `/tmp` is a
-        // symlink to `/private/tmp` on macOS), so we re-attach the deleted
-        // tail onto the canonicalized ancestor before matching repos.
-        //
-        // We try each ancestor from the file upward: once we hit one that still
-        // exists we canonicalize it and match the re-attached path against the
-        // canonicalized repo roots.
         let deleted_src = StandardizedPath::from_local_absolute_unchecked(path);
         for ancestor_std in deleted_src.ancestors() {
             let Some(ancestor) = ancestor_std.to_local_path() else {
@@ -772,8 +755,6 @@ impl LocalRepoMetadataModel {
             }
         }
 
-        // Fall back to the raw path so repos registered under a matching
-        // non-canonical spelling still resolve.
         self.find_repository_for_path_string(path.to_string_lossy().as_ref())
             .map(|repo_path| (repo_path, path.to_path_buf()))
     }
