@@ -3685,3 +3685,95 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         );
     });
 }
+
+/// Deletions reported through a non-canonical (symlinked) path must still be
+/// attributed to the repo registered under its canonicalized root. On macOS
+/// `/tmp` is a symlink to `/private/tmp`, so a workspace opened as `/tmp/foo`
+/// is indexed under its canonical `/private/tmp/foo`, but the watcher can
+/// report the deletion as `/tmp/foo/bar.txt`. Previously this mismatch made
+/// `find_repository_for_path_string` drop the event and the file lingered in
+/// the Project Explorer until restart.
+#[cfg(all(unix, feature = "local_fs"))]
+#[test]
+fn deleted_file_via_symlinked_alias_is_attributed_to_repo() {
+    VirtualFS::test("lazy_delete_via_symlink_alias", |dirs, mut vfs| {
+        vfs.mkdir("real")
+            .with_files(vec![Stub::FileWithContent("real/a.txt", "x")]);
+        let real_dir = dirs.tests().join("real");
+        let alias_dir = dirs.tests().join("alias");
+        if std::os::unix::fs::symlink(&real_dir, &alias_dir).is_err() {
+            eprintln!("skipping: cannot create symlink (filesystem may not support it)");
+            return;
+        }
+
+        // Open the workspace through the alias, exactly like opening `/tmp/foo`
+        // on macOS. The lazy root is registered under its canonical path.
+        let root = StandardizedPath::from_local_canonicalized(&alias_dir).unwrap();
+        let deleted_file_local = alias_dir.join("a.txt");
+        let deleted_file_std =
+            StandardizedPath::from_local_canonicalized(&deleted_file_local).unwrap();
+
+        App::test((), |mut app| async move {
+            let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
+            model_handle.update(&mut app, |model, ctx| {
+                model
+                    .index_lazy_loaded_path(&root, ctx)
+                    .expect("should index lazy path");
+            });
+            await_build_tasks_for_repo(&mut app, &model_handle, &root).await;
+
+            // The file starts present in the tree under its canonical path.
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(state.entry.contains(&deleted_file_std));
+            });
+
+            // Delete the file on disk, then deliver a deletion event whose path
+            // is spelled through the alias (as the watcher reports it). The
+            // event must still be attributed to the canonicalized repo root.
+            std::fs::remove_file(&deleted_file_local).unwrap();
+
+            // Wait for the async mutation to land by listening for the tree
+            // update the spawned handler emits.
+            let (tx, rx) = oneshot::channel();
+            let sender = Rc::new(RefCell::new(Some(tx)));
+            let root_for_event = root.clone();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&model_handle, move |_, event, _ctx| {
+                    if let RepositoryMetadataEvent::FileTreeEntryUpdated { path, .. } = event
+                        && path == &root_for_event
+                        && let Some(tx) = sender.borrow_mut().take()
+                    {
+                        let _ = tx.send(());
+                    }
+                });
+            });
+
+            model_handle.update(&mut app, |model, ctx| {
+                model.handle_watcher_event(
+                    &BulkFilesystemWatcherEvent {
+                        deleted: std::collections::HashSet::from([deleted_file_local.clone()]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+            });
+            rx.with_timeout(Duration::from_secs(5))
+                .await
+                .expect("timed out waiting for tree update")
+                .expect("tree update sender dropped");
+
+            model_handle.read(&app, |model, _ctx| {
+                let Some(IndexedRepoState::Indexed(state)) = model.repository_state(&root) else {
+                    panic!("expected indexed lazy-loaded path");
+                };
+                assert!(
+                    !state.entry.contains(&deleted_file_std),
+                    "deletion reported via a symlinked alias should remove the entry from the tree"
+                );
+            });
+        });
+    });
+}

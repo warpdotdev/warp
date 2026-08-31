@@ -596,16 +596,24 @@ impl LocalRepoMetadataModel {
             }
         }
 
-        // Process deleted files
+        // Process deleted files. The deleted path may be reported under a
+        // non-canonical root (e.g. `/tmp` symlinked to `/private/tmp` on macOS),
+        // so we canonicalize it through its closest existing ancestor. The tree
+        // is keyed by canonical paths, so the mutation must use that canonical
+        // spelling for the `Remove` to land.
         for path in &event.deleted {
-            if let Some(repo_path) =
-                self.find_repository_for_path_string(path.to_string_lossy().as_ref())
-            {
-                let repo_update = repo_updates.entry(repo_path).or_default();
-                repo_update.deleted.push(path.to_path_buf());
-            } else if !symlink_target_paths.contains(path) {
-                log::warn!("Deleted file not found in any repo: {path:?} not found in any repo");
-            }
+            let Some((repo_path, canonical_path)) =
+                self.find_repository_and_canonical_for_deleted_path(path)
+            else {
+                if !symlink_target_paths.contains(path) {
+                    log::warn!(
+                        "Deleted file not found in any repo: {path:?} not found in any repo"
+                    );
+                }
+                continue;
+            };
+            let repo_update = repo_updates.entry(repo_path).or_default();
+            repo_update.deleted.push(canonical_path);
         }
 
         // Process moved files
@@ -718,6 +726,58 @@ impl LocalRepoMetadataModel {
     }
 
     #[cfg(feature = "local_fs")]
+    /// Finds the repository for a deleted file and the canonical path to remove
+    /// from its tree.
+    ///
+    /// Unlike `find_repository_for_watcher_entry_path`, a deleted path can no
+    /// longer be canonicalized, but the watcher may report it through a path
+    /// that differs from the repo's canonicalized root (e.g. `/tmp` on macOS is
+    /// a symlink to `/private/tmp`). Attribution must therefore canonicalize
+    /// the path's closest still-existing ancestor and match repos against that,
+    /// otherwise deletions under such a path are silently dropped and the file
+    /// lingers in the Explorer. The canonical spelling must also be used for
+    /// the resulting `Remove` mutation since the tree is keyed by canonical
+    /// paths.
+    fn find_repository_and_canonical_for_deleted_path(
+        &self,
+        path: &Path,
+    ) -> Option<(StandardizedPath, PathBuf)> {
+        // Canonicalize the deleted path through its closest still-existing
+        // ancestor. Deleted files can't be canonicalized directly, but the
+        // watcher may report them under a non-canonical root (e.g. `/tmp` is a
+        // symlink to `/private/tmp` on macOS), so we re-attach the deleted
+        // tail onto the canonicalized ancestor before matching repos.
+        //
+        // We try each ancestor from the file upward: once we hit one that still
+        // exists we canonicalize it and match the re-attached path against the
+        // canonicalized repo roots.
+        let deleted_src = StandardizedPath::from_local_absolute_unchecked(path);
+        for ancestor_std in deleted_src.ancestors() {
+            let Some(ancestor) = ancestor_std.to_local_path() else {
+                continue;
+            };
+            if !ancestor.exists() {
+                continue;
+            }
+            let Some(canonical) = dunce::canonicalize(&ancestor).ok() else {
+                continue;
+            };
+            let Some(tail) = path.strip_prefix(&ancestor).ok() else {
+                continue;
+            };
+            let canonical_path = canonical.join(tail);
+            let canonical_std = StandardizedPath::from_local_absolute_unchecked(&canonical_path);
+            if let Some(repo_path) = self.find_repository_for_standardized_path(&canonical_std) {
+                return Some((repo_path, canonical_path));
+            }
+        }
+
+        // Fall back to the raw path so repos registered under a matching
+        // non-canonical spelling still resolve.
+        self.find_repository_for_path_string(path.to_string_lossy().as_ref())
+            .map(|repo_path| (repo_path, path.to_path_buf()))
+    }
+
     fn find_repository_for_path_string(&self, path_str: &str) -> Option<StandardizedPath> {
         self.repositories
             .iter()
