@@ -584,7 +584,6 @@ end
 
 # Runs the shell's own ctrl-r history tool as a foreground command.
 function warp_run_external_ctrl_r_widget
-  set -l warp_ctrl_r_token "$argv[1]"
   set -l result ""
   switch "$_WARP_EXTERNAL_CTRL_R_WIDGET"
     case 'fzf-history-widget'
@@ -601,8 +600,7 @@ function warp_run_external_ctrl_r_widget
       set result (string replace "__atuin_accept__:" "" -- "$output" | string collect)
   end
   set -l warp_escaped_selection (warp_escape_json "$result")
-  set -l warp_escaped_token (warp_escape_json "$warp_ctrl_r_token")
-  warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"token\": \"$warp_escaped_token\", \"session_id\": $WARP_SESSION_ID } }"
+  warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
 end
 
 function warp_ctrl_t_widget_result
@@ -611,11 +609,10 @@ end
 
 # Runs fzf directly against a find-style command as a foreground command.
 function warp_run_external_ctrl_t_widget
-  set -l warp_ctrl_t_token "$argv[1]"
   set -l result ""
   switch "$_WARP_EXTERNAL_CTRL_T_WIDGET"
     case 'fzf-file-widget'
-      set -l warp_ctrl_t_parts (string split -m 1 -- ':' "$argv[2]")
+      set -l warp_ctrl_t_parts (string split -m 1 -- ':' "$argv[1]")
       set -l char_cursor $warp_ctrl_t_parts[1]
       set -l original_line (warp_hex_decode_string $warp_ctrl_t_parts[2] | string collect --no-trim-newlines --allow-empty)
       commandline -r -- $original_line
@@ -626,8 +623,7 @@ function warp_run_external_ctrl_t_widget
       commandline -r ''
   end
   set -l warp_escaped_selection (warp_escape_json "$result")
-  set -l warp_escaped_token (warp_escape_json "$warp_ctrl_t_token")
-  warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"token\": \"$warp_escaped_token\", \"session_id\": $WARP_SESSION_ID } }"
+  warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
 end
 
 # Exclude the ctrl-r/ctrl-t external handoff helpers (see warp_run_external_ctrl_r_widget/
@@ -658,7 +654,7 @@ else if not functions -q warp_original_fish_should_add_to_history
   end
 end
 function fish_should_add_to_history
-  string match --quiet -- '*warp_run_external_ctrl_r_widget *' $argv[1]; and return 1
+  string match --quiet -- '*warp_run_external_ctrl_r_widget*' $argv[1]; and return 1
   string match --quiet -- '*warp_run_external_ctrl_t_widget*' $argv[1]; and return 1
   warp_original_fish_should_add_to_history $argv
 end

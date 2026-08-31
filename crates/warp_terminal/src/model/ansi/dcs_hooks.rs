@@ -998,13 +998,10 @@ pub struct InputBufferValue {
 }
 
 /// Selection reported by an external shell widget (ctrl-r history or ctrl-t file search).
-/// Empty `buffer` means the user cancelled. `token` echoes the handoff token so a stale or
-/// unsolicited write can be ignored.
+/// Empty `buffer` means the user cancelled.
 #[derive(Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ExternalShellWidgetSelectionValue {
     pub buffer: String,
-    #[serde(default)]
-    pub token: String,
     #[serde(default)]
     pub session_id: HookSessionId,
 }
@@ -1013,7 +1010,6 @@ impl std::fmt::Debug for ExternalShellWidgetSelectionValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExternalShellWidgetSelectionValue")
             .field("buffer", &"<redacted>")
-            .field("token", &self.token)
             .field("session_id", &self.session_id)
             .finish()
     }

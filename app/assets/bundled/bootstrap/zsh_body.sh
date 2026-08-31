@@ -712,7 +712,6 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
 
   # Runs the shell's own ctrl-r history widget as a foreground command.
   function warp_run_external_ctrl_r_widget () {
-    local warp_ctrl_r_token="$1"
     local result=""
     case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
       fzf-history-widget)
@@ -734,13 +733,11 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         ;;
     esac
     local warp_escaped_selection="$(warp_escape_json "$result")"
-    local warp_escaped_token="$(warp_escape_json "$warp_ctrl_r_token")"
-    warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"token\": \"$warp_escaped_token\", \"session_id\": $WARP_SESSION_ID } }"
+    warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
   }
 
   # Runs the shell's own ctrl-t file-search widget as a foreground command.
   function warp_run_external_ctrl_t_widget () {
-    local warp_ctrl_t_token="$1"
     local result=""
     case "$_WARP_EXTERNAL_CTRL_T_WIDGET" in
       fzf-file-widget)
@@ -752,8 +749,7 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
         ;;
     esac
     local warp_escaped_selection="$(warp_escape_json "$result")"
-    local warp_escaped_token="$(warp_escape_json "$warp_ctrl_t_token")"
-    warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"token\": \"$warp_escaped_token\", \"session_id\": $WARP_SESSION_ID } }"
+    warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
   }
 
   function clear() {

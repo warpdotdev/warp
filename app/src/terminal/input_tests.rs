@@ -119,7 +119,6 @@ use crate::{
 fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
     PendingShellWidgetHandoff {
         session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
         original_buffer: "draft".to_string(),
         selection: None,
         block_id: BlockId::new(),
@@ -130,7 +129,6 @@ fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
 fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
     PendingShellWidgetHandoff {
         session_id: SessionId::from(1),
-        token: "tok-1".to_string(),
         original_buffer: "echo ".to_string(),
         selection: None,
         block_id: BlockId::new(),
@@ -147,7 +145,6 @@ fn matching_shell_widget_handoff_selection_is_applied() {
     PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(1),
-        "tok-1",
         "echo selected",
     );
     assert_eq!(pending.as_ref().unwrap().restore_text(), "echo selected");
@@ -156,7 +153,6 @@ fn matching_shell_widget_handoff_selection_is_applied() {
     PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(1),
-        "tok-1",
         "selected/file.txt",
     );
     assert_eq!(
@@ -171,7 +167,6 @@ fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
     PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
         SessionId::from(1),
-        "tok-1",
         "echo selected",
     );
     assert!(pending.is_none());
@@ -179,17 +174,7 @@ fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
     let mut pending = Some(pending_ctrl_r_handoff());
     PendingShellWidgetHandoff::maybe_apply_selection(
         &mut pending,
-        SessionId::from(1),
-        "some-other-token",
-        "echo selected",
-    );
-    assert_eq!(pending.as_ref().unwrap().restore_text(), "draft");
-
-    let mut pending = Some(pending_ctrl_r_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(
-        &mut pending,
         SessionId::from(2),
-        "tok-1",
         "echo selected",
     );
     assert_eq!(pending.unwrap().restore_text(), "draft");
@@ -198,11 +183,11 @@ fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
 #[test]
 fn empty_shell_widget_handoff_selection_keeps_original_buffer() {
     let mut pending = Some(pending_ctrl_r_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "tok-1", "");
+    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "");
     assert_eq!(pending.unwrap().restore_text(), "draft");
 
     let mut pending = Some(pending_ctrl_t_handoff());
-    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "tok-1", "");
+    PendingShellWidgetHandoff::maybe_apply_selection(&mut pending, SessionId::from(1), "");
     assert_eq!(pending.unwrap().selection, None);
 }
 
@@ -1963,7 +1948,6 @@ async fn complete_ctrl_t_handoff(
     input.update(app, |input, ctx| {
         input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
             session_id: SessionId::from(1),
-            token: "tok-1".to_string(),
             original_buffer: original_buffer.to_string(),
             selection: insertion.map(str::to_string),
             block_id: block_id.clone(),
@@ -2007,7 +1991,6 @@ async fn complete_ctrl_r_handoff(
     input.update(app, |input, ctx| {
         input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
             session_id: SessionId::from(1),
-            token: "tok-1".to_string(),
             original_buffer: original_buffer.to_string(),
             selection: selection.map(str::to_string),
             block_id: block_id.clone(),
@@ -2199,9 +2182,7 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
         input.update(&mut app, |input, ctx| {
             input.handle_block_completed_event(
                 BlockCompletedEvent {
-                    block_type: user_block_completed_for_test(
-                        " warp_run_external_ctrl_t_widget tok-1",
-                    ),
+                    block_type: user_block_completed_for_test(" warp_run_external_ctrl_t_widget"),
                     num_secrets_obfuscated: 0,
                     block_index: BlockIndex::zero(),
                     block_id,

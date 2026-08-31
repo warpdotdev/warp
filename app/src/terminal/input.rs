@@ -56,7 +56,6 @@ use serde_json::json;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
 use settings::{Setting as _, ToggleableSetting};
 use string_offset::{ByteOffset, CharOffset};
-use uuid::Uuid;
 use vec1::Vec1;
 use vim::vim::{VimHandler, VimMode};
 use warp_cli::agent::Harness;
@@ -1899,7 +1898,6 @@ enum ShellWidgetHandoffKind {
 
 struct PendingShellWidgetHandoff {
     session_id: SessionId,
-    token: String,
     original_buffer: String,
     selection: Option<String>,
     block_id: BlockId,
@@ -1907,16 +1905,11 @@ struct PendingShellWidgetHandoff {
 }
 
 impl PendingShellWidgetHandoff {
-    fn maybe_apply_selection(
-        pending: &mut Option<Self>,
-        session_id: SessionId,
-        token: &str,
-        selection: &str,
-    ) {
+    fn maybe_apply_selection(pending: &mut Option<Self>, session_id: SessionId, selection: &str) {
         let Some(handoff) = pending else {
             return;
         };
-        if handoff.session_id != session_id || handoff.token != token {
+        if handoff.session_id != session_id {
             return;
         }
         if !selection.is_empty() {
@@ -7710,10 +7703,9 @@ impl Input {
     }
 
     /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and
-    /// submitted it, passing a freshly generated handoff token as its argument and snapshotting
-    /// the current buffer contents so they're restored once the command's block completes --
-    /// unless [`Self::set_external_shell_widget_selection`] supplies a selected command in the
-    /// meantime. Returns `true` if the command was started.
+    /// submitted it, snapshotting the current buffer contents so they're restored once the
+    /// command's block completes -- unless [`Self::set_external_shell_widget_selection`] supplies
+    /// a selected command in the meantime. Returns `true` if the command was started.
     ///
     /// The command is prefixed with a leading space, honoring the "ignorespace" convention that
     /// bash/zsh support and atuin explicitly implements itself (independent of the shell's own
@@ -7733,8 +7725,7 @@ impl Input {
         };
         let current_input = self.buffer_text(ctx);
         let block_id = self.model.lock().block_list().active_block_id().clone();
-        let token = Uuid::new_v4().to_string();
-        let command = format!(" {helper_command} {token}");
+        let command = format!(" {helper_command}");
         // Not a command the user ran: Warp's history is independent of the shell histfile.
         let started = self.try_execute_command_from_source(
             &command,
@@ -7745,7 +7736,6 @@ impl Input {
         if started {
             self.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
                 session_id,
-                token,
                 original_buffer: current_input,
                 selection: None,
                 block_id,
@@ -7755,17 +7745,11 @@ impl Input {
         started
     }
 
-    /// Applies `selection` only if `session_id` and `token` match the in-flight handoff.
-    pub fn set_external_shell_widget_selection(
-        &mut self,
-        session_id: SessionId,
-        token: &str,
-        selection: &str,
-    ) {
+    /// Applies `selection` only if `session_id` matches the in-flight handoff.
+    pub fn set_external_shell_widget_selection(&mut self, session_id: SessionId, selection: &str) {
         PendingShellWidgetHandoff::maybe_apply_selection(
             &mut self.pending_shell_widget_handoff,
             session_id,
-            token,
             selection,
         );
     }
@@ -7800,8 +7784,7 @@ impl Input {
             .as_ref(ctx)
             .end_byte_index_of_last_selection(ctx);
         let block_id = self.model.lock().block_list().active_block_id().clone();
-        let token = Uuid::new_v4().to_string();
-        let mut command = format!(" {helper_command} {token}");
+        let mut command = format!(" {helper_command}");
         if apply_mode == CtrlTApplyMode::Replace {
             command.push_str(&format!(
                 " {}",
@@ -7818,7 +7801,6 @@ impl Input {
         if started {
             self.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
                 session_id,
-                token,
                 original_buffer,
                 selection: None,
                 block_id,

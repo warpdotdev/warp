@@ -12999,11 +12999,7 @@ impl TerminalView {
                     && let Some(session_id) = data.session_id.map(SessionId::from)
                 {
                     self.input.update(ctx, |input, _ctx| {
-                        input.set_external_shell_widget_selection(
-                            session_id,
-                            &data.token,
-                            &data.buffer,
-                        );
+                        input.set_external_shell_widget_selection(session_id, &data.buffer);
                     });
                 }
             }

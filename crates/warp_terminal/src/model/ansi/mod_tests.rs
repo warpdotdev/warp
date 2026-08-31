@@ -987,7 +987,6 @@ fn parse_dcs_external_shell_widget_selection() {
                 "hook": "ExternalShellWidgetSelection",
                 "value": {
                     "buffer": "echo selected",
-                    "token": "tok-1",
                     "session_id": 167303092612201
                 }
             }"#,
@@ -1001,7 +1000,6 @@ fn parse_dcs_external_shell_widget_selection() {
             *value,
             ExternalShellWidgetSelectionValue {
                 buffer: "echo selected".to_string(),
-                token: "tok-1".to_string(),
                 session_id: Some(167303092612201),
             }
         ),
@@ -1016,7 +1014,6 @@ fn parse_dcs_external_shell_widget_selection_with_unregistered_session_is_reject
                 "hook": "ExternalShellWidgetSelection",
                 "value": {
                     "buffer": "echo selected",
-                    "token": "tok-1",
                     "session_id": 999999999999999
                 }
             }"#,
