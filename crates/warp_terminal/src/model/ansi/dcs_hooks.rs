@@ -69,16 +69,8 @@ pub(super) enum DProtoHook {
     InputBuffer {
         value: InputBufferValue,
     },
-    /// Reports the command selected in the shell's external ctrl-r history widget (e.g. fzf or
-    /// atuin), so it can be inserted into the input editor. See [`ExternalCtrlRSelectionValue`].
-    ExternalCtrlRSelection {
-        value: ExternalCtrlRSelectionValue,
-    },
-    /// Reports the path(s) selected in the shell's external ctrl-t file-search widget (e.g.
-    /// fzf), so they can be inserted into the input editor at the cursor position ctrl-t was
-    /// pressed at. See [`ExternalCtrlTSelectionValue`].
-    ExternalCtrlTSelection {
-        value: ExternalCtrlTSelectionValue,
+    ExternalShellWidgetSelection {
+        value: ExternalShellWidgetSelectionValue,
     },
     Clear {
         value: ClearValue,
@@ -107,8 +99,7 @@ const DPROTO_HOOK_VARIANTS: &[&str] = &[
     "SSH",
     "InitShell",
     "InputBuffer",
-    "ExternalCtrlRSelection",
-    "ExternalCtrlTSelection",
+    "ExternalShellWidgetSelection",
     "Clear",
     "InitSubshell",
     "SourcedRcFileForWarp",
@@ -162,10 +153,7 @@ impl<'de> Deserialize<'de> for DProtoHook {
             "InputBuffer" => DProtoHook::InputBuffer {
                 value: parse_hook_value::<_, D::Error>(raw.value)?,
             },
-            "ExternalCtrlRSelection" => DProtoHook::ExternalCtrlRSelection {
-                value: parse_hook_value::<_, D::Error>(raw.value)?,
-            },
-            "ExternalCtrlTSelection" => DProtoHook::ExternalCtrlTSelection {
+            "ExternalShellWidgetSelection" => DProtoHook::ExternalShellWidgetSelection {
                 value: parse_hook_value::<_, D::Error>(raw.value)?,
             },
             "Clear" => DProtoHook::Clear {
@@ -204,8 +192,7 @@ impl DProtoHook {
             DProtoHook::SSH { .. } => "SSH",
             DProtoHook::InitShell { .. } => "InitShell",
             DProtoHook::InputBuffer { .. } => "InputBuffer",
-            DProtoHook::ExternalCtrlRSelection { .. } => "ExternalCtrlRSelection",
-            DProtoHook::ExternalCtrlTSelection { .. } => "ExternalCtrlTSelection",
+            DProtoHook::ExternalShellWidgetSelection { .. } => "ExternalShellWidgetSelection",
             DProtoHook::Clear { .. } => "Clear",
             DProtoHook::InitSubshell { .. } => "InitSubshell",
             DProtoHook::SourcedRcFileForWarp { .. } => "SourcedRcFileForWarp",
@@ -225,8 +212,9 @@ impl DProtoHook {
             DProtoHook::CommandFinished { value } => value.session_id.map(SessionId::from),
             DProtoHook::Bootstrapped { value } => value.session_id.map(SessionId::from),
             DProtoHook::InputBuffer { value } => value.session_id.map(SessionId::from),
-            DProtoHook::ExternalCtrlRSelection { value } => value.session_id.map(SessionId::from),
-            DProtoHook::ExternalCtrlTSelection { value } => value.session_id.map(SessionId::from),
+            DProtoHook::ExternalShellWidgetSelection { value } => {
+                value.session_id.map(SessionId::from)
+            }
             DProtoHook::Clear { value } => value.session_id.map(SessionId::from),
             DProtoHook::FinishUpdate { value } => value.session_id.map(SessionId::from),
             DProtoHook::PreInteractiveSSHSession { value } => value.session_id.map(SessionId::from),
@@ -248,8 +236,7 @@ impl DProtoHook {
             | DProtoHook::SSH { .. }
             | DProtoHook::InitShell { .. }
             | DProtoHook::InputBuffer { .. }
-            | DProtoHook::ExternalCtrlRSelection { .. }
-            | DProtoHook::ExternalCtrlTSelection { .. }
+            | DProtoHook::ExternalShellWidgetSelection { .. }
             | DProtoHook::Clear { .. }
             | DProtoHook::InitSubshell { .. }
             | DProtoHook::FinishUpdate { .. }
@@ -1010,16 +997,11 @@ pub struct InputBufferValue {
     pub session_id: HookSessionId,
 }
 
-/// Received from the pty after the shell's external ctrl-r history widget (e.g. fzf or atuin,
-/// detected via the `external_ctrl_r_history` [`BootstrappedValue::shell_plugins`] tag) finishes,
-/// reporting the command the user selected. Empty when the user cancelled without selecting
-/// anything. Warp inserts the selection into the input editor without executing it.
-///
-/// `token` echoes back the handoff token the client sent as an argument to the shell helper that
-/// emits this hook, so the client can verify this is the reply to a handoff it's actually
-/// waiting on rather than an unsolicited or stale write to the pty.
+/// Selection reported by an external shell widget (ctrl-r history or ctrl-t file search).
+/// Empty `buffer` means the user cancelled. `token` echoes the handoff token so a stale or
+/// unsolicited write can be ignored.
 #[derive(Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ExternalCtrlRSelectionValue {
+pub struct ExternalShellWidgetSelectionValue {
     pub buffer: String,
     #[serde(default)]
     pub token: String,
@@ -1027,41 +1009,9 @@ pub struct ExternalCtrlRSelectionValue {
     pub session_id: HookSessionId,
 }
 
-impl std::fmt::Debug for ExternalCtrlRSelectionValue {
-    /// Redacts `buffer`, since it carries the shell command the user selected and may contain
-    /// sensitive data (e.g. a secret typed into an earlier command).
+impl std::fmt::Debug for ExternalShellWidgetSelectionValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExternalCtrlRSelectionValue")
-            .field("buffer", &"<redacted>")
-            .field("token", &self.token)
-            .field("session_id", &self.session_id)
-            .finish()
-    }
-}
-
-/// Received from the pty after the shell's external ctrl-t file-search widget (e.g. fzf,
-/// detected via the `external_ctrl_t_file` [`BootstrappedValue::shell_plugins`] tag) finishes,
-/// reporting the path(s) the user selected. Empty when the user cancelled without selecting
-/// anything. Warp inserts the selection into the input editor, at the cursor position ctrl-t
-/// was pressed at, without executing it.
-///
-/// `token` echoes back the handoff token the client sent as an argument to the shell helper that
-/// emits this hook, so the client can verify this is the reply to a handoff it's actually
-/// waiting on rather than an unsolicited or stale write to the pty.
-#[derive(Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ExternalCtrlTSelectionValue {
-    pub buffer: String,
-    #[serde(default)]
-    pub token: String,
-    #[serde(default)]
-    pub session_id: HookSessionId,
-}
-
-impl std::fmt::Debug for ExternalCtrlTSelectionValue {
-    /// Redacts `buffer`, since it carries file path(s) that may reveal sensitive information
-    /// about the user's filesystem.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExternalCtrlTSelectionValue")
+        f.debug_struct("ExternalShellWidgetSelectionValue")
             .field("buffer", &"<redacted>")
             .field("token", &self.token)
             .field("session_id", &self.session_id)

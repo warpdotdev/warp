@@ -9,9 +9,7 @@ pub use warp_terminal::event::{ExecutedExecutorCommandEvent, ParseGeneratorOutpu
 use warp_util::lazy::Lazy;
 
 use super::history::HistoryEntry;
-use super::model::ansi::{
-    ExternalCtrlRSelectionValue, ExternalCtrlTSelectionValue, FinishUpdateValue,
-};
+use super::model::ansi::{ExternalShellWidgetSelectionValue, FinishUpdateValue};
 use super::model::block::BlockId;
 use super::model::lifecycle::LifecycleRecoveryRecord;
 use super::model::session::{SessionId, SessionInfo};
@@ -130,12 +128,7 @@ pub enum Event {
     /// Emitted when the assisted auto-update has completed and we're ready to
     /// relaunch the app.
     FinishUpdate(FinishUpdateValue),
-    /// Emitted when the shell reports the command selected in its external ctrl-r history
-    /// widget (e.g. fzf or atuin).
-    ExternalCtrlRSelection(ExternalCtrlRSelectionValue),
-    /// Emitted when the shell reports the path(s) selected in its external ctrl-t file-search
-    /// widget (e.g. fzf).
-    ExternalCtrlTSelection(ExternalCtrlTSelectionValue),
+    ExternalShellWidgetSelection(ExternalShellWidgetSelectionValue),
     TextSelectionChanged,
     ShellSpawned(ShellType),
     ImageReceived {
@@ -483,21 +476,10 @@ impl Debug for Event {
                 )
             }
             Event::FinishUpdate(data) => write!(f, "FinishUpdate({})", data.update_id),
-            Event::ExternalCtrlRSelection(data) => {
-                // The buffer is a selected shell command, which may carry a credential; log only
-                // its length rather than its contents.
+            Event::ExternalShellWidgetSelection(data) => {
                 write!(
                     f,
-                    "ExternalCtrlRSelection(buffer_len: {})",
-                    data.buffer.len()
-                )
-            }
-            Event::ExternalCtrlTSelection(data) => {
-                // The buffer is a selected file path, which may reveal filesystem structure;
-                // log only its length rather than its contents.
-                write!(
-                    f,
-                    "ExternalCtrlTSelection(buffer_len: {})",
+                    "ExternalShellWidgetSelection(buffer_len: {})",
                     data.buffer.len()
                 )
             }

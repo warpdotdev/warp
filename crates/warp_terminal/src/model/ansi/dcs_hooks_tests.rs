@@ -171,12 +171,8 @@ fn every_hook_tag_dispatches_to_the_matching_variant() {
         ),
         ("InputBuffer", serde_json::json!({"buffer": "echo hi"})),
         (
-            "ExternalCtrlRSelection",
+            "ExternalShellWidgetSelection",
             serde_json::json!({"buffer": "echo hi"}),
-        ),
-        (
-            "ExternalCtrlTSelection",
-            serde_json::json!({"buffer": "/home/me/file.txt"}),
         ),
         ("Clear", serde_json::json!({})),
         (

@@ -66,9 +66,9 @@ pub use crate::terminal::history::HistoryEntry;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue,
-    ExternalCtrlRSelectionValue, ExternalCtrlTSelectionValue, Handler, InitShellValue,
-    InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata,
-    SSHValue, SourcedRcFileForWarpValue,
+    ExternalShellWidgetSelectionValue, Handler, InitShellValue, InitSubshellValue,
+    PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata, SSHValue,
+    SourcedRcFileForWarpValue,
 };
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::completions::{ShellCompletion, ShellCompletionUpdate};
@@ -3202,14 +3202,9 @@ impl ansi::Handler for TerminalModel {
         delegate!(self.input_buffer(data));
     }
 
-    fn external_ctrl_r_selection(&mut self, data: ExternalCtrlRSelectionValue) {
+    fn external_shell_widget_selection(&mut self, data: ExternalShellWidgetSelectionValue) {
         self.event_proxy
-            .send_app_event(Event::ExternalCtrlRSelection(data));
-    }
-
-    fn external_ctrl_t_selection(&mut self, data: ExternalCtrlTSelectionValue) {
-        self.event_proxy
-            .send_app_event(Event::ExternalCtrlTSelection(data));
+            .send_app_event(Event::ExternalShellWidgetSelection(data));
     }
 
     fn init_subshell(&mut self, data: InitSubshellValue) {

@@ -9227,7 +9227,7 @@ impl TerminalView {
     /// The command the user selects (or the buffer they had before ctrl-r, if they cancel) is
     /// restored into the input editor once the helper's block completes; see
     /// [`Input::trigger_external_ctrl_r_history_search`] and
-    /// [`Input::set_external_ctrl_r_selection`].
+    /// [`Input::set_external_shell_widget_selection`].
     ///
     /// Returns `true` if the handoff was triggered, in which case the caller should not open
     /// Warp's command search.
@@ -12994,21 +12994,16 @@ impl TerminalView {
                     log::warn!("Got a FinishUpdate event with non-matching update id!");
                 }
             }
-            ModelEvent::ExternalCtrlRSelection(data) => {
+            ModelEvent::ExternalShellWidgetSelection(data) => {
                 if FeatureFlag::ShellWidgetHandoff.is_enabled()
                     && let Some(session_id) = data.session_id.map(SessionId::from)
                 {
                     self.input.update(ctx, |input, _ctx| {
-                        input.set_external_ctrl_r_selection(session_id, &data.token, &data.buffer);
-                    });
-                }
-            }
-            ModelEvent::ExternalCtrlTSelection(data) => {
-                if FeatureFlag::ShellWidgetHandoff.is_enabled()
-                    && let Some(session_id) = data.session_id.map(SessionId::from)
-                {
-                    self.input.update(ctx, |input, _ctx| {
-                        input.set_external_ctrl_t_selection(session_id, &data.token, &data.buffer);
+                        input.set_external_shell_widget_selection(
+                            session_id,
+                            &data.token,
+                            &data.buffer,
+                        );
                     });
                 }
             }

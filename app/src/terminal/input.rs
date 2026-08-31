@@ -7712,7 +7712,7 @@ impl Input {
     /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and
     /// submitted it, passing a freshly generated handoff token as its argument and snapshotting
     /// the current buffer contents so they're restored once the command's block completes --
-    /// unless [`Self::set_external_ctrl_r_selection`] supplies a selected command in the
+    /// unless [`Self::set_external_shell_widget_selection`] supplies a selected command in the
     /// meantime. Returns `true` if the command was started.
     ///
     /// The command is prefixed with a leading space, honoring the "ignorespace" convention that
@@ -7756,7 +7756,7 @@ impl Input {
     }
 
     /// Applies `selection` only if `session_id` and `token` match the in-flight handoff.
-    pub fn set_external_ctrl_r_selection(
+    pub fn set_external_shell_widget_selection(
         &mut self,
         session_id: SessionId,
         token: &str,
@@ -7829,21 +7829,6 @@ impl Input {
             });
         }
         started
-    }
-
-    /// Applies `selection` only if `session_id` and `token` match the in-flight handoff.
-    pub fn set_external_ctrl_t_selection(
-        &mut self,
-        session_id: SessionId,
-        token: &str,
-        selection: &str,
-    ) {
-        PendingShellWidgetHandoff::maybe_apply_selection(
-            &mut self.pending_shell_widget_handoff,
-            session_id,
-            token,
-            selection,
-        );
     }
 
     fn try_execute_command_with_options(

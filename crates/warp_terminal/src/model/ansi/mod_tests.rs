@@ -237,14 +237,9 @@ impl Handler for MockHandler {
             .push(DProtoHook::InputBuffer { value: data })
     }
 
-    fn external_ctrl_r_selection(&mut self, data: super::ExternalCtrlRSelectionValue) {
+    fn external_shell_widget_selection(&mut self, data: super::ExternalShellWidgetSelectionValue) {
         self.d_proto_hooks
-            .push(DProtoHook::ExternalCtrlRSelection { value: data })
-    }
-
-    fn external_ctrl_t_selection(&mut self, data: super::ExternalCtrlTSelectionValue) {
-        self.d_proto_hooks
-            .push(DProtoHook::ExternalCtrlTSelection { value: data })
+            .push(DProtoHook::ExternalShellWidgetSelection { value: data })
     }
 
     fn init_subshell(&mut self, data: InitSubshellValue) {
@@ -985,16 +980,11 @@ fn parse_dcs_input_buffer() {
     }
 }
 
-/// End-to-end regression for the ctrl-r/ctrl-t handoff dispatch: this is the exact path by which
-/// a shell-reported selection reaches the terminal handler, and it was hand-reapplied at this
-/// module's new location during a merge with master's crate-extraction refactor (which relocated
-/// this file from `app/src/terminal/model/ansi/mod.rs`) -- so it needs its own coverage here,
-/// not just a mock-level unit test of the handler trait in isolation.
 #[test]
-fn parse_dcs_external_ctrl_r_selection() {
+fn parse_dcs_external_shell_widget_selection() {
     let bytes = hex_encoded_dcs_string(
         r#"{
-                "hook": "ExternalCtrlRSelection",
+                "hook": "ExternalShellWidgetSelection",
                 "value": {
                     "buffer": "echo selected",
                     "token": "tok-1",
@@ -1007,9 +997,9 @@ fn parse_dcs_external_ctrl_r_selection() {
 
     assert_eq!(handler.d_proto_hooks.len(), 1);
     match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::ExternalCtrlRSelection { value } => assert_eq!(
+        DProtoHook::ExternalShellWidgetSelection { value } => assert_eq!(
             *value,
-            ExternalCtrlRSelectionValue {
+            ExternalShellWidgetSelectionValue {
                 buffer: "echo selected".to_string(),
                 token: "tok-1".to_string(),
                 session_id: Some(167303092612201),
@@ -1019,14 +1009,11 @@ fn parse_dcs_external_ctrl_r_selection() {
     }
 }
 
-/// The session_id gate is what stops an unrelated pty write (or a stale reply after the client
-/// gave up on the handoff) from being treated as a real selection -- this must still apply at the
-/// dispatch's new location, not just for hooks the merge didn't touch.
 #[test]
-fn parse_dcs_external_ctrl_r_selection_with_unregistered_session_is_rejected() {
+fn parse_dcs_external_shell_widget_selection_with_unregistered_session_is_rejected() {
     let bytes = hex_encoded_dcs_string(
         r#"{
-                "hook": "ExternalCtrlRSelection",
+                "hook": "ExternalShellWidgetSelection",
                 "value": {
                     "buffer": "echo selected",
                     "token": "tok-1",
@@ -1041,36 +1028,6 @@ fn parse_dcs_external_ctrl_r_selection_with_unregistered_session_is_rejected() {
         handler.d_proto_hooks.is_empty(),
         "a selection for an unregistered session_id must be rejected, not dispatched"
     );
-}
-
-/// See `parse_dcs_external_ctrl_r_selection` above for why this end-to-end coverage matters.
-#[test]
-fn parse_dcs_external_ctrl_t_selection() {
-    let bytes = hex_encoded_dcs_string(
-        r#"{
-                "hook": "ExternalCtrlTSelection",
-                "value": {
-                    "buffer": "src/main.rs",
-                    "token": "tok-2",
-                    "session_id": 167303092612201
-                }
-            }"#,
-    );
-
-    let (_, handler) = parse_bytes(&bytes);
-
-    assert_eq!(handler.d_proto_hooks.len(), 1);
-    match handler.d_proto_hooks.first().unwrap() {
-        DProtoHook::ExternalCtrlTSelection { value } => assert_eq!(
-            *value,
-            ExternalCtrlTSelectionValue {
-                buffer: "src/main.rs".to_string(),
-                token: "tok-2".to_string(),
-                session_id: Some(167303092612201),
-            }
-        ),
-        _ => panic!("incorrect dcs value"),
-    }
 }
 
 #[test]
