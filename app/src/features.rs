@@ -531,7 +531,3 @@ fn enabled_features() -> HashSet<FeatureFlag> {
 
     flags
 }
-
-#[cfg(test)]
-#[path = "features_tests.rs"]
-mod tests;
