@@ -357,6 +357,7 @@ integration_tests! {
     test_goto_line_jumps_to_line,
     test_goto_line_with_column,
     test_goto_line_clamps_out_of_range,
+    test_code_editor_select_to_buffer_boundaries_with_shortcuts,
     test_code_editor_line_numbers_default_to_absolute,
     test_code_editor_relative_line_numbers_follow_cursor,
 
