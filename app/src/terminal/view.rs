@@ -728,11 +728,6 @@ const EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG: &str = "external_ctrl_r_history";
 /// `app/assets/bundled/bootstrap/zsh_body.sh`.
 const EXTERNAL_CTRL_T_FILE_PLUGIN_TAG: &str = "external_ctrl_t_file";
 
-/// Name of the bootstrap-installed shell function invoked to hand ctrl-t off to the shell's own
-/// external file-search widget. Must match the function name defined in
-/// `app/assets/bundled/bootstrap/zsh_body.sh`.
-const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
-
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY: &str = "LongRunningRequestedCommand";
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY: &str =
     "LongRunningRequestedUserTookOverCommand";
@@ -9296,11 +9291,7 @@ impl TerminalView {
         };
 
         self.input.update(ctx, |input, ctx| {
-            input.trigger_external_ctrl_t_file_search(
-                EXTERNAL_CTRL_T_HELPER_COMMAND,
-                apply_mode,
-                ctx,
-            )
+            input.trigger_external_ctrl_t_file_search(apply_mode, ctx)
         })
     }
 

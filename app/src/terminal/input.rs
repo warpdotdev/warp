@@ -1934,6 +1934,11 @@ impl PendingShellWidgetHandoff {
 /// `app/assets/bundled/bootstrap/zsh_body.sh`.
 const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
 
+/// Name of the bootstrap-installed shell function invoked to hand ctrl-t off to the shell's own
+/// external file-search widget. Must match the function name defined in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
+
 struct AmbientAgentViewState {
     view_model: ModelHandle<AmbientAgentViewModel>,
     #[allow(dead_code)]
@@ -7738,12 +7743,12 @@ impl Input {
         handoff.maybe_apply_selection(session_id, selection);
     }
 
-    /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and
-    /// submitted it, mirroring [`Self::trigger_external_ctrl_r_history_search`]. Unlike ctrl-r,
-    /// which replaces the whole buffer with the selection, ctrl-t either splices the selection
-    /// into the buffer at the cursor position ctrl-t was pressed at, or replaces the buffer
-    /// wholesale, depending on `apply_mode` (see [`CtrlTApplyMode`]) -- so this snapshots the
-    /// current buffer text and cursor byte offset separately, rather than a single restorable
+    /// Runs [`EXTERNAL_CTRL_T_HELPER_COMMAND`] (a bootstrap-installed shell function) as if the
+    /// user had typed and submitted it, mirroring [`Self::trigger_external_ctrl_r_history_search`].
+    /// Unlike ctrl-r, which replaces the whole buffer with the selection, ctrl-t either splices the
+    /// selection into the buffer at the cursor position ctrl-t was pressed at, or replaces the
+    /// buffer wholesale, depending on `apply_mode` (see [`CtrlTApplyMode`]) -- so this snapshots
+    /// the current buffer text and cursor byte offset separately, rather than a single restorable
     /// string. Returns `true` if the command was started.
     ///
     /// See [`Self::trigger_external_ctrl_r_history_search`] for why the command is prefixed with
@@ -7759,7 +7764,6 @@ impl Input {
     /// and reports a plain path for Warp to splice in itself.
     pub fn trigger_external_ctrl_t_file_search(
         &mut self,
-        helper_command: &str,
         apply_mode: CtrlTApplyMode,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
@@ -7772,7 +7776,7 @@ impl Input {
             .as_ref(ctx)
             .end_byte_index_of_last_selection(ctx);
         let block_id = self.model.lock().block_list().active_block_id().clone();
-        let mut command = format!(" {helper_command}");
+        let mut command = format!(" {EXTERNAL_CTRL_T_HELPER_COMMAND}");
         if apply_mode == CtrlTApplyMode::Replace {
             let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
             command.push_str(&format!(" {char_cursor}:{}", hex::encode(&original_buffer)));

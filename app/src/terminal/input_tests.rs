@@ -2132,11 +2132,7 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
         });
 
         let started = input.update(&mut app, |input, ctx| {
-            input.trigger_external_ctrl_t_file_search(
-                "warp_run_external_ctrl_t_widget",
-                CtrlTApplyMode::Splice,
-                ctx,
-            )
+            input.trigger_external_ctrl_t_file_search(CtrlTApplyMode::Splice, ctx)
         });
         assert!(started, "the handoff command should have started");
 
