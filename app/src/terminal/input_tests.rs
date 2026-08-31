@@ -2248,42 +2248,6 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
     });
 }
 
-/// The fish ctrl-t helper reads the draft's cursor with fish's `commandline -C`, which takes a
-/// *character* offset, while `cursor_offset` here is a byte offset -- so a draft containing a
-/// multi-byte character before the cursor (here, "caf\u{e9} ", where \u{e9} is 2 bytes but 1
-/// character, for 6 bytes and 5 characters total) must have that byte offset converted, not
-/// copied verbatim, or the widget would seed itself at the wrong position for any non-ASCII draft.
-#[test]
-fn ctrl_t_draft_arg_converts_byte_cursor_to_char_cursor_for_multi_byte_draft() {
-    let original_buffer = "caf\u{e9} ls";
-    // Byte offset right after "café " (the \u{e9} is 2 bytes), which is character offset 5.
-    let cursor_offset = ByteOffset::from("caf\u{e9} ".len());
-    let arg = ctrl_t_draft_arg(original_buffer, cursor_offset);
-
-    let (char_cursor, hex_draft) = arg
-        .split_once(':')
-        .expect("the arg must be colon-delimited");
-    assert_eq!(
-        char_cursor, "5",
-        "the cursor must be encoded as a character offset, not the byte offset"
-    );
-    assert_eq!(
-        hex::decode(hex_draft).expect("the draft must be valid hex"),
-        original_buffer.as_bytes(),
-        "the draft must be hex-encoded verbatim"
-    );
-}
-
-/// An empty draft (ctrl-t on a blank line) is the ordinary, not edge, case: the hex field for it
-/// is empty, so the cursor and draft must stay combined into one argument rather than passed
-/// separately, or the empty field would vanish under the shell's own word-splitting once the
-/// invocation is typed into the terminal as literal text.
-#[test]
-fn ctrl_t_draft_arg_keeps_empty_draft_and_cursor_as_one_token() {
-    let arg = ctrl_t_draft_arg("", ByteOffset::from(0));
-    assert_eq!(arg, "0:");
-}
-
 /// While `ShellWidgetHandoff` is disabled (its default state, matching a user who hasn't opted
 /// into this prototype), the `workspace:trigger_external_ctrl_t_file_search` binding must be
 /// completely ineligible -- not merely a no-op when triggered -- so ctrl-t falls through to

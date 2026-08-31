@@ -1929,19 +1929,6 @@ impl PendingShellWidgetHandoff {
     }
 }
 
-/// Encodes the draft line and cursor the fish ctrl-t helper seeds `fzf-file-widget` with (see
-/// [`CtrlTApplyMode::Replace`]) as a single `{char_cursor}:{hex_draft}` argument: hex keeps the
-/// draft a single token, and combining it with the cursor avoids an empty hex field (an empty
-/// draft) vanishing under the shell's own word-splitting, since the invocation is typed into the
-/// terminal as literal text for the shell to parse. `char_cursor` is `cursor_offset` converted to
-/// a character offset, since fish's `commandline -C` takes characters while `cursor_offset` is a
-/// byte offset. Bash/zsh never call this: their helper searches independently of the draft and
-/// reports a plain path for Warp to splice in itself.
-fn ctrl_t_draft_arg(original_buffer: &str, cursor_offset: ByteOffset) -> String {
-    let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
-    format!("{char_cursor}:{}", hex::encode(original_buffer))
-}
-
 struct AmbientAgentViewState {
     view_model: ModelHandle<AmbientAgentViewModel>,
     #[allow(dead_code)]
@@ -7762,9 +7749,13 @@ impl Input {
     /// a leading space.
     ///
     /// When `apply_mode` is [`CtrlTApplyMode::Replace`], the command is also given the draft line
-    /// and cursor for the fish helper to seed its widget with (see [`ctrl_t_draft_arg`]);
-    /// bash/zsh never need this, since their helper searches independently of the draft and
-    /// reports a plain path for Warp to splice in itself.
+    /// and cursor as `{char_cursor}:{hex_draft}` so the fish helper can seed its widget. Hex keeps
+    /// the draft a single token, and combining it with the cursor avoids an empty hex field (an
+    /// empty draft) vanishing under the shell's own word-splitting, since the invocation is typed
+    /// into the terminal as literal text. `char_cursor` is `cursor_offset` converted to a character
+    /// offset, since fish's `commandline -C` takes characters while `cursor_offset` is a byte
+    /// offset. Bash/zsh never need this, since their helper searches independently of the draft
+    /// and reports a plain path for Warp to splice in itself.
     pub fn trigger_external_ctrl_t_file_search(
         &mut self,
         helper_command: &str,
@@ -7782,10 +7773,8 @@ impl Input {
         let block_id = self.model.lock().block_list().active_block_id().clone();
         let mut command = format!(" {helper_command}");
         if apply_mode == CtrlTApplyMode::Replace {
-            command.push_str(&format!(
-                " {}",
-                ctrl_t_draft_arg(&original_buffer, cursor_offset)
-            ));
+            let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
+            command.push_str(&format!(" {char_cursor}:{}", hex::encode(&original_buffer)));
         }
         // Not a command the user ran: Warp's history is independent of the shell histfile.
         let started = self.try_execute_command_from_source(
