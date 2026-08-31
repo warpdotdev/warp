@@ -34,7 +34,10 @@ impl TaskCommand {
 /// Conversation-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum ConversationCommand {
-    /// Get a conversation by conversation ID.
+    /// Get a Warp-native conversation by conversation ID.
+    ///
+    /// Third-party harness transcripts are not available by conversation ID.
+    /// Use `oz run get <run_id> --conversation` instead.
     Get(ConversationGetArgs),
 }
 

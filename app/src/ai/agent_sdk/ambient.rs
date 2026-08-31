@@ -17,6 +17,7 @@ use warp_cli::task::{
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_server_client::HttpStatusError;
 use warpui::r#async::{Spawnable, Timer};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
@@ -50,6 +51,13 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
+const OPERATION_NOT_SUPPORTED_TYPE: &str = "https://docs.warp.dev/errors/operation_not_supported";
+const NORMALIZED_UNSUPPORTED_TITLE: &str =
+    "normalized conversations are only supported for Warp-native transcripts";
+const THIRD_PARTY_CONVERSATION_ID_HINT: &str = concat!(
+    "Normalized conversations are only supported for Warp-native transcripts. ",
+    "Use `oz run get <run_id> --conversation` to fetch a third-party harness transcript.",
+);
 
 /// Singleton model that runs async work for ambient agent CLI commands.
 struct AmbientAgentRunner;
@@ -1425,6 +1433,84 @@ pub fn get_run_conversation(ctx: &mut AppContext, run_id: String) -> anyhow::Res
     runner.update(ctx, |runner, ctx| runner.get_run_conversation(run_id, ctx))
 }
 
+fn http_status_error(err: &anyhow::Error) -> Option<&HttpStatusError> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<HttpStatusError>())
+}
+
+#[derive(serde::Deserialize)]
+struct NormalizedConversationError {
+    #[serde(rename = "type", default)]
+    type_uri: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+/// HTTP 422 `operation_not_supported` means this conversation is a third-party harness
+/// transcript, which the normalized conversation API does not serve.
+pub(super) fn is_normalized_conversation_unsupported(err: &anyhow::Error) -> bool {
+    let Some(status_error) = http_status_error(err) else {
+        return false;
+    };
+    if status_error.status != 422 {
+        return false;
+    }
+    let Ok(payload) = serde_json::from_str::<NormalizedConversationError>(&status_error.body)
+    else {
+        return false;
+    };
+    payload.type_uri.as_deref() == Some(OPERATION_NOT_SUPPORTED_TYPE)
+        || payload.title.as_deref() == Some(NORMALIZED_UNSUPPORTED_TITLE)
+}
+
+pub(super) fn is_http_not_found(err: &anyhow::Error) -> bool {
+    http_status_error(err).is_some_and(|status_error| status_error.status == 404)
+}
+
+pub(super) fn format_conversation_json(value: &serde_json::Value) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(value)?)
+}
+
+pub(super) fn format_raw_transcript(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| serde_json::to_string_pretty(&value).ok())
+        .unwrap_or_else(|| body.to_string())
+}
+
+pub(super) async fn load_run_conversation_output(
+    ai_client: &dyn AIClient,
+    run_id: &str,
+) -> anyhow::Result<String> {
+    match ai_client.get_run_conversation(run_id).await {
+        Ok(conversation) => format_conversation_json(&conversation),
+        Err(err) if is_normalized_conversation_unsupported(&err) => {
+            match ai_client.get_run_transcript(run_id).await {
+                Ok(body) => Ok(format_raw_transcript(&body)),
+                Err(transcript_err) if is_http_not_found(&transcript_err) => {
+                    Err(transcript_err
+                        .context(format!("Raw transcript not found for run {run_id}")))
+                }
+                Err(transcript_err) => Err(transcript_err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+}
+
+pub(super) async fn load_public_conversation_output(
+    ai_client: &dyn AIClient,
+    conversation_id: &str,
+) -> anyhow::Result<String> {
+    match ai_client.get_public_conversation(conversation_id).await {
+        Ok(conversation) => format_conversation_json(&conversation),
+        Err(err) if is_normalized_conversation_unsupported(&err) => {
+            Err(err.context(THIRD_PARTY_CONVERSATION_ID_HINT))
+        }
+        Err(err) => Err(err),
+    }
+}
+
 impl AmbientAgentRunner {
     fn get_conversation(
         &self,
@@ -1434,9 +1520,9 @@ impl AmbientAgentRunner {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         let future = async move {
-            let conversation = ai_client.get_public_conversation(&conversation_id).await?;
-            let pretty = serde_json::to_string_pretty(&conversation)?;
-            println!("{pretty}");
+            let output =
+                load_public_conversation_output(ai_client.as_ref(), &conversation_id).await?;
+            println!("{output}");
             Ok(())
         };
         self.spawn_command(future, ctx);
@@ -1452,9 +1538,8 @@ impl AmbientAgentRunner {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         let future = async move {
-            let conversation = ai_client.get_run_conversation(&run_id).await?;
-            let pretty = serde_json::to_string_pretty(&conversation)?;
-            println!("{pretty}");
+            let output = load_run_conversation_output(ai_client.as_ref(), &run_id).await?;
+            println!("{output}");
             Ok(())
         };
         self.spawn_command(future, ctx);
