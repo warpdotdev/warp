@@ -5,14 +5,14 @@ use pathfinder_geometry::rect::RectF;
 
 use super::*;
 use crate::elements::new_scrollable::SingleAxisConfig;
-use crate::elements::{ClippedScrollStateHandle, Fill, NewScrollable, SelectableElement};
+use crate::elements::{
+    ClippedScrollStateHandle, EventHandler, Fill, NewScrollable, SelectableElement,
+};
 use crate::platform::WindowStyle;
 use crate::{App, Entity, EntityIdSet, Presenter, TypedActionView, WindowInvalidation};
 
-/// Selectable element that paints a hit-recorded rect (like any `Container`
-/// does), so that when it is rendered inside a layer-starting element such as
-/// a clipped `NewScrollable`, clicks on it register as covered at lower
-/// z-indexes.
+/// Selectable element that paints a hit-recorded rect (as `Container` does), so content inside a
+/// layer-starting parent registers as covered at lower z-indexes.
 #[derive(Default)]
 struct LayeredSelectableProbe {
     origin: Option<Point>,
@@ -125,19 +125,24 @@ impl crate::core::View for ScrollableSelectionView {
 
     fn render(&self, _: &AppContext) -> Box<dyn Element> {
         let captured_selection = self.captured_selection.clone();
+        // Mirrors the element sandwich around collapsible reasoning block bodies: an
+        // EventHandler wrapping a clipped scrollable.
         SelectableArea::new(
             self.selection_handle.clone(),
             move |args, _, _| {
                 *captured_selection.borrow_mut() = Some(args.selection);
             },
-            NewScrollable::vertical(
-                SingleAxisConfig::Clipped {
-                    handle: ClippedScrollStateHandle::default(),
-                    child: Box::new(LayeredSelectableProbe::default()),
-                },
-                Fill::None,
-                Fill::None,
-                Fill::None,
+            EventHandler::new(
+                NewScrollable::vertical(
+                    SingleAxisConfig::Clipped {
+                        handle: ClippedScrollStateHandle::default(),
+                        child: Box::new(LayeredSelectableProbe::default()),
+                    },
+                    Fill::None,
+                    Fill::None,
+                    Fill::None,
+                )
+                .finish(),
             )
             .finish(),
         )
@@ -149,11 +154,9 @@ impl TypedActionView for ScrollableSelectionView {
     type Action = ();
 }
 
-/// Regression test: a drag that starts on content painted inside a
-/// layer-starting child (e.g. the clipped scrollable body of a collapsible
-/// reasoning block) must still start a selection. Hit testing the mouse down
-/// at the SelectableArea's own z-index would treat those clicks as covered by
-/// the child's layers and never begin the selection.
+/// A drag starting on content painted in a child's own layers must start a selection and yield
+/// the child's fragments on mouse up. Covers the mouse-down hit test at the child subtree's max
+/// z-index and `EventHandler`'s forwarding of selection queries.
 #[test]
 fn selection_starts_on_content_painted_in_child_layers() {
     App::test((), |mut app| async move {

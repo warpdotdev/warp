@@ -43,12 +43,9 @@ pub struct SelectableArea {
 
     should_support_rect_select: bool,
 
-    // Upper bound of z-indexes painted by the child subtree. Mouse-down hit testing must use
-    // this instead of the origin's z-index: child content that starts its own layers (e.g. a
-    // clipped scrollable inside a collapsible reasoning block) hit-records at higher z-indexes,
-    // so testing at the origin z would treat clicks on that content as covered and refuse to
-    // start a selection. Overlays painted after this element land on even higher layers, so
-    // they still register as covering.
+    // Upper bound of z-indexes painted by the child subtree. Mouse-down hit testing uses this
+    // instead of the origin's z-index so child content that starts its own layers (e.g. a clipped
+    // scrollable) isn't treated as covering this element; later-painted overlays still are.
     child_max_z_index: Option<ZIndex>,
 }
 
