@@ -342,6 +342,26 @@ enum Transport {
     Sse(Option<rmcp::transport::auth::AuthClient<reqwest::Client>>),
 }
 
+/// The message [`unexpected_status_error`] wraps, shared with
+/// [`is_forbidden_transport_error`] so the two can't drift apart.
+fn unexpected_status_message(status: reqwest::StatusCode) -> String {
+    format!("Unexpected status code: {status}")
+}
+
+fn unexpected_status_error(status: reqwest::StatusCode) -> rmcp::RmcpError {
+    rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(unexpected_status_message(status))
+}
+
+/// Returns `true` if `error` is the "unexpected status code" error this module raises for an
+/// HTTP 403 Forbidden response from the connection preflight in `determine_transport`.
+pub fn is_forbidden_transport_error(error: &rmcp::RmcpError) -> bool {
+    matches!(
+        error,
+        rmcp::RmcpError::TransportCreation { error, .. }
+            if error.to_string() == unexpected_status_message(reqwest::StatusCode::FORBIDDEN)
+    )
+}
+
 /// Determines which transport to use.
 ///
 /// This sends a "preflight" InitializeRequest to the server to determine whether the
@@ -356,11 +376,6 @@ async fn determine_transport(
 ) -> Result<Transport, rmcp::RmcpError> {
     use reqwest::StatusCode;
 
-    fn unexpected_error(status: reqwest::StatusCode) -> rmcp::RmcpError {
-        rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(format!(
-            "Unexpected status code: {status}"
-        ))
-    }
     match send_initialize_request(url, headers, None).await? {
         StatusCode::OK => Ok(Transport::Http(None)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
@@ -402,10 +417,10 @@ async fn determine_transport(
                     emit_authenticated_notification().await;
                     Ok(Transport::Sse(Some(client)))
                 }
-                other => Err(unexpected_error(other)),
+                other => Err(unexpected_status_error(other)),
             }
         }
-        status => Err(unexpected_error(status)),
+        status => Err(unexpected_status_error(status)),
     }
 }
 

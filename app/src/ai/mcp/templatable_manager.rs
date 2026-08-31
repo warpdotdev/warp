@@ -103,6 +103,13 @@ pub struct TemplatableMCPServerManager {
     /// spawned, so the field would be dead code there.
     #[cfg(not(target_family = "wasm"))]
     builtin_server_token: Option<String>,
+    /// Set when the built-in Factory MCP server's most recent spawn attempt
+    /// failed with HTTP 403 (the account cannot use Factory MCP). While set,
+    /// `sync_builtin_servers` treats the built-in as ineligible instead of
+    /// re-attaching it on every `AccessTokenRefreshed`; cleared on the next
+    /// login, which may have changed access.
+    #[cfg(not(target_family = "wasm"))]
+    builtin_server_forbidden: bool,
     /// Log-file handles for spawned server instances, keyed by installation
     /// UUID. `LogManager` reserves one log path per template UUID and rejects
     /// re-registration while an unclosed logger holds it, so shutdown paths

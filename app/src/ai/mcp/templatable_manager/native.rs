@@ -8,7 +8,7 @@ use mcp::oauth::{
     PersistedCredentialsMap, TEMPLATABLE_MCP_CREDENTIALS_KEY, load_credentials_from_secure_storage,
     write_to_secure_storage,
 };
-use mcp::runtime::{error_to_user_message, spawn_server};
+use mcp::runtime::{error_to_user_message, is_forbidden_transport_error, spawn_server};
 use parking_lot::Mutex;
 use simple_logger::manager::LogManager;
 use url::Url;
@@ -228,12 +228,30 @@ impl TemplatableMCPServerManager {
                 uuid: installation_uuid,
             });
         } else {
-            report_error!(
-                "No template UUID found for installation UUID",
-                extra: { "installation_uuid" => %installation_uuid },
-                warp_errors::ReportErrorLogMode::OncePerRun
+            // Callers are expected to check `installation_uses_credential_store` first;
+            // reaching here means the installation vanished from both credential stores
+            // between that check and this call.
+            log::warn!(
+                "No template UUID found for installation UUID {installation_uuid} when deleting credentials"
             );
         }
+    }
+
+    /// Returns `true` if `installation_uuid` is backed by a real, persisted installation
+    /// (file-based or locally-installed) that could have OAuth credentials stored for it.
+    ///
+    /// Ephemeral installs built entirely in-code - the built-in Factory MCP server, and
+    /// CLI-run MCP servers started by the agent driver - are never inserted into either
+    /// credential store's backing map, so there is nothing to clean up for them.
+    fn installation_uses_credential_store(
+        &self,
+        installation_uuid: Uuid,
+        app: &AppContext,
+    ) -> bool {
+        FileBasedMCPManager::as_ref(app)
+            .get_hash_by_uuid(installation_uuid)
+            .is_some()
+            || self.get_template_uuid(installation_uuid).is_some()
     }
 
     /// Creates a new [`TemplatableMCPServerManager`] instance.
@@ -357,7 +375,12 @@ impl TemplatableMCPServerManager {
             ctx.subscribe_to_model(&auth_manager, |me, _, event, ctx| match event {
                 // Fires on login and on user refresh; the credentials may
                 // have rotated either way, so respawn with the current token.
-                AuthManagerEvent::AuthComplete => me.sync_builtin_servers(true, ctx),
+                AuthManagerEvent::AuthComplete => {
+                    // A fresh login may have changed Factory access, so clear any
+                    // previous denial before re-attempting the built-in server.
+                    me.builtin_server_forbidden = false;
+                    me.sync_builtin_servers(true, ctx);
+                }
                 AuthManagerEvent::AuthFailed(_)
                 | AuthManagerEvent::NeedsReauth
                 | AuthManagerEvent::SkippedLogin => me.sync_builtin_servers(false, ctx),
@@ -407,6 +430,7 @@ impl TemplatableMCPServerManager {
             cli_spawned_server_uuids: Default::default(),
             builtin_server_uuids: Default::default(),
             builtin_server_token: Default::default(),
+            builtin_server_forbidden: false,
             server_loggers: Default::default(),
         };
 
@@ -778,7 +802,8 @@ impl TemplatableMCPServerManager {
         // agent runs manage their MCP servers explicitly.
         let eligible = FeatureFlag::FactoryMcp.is_enabled()
             && AppExecutionMode::as_ref(ctx).can_autostart_mcp_servers()
-            && !auth_state.is_anonymous_or_logged_out();
+            && !auth_state.is_anonymous_or_logged_out()
+            && !self.builtin_server_forbidden;
         let is_active = self.is_server_active_or_pending(installation_uuid);
 
         if !eligible {
@@ -1175,7 +1200,26 @@ impl TemplatableMCPServerManager {
                             ctx,
                         );
 
-                        me.delete_credentials_from_secure_storage(installation_uuid, ctx);
+                        if me.installation_uses_credential_store(installation_uuid, ctx) {
+                            me.delete_credentials_from_secure_storage(installation_uuid, ctx);
+                        } else {
+                            log::debug!(
+                                "Skipping credential cleanup for ephemeral installation {installation_uuid}; it never used the credential store"
+                            );
+                        }
+
+                        // The built-in Factory MCP server is respawned on every
+                        // `AccessTokenRefreshed` (~5 min); a 403 means the account can't use
+                        // Factory MCP, which won't change until the next login, so stop
+                        // retrying rather than hammering the endpoint on every refresh.
+                        if installation_uuid == builtin::FACTORY_MCP_INSTALLATION_UUID
+                            && is_forbidden_transport_error(&e)
+                        {
+                            log::info!(
+                                "Built-in Factory MCP server was denied (account lacks Factory access); not retrying until the next login"
+                            );
+                            me.builtin_server_forbidden = true;
+                        }
 
                         me.notify_reconnect_waiters(installation_uuid, Err(error_message));
 
@@ -1979,3 +2023,7 @@ impl TemplatableMCPServerManager {
             .contains_key(&installation_hash)
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

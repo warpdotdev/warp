@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rmcp::model::{ErrorCode, ErrorData, Resource, ServerCapabilities, Tool};
 
-use super::{query_resources_for, query_tools_for, should_query_resources, should_query_tools};
+use super::{
+    is_forbidden_transport_error, query_resources_for, query_tools_for, should_query_resources,
+    should_query_tools, unexpected_status_error,
+};
 
 /// Build a `ServerCapabilities` with selected capability flags toggled on.
 /// Each `Some(default)` mirrors how rmcp deserializes a capability the
@@ -278,4 +281,38 @@ async fn query_resources_for_calls_list_function_exactly_once() {
     .await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+/// Only an actual 403 from the connection preflight should be classified as
+/// a denial; other status codes must not be misread as one.
+#[test]
+fn is_forbidden_transport_error_matches_only_403() {
+    assert!(is_forbidden_transport_error(&unexpected_status_error(
+        reqwest::StatusCode::FORBIDDEN
+    )));
+    assert!(!is_forbidden_transport_error(&unexpected_status_error(
+        reqwest::StatusCode::INTERNAL_SERVER_ERROR
+    )));
+    assert!(!is_forbidden_transport_error(&unexpected_status_error(
+        reqwest::StatusCode::UNAUTHORIZED
+    )));
+}
+
+/// Non-`TransportCreation` variants (e.g. a runtime/task error) are never
+/// mistaken for a 403 denial, however their message happens to be formatted.
+#[test]
+fn is_forbidden_transport_error_ignores_other_error_variants() {
+    assert!(!is_forbidden_transport_error(&rmcp::RmcpError::TaskError(
+        "Unexpected status code: 403 Forbidden".to_string()
+    )));
+}
+
+/// A `TransportCreation` error unrelated to the status-code preflight (e.g.
+/// a client build failure) must not be misread as a 403 denial.
+#[test]
+fn is_forbidden_transport_error_ignores_unrelated_transport_creation_errors() {
+    let error = rmcp::RmcpError::transport_creation::<
+        rmcp::transport::StreamableHttpClientTransport<reqwest::Client>,
+    >("Failed to build client with headers: boom".to_string());
+    assert!(!is_forbidden_transport_error(&error));
 }
