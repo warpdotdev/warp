@@ -1561,6 +1561,41 @@ impl AgentInputFooter {
         }
     }
 
+    fn cloud_routing_indicator_button(
+        &self,
+        terminal_model: &TerminalModel,
+        app: &AppContext,
+    ) -> Option<&ViewHandle<ActionButton>> {
+        match resolve_ai_query_routing(
+            self.terminal_view_id,
+            self.ambient_agent_view_model.as_ref(),
+            terminal_model,
+            app,
+        ) {
+            AIQueryRouting::LiveRemoteVm {
+                ambient_agent_task_id: Some(_),
+                ..
+            } => Some(&self.live_session_indicator),
+            AIQueryRouting::NewCloudVm { .. } => Some(&self.new_cloud_vm_indicator),
+            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
+            AIQueryRouting::LiveRemoteVm {
+                ambient_agent_task_id: None,
+                ..
+            }
+            | AIQueryRouting::UnconnectedReadOnly
+            | AIQueryRouting::Local => None,
+        }
+    }
+
+    fn cloud_routing_indicator(
+        &self,
+        terminal_model: &TerminalModel,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        self.cloud_routing_indicator_button(terminal_model, app)
+            .map(|indicator| ChildView::new(indicator).finish())
+    }
+
     fn render_cli_mode_footer(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let cli_icon_size = ButtonSize::AgentInputButton.icon_size(appearance, app);
@@ -1569,7 +1604,7 @@ impl AgentInputFooter {
         // the lock before calling into helpers like `should_use_manual_mode`
         // and `render_cli_toolbar_item`, which may re-lock the same model and
         // would deadlock since the lock is non-reentrant.
-        let (background_color, shared_status, is_conversation_transcript_context) = {
+        let (background_color, shared_status, is_conversation_transcript_context, cloud_indicator) = {
             let terminal_model = self.terminal_model.lock();
             let background_color = if terminal_model.is_alt_screen_active() {
                 terminal_model
@@ -1582,10 +1617,12 @@ impl AgentInputFooter {
             let shared_status = terminal_model.shared_session_status().clone();
             let is_conversation_transcript_context =
                 is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+            let cloud_indicator = self.cloud_routing_indicator(&terminal_model, app);
             (
                 background_color,
                 shared_status,
                 is_conversation_transcript_context,
+                cloud_indicator,
             )
         };
 
@@ -1622,6 +1659,10 @@ impl AgentInputFooter {
                 .with_padding_right(8.)
                 .finish(),
             );
+        }
+
+        if let Some(indicator) = cloud_indicator {
+            left_buttons.add_child(indicator);
         }
 
         if let Some(chip_kind) = self.plugin_chip_kind(app) {
@@ -2350,28 +2391,8 @@ impl View for AgentInputFooter {
 
         // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
         // The new-cloud-VM chip uses a yellow icon; the live-session chip uses the default color.
-        match resolve_ai_query_routing(
-            self.terminal_view_id,
-            self.ambient_agent_view_model.as_ref(),
-            &terminal_model,
-            app,
-        ) {
-            AIQueryRouting::LiveRemoteVm {
-                ambient_agent_task_id: Some(_),
-                ..
-            } => {
-                left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
-            }
-            AIQueryRouting::NewCloudVm { .. } => {
-                left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
-            }
-            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
-            AIQueryRouting::LiveRemoteVm {
-                ambient_agent_task_id: None,
-                ..
-            }
-            | AIQueryRouting::UnconnectedReadOnly
-            | AIQueryRouting::Local => {}
+        if let Some(indicator) = self.cloud_routing_indicator(&terminal_model, app) {
+            left_buttons.add_child(indicator);
         }
 
         for item in &left_items {
@@ -2982,3 +3003,7 @@ impl ActionButtonTheme for NLDButtonTheme {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

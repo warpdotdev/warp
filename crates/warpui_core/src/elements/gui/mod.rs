@@ -177,6 +177,13 @@ pub trait Element {
     fn debug_text_content(&self) -> Option<String> {
         None
     }
+
+    /// Child-view IDs embedded in this element tree. Container elements should aggregate IDs from
+    /// their children.
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        Vec::new()
+    }
 }
 
 pub trait ParentElement: Extend<Box<dyn Element>> + Sized {

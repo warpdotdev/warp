@@ -861,6 +861,11 @@ impl<T> Element for ChildView<T> {
     fn origin(&self) -> Option<Point> {
         self.origin
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<EntityId> {
+        vec![self.view_id]
+    }
 }
 
 #[cfg(test)]
