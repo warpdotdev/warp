@@ -21,6 +21,122 @@ enum ElementIdentifier {
     Overlay,
 }
 
+/// Minimal selectable element that reports a fixed fragment, used to assert
+/// that `EventHandler` forwards selection queries to its child.
+struct SelectableProbe;
+
+impl Element for SelectableProbe {
+    fn layout(
+        &mut self,
+        _constraint: SizeConstraint,
+        _ctx: &mut LayoutContext,
+        _app: &AppContext,
+    ) -> Vector2F {
+        vec2f(100., 100.)
+    }
+
+    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
+
+    fn paint(&mut self, _origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {}
+
+    fn size(&self) -> Option<Vector2F> {
+        Some(vec2f(100., 100.))
+    }
+
+    fn origin(&self) -> Option<Point> {
+        Some(Point::new(0., 0., ZIndex::new(0)))
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &DispatchedEvent,
+        _ctx: &mut EventContext,
+        _app: &AppContext,
+    ) -> bool {
+        false
+    }
+
+    fn as_selectable_element(&self) -> Option<&dyn SelectableElement> {
+        Some(self)
+    }
+}
+
+impl SelectableElement for SelectableProbe {
+    fn get_selection(
+        &self,
+        _selection_start: Vector2F,
+        _selection_end: Vector2F,
+        _is_rect: IsRect,
+    ) -> Option<Vec<SelectionFragment>> {
+        Some(vec![SelectionFragment {
+            text: "probe".to_string(),
+            origin: Point::new(0., 0., ZIndex::new(0)),
+        }])
+    }
+
+    fn expand_selection(
+        &self,
+        absolute_point: Vector2F,
+        _direction: SelectionDirection,
+        _unit: SelectionType,
+        _word_boundaries_policy: &WordBoundariesPolicy,
+    ) -> Option<Vector2F> {
+        Some(absolute_point + vec2f(5., 0.))
+    }
+
+    fn is_point_semantically_before(
+        &self,
+        absolute_point: Vector2F,
+        absolute_point_other: Vector2F,
+    ) -> Option<bool> {
+        Some(absolute_point.x() < absolute_point_other.x())
+    }
+
+    fn smart_select(
+        &self,
+        absolute_point: Vector2F,
+        _smart_select_fn: crate::elements::SmartSelectFn,
+    ) -> Option<(Vector2F, Vector2F)> {
+        Some((absolute_point, absolute_point + vec2f(12., 0.)))
+    }
+
+    fn calculate_clickable_bounds(&self, _current_selection: Option<Selection>) -> Vec<RectF> {
+        Vec::new()
+    }
+}
+
+/// Regression test: `EventHandler` must be transparent to the selection
+/// system, otherwise text wrapped in one (e.g. the scrollable body of
+/// collapsible reasoning blocks) highlights during a drag but produces no
+/// selected text on mouse release.
+#[test]
+fn selectable_element_queries_forward_to_child() {
+    let handler = EventHandler::new(Box::new(SelectableProbe));
+    let selectable = handler
+        .as_selectable_element()
+        .expect("EventHandler should expose itself as a selectable element");
+
+    let fragments = selectable
+        .get_selection(vec2f(0., 0.), vec2f(10., 10.), IsRect::False)
+        .expect("child fragments should be forwarded");
+    assert_eq!(fragments.len(), 1);
+    assert_eq!(fragments[0].text, "probe");
+
+    assert_eq!(
+        selectable.expand_selection(
+            vec2f(3., 3.),
+            SelectionDirection::Forward,
+            SelectionType::Semantic,
+            &WordBoundariesPolicy::Default,
+        ),
+        Some(vec2f(8., 3.))
+    );
+    assert_eq!(
+        selectable.is_point_semantically_before(vec2f(1., 0.), vec2f(2., 0.)),
+        Some(true)
+    );
+}
+
 #[test]
 fn test_right_mouse_down_with_shift_reports_modifier() {
     App::test((), |mut app| async move {
