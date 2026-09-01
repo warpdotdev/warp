@@ -137,7 +137,6 @@ impl LrcActivityMonitor {
         let now = Instant::now();
         let mut state = self.state.lock();
         if !state.monitoring_enabled {
-            log::debug!("[LRC activity] monitoring disabled, no report block_id={block_id:?}");
             return None;
         }
 
@@ -145,9 +144,7 @@ impl LrcActivityMonitor {
             .blocks
             .entry(block_id.clone())
             .or_insert_with(|| BlockActivity::new(now));
-        let report = block_activity.take_report(now);
-        log::debug!("[LRC activity] report block_id={block_id:?} activity={report:?}");
-        report
+        block_activity.take_report(now)
     }
 
     /// Removes state for a command that is no longer being monitored.

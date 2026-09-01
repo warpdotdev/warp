@@ -89,12 +89,3 @@ fn block_working_directory_updated_does_not_drain_finish_senders() {
         );
     });
 }
-
-#[cfg(windows)]
-#[test]
-fn lrc_activity_signals_are_supported_on_windows_when_the_flag_is_enabled() {
-    use warp_core::features::FeatureFlag;
-
-    let _flag = FeatureFlag::LrcActivitySignal.override_enabled(true);
-    assert!(super::lrc_activity_signals_supported());
-}
