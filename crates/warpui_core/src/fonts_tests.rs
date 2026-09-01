@@ -172,3 +172,10 @@ fn em_width_does_not_panic_when_bounds_and_advance_are_missing() {
 
     assert_eq!(cache.em_width(FamilyId(0), 16.0), 16.0);
 }
+
+#[test]
+fn em_width_falls_back_when_horizontal_advance_is_zero() {
+    let cache = EmWidthFontDB::cache(None, Some(vec2i(0, 0)));
+
+    assert_eq!(cache.em_width(FamilyId(0), 16.0), 16.0);
+}
