@@ -98,11 +98,10 @@ fn older_exact_match_outranks_fresher_weak_match() {
 
 #[test]
 fn recency_breaks_ties_among_equal_quality_substring_matches() {
-    // Failure mode 1 (warp#6126, #3430, #5588, #6344): every `make *` candidate used to score
-    // identically regardless of recency, so a fresh command could get buried. `OS=linux make
-    // bar` is a substring match just like the others (not at column 0, raw Skim score 83 vs 91
-    // for the others), and being freshest should now win: the prior multiplier's swing (0.8x for
-    // the 10-day-old matches vs 1.2x for the brand new one) outweighs that small raw gap.
+    // `OS=linux make bar` is a substring match just like the others (not at column 0, raw Skim
+    // score 83 vs 91 for the others); being freshest should still win here because the prior
+    // multiplier's swing (0.8x for the 10-day-old matches vs 1.2x for the brand new one)
+    // outweighs that small raw gap.
     let session = SessionId::from(1);
     let make_foo = Scenario::new("make foo", "make").days_ago(10);
     let make_bar = Scenario::new("make bar", "make").days_ago(10);
@@ -120,9 +119,6 @@ fn recency_breaks_ties_among_equal_quality_substring_matches() {
 
 #[test]
 fn whitespace_tokenization_ands_terms_across_the_command() {
-    // Failure mode 2 (warp#4174): a literal space in the query previously had to appear
-    // literally in the command, so "cd hi orm" matched nothing in
-    // "cd ~/projects/history_orm" despite every term being present.
     let tokens = tokenize_query("cd hi orm");
     assert!(match_history_command("cd ~/projects/history_orm", &tokens).is_some());
     assert!(
@@ -133,10 +129,6 @@ fn whitespace_tokenization_ands_terms_across_the_command() {
 
 #[test]
 fn consecutive_substrings_beat_scattered_boundary_matches() {
-    // Failure mode 3 (warp#1810): Skim's word-boundary bonus made "txjs-cli push" (a scattered
-    // match) outscore "adb tcpip 5000" (a tight, contiguous match) for query "tcp" on raw score
-    // alone (65 vs 63); real fzf reverses this. `adjusted_skim`'s consecutive-run bonus
-    // (CONSECUTIVE_BONUS_PER_CHAR) corrects it directly on the raw scale.
     let tokens = tokenize_query("tcp");
     let (contiguous_raw, contiguous) = match_history_command("adb tcpip 5000", &tokens).unwrap();
     let (scattered_raw, scattered) = match_history_command("txjs-cli push", &tokens).unwrap();
@@ -180,9 +172,6 @@ fn exit_failure_is_penalized() {
 
 #[test]
 fn missing_timestamp_falls_back_to_list_position_instead_of_reading_as_infinitely_old() {
-    // History-file rows with no matching sqlite record have no start_ts. A recent one (near the
-    // end of the chronological candidate list) should still read as recent, not vanish behind
-    // every timestamped entry.
     let session = SessionId::from(1);
     let recent_untracked = Scenario::new("ls -la", "ls -la").newer_candidates(0);
     let old_untracked = Scenario::new("ls -la", "ls -la").newer_candidates(200);
@@ -216,18 +205,14 @@ fn match_score_floor_filters_out_low_quality_matches() {
 
 #[test]
 fn blank_query_ignores_priors_and_yields_a_result() {
-    // `SearchMixer` invokes history with an empty query for the zero state (`run_in_zero_state:
-    // true`), where match quality is necessarily zero. Bypassing only the score floor isn't
-    // enough: priors (session, exit status, recency) must also be bypassed, or they'd reorder
-    // the zero state away from `History::commands_shared()`'s established chronological order.
-    // Two candidates with wildly different priors must therefore score identically here, not
-    // just both clear the floor.
     let zero_quality = MatchQuality {
         adjusted_skim: 0.0,
         adjusted_skim_per_char: 0.0,
     };
     assert!(zero_quality.adjusted_skim_per_char < RAW_SKIM_FLOOR_PER_CHAR);
 
+    // Deliberately different start_ts: if a blank query only bypassed the score floor (not
+    // priors), these would score differently via the recency prior.
     let mut recent = HistoryEntry::command_only("ls -la".to_owned());
     recent.start_ts = Some(now());
 

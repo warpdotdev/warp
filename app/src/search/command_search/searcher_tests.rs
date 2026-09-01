@@ -31,6 +31,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
+use crate::test_util::assert_eventually;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSource, WorkflowType};
 
@@ -118,9 +119,7 @@ impl SyncDataSource for SlowDataSource {
     }
 }
 
-/// A sync data source that returns a fixed, pre-built set of results, used to exercise the mixer
-/// against a real non-history `SearchItem` without needing that source's full production data
-/// source (which requires app-level model setup, e.g. `WorkflowsDataSource`).
+/// A sync data source returning a fixed, pre-built set of results.
 struct FixedResults<T>(Vec<T>);
 
 impl<T: SearchItem<Action = CommandSearchItemAction> + Clone + 'static> SyncDataSource
@@ -232,7 +231,8 @@ fn test_exact_matches_rank_above_prefix_matches() {
 
             assert!(matches!(
             results.first().map(|result| result.accept_result()),
-            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command: long, linked_workflow_data: None })) if long == long_command));
+            Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem { command: long, linked_workflow_data: None })) if long == long_command),
+            "a substring-only match should rank below a whole-line exact match");
 
             assert!(matches!(
             results.get(1).map(|result| result.accept_result()),
@@ -243,13 +243,6 @@ fn test_exact_matches_rank_above_prefix_matches() {
 
 #[test]
 fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
-    // `SearchMixer` invokes history with an empty query for the zero state (`run_in_zero_state:
-    // true`), where match quality is necessarily zero. Bypassing only the score floor for a
-    // blank query still lets priors reorder the zero state away from
-    // `History::commands_shared()`'s established chronological order (oldest first, newest
-    // last/closest to the input) -- e.g. an older command whose session_id happens to match
-    // would leapfrog a newer one. Priors must be ignored entirely for a blank query, not just
-    // let through the floor.
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -289,7 +282,10 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
             );
         });
 
-        Timer::after(Duration::from_millis(200)).await;
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the history query should finish loading"
+        );
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
@@ -299,9 +295,6 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
                 "history should still populate the zero state for a blank query"
             );
 
-            // The newer entry must stay last (closest to the input), matching insertion order,
-            // even though the older entry's session_id happens to match the data source's
-            // session and would otherwise earn a session-prior bonus.
             assert!(matches!(
                 results.last().map(|result| result.accept_result()),
                 Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
@@ -315,26 +308,12 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
 
 #[test]
 fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
-    // Regression test for a cross-source ranking review finding: history's score used to be
-    // packed onto a narrow (roughly 0-13) scale while every other Command Search source returns
-    // raw Skim magnitudes in the tens to hundreds, so a solid history match could sink beneath a
-    // much weaker item from another source purely because of which source it came from. `rank`'s
-    // score now stays on that same raw Skim scale, so a clearly stronger history match must still
-    // outrank a much weaker item from any of the sources it actually competes against in Command
-    // Search: workflows, saved prompts (agent-mode workflows), and AI prompt history. (Env-var
-    // collections use the same weighted-field scoring as workflows; not covered here since wiring
-    // one through this mixer needs a full `CloudEnvVarCollection` object.)
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        // Matches "test" as a clean, contiguous substring: a strong match.
         let history_command = "npm test -- widgets".to_owned();
-
-        // "test" is scattered across four separated words here, so its raw Skim score is
-        // genuinely lower than the history command's -- asserted below rather than assumed, so
-        // this fixture can't silently stop testing what it claims to.
         let weak_match_text = "archive old logs then send email summary tonight";
 
         let history_raw_score =
@@ -372,8 +351,6 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
             fuzzy_matched_workflow,
         };
 
-        // Saved prompts reach Command Search as agent-mode workflows, scored by the same
-        // name/content/description/folder-weighted formula as command workflows.
         let weak_saved_prompt = Workflow::AgentMode {
             name: "Unrelated saved prompt".to_owned(),
             query: weak_match_text.to_owned(),
@@ -389,8 +366,6 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
             fuzzy_matched_workflow: fuzzy_matched_saved_prompt,
         };
 
-        // AI prompt history scores on the raw Skim scale directly (no discount), so it's the
-        // sharpest test of whether history keeps pace with an unscaled competitor.
         let ai_prompt_item = AIQuerySearchResultItem {
             query_text: weak_match_text.to_owned(),
             start_time: Local::now(),
@@ -423,14 +398,15 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
             mixer.run_query("test".into(), ctx);
         });
 
-        Timer::after(Duration::from_millis(200)).await;
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
             assert_eq!(results.len(), 4);
 
-            // The view renders highest-ranked items at the bottom (last index), so the stronger
-            // history match must be last, not buried beneath any of the three weaker competitors.
             assert!(matches!(
                 results.last().map(|result| result.accept_result()),
                 Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
@@ -479,9 +455,6 @@ fn test_no_query_filter_runs_all_data_sources() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
-
-            // "git" ranks above "git checkout" because it's a whole-line exact match for the
-            // query, not merely a substring match, so it appears last (closest to the input).
             assert_eq!(
                 results
                     .iter()
@@ -560,8 +533,6 @@ fn test_query_filter_limits_data_sources() {
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
-            // "git" ranks above "git checkout" because it's a whole-line exact match for the
-            // query, not merely a substring match, so it appears last (closest to the input).
             assert_eq!(
                 results
                     .iter()
@@ -819,11 +790,6 @@ fn test_async_source_without_include_in_unfiltered_skipped_on_empty_filters() {
 
 #[test]
 fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
-    // With `HistorySearchRankingV2` disabled, history search must be a genuine return to the
-    // pre-APP-5650 behavior: the whole query matched as a single fuzzy pattern, not AND-ed
-    // whitespace-separated tokens. "cd hi orm" only matches "cd ~/projects/history_orm" via
-    // tokenization (see `rank_tests.rs`'s `whitespace_tokenization_ands_terms_across_the_command`),
-    // so it must produce no results when the flag is off.
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
 
     App::test((), |mut app| async move {
@@ -846,7 +812,10 @@ fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
             mixer.run_query("cd hi orm".into(), ctx);
         });
 
-        Timer::after(Duration::from_millis(200)).await;
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();
@@ -860,9 +829,6 @@ fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
 
 #[test]
 fn test_history_search_disabled_flag_scores_raw_skim_with_no_priors() {
-    // With `HistorySearchRankingV2` disabled, a match's score must be exactly the raw Skim
-    // score fuzzy_match produces, unaffected by the exact-whole-line bonus or any history prior
-    // (recency, session, exit status) -- even for an old, low-priority entry.
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
 
     App::test((), |mut app| async move {
@@ -892,7 +858,10 @@ fn test_history_search_disabled_flag_scores_raw_skim_with_no_priors() {
             mixer.run_query("git status".into(), ctx);
         });
 
-        Timer::after(Duration::from_millis(200)).await;
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
 
         app.read(|app| {
             let results = mixer.as_ref(app).results();

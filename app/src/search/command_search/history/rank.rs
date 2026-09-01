@@ -5,55 +5,42 @@ use ordered_float::OrderedFloat;
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
 
-// ----- Tunable constants -----
-//
-// Everything below shapes `rank()`'s formula: `score = adjusted_skim * f(priors)`, where
-// `adjusted_skim` is the match-quality component (raw Skim score plus the corrections in
-// `adjusted_skim()`) and `f(priors)` is a bounded multiplier built from recency, session, and
-// exit status. Change a value, rebuild, and re-run
-// `cargo test -p warp --lib search::command_search::history` to see the effect against the
-// golden fixtures in `rank_tests.rs`.
+// `rank()`'s formula is `score = adjusted_skim * f(priors)`: `adjusted_skim` is the match-quality
+// component (raw Skim score plus the corrections in `adjusted_skim()`) and `f(priors)` is a
+// bounded multiplier built from recency, session, and exit status.
 
-/// Bottom of `f(priors)`'s range. Raise to score history higher relative to every other Command
-/// Search source's own (unscaled) score, across the board; lower to score it lower.
+/// Bottom of `f(priors)`'s range.
 const PRIOR_MULTIPLIER_BASELINE: f64 = 0.8;
 
 /// Width added on top of [`PRIOR_MULTIPLIER_BASELINE`], so `f(priors)` ranges over `[0.8, 1.2]`.
-/// Raise to let priors reorder history results more aggressively relative to raw match quality;
-/// lower to let raw match quality dominate more. Too wide and a fresh weak match can outrank an
-/// older strong one (see `rank_tests.rs`'s `older_exact_match_outranks_fresher_weak_match` and
-/// `recency_breaks_ties_among_equal_quality_substring_matches`, which pin down the current width).
+/// Bounded by `rank_tests.rs`'s `older_exact_match_outranks_fresher_weak_match` and
+/// `recency_breaks_ties_among_equal_quality_substring_matches`, which pin down this width.
 const PRIOR_MULTIPLIER_SWING: f64 = 0.4;
 
-/// How much of `f(priors)` is driven by recency vs. the other priors below. Raise to make
-/// freshness matter more.
+/// How much of `f(priors)` is driven by recency vs. the other priors below.
 const RECENCY_WEIGHT: f64 = 0.30;
 
-/// How much of `f(priors)` is driven by whether a command ran in the current session. Raise to
-/// favor the current session's own history more.
+/// How much of `f(priors)` is driven by whether a command ran in the current session.
 const SESSION_WEIGHT: f64 = 0.05;
 
-/// How much `f(priors)` is reduced for a command whose last run failed. Raise to penalize failed
-/// commands more.
+/// How much `f(priors)` is reduced for a command whose last run failed.
 const EXIT_PENALTY_WEIGHT: f64 = 0.03;
 
-/// Days for the recency term to decay by half. Lower makes recent commands matter more (and older
-/// ones fade faster); raise for a longer memory.
+/// Days for the recency term to decay by half.
 const RECENCY_HALF_LIFE_DAYS: f64 = 3.0;
 
-/// Minimum adjusted-Skim score, per character of the query, for a match to be shown at all. Raise
-/// to filter out more loose/scattered matches; lower to show more borderline ones. Legitimate
-/// matches score in the high teens to twenties per character (see `rank_tests.rs`).
+/// Minimum adjusted-Skim score, per character of the query, for a match to be shown at all.
+/// Legitimate matches score in the high teens to twenties per character (see `rank_tests.rs`).
 const RAW_SKIM_FLOOR_PER_CHAR: f64 = 8.0;
 
 /// Per-character bonus for a run of contiguously-matched characters, folded into `adjusted_skim`.
-/// Raise to favor tight, contiguous matches over scattered ones more strongly (fixes issue #1810,
-/// where Skim's word-boundary bonus made a scattered match outscore a contiguous one).
+/// Fixes issue #1810, where Skim's word-boundary bonus made a scattered match outscore a
+/// contiguous one.
 const CONSECUTIVE_BONUS_PER_CHAR: f64 = 4.0;
 
-/// Bonus added once to `adjusted_skim` when the query exactly matches the whole command. Raise to
-/// make an exact match harder to displace by a fresher partial match; needed because SkimMatcherV2
-/// scores a query identically whether it's the whole command or just a prefix of a longer one.
+/// Bonus added once to `adjusted_skim` when the query exactly matches the whole command; needed
+/// because SkimMatcherV2 scores a query identically whether it's the whole command or just a
+/// prefix of a longer one.
 ///
 /// This is a deliberate product policy, not an oversight: it intentionally lets an exact
 /// whole-line history match outrank an equally-matching item from another Command Search source,
@@ -63,22 +50,16 @@ const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
 /// Synthetic "days per list position" used to derive an age for entries with no timestamp, so a
 /// commonly-typed command near the tail of an untracked history file still reads as recent
 /// instead of decaying to zero relevance. Reuses [`RECENCY_HALF_LIFE_DAYS`] as the decay rate.
-/// Raise to age untimestamped entries faster per newer-list-position step; lower to preserve
-/// their recency longer.
 const FALLBACK_AGE_DAYS_PER_POSITION: f64 = 1.0;
 
-/// Derived, not meant to be hand-tuned: theoretical lower bound of the weighted prior sum
-/// (`RECENCY_WEIGHT * recency + ... - EXIT_PENALTY_WEIGHT * exit_pen`), reached when every
-/// positive prior is absent and the command's last run failed. Used to rescale that sum into
-/// `[0, 1]` before it becomes `f(priors)`'s swing; recomputes automatically if the weights above
-/// change.
+/// Theoretical lower bound of the weighted prior sum, reached when every positive prior is absent
+/// and the command's last run failed. Rescales that sum into `[0, 1]` before it becomes
+/// `f(priors)`'s swing.
 const PRIOR_SUM_MIN: f64 = -EXIT_PENALTY_WEIGHT;
 
-/// Derived, not meant to be hand-tuned: theoretical upper bound of the weighted prior sum, reached
-/// when every positive prior is fully satisfied and the command's last run succeeded.
+/// Theoretical upper bound of the weighted prior sum, reached when every positive prior is fully
+/// satisfied and the command's last run succeeded.
 const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + SESSION_WEIGHT;
-
-// ----- End tunable constants -----
 
 /// The Skim-scale quality of a fuzzy match, before history priors are applied.
 #[derive(Debug, Clone, Copy, PartialEq)]
