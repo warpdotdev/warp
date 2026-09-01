@@ -47,10 +47,10 @@ use crate::ai::agent::api::{self, ServerConversationToken};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
-    AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus, AIIdentifiers, CancellationOutcome,
-    CancellationReason, DocumentContentAttachmentSource, EntrypointType, FileContext,
-    FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    AIAgentAction, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputStatus, AIIdentifiers,
+    CancellationOutcome, CancellationReason, DocumentContentAttachmentSource, EntrypointType,
+    FileContext, FinishedAIAgentOutput, PassiveSuggestionResultType, PassiveSuggestionTrigger,
     PassiveSuggestionTriggerType, RenderableAIError, RequestCost, RequestMetadata, RunningCommand,
     StaticQueryType, TransientNetworkErrorKind, UserQueryMode, extract_user_query_mode,
 };
@@ -429,6 +429,32 @@ impl InputQuery {
     }
 }
 
+fn partition_actions_with_server_results(
+    output: &AIAgentOutput,
+    inputs: &[AIAgentInput],
+) -> (Vec<AIAgentAction>, Vec<AIAgentActionResult>) {
+    let actions = output.actions().cloned().collect::<Vec<_>>();
+    let action_ids = actions
+        .iter()
+        .map(|action| action.id.clone())
+        .collect::<HashSet<_>>();
+    let action_results = inputs
+        .iter()
+        .filter_map(AIAgentInput::action_result)
+        .filter(|result| action_ids.contains(&result.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let resolved_action_ids = action_results
+        .iter()
+        .map(|result| result.id.clone())
+        .collect::<HashSet<_>>();
+    let unresolved_actions = actions
+        .into_iter()
+        .filter(|action| !resolved_action_ids.contains(&action.id))
+        .collect();
+
+    (unresolved_actions, action_results)
+}
 impl BlocklistAIController {
     /// Returns the bundled-skill catalog origin for this controller's active session.
     pub fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
@@ -3145,6 +3171,7 @@ impl BlocklistAIController {
                 let mut was_passive_request = false;
                 let mut is_any_exchange_unfinished = false;
                 let mut actions_to_queue = vec![];
+                let mut server_synthesized_action_results = vec![];
 
                 for new_exchange_id in new_exchange_ids {
                     let Some(exchange) = conversation.exchange_with_id(new_exchange_id) else {
@@ -3159,8 +3186,26 @@ impl BlocklistAIController {
                         ..
                     } = &exchange.output_status
                     {
-                        actions_to_queue.extend(output.get().actions().cloned());
+                        if FeatureFlag::ServerSynthesizedClientToolResults.is_enabled() {
+                            let (unresolved_actions, action_results) =
+                                partition_actions_with_server_results(
+                                    &output.get(),
+                                    &exchange.input,
+                                );
+                            actions_to_queue.extend(unresolved_actions);
+                            server_synthesized_action_results.extend(action_results);
+                        } else {
+                            actions_to_queue.extend(output.get().actions().cloned());
+                        }
                     }
+                }
+
+                if !server_synthesized_action_results.is_empty() {
+                    self.action_model.update(ctx, |action_model, _| {
+                        action_model.record_server_synthesized_action_results(
+                            server_synthesized_action_results.into_iter().map(Arc::new),
+                        );
+                    });
                 }
 
                 if let Some(stream_cancellation) = &cancellation {

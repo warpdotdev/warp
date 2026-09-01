@@ -4,7 +4,7 @@ use warp_multi_agent_api as api;
 
 use super::{
     api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
-    supports_orchestration_v2,
+    supports_orchestration_v2, supports_server_synthesized_client_tool_results,
 };
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
@@ -105,6 +105,17 @@ fn api_keys_with_warp_credit_fallback_setting_preserves_existing_keys() {
 fn supports_orchestration_v2_matches_request_orchestration_setting() {
     assert!(supports_orchestration_v2(true));
     assert!(!supports_orchestration_v2(false));
+}
+#[test]
+fn server_synthesized_client_tool_result_capability_is_disabled_by_default() {
+    assert!(!supports_server_synthesized_client_tool_results());
+}
+
+#[test]
+fn server_synthesized_client_tool_result_capability_is_advertised_when_enabled() {
+    let _flag = FeatureFlag::ServerSynthesizedClientToolResults.override_enabled(true);
+
+    assert!(supports_server_synthesized_client_tool_results());
 }
 
 #[test]

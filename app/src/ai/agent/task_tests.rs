@@ -1,6 +1,16 @@
+use std::collections::HashSet;
+
+use ai::skills::SkillPathOrigin;
+use chrono::Local;
 use warp_multi_agent_api as api;
 
-use super::{ExtractMessagesError, Task};
+use super::{ExtractMessagesError, Task, TaskMessageContext};
+use crate::ai::agent::{
+    AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
+    RunAgentsResult, Shared,
+};
+use crate::ai::llms::LLMId;
+use crate::features::FeatureFlag;
 use crate::test_util::ai_agent_tasks::{
     create_api_subtask, create_api_task, create_message, create_subagent_tool_call_message,
 };
@@ -8,6 +18,139 @@ use crate::test_util::ai_agent_tasks::{
 /// Creates a Task backed by server data from the given api::Task.
 fn create_server_task(api_task: api::Task) -> Task {
     Task::new_restored_root(api_task, std::iter::empty())
+}
+fn streaming_exchange() -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Streaming {
+            output: Some(Shared::new(AIAgentOutput::default())),
+        },
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from(""),
+        request_cost: None,
+        coding_model_id: LLMId::from(""),
+        cli_agent_model_id: LLMId::from(""),
+        computer_use_model_id: LLMId::from(""),
+        response_initiator: None,
+    }
+}
+
+fn run_agents_message(
+    message_id: &str,
+    task_id: &str,
+    message: api::message::Message,
+) -> api::Message {
+    api::Message {
+        id: message_id.to_owned(),
+        task_id: task_id.to_owned(),
+        request_id: "request".to_owned(),
+        message: Some(message),
+        ..Default::default()
+    }
+}
+
+struct ServerResultHydrationObservation {
+    action_count: usize,
+    action_result: Option<crate::ai::agent::AIAgentActionResult>,
+}
+
+fn observe_live_owner_server_result_hydration(enabled: bool) -> ServerResultHydrationObservation {
+    let _flag = FeatureFlag::ServerSynthesizedClientToolResults.override_enabled(enabled);
+    let task_id = "task";
+    let tool_call_id = "run-agents";
+    let exchange = streaming_exchange();
+    let exchange_id = exchange.id;
+    let mut task = create_server_task(create_api_task(task_id, vec![]));
+    task.append_exchange(exchange);
+    let skill_path_origin = SkillPathOrigin::Unavailable;
+    let message_context = TaskMessageContext {
+        current_todo_list: None,
+        active_code_review: None,
+        skill_path_origin: &skill_path_origin,
+    };
+    let tool_call = run_agents_message(
+        "call",
+        task_id,
+        api::message::Message::ToolCall(api::message::ToolCall {
+            tool_call_id: tool_call_id.to_owned(),
+            tool: Some(api::message::tool_call::Tool::RunAgents(
+                api::RunAgents::default(),
+            )),
+        }),
+    );
+
+    task.add_messages(vec![tool_call], exchange_id, message_context, false)
+        .expect("tool call should be ingested");
+
+    let result = run_agents_message(
+        "result",
+        task_id,
+        api::message::Message::ToolCallResult(api::message::ToolCallResult {
+            tool_call_id: tool_call_id.to_owned(),
+            result: Some(api::message::tool_call_result::Result::RunAgentsResult(
+                api::RunAgentsResult {
+                    outcome: Some(api::run_agents_result::Outcome::Failure(
+                        api::run_agents_result::Failure {
+                            error: "invalid configuration".to_owned(),
+                        },
+                    )),
+                },
+            )),
+            context: None,
+        }),
+    );
+
+    task.add_messages(vec![result], exchange_id, message_context, false)
+        .expect("paired result should be ingested");
+
+    let exchange = task.exchange(exchange_id).expect("exchange exists");
+    let action_count = exchange
+        .output_status
+        .output()
+        .expect("output exists")
+        .get()
+        .actions()
+        .count();
+    let action_result = exchange
+        .input
+        .iter()
+        .find_map(AIAgentInput::action_result)
+        .cloned();
+
+    ServerResultHydrationObservation {
+        action_count,
+        action_result,
+    }
+}
+
+#[test]
+fn live_owner_hydrates_a_server_synthesized_run_agents_failure_when_enabled() {
+    let observation = observe_live_owner_server_result_hydration(true);
+
+    assert_eq!(observation.action_count, 1);
+    let action_result = observation
+        .action_result
+        .expect("server result should be hydrated");
+    assert_eq!(action_result.id.to_string(), "run-agents");
+    assert!(matches!(
+        action_result.result,
+        crate::ai::agent::AIAgentActionResultType::RunAgents(RunAgentsResult::Failure {
+            error
+        }) if error == "invalid configuration"
+    ));
+}
+
+#[test]
+fn live_owner_ignores_a_server_synthesized_run_agents_failure_when_disabled() {
+    let observation = observe_live_owner_server_result_hydration(false);
+
+    assert_eq!(observation.action_count, 1);
+    assert_eq!(observation.action_result, None);
 }
 
 // =============================================================================

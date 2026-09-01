@@ -135,6 +135,13 @@ pub fn convert_conversation_data_to_ai_conversation(
     }
 }
 
+fn raw_image_data(image: &api::RawImage) -> Option<Vec<u8>> {
+    match &image.source {
+        Some(api::raw_image::Source::Data(data)) => Some(data.clone()),
+        Some(api::raw_image::Source::StoredRef(_)) | None => None,
+    }
+}
+
 /// Converts InputContext from the API to the application type `Arc<[AIAgentContext]>`
 #[allow(clippy::single_range_in_vec_init)]
 pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<[AIAgentContext]> {
@@ -1370,17 +1377,19 @@ pub(crate) fn convert_tool_call_result_to_input(
             let use_computer_result =
                 match &result.result {
                     Some(api::use_computer_result::Result::Success(success)) => {
-                        let screenshot = success.screenshot.as_ref().map(|s| {
-                            // The original dimensions are not preserved through the API, so we use
-                            // the current dimensions for both.
-                            computer_use::Screenshot {
-                                width: s.width as usize,
-                                height: s.height as usize,
-                                original_width: s.width as usize,
-                                original_height: s.height as usize,
-                                data: s.data.clone(),
-                                mime_type: s.mime_type.clone().into(),
-                            }
+                        let screenshot = success.screenshot.as_ref().and_then(|s| {
+                            raw_image_data(s).map(|data| {
+                                // The original dimensions are not preserved through the API, so we use
+                                // the current dimensions for both.
+                                computer_use::Screenshot {
+                                    width: s.width as usize,
+                                    height: s.height as usize,
+                                    original_width: s.width as usize,
+                                    original_height: s.height as usize,
+                                    data,
+                                    mime_type: s.mime_type.clone().into(),
+                                }
+                            })
                         });
                         let cursor_position = success
                             .cursor_position
@@ -1435,17 +1444,22 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 ..
                             },
                             Some(platform),
-                        ) => RequestComputerUseResult::Approved {
-                            screenshot: computer_use::Screenshot {
-                                width: initial_screenshot.width as usize,
-                                height: initial_screenshot.height as usize,
-                                original_width: screen_dimensions.width_px as usize,
-                                original_height: screen_dimensions.height_px as usize,
-                                data: initial_screenshot.data.clone(),
-                                mime_type: initial_screenshot.mime_type.clone().into(),
+                        ) => match raw_image_data(initial_screenshot) {
+                            Some(data) => RequestComputerUseResult::Approved {
+                                screenshot: computer_use::Screenshot {
+                                    width: initial_screenshot.width as usize,
+                                    height: initial_screenshot.height as usize,
+                                    original_width: screen_dimensions.width_px as usize,
+                                    original_height: screen_dimensions.height_px as usize,
+                                    data,
+                                    mime_type: initial_screenshot.mime_type.clone().into(),
+                                },
+                                platform,
+                                windows: windows.iter().map(convert_api_window_info).collect(),
                             },
-                            platform,
-                            windows: windows.iter().map(convert_api_window_info).collect(),
+                            None => RequestComputerUseResult::Error(
+                                "Missing initial screenshot image data".to_string(),
+                            ),
                         },
                         _ => RequestComputerUseResult::Error(
                             "Missing screen dimensions, initial screenshot, or valid platform"

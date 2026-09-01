@@ -108,6 +108,9 @@ pub async fn generate_multi_agent_output(
                 && FeatureFlag::CloudAgentRunners.is_enabled(),
             supports_background_computer_use: FeatureFlag::BackgroundComputerUse.is_enabled()
                 && computer_use::background_supported(),
+            supports_stored_screenshots: false,
+            supports_server_synthesized_client_tool_results:
+                supports_server_synthesized_client_tool_results(),
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
         }),
@@ -207,6 +210,9 @@ fn api_keys_with_warp_credit_fallback_setting(
 
 fn supports_orchestration_v2(orchestration_enabled: bool) -> bool {
     orchestration_enabled
+}
+fn supports_server_synthesized_client_tool_results() -> bool {
+    FeatureFlag::ServerSynthesizedClientToolResults.is_enabled()
 }
 
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {

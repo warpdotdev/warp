@@ -29,6 +29,7 @@ use super::{
 };
 use crate::AIAgentTodoList;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
+use crate::features::FeatureFlag;
 use crate::terminal::model::block::BlockId;
 
 #[derive(Debug, thiserror::Error)]
@@ -890,6 +891,21 @@ impl Task {
         message_context: TaskMessageContext<'_>,
         should_convert_input_messages: bool,
     ) -> Result<(), UpdateTaskError> {
+        let tool_calls = if should_convert_input_messages {
+            Vec::new()
+        } else {
+            self.try_get_source()?
+                .messages
+                .iter()
+                .chain(&messages)
+                .filter_map(|message| message.tool_call().cloned())
+                .collect()
+        };
+        let tool_call_map = tool_calls
+            .iter()
+            .map(|tool_call| (tool_call.tool_call_id.clone(), tool_call))
+            .collect::<HashMap<_, _>>();
+        let task_id = self.id.clone();
         let exchange = self
             .exchange_mut(exchange_id)
             .ok_or(UpdateTaskError::ExchangeNotFound)?;
@@ -918,6 +934,57 @@ impl Task {
                 }
 
                 exchange.input.push(input);
+            }
+        } else {
+            let mut output_action_ids = exchange
+                .output_status
+                .output()
+                .into_iter()
+                .flat_map(|output| {
+                    output
+                        .get()
+                        .actions()
+                        .map(|action| action.id.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<HashSet<_>>();
+            output_action_ids.extend(messages.iter().filter_map(|message| {
+                message
+                    .tool_call()
+                    .map(|tool_call| tool_call.tool_call_id.clone().into())
+            }));
+            if FeatureFlag::ServerSynthesizedClientToolResults.is_enabled() {
+                let mut document_versions = HashMap::new();
+                for tool_call_result in messages
+                    .iter()
+                    .filter_map(|message| message.tool_call_result())
+                {
+                    let action_id = tool_call_result.tool_call_id.clone().into();
+                    if !output_action_ids.contains(&action_id) {
+                        continue;
+                    }
+                    if let Some(input) = convert_tool_call_result_to_input(
+                        &task_id,
+                        tool_call_result,
+                        &tool_call_map,
+                        &mut document_versions,
+                    ) {
+                        if let Some(action_result) = input.action_result()
+                            && let Some(existing_result) =
+                                exchange.input.iter_mut().find(|existing_input| {
+                                    existing_input
+                                        .action_result()
+                                        .is_some_and(|existing_result| {
+                                            existing_result.id == action_result.id
+                                        })
+                                })
+                        {
+                            *existing_result = input;
+                        } else {
+                            exchange.input.push(input);
+                        }
+                    }
+                }
             }
         }
 

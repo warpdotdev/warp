@@ -666,6 +666,15 @@ impl BlocklistAIActionModel {
             .or_else(|| self.past_action_results.get(id))
     }
 
+    pub fn record_server_synthesized_action_results(
+        &mut self,
+        action_results: impl IntoIterator<Item = Arc<AIAgentActionResult>>,
+    ) {
+        for action_result in action_results {
+            self.past_action_results
+                .insert(action_result.id.clone(), action_result);
+        }
+    }
     pub fn recording_spans_for_conversation(
         &self,
         conversation: &AIConversation,

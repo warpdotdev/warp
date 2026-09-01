@@ -9,26 +9,28 @@ use ai::api_keys::{
 use chrono::Local;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
-use warp_multi_agent_api::response_event;
+use warp_multi_agent_api::{self as api, response_event};
 use warpui::{App, SingletonEntity, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment,
+    AIAgentContext, AIAgentInput, CancellationReason, ImageContext, PassiveSuggestionTrigger,
+    RunAgentsResult, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment, PendingFile, RequestInput,
-    ResponseStream, ResponseStreamId,
+    AIActionStatus, BlocklistAIHistoryEvent, BlocklistAIHistoryModel, PendingAttachment,
+    PendingFile, RequestInput, ResponseStream, ResponseStreamId, StartAgentExecutorEvent,
 };
 use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy_for_any_team};
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider};
+use crate::server::experiments::ServerExperiments;
 use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
 use crate::test_util::terminal::{
@@ -67,6 +69,357 @@ fn file_attachment(file_name: &str) -> PendingAttachment {
     })
 }
 
+struct ServerResultStreamCompletionObservation {
+    output_action_ids: Vec<String>,
+    hydrated_result_ids: Vec<String>,
+    resolved_status: Option<AIActionStatus>,
+    recorded_result: Option<AIAgentActionResult>,
+    pending_action_ids: Vec<String>,
+    resolved_execution_pending: bool,
+    sent_request_count: usize,
+    start_agent_request_count: usize,
+}
+
+fn observe_server_result_stream_completion(
+    hydration_enabled: bool,
+    completion_enabled: bool,
+) -> ServerResultStreamCompletionObservation {
+    App::test((), |mut app| async move {
+        let hydration_flag =
+            FeatureFlag::ServerSynthesizedClientToolResults.override_enabled(hydration_enabled);
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
+        let terminal = add_window_with_terminal(&mut app, None);
+        let sent_request_count = Arc::new(Mutex::new(0));
+        let start_agent_request_count = Arc::new(Mutex::new(0));
+
+        let (conversation_id, stream, action_model) = terminal.update(&mut app, |view, ctx| {
+            let terminal_surface_id = view.id();
+            let stream_id = ResponseStreamId::new_for_test();
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let conversation_id = history.start_new_conversation(
+                        terminal_surface_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    let task_id = history
+                        .conversation(&conversation_id)
+                        .expect("conversation exists")
+                        .get_root_task_id()
+                        .clone();
+                    history
+                        .update_conversation_for_new_request_input(
+                            RequestInput {
+                                conversation_id,
+                                input_messages: HashMap::from([(task_id.clone(), vec![])]),
+                                working_directory: None,
+                                model_id: LLMId::from("test-model"),
+                                coding_model_id: LLMId::from("test-coding-model"),
+                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                shared_session_response_initiator: None,
+                                request_start_ts: Local::now(),
+                                supported_tools_override: None,
+                            },
+                            stream_id.clone(),
+                            terminal_surface_id,
+                            ctx,
+                        )
+                        .expect("request input should initialize an exchange");
+                    conversation_id
+                });
+            let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+            let controller = view.ai_controller().clone();
+            let sent_request_count_for_subscription = Arc::clone(&sent_request_count);
+            ctx.subscribe_to_model(&controller, move |_, _, event, _| {
+                if matches!(event, super::BlocklistAIControllerEvent::SentRequest { .. }) {
+                    *sent_request_count_for_subscription.lock().unwrap() += 1;
+                }
+            });
+            controller.update(ctx, |controller, ctx| {
+                controller.register_mock_stream_for_test(
+                    stream_id,
+                    conversation_id,
+                    stream.clone(),
+                    ctx,
+                );
+            });
+            let action_model = view.ai_action_model().clone();
+            let start_agent_executor = action_model.as_ref(ctx).start_agent_executor(ctx);
+            let start_agent_request_count_for_subscription = Arc::clone(&start_agent_request_count);
+            ctx.subscribe_to_model(&start_agent_executor, move |_, _, event, _| {
+                if matches!(event, StartAgentExecutorEvent::CreateAgent(_)) {
+                    *start_agent_request_count_for_subscription.lock().unwrap() += 1;
+                }
+            });
+            (conversation_id, stream, action_model)
+        });
+        let task_id = "server-task";
+
+        let resolved_id = "server-resolved";
+        let unresolved_id = "client-pending";
+        let message = |id: &str, message: api::message::Message| api::Message {
+            id: id.to_owned(),
+            task_id: task_id.to_owned(),
+            request_id: "request".to_owned(),
+            message: Some(message),
+            ..Default::default()
+        };
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(
+                api::ResponseEvent {
+                    r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                        request_id: "request".to_owned(),
+                        conversation_id: "conversation".to_owned(),
+                        run_id: String::new(),
+                    })),
+                },
+                ctx,
+            );
+            stream.emit_response_event_for_test(
+                api::ResponseEvent {
+                    r#type: Some(response_event::Type::ClientActions(
+                        response_event::ClientActions {
+                            actions: vec![
+                                api::ClientAction {
+                                    action: Some(api::client_action::Action::CreateTask(
+                                        api::client_action::CreateTask {
+                                            task: Some(api::Task {
+                                                id: task_id.to_owned(),
+                                                ..Default::default()
+                                            }),
+                                        },
+                                    )),
+                                },
+                                api::ClientAction {
+                                    action: Some(api::client_action::Action::AddMessagesToTask(
+                                        api::client_action::AddMessagesToTask {
+                                            task_id: task_id.to_owned(),
+                                            messages: vec![
+                                                message(
+                                                    "resolved-call",
+                                                    api::message::Message::ToolCall(
+                                                        api::message::ToolCall {
+                                                            tool_call_id: resolved_id.to_owned(),
+                                                            tool: Some(
+                                                                api::message::tool_call::Tool::RunAgents(
+                                                                    api::RunAgents::default(),
+                                                                ),
+                                                            ),
+                                                        },
+                                                    ),
+                                                ),
+                                                message(
+                                                    "resolved-result",
+                                                    api::message::Message::ToolCallResult(
+                                                        api::message::ToolCallResult {
+                                                            tool_call_id: resolved_id.to_owned(),
+                                                            result: Some(
+                                                                api::message::tool_call_result::Result::RunAgentsResult(
+                                                                    api::RunAgentsResult {
+                                                                        outcome: Some(
+                                                                            api::run_agents_result::Outcome::Failure(
+                                                                                api::run_agents_result::Failure {
+                                                                                    error: "invalid configuration".to_owned(),
+                                                                                },
+                                                                            ),
+                                                                        ),
+                                                                    },
+                                                                ),
+                                                            ),
+                                                            context: None,
+                                                        },
+                                                    ),
+                                                ),
+                                                message(
+                                                    "unresolved-call",
+                                                    api::message::Message::ToolCall(
+                                                        api::message::ToolCall {
+                                                            tool_call_id: unresolved_id.to_owned(),
+                                                            tool: Some(
+                                                                api::message::tool_call::Tool::RunAgents(
+                                                                    api::RunAgents::default(),
+                                                                ),
+                                                            ),
+                                                        },
+                                                    ),
+                                                ),
+                                            ],
+                                        },
+                                    )),
+                                },
+                            ],
+                        },
+                    )),
+                },
+                ctx,
+            );
+            stream.emit_response_event_for_test(
+                api::ResponseEvent {
+                    r#type: Some(response_event::Type::Finished(
+                        response_event::StreamFinished {
+                            reason: Some(response_event::stream_finished::Reason::Done(
+                                response_event::stream_finished::Done {},
+                            )),
+                            conversation_usage_metadata: None,
+                            token_usage: vec![],
+                            should_refresh_model_config: false,
+                            #[allow(deprecated)]
+                            request_cost: None,
+                            request_charges: None,
+                        },
+                    )),
+                },
+                ctx,
+            );
+        });
+        let (output_action_ids, hydrated_result_ids) =
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                let exchange = history
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.latest_exchange())
+                    .expect("finished exchange should exist");
+                (
+                    exchange
+                        .output_status
+                        .output()
+                        .expect("finished output should exist")
+                        .get()
+                        .actions()
+                        .map(|action| action.id.to_string())
+                        .collect::<Vec<_>>(),
+                    exchange
+                        .input
+                        .iter()
+                        .filter_map(AIAgentInput::action_result)
+                        .map(|result| result.id.to_string())
+                        .collect::<Vec<_>>(),
+                )
+            });
+        drop(hydration_flag);
+        let _completion_flag =
+            FeatureFlag::ServerSynthesizedClientToolResults.override_enabled(completion_enabled);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_after_stream_finished_for_test(ctx);
+        });
+        crate::test_util::assert_eventually!(
+            action_model.read(&app, |action_model, _| {
+                action_model
+                    .get_pending_actions_for_conversation(&conversation_id)
+                    .next()
+                    .is_some()
+            }),
+            "stream completion did not queue its unresolved actions"
+        );
+
+        let (resolved_status, recorded_result, pending_action_ids, resolved_execution_pending) =
+            action_model.read(&app, |action_model, ctx| {
+                let resolved_id = AIAgentActionId::from(resolved_id.to_owned());
+                let resolved_status = action_model.get_action_status(&resolved_id);
+                let recorded_result = action_model
+                    .get_action_result(&resolved_id)
+                    .map(|result| result.as_ref().clone());
+                (
+                    resolved_status,
+                    recorded_result,
+                    action_model
+                        .get_pending_actions_for_conversation(&conversation_id)
+                        .map(|action| action.id.to_string())
+                        .collect(),
+                    action_model
+                        .run_agents_executor(ctx)
+                        .as_ref(ctx)
+                        .is_pending(&resolved_id),
+                )
+            });
+
+        let sent_request_count = *sent_request_count.lock().unwrap();
+        let start_agent_request_count = *start_agent_request_count.lock().unwrap();
+        ServerResultStreamCompletionObservation {
+            output_action_ids,
+            hydrated_result_ids,
+            resolved_status,
+            recorded_result,
+            pending_action_ids,
+            resolved_execution_pending,
+            sent_request_count,
+            start_agent_request_count,
+        }
+    })
+}
+
+#[test]
+fn stream_completion_consumes_server_results_when_capability_enabled() {
+    let observation = observe_server_result_stream_completion(true, true);
+
+    assert_eq!(
+        observation.output_action_ids,
+        vec!["server-resolved", "client-pending"]
+    );
+    assert_eq!(observation.hydrated_result_ids, vec!["server-resolved"]);
+    assert!(matches!(
+        observation.resolved_status,
+        Some(AIActionStatus::Finished(_))
+    ));
+    assert!(matches!(
+        observation.recorded_result,
+        Some(AIAgentActionResult {
+            result: AIAgentActionResultType::RunAgents(RunAgentsResult::Failure { error }),
+            ..
+        }) if error == "invalid configuration"
+    ));
+    assert_eq!(observation.pending_action_ids, vec!["client-pending"]);
+    assert!(!observation.resolved_execution_pending);
+    assert_eq!(observation.sent_request_count, 0);
+    assert_eq!(observation.start_agent_request_count, 0);
+}
+
+#[test]
+fn stream_completion_queues_server_resolved_actions_when_capability_disabled() {
+    let observation = observe_server_result_stream_completion(false, false);
+
+    assert_eq!(
+        observation.output_action_ids,
+        vec!["server-resolved", "client-pending"]
+    );
+    assert!(observation.hydrated_result_ids.is_empty());
+    assert!(matches!(
+        observation.resolved_status,
+        Some(AIActionStatus::Blocked | AIActionStatus::Queued)
+    ));
+    assert_eq!(observation.recorded_result, None);
+    assert_eq!(
+        observation.pending_action_ids,
+        vec!["server-resolved", "client-pending"]
+    );
+    assert_eq!(observation.sent_request_count, 0);
+    assert_eq!(observation.start_agent_request_count, 0);
+}
+
+#[test]
+fn stream_completion_does_not_suppress_results_if_capability_is_disabled_before_completion() {
+    let observation = observe_server_result_stream_completion(true, false);
+
+    assert_eq!(
+        observation.output_action_ids,
+        vec!["server-resolved", "client-pending"]
+    );
+    assert_eq!(observation.hydrated_result_ids, vec!["server-resolved"]);
+    assert!(matches!(
+        observation.resolved_status,
+        Some(AIActionStatus::Blocked | AIActionStatus::Queued)
+    ));
+    assert_eq!(observation.recorded_result, None);
+    assert_eq!(
+        observation.pending_action_ids,
+        vec!["server-resolved", "client-pending"]
+    );
+    assert_eq!(observation.sent_request_count, 0);
+    assert_eq!(observation.start_agent_request_count, 0);
+}
 #[test]
 fn passive_suggestions_request_params_omit_ambient_agent_task_id() {
     App::test((), |mut app| async move {

@@ -934,6 +934,7 @@ pub enum FeatureFlag {
     /// orchestration (`run_agents`) confirmation card and plan-card config
     /// block for choosing a runner when starting remote child agents.
     CloudAgentRunners,
+    ServerSynthesizedClientToolResults,
 
     /// Gates the account-first onboarding flow, including the reordered
     /// pre-auth slides and post-auth account offer.

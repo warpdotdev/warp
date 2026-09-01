@@ -1088,10 +1088,10 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height_px: screenshot.original_height as i32,
                                 }),
                                 initial_screenshot: Some(api::RawImage {
-                                    data: screenshot.data,
                                     mime_type: screenshot.mime_type.to_string(),
                                     width: screenshot.width as i32,
                                     height: screenshot.height as i32,
+                                    source: Some(api::raw_image::Source::Data(screenshot.data)),
                                 }),
                                 platform: convert_platform(platform).into(),
                                 windows: windows.into_iter().map(convert_window_info).collect(),
@@ -1136,10 +1136,10 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
                         result: Some(api::use_computer_result::Result::Success(
                             api::use_computer_result::Success {
                                 screenshot: result.screenshot.map(|s| api::RawImage {
-                                    data: s.data,
                                     mime_type: s.mime_type.to_string(),
                                     width: s.width as i32,
                                     height: s.height as i32,
+                                    source: Some(api::raw_image::Source::Data(s.data)),
                                 }),
                                 cursor_position: result.cursor_position.map(vec_to_coordinates),
                                 windows: result
