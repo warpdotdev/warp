@@ -73,6 +73,23 @@ impl<T: Entity> ViewHandle<T> {
         app.update_view(self, update)
     }
 
+    /// Updates a value within the underlying View, returning `None` when the
+    /// view's window has already been torn down.
+    ///
+    /// A [`ViewHandle`] keeps the view's ref count alive but does not keep its
+    /// window open, so any update that can outlive its window — typically one
+    /// driven by a spawned task that resolves after the user closed the window
+    /// — would otherwise panic. Use this where a missing window makes the
+    /// update moot rather than indicating a bug; a reentrant update of a view
+    /// that is already checked out still panics.
+    pub fn try_update<A, F, S>(&self, app: &mut A, update: F) -> Option<S>
+    where
+        A: UpdateView,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        app.try_update_view(self, update)
+    }
+
     pub fn is_focused(&self, app: &AppContext) -> bool {
         app.focused_view_id(self.window_id(app)) == Some(self.view_id)
     }
@@ -324,6 +341,13 @@ pub trait UpdateView: ReadView {
     // `&mut ViewContext<T>`, which exposes `emit(T::Event)` and therefore needs
     // `T: Entity`.
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S;
+
+    /// Fallible counterpart to [`Self::update_view`] that yields `None` when
+    /// the handle's window no longer exists, instead of panicking.
+    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S;

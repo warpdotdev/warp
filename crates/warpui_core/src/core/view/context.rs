@@ -920,6 +920,14 @@ impl<V: Entity> UpdateView for ViewContext<'_, V> {
     {
         self.app.update_view(handle, update)
     }
+
+    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        self.app.try_update_view(handle, update)
+    }
 }
 
 impl<V: Entity> ReadView for ViewContext<'_, V> {

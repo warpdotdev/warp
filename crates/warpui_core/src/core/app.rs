@@ -483,6 +483,14 @@ impl UpdateView for App {
     {
         self.as_mut().update_view(handle, update)
     }
+
+    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        self.as_mut().try_update_view(handle, update)
+    }
 }
 
 impl ReadView for App {
@@ -4622,6 +4630,18 @@ impl AppContext {
         self.flush_effects();
     }
 
+    /// Whether an update targeting `view_id` can be checked out, i.e. whether the view is still
+    /// mapped to a window that still exists.
+    ///
+    /// This deliberately does not inspect the window's view map. A view is absent from that map
+    /// while an update against it is in flight, so consulting it here would report a live but
+    /// reentrantly-borrowed view as gone and silently swallow a circular update.
+    fn view_window_exists(&self, view_id: EntityId) -> bool {
+        self.view_to_window
+            .get(&view_id)
+            .is_some_and(|window_id| self.windows.contains_key(window_id))
+    }
+
     /// Removes the view with the given ID so that an update closure can run against it.
     ///
     /// This bookkeeping is not generic, so it is compiled once instead of being duplicated into
@@ -4693,6 +4713,17 @@ impl UpdateView for AppContext {
         let result = update(downcast_view_mut(&mut view), &mut ctx);
         self.finish_view_update(window_id, handle.id(), view);
         result
+    }
+
+    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        if !self.view_window_exists(handle.id()) {
+            return None;
+        }
+        Some(self.update_view(handle, update))
     }
 }
 
