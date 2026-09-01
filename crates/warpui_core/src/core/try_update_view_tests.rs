@@ -38,13 +38,13 @@ fn try_update_applies_the_closure_while_the_window_is_open() {
             "updated"
         });
 
-        assert_eq!(result, Some("updated"));
+        assert_eq!(result, Ok("updated"));
         view.read(&app, |view, _| assert_eq!(view.value, 42));
     });
 }
 
 #[test]
-fn try_update_returns_none_after_the_window_closes() {
+fn try_update_reports_window_closed_after_the_window_closes() {
     App::test((), |mut app| async move {
         let (window_id, _root) =
             app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
@@ -58,7 +58,7 @@ fn try_update_returns_none_after_the_window_closes() {
             *closure_ran_inner.borrow_mut() = true;
         });
 
-        assert_eq!(result, None);
+        assert_eq!(result, Err(ViewUpdateError::WindowClosed));
         assert!(
             !*closure_ran.borrow(),
             "the update closure must not run once the window is gone"
@@ -66,11 +66,34 @@ fn try_update_returns_none_after_the_window_closes() {
     });
 }
 
-/// A reentrant update is a programming error rather than a torn-down window, so
-/// `try_update` must still surface it instead of quietly reporting `None`.
+/// A `try_` method is expected not to panic, so a reentrant update is reported
+/// rather than raised. It must stay distinct from
+/// [`ViewUpdateError::WindowClosed`] because only reentrancy is a bug worth an
+/// engineer's attention.
+#[test]
+fn try_update_reports_a_circular_update_rather_than_panicking() {
+    App::test((), |mut app| async move {
+        let (window_id, _root) =
+            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
+        let view = app.add_view(window_id, |_| TestView::default());
+        let reentrant = view.clone();
+
+        let result = app.update(|ctx| {
+            view.update(ctx, |_, ctx| {
+                reentrant.try_update(ctx, |view, _| view.value += 1)
+            })
+        });
+
+        assert_eq!(result, Err(ViewUpdateError::CircularUpdate));
+        view.read(&app, |view, _| assert_eq!(view.value, 0));
+    });
+}
+
+/// The panicking [`ViewHandle::update`] is deliberately left alone, so callers
+/// that never expect a reentrant update still fail loudly.
 #[test]
 #[should_panic(expected = "Circular view update")]
-fn try_update_still_panics_on_a_reentrant_update() {
+fn update_still_panics_on_a_reentrant_update() {
     App::test((), |mut app| async move {
         let (window_id, _root) =
             app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
@@ -79,17 +102,17 @@ fn try_update_still_panics_on_a_reentrant_update() {
 
         app.update(|ctx| {
             view.update(ctx, |_, ctx| {
-                reentrant.try_update(ctx, |view, _| view.value += 1);
+                reentrant.update(ctx, |view, _| view.value += 1);
             });
         });
     });
 }
 
-/// Guards the reason `try_update` exists rather than reusing
-/// `WeakViewHandle::upgrade`: `upgrade` consults the window's view map, and a
-/// view is absent from that map while an update against it is in flight. A
-/// guard built on it would misreport the reentrant update above as a closed
-/// window and swallow the panic.
+/// Guards the reason `try_update` does not reuse `WeakViewHandle::upgrade`:
+/// `upgrade` consults the window's view map, and a view is absent from that map
+/// while an update against it is in flight. Building the check on it would
+/// collapse the reentrant case above into
+/// [`ViewUpdateError::WindowClosed`].
 #[test]
 fn weak_upgrade_reports_a_reentrantly_borrowed_view_as_gone() {
     App::test((), |mut app| async move {

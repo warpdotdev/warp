@@ -11,7 +11,9 @@ use futures::{Future, FutureExt};
 use thiserror::Error;
 use warp_errors::report_error;
 
-use super::handle::{AnyViewHandle, ReadView, UpdateView, ViewAsRef, ViewHandle, WeakViewHandle};
+use super::handle::{
+    AnyViewHandle, ReadView, UpdateView, ViewAsRef, ViewHandle, ViewUpdateError, WeakViewHandle,
+};
 use super::{TypedActionView, View};
 use crate::accessibility::AccessibilityContent;
 use crate::r#async::executor::{Background, Foreground};
@@ -921,7 +923,11 @@ impl<V: Entity> UpdateView for ViewContext<'_, V> {
         self.app.update_view(handle, update)
     }
 
-    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,

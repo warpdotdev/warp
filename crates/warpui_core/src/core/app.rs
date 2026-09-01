@@ -61,8 +61,8 @@ use crate::{
     EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
     NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
     SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor, assets,
-    rendering,
+    ViewAsRef, ViewContext, ViewHandle, ViewUpdateError, WindowId, WindowInvalidation, ZoomFactor,
+    assets, rendering,
 };
 
 #[cfg(feature = "tui")]
@@ -484,7 +484,11 @@ impl UpdateView for App {
         self.as_mut().update_view(handle, update)
     }
 
-    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
@@ -4630,16 +4634,24 @@ impl AppContext {
         self.flush_effects();
     }
 
-    /// Whether an update targeting `view_id` can be checked out, i.e. whether the view is still
-    /// mapped to a window that still exists.
+    /// Whether an update targeting `view_id` can be checked out, and if not, why.
     ///
-    /// This deliberately does not inspect the window's view map. A view is absent from that map
-    /// while an update against it is in flight, so consulting it here would report a live but
-    /// reentrantly-borrowed view as gone and silently swallow a circular update.
-    fn view_window_exists(&self, view_id: EntityId) -> bool {
-        self.view_to_window
+    /// A view is absent from its window's view map while an update against it is in flight, so
+    /// that absence means reentrancy rather than teardown. The two must stay distinguishable:
+    /// [`ViewUpdateError::WindowClosed`] is an expected race, while
+    /// [`ViewUpdateError::CircularUpdate`] is a bug worth reporting.
+    fn check_view_available_for_update(&self, view_id: EntityId) -> Result<(), ViewUpdateError> {
+        let Some(window) = self
+            .view_to_window
             .get(&view_id)
-            .is_some_and(|window_id| self.windows.contains_key(window_id))
+            .and_then(|window_id| self.windows.get(window_id))
+        else {
+            return Err(ViewUpdateError::WindowClosed);
+        };
+        if !window.views.contains_key(&view_id) {
+            return Err(ViewUpdateError::CircularUpdate);
+        }
+        Ok(())
     }
 
     /// Removes the view with the given ID so that an update closure can run against it.
@@ -4715,15 +4727,17 @@ impl UpdateView for AppContext {
         result
     }
 
-    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
-        if !self.view_window_exists(handle.id()) {
-            return None;
-        }
-        Some(self.update_view(handle, update))
+        self.check_view_available_for_update(handle.id())?;
+        Ok(self.update_view(handle, update))
     }
 }
 

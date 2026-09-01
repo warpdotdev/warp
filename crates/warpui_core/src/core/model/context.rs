@@ -18,7 +18,7 @@ use crate::windowing::WindowManager;
 use crate::{
     AppContext, Effect, Entity, EntityId, GetSingletonModelHandle, ModelAsRef, ModelHandle,
     ReadModel, ReadView, RequestState, RetryOption, UpdateModel, UpdateView, View, ViewAsRef,
-    ViewContext, ViewHandle, WeakModelHandle,
+    ViewContext, ViewHandle, ViewUpdateError, WeakModelHandle,
 };
 
 /// Error returned when a model has been dropped, and so references to it are invalid.
@@ -617,7 +617,11 @@ impl<M> UpdateView for ModelContext<'_, M> {
         self.app.update_view(handle, update)
     }
 
-    fn try_update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> Option<S>
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
