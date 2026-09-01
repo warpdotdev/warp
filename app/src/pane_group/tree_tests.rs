@@ -1,4 +1,93 @@
+use warpui::App;
+
 use super::*;
+use crate::test_util::settings::initialize_settings_for_tests;
+
+#[test]
+fn test_resize_flex_accumulates_consecutive_drag_deltas() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.read(|ctx| {
+            let measured_sizes = (500., 500.);
+            let total_pixel_size = measured_sizes.0 + measured_sizes.1;
+            let mut cached_total_pixel_size = None;
+            let mut flex_1 = 1.;
+            let mut flex_2 = 1.;
+
+            for _ in 0..3 {
+                let total_flex = flex_1 + flex_2;
+                flex_1 = compute_new_flex(
+                    flex_1,
+                    flex_2,
+                    10.,
+                    measured_sizes,
+                    &mut cached_total_pixel_size,
+                    ctx,
+                )
+                .expect("valid resize should update flex");
+                flex_2 = total_flex - flex_1;
+            }
+
+            let first_pane_size = flex_1 / (flex_1 + flex_2) * total_pixel_size;
+            assert!((first_pane_size - 530.).abs() < f32::EPSILON);
+            assert_eq!(cached_total_pixel_size, Some(total_pixel_size));
+        });
+    });
+}
+
+#[test]
+fn test_resize_flex_recovers_after_invalid_initial_measurements() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.read(|ctx| {
+            let mut cached_total_pixel_size = None;
+            for measured_sizes in [(0., 0.), (f32::NAN, 500.), (f32::INFINITY, 500.)] {
+                assert_eq!(
+                    compute_new_flex(
+                        1.,
+                        1.,
+                        10.,
+                        measured_sizes,
+                        &mut cached_total_pixel_size,
+                        ctx,
+                    ),
+                    None
+                );
+                assert_eq!(cached_total_pixel_size, None);
+            }
+
+            assert!(
+                compute_new_flex(1., 1., 10., (500., 500.), &mut cached_total_pixel_size, ctx,)
+                    .is_some()
+            );
+            assert_eq!(cached_total_pixel_size, Some(1000.));
+        });
+    });
+}
+
+#[test]
+fn test_resize_flex_respects_minimum_pane_size() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.read(|ctx| {
+            let minimum_pane_size = get_minimum_pane_size(ctx);
+            let measured_sizes = (minimum_pane_size * 2., minimum_pane_size * 2.);
+            let mut cached_total_pixel_size = None;
+
+            assert_eq!(
+                compute_new_flex(
+                    1.,
+                    1.,
+                    -(minimum_pane_size + 1.),
+                    measured_sizes,
+                    &mut cached_total_pixel_size,
+                    ctx,
+                ),
+                None
+            );
+        });
+    });
+}
 
 #[test]
 fn test_split_pane_layout() {
