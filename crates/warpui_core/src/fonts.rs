@@ -508,12 +508,14 @@ impl Cache {
         let (glyph_id, _) = self
             .glyph_for_char(font_id, 'm', false)
             .expect("we verify in Config::new that the font has an 'm' glyph");
-        let bounds = self
-            .glyph_typographic_bounds(font_id, font_size, glyph_id)
-            .expect(
-            "we verify in Config::new that we can measure the typographic bounds of the 'm' glyph",
-        );
-        bounds.width()
+        // Some Windows fonts map 'm' with a horizontal advance but no outline bounding box.
+        match self.glyph_typographic_bounds(font_id, font_size, glyph_id) {
+            Ok(bounds) => bounds.width(),
+            Err(_) => self
+                .glyph_advance(font_id, font_size, glyph_id)
+                .expect("we verify in Config::new that we can measure the 'm' glyph")
+                .x(),
+        }
     }
 
     pub(crate) fn remove_glyphs_by_char_entry(&mut self, key: (FontId, char)) {
