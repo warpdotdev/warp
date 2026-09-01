@@ -51,10 +51,9 @@ use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::{report_error, report_if_error};
-use warp_multi_agent_api::StoredScreenshotRef;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
-use warpui::assets::asset_cache::AssetCache;
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -155,6 +154,7 @@ use crate::ai::get_relevant_files::controller::{
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::SkillOpenOrigin;
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
+use crate::ai::stored_screenshots::stored_screenshot_asset_source;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -6463,21 +6463,16 @@ fn screenshot_asset_id(action_id: &AIAgentActionId) -> String {
     format!("screenshot-{action_id}")
 }
 
-/// Opens the lightbox over the given UseComputer actions' screenshots, which must already be
-/// present in the `AssetCache` under their [`screenshot_asset_id`]s.
+/// Opens the lightbox over the given screenshot asset sources.
 fn open_screenshot_lightbox(
-    action_ids: &[AIAgentActionId],
+    sources: Vec<AssetSource>,
     initial_index: usize,
     ctx: &mut ViewContext<AIBlock>,
 ) {
-    let images = action_ids
-        .iter()
-        .map(|action_id| ui_components::lightbox::LightboxImage {
-            source: ui_components::lightbox::LightboxImageSource::Resolved {
-                asset_source: warpui::assets::asset_cache::AssetSource::Raw {
-                    id: screenshot_asset_id(action_id),
-                },
-            },
+    let images = sources
+        .into_iter()
+        .map(|asset_source| ui_components::lightbox::LightboxImage {
+            source: ui_components::lightbox::LightboxImageSource::Resolved { asset_source },
             description: None,
         })
         .collect();
@@ -7128,15 +7123,14 @@ impl TypedActionView for AIBlock {
                         .flat_map(|c| c.use_computer_action_ids())
                         .collect();
 
-                // For each action with a screenshot result, either insert the inline
-                // bytes into the AssetCache immediately or record the stored ref that
-                // must first be fetched from object storage (restored/shared
-                // conversations whose screenshot bytes were offloaded by the server).
+                let server_api_provider = ServerApiProvider::handle(ctx);
+                let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
+                let http_client = server_api_provider.as_ref(ctx).get_http_client();
+
                 // We Arc::clone the result each iteration to release the immutable
                 // borrow on ctx, allowing the mutable AssetCache update in the same
                 // loop body. Arc::clone is just a refcount bump (no data copied).
-                let mut screenshot_actions: Vec<(AIAgentActionId, Option<StoredScreenshotRef>)> =
-                    Vec::new();
+                let mut screenshot_sources: Vec<(AIAgentActionId, AssetSource)> = Vec::new();
                 for action_id in &use_computer_action_ids {
                     let Some(result) = self
                         .action_model
@@ -7157,98 +7151,41 @@ impl TypedActionView for AIBlock {
                             let asset_id = screenshot_asset_id(action_id);
                             AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
                                 asset_cache.insert_raw_asset_bytes::<ImageType>(
-                                    asset_id,
+                                    asset_id.clone(),
                                     &screenshot.data,
                                     ctx,
                                 );
                             });
-                            screenshot_actions.push((action_id.clone(), None));
+                            screenshot_sources
+                                .push((action_id.clone(), AssetSource::Raw { id: asset_id }));
                         }
                         Some(ScreenshotSource::Stored { stored_ref, .. }) => {
-                            screenshot_actions.push((action_id.clone(), Some(stored_ref.clone())));
+                            screenshot_sources.push((
+                                action_id.clone(),
+                                stored_screenshot_asset_source(
+                                    stored_ref.clone(),
+                                    ai_client.clone(),
+                                    http_client.clone(),
+                                ),
+                            ));
                         }
                         None => {}
                     }
                 }
 
-                if screenshot_actions.is_empty() {
+                if screenshot_sources.is_empty() {
                     return;
                 }
 
-                let initial_index = screenshot_actions
+                let initial_index = screenshot_sources
                     .iter()
                     .position(|(id, _)| id == action_id)
                     .unwrap_or(0);
-                let refs_to_fetch: Vec<(AIAgentActionId, StoredScreenshotRef)> = screenshot_actions
-                    .iter()
-                    .filter_map(|(id, stored_ref)| {
-                        stored_ref
-                            .as_ref()
-                            .map(|stored_ref| (id.clone(), stored_ref.clone()))
-                    })
+                let sources = screenshot_sources
+                    .into_iter()
+                    .map(|(_, source)| source)
                     .collect();
-                let ordered_action_ids: Vec<AIAgentActionId> =
-                    screenshot_actions.into_iter().map(|(id, _)| id).collect();
-
-                if refs_to_fetch.is_empty() {
-                    open_screenshot_lightbox(&ordered_action_ids, initial_index, ctx);
-                    return;
-                }
-
-                // Resolve each stored ref to a signed URL and download the image
-                // bytes before opening the lightbox.
-                let server_api_provider = ServerApiProvider::handle(ctx);
-                let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
-                let http_client = server_api_provider.as_ref(ctx).get_http_client();
-                ctx.spawn(
-                    async move {
-                        let mut fetched = Vec::with_capacity(refs_to_fetch.len());
-                        for (action_id, stored_ref) in refs_to_fetch {
-                            let download = ai_client
-                                .get_screenshot_download(
-                                    &stored_ref.conversation_id,
-                                    &stored_ref.screenshot_uid,
-                                )
-                                .await?;
-                            let response = http_client.get(&download.download_url).send().await?;
-                            if !response.status().is_success() {
-                                return Err(anyhow::anyhow!(
-                                    "Failed to download screenshot {}: HTTP {}",
-                                    stored_ref.screenshot_uid,
-                                    response.status()
-                                ));
-                            }
-                            let bytes = response.bytes().await?;
-                            fetched.push((action_id, bytes));
-                        }
-                        anyhow::Ok(fetched)
-                    },
-                    move |_, result, ctx| match result {
-                        Ok(fetched) => {
-                            for (action_id, bytes) in fetched {
-                                let asset_id = screenshot_asset_id(&action_id);
-                                AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                                    asset_cache
-                                        .insert_raw_asset_bytes::<ImageType>(asset_id, &bytes, ctx);
-                                });
-                            }
-                            open_screenshot_lightbox(&ordered_action_ids, initial_index, ctx);
-                        }
-                        Err(error) => {
-                            log::warn!("Failed to load stored screenshots for lightbox: {error:#}");
-                            let window_id = ctx.window_id();
-                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                                toast_stack.add_ephemeral_toast(
-                                    DismissibleToast::error(
-                                        "Failed to load screenshot.".to_string(),
-                                    ),
-                                    window_id,
-                                    ctx,
-                                );
-                            });
-                        }
-                    },
-                );
+                open_screenshot_lightbox(sources, initial_index, ctx);
             }
             AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
                 let decoded_images = self
