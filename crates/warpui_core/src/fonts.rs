@@ -511,10 +511,16 @@ impl Cache {
         // Some Windows fonts map 'm' with a horizontal advance but no outline bounding box.
         match self.glyph_typographic_bounds(font_id, font_size, glyph_id) {
             Ok(bounds) => bounds.width(),
-            Err(_) => self
-                .glyph_advance(font_id, font_size, glyph_id)
-                .expect("we verify in Config::new that we can measure the 'm' glyph")
-                .x(),
+            Err(_) => match self.glyph_advance(font_id, font_size, glyph_id) {
+                Ok(advance) => advance.x(),
+                Err(_) => {
+                    log::warn!(
+                        "[em_width] 'm' glyph has neither typographic bounds nor horizontal advance; falling back to font_size font_id={font_id:?} font_size={font_size}"
+                    );
+                    // Scroll converts pixels with `/ em_width`; keep a positive width.
+                    font_size.max(1.0)
+                }
+            },
         }
     }
 
