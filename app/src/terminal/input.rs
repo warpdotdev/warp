@@ -1918,16 +1918,6 @@ impl PendingShellWidgetHandoff {
     }
 }
 
-/// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
-/// own external history widget. Must match the function name defined in
-/// `app/assets/bundled/bootstrap/zsh_body.sh`.
-pub(crate) const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
-
-/// Name of the bootstrap-installed shell function invoked to hand ctrl-t off to the shell's own
-/// external file-search widget. Must match the function name defined in
-/// `app/assets/bundled/bootstrap/zsh_body.sh`.
-pub(crate) const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
-
 struct AmbientAgentViewState {
     view_model: ModelHandle<AmbientAgentViewModel>,
     #[allow(dead_code)]

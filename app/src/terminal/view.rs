@@ -417,9 +417,8 @@ use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
-    CommandExecutionSource, EXTERNAL_CTRL_R_HELPER_COMMAND, EXTERNAL_CTRL_T_HELPER_COMMAND,
-    InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning, MenuPositioningProvider,
-    ShellWidgetApplyMode,
+    CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
+    MenuPositioningProvider, ShellWidgetApplyMode,
 };
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
@@ -728,6 +727,16 @@ const EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG: &str = "external_ctrl_r_history";
 /// each binding is detected and reported on its own. Must match the tag name used in
 /// `app/assets/bundled/bootstrap/zsh_body.sh`.
 const EXTERNAL_CTRL_T_FILE_PLUGIN_TAG: &str = "external_ctrl_t_file";
+
+/// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
+/// own external history widget. Must match the function name defined in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
+
+/// Name of the bootstrap-installed shell function invoked to hand ctrl-t off to the shell's own
+/// external file-search widget. Must match the function name defined in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
 
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY: &str = "LongRunningRequestedCommand";
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY: &str =

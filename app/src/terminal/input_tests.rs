@@ -2108,7 +2108,7 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
 
         let started = input.update(&mut app, |input, ctx| {
             input.trigger_external_shell_widget_handoff(
-                EXTERNAL_CTRL_T_HELPER_COMMAND,
+                "warp_run_external_ctrl_t_widget",
                 ShellWidgetApplyMode::Splice,
                 true,
                 ctx,
