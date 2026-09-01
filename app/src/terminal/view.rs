@@ -417,8 +417,8 @@ use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
-    CommandExecutionSource, CtrlTApplyMode, InputAction, InputEmptyStateChangeReason, InputState,
-    MenuPositioning, MenuPositioningProvider,
+    CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
+    MenuPositioningProvider, ShellWidgetApplyMode,
 };
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
@@ -9256,7 +9256,7 @@ impl TerminalView {
     /// [`Self::maybe_trigger_external_ctrl_r_history_search`], but lands the selection either by
     /// inserting it into the input editor at the cursor position or by replacing the whole
     /// buffer, depending on the session's shell; see [`Input::trigger_external_ctrl_t_file_search`]
-    /// and [`CtrlTApplyMode`].
+    /// and [`ShellWidgetApplyMode`].
     ///
     /// Returns `true` if the handoff was triggered, in which case the caller should not pass
     /// ctrl-t through to the pty or handle it any other way.
@@ -9284,10 +9284,12 @@ impl TerminalView {
         // fish invokes the user's real `fzf-file-widget` directly, which already performs its
         // own token-aware replacement and so returns the whole new line; bash/zsh's helper
         // instead searches independently of the draft and reports a plain path to splice in at
-        // the cursor. See `CtrlTApplyMode` and the fish/bash/zsh helper implementations.
+        // the cursor. See `ShellWidgetApplyMode` and the fish/bash/zsh helper implementations.
         let apply_mode = match session.shell().shell_type() {
-            ShellType::Fish => CtrlTApplyMode::Replace,
-            ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => CtrlTApplyMode::Splice,
+            ShellType::Fish => ShellWidgetApplyMode::Replace,
+            ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => {
+                ShellWidgetApplyMode::Splice
+            }
         };
 
         self.input.update(ctx, |input, ctx| {

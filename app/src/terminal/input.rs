@@ -1880,20 +1880,13 @@ pub struct Input {
     pending_shell_widget_handoff: Option<PendingShellWidgetHandoff>,
 }
 
-/// How a completed ctrl-t handoff lands its selection. Fish's widget already performs token-aware
-/// replacement and reports the whole line; bash/zsh report a path fragment to splice at the cursor.
+/// How a completed shell-widget handoff lands its selection. Fish's ctrl-t widget already performs
+/// token-aware replacement and reports the whole line; bash/zsh ctrl-t report a path fragment to
+/// splice at the cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CtrlTApplyMode {
+pub enum ShellWidgetApplyMode {
     Splice,
     Replace,
-}
-
-enum ShellWidgetHandoffKind {
-    CtrlR,
-    CtrlT {
-        apply_mode: CtrlTApplyMode,
-        cursor_offset: ByteOffset,
-    },
 }
 
 struct PendingShellWidgetHandoff {
@@ -1901,7 +1894,8 @@ struct PendingShellWidgetHandoff {
     original_buffer: String,
     selection: Option<String>,
     block_id: BlockId,
-    kind: ShellWidgetHandoffKind,
+    apply_mode: ShellWidgetApplyMode,
+    cursor_offset: Option<ByteOffset>,
 }
 
 impl PendingShellWidgetHandoff {
@@ -1915,16 +1909,11 @@ impl PendingShellWidgetHandoff {
     }
 
     fn restore_text(&self) -> &str {
-        match (&self.kind, &self.selection) {
-            (ShellWidgetHandoffKind::CtrlR, Some(selection)) => selection,
-            (
-                ShellWidgetHandoffKind::CtrlT {
-                    apply_mode: CtrlTApplyMode::Replace,
-                    ..
-                },
-                Some(selection),
-            ) => selection,
-            _ => &self.original_buffer,
+        match (self.apply_mode, &self.selection) {
+            (ShellWidgetApplyMode::Replace, Some(selection)) => selection,
+            (ShellWidgetApplyMode::Replace, None) | (ShellWidgetApplyMode::Splice, _) => {
+                &self.original_buffer
+            }
         }
     }
 }
@@ -7729,7 +7718,8 @@ impl Input {
                 original_buffer: current_input,
                 selection: None,
                 block_id,
-                kind: ShellWidgetHandoffKind::CtrlR,
+                apply_mode: ShellWidgetApplyMode::Replace,
+                cursor_offset: None,
             });
         }
         started
@@ -7747,24 +7737,24 @@ impl Input {
     /// user had typed and submitted it, mirroring [`Self::trigger_external_ctrl_r_history_search`].
     /// Unlike ctrl-r, which replaces the whole buffer with the selection, ctrl-t either splices the
     /// selection into the buffer at the cursor position ctrl-t was pressed at, or replaces the
-    /// buffer wholesale, depending on `apply_mode` (see [`CtrlTApplyMode`]) -- so this snapshots
-    /// the current buffer text and cursor byte offset separately, rather than a single restorable
-    /// string. Returns `true` if the command was started.
+    /// buffer wholesale, depending on `apply_mode` (see [`ShellWidgetApplyMode`]) -- so this
+    /// snapshots the current buffer text and cursor byte offset separately, rather than a single
+    /// restorable string. Returns `true` if the command was started.
     ///
     /// See [`Self::trigger_external_ctrl_r_history_search`] for why the command is prefixed with
     /// a leading space.
     ///
-    /// When `apply_mode` is [`CtrlTApplyMode::Replace`], the command is also given the draft line
-    /// and cursor as `{char_cursor}:{hex_draft}` so the fish helper can seed its widget. Hex keeps
-    /// the draft a single token, and combining it with the cursor avoids an empty hex field (an
-    /// empty draft) vanishing under the shell's own word-splitting, since the invocation is typed
-    /// into the terminal as literal text. `char_cursor` is `cursor_offset` converted to a character
-    /// offset, since fish's `commandline -C` takes characters while `cursor_offset` is a byte
-    /// offset. Bash/zsh never need this, since their helper searches independently of the draft
-    /// and reports a plain path for Warp to splice in itself.
+    /// When `apply_mode` is [`ShellWidgetApplyMode::Replace`], the command is also given the draft
+    /// line and cursor as `{char_cursor}:{hex_draft}` so the fish helper can seed its widget. Hex
+    /// keeps the draft a single token, and combining it with the cursor avoids an empty hex field
+    /// (an empty draft) vanishing under the shell's own word-splitting, since the invocation is
+    /// typed into the terminal as literal text. `char_cursor` is `cursor_offset` converted to a
+    /// character offset, since fish's `commandline -C` takes characters while `cursor_offset` is a
+    /// byte offset. Bash/zsh never need this, since their helper searches independently of the
+    /// draft and reports a plain path for Warp to splice in itself.
     pub fn trigger_external_ctrl_t_file_search(
         &mut self,
-        apply_mode: CtrlTApplyMode,
+        apply_mode: ShellWidgetApplyMode,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let Some(session_id) = self.active_block_session_id() else {
@@ -7777,7 +7767,7 @@ impl Input {
             .end_byte_index_of_last_selection(ctx);
         let block_id = self.model.lock().block_list().active_block_id().clone();
         let mut command = format!(" {EXTERNAL_CTRL_T_HELPER_COMMAND}");
-        if apply_mode == CtrlTApplyMode::Replace {
+        if apply_mode == ShellWidgetApplyMode::Replace {
             let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
             command.push_str(&format!(" {char_cursor}:{}", hex::encode(&original_buffer)));
         }
@@ -7794,10 +7784,8 @@ impl Input {
                 original_buffer,
                 selection: None,
                 block_id,
-                kind: ShellWidgetHandoffKind::CtrlT {
-                    apply_mode,
-                    cursor_offset,
-                },
+                apply_mode,
+                cursor_offset: Some(cursor_offset),
             });
         }
         started
@@ -15699,33 +15687,29 @@ impl Input {
                         self.editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text(&restore_text, ctx);
                             if let Some(handoff) = &completed_handoff {
-                                match (&handoff.kind, &handoff.selection) {
+                                match (
+                                    handoff.apply_mode,
+                                    &handoff.selection,
+                                    handoff.cursor_offset,
+                                ) {
                                     (
-                                        ShellWidgetHandoffKind::CtrlT {
-                                            apply_mode: CtrlTApplyMode::Splice,
-                                            cursor_offset,
-                                        },
+                                        ShellWidgetApplyMode::Splice,
                                         Some(insertion),
+                                        Some(cursor_offset),
                                     ) => editor.select_and_replace(
                                         insertion,
-                                        [*cursor_offset..*cursor_offset],
+                                        [cursor_offset..cursor_offset],
                                         PlainTextEditorViewAction::InsertSelectedText,
                                         ctx,
                                     ),
-                                    (
-                                        ShellWidgetHandoffKind::CtrlT {
-                                            apply_mode: CtrlTApplyMode::Replace,
-                                            ..
-                                        },
-                                        Some(_),
-                                    ) => {}
-                                    (ShellWidgetHandoffKind::CtrlT { cursor_offset, .. }, None) => {
-                                        editor.select_ranges_by_byte_offset(
-                                            [*cursor_offset..*cursor_offset],
+                                    (_, None, Some(cursor_offset)) => editor
+                                        .select_ranges_by_byte_offset(
+                                            [cursor_offset..cursor_offset],
                                             ctx,
-                                        )
-                                    }
-                                    (ShellWidgetHandoffKind::CtrlR, _) => {}
+                                        ),
+                                    (ShellWidgetApplyMode::Replace, Some(_), _)
+                                    | (ShellWidgetApplyMode::Splice, Some(_), None)
+                                    | (_, None, None) => {}
                                 }
                             }
                         });

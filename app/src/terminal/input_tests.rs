@@ -122,7 +122,8 @@ fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
         original_buffer: "draft".to_string(),
         selection: None,
         block_id: BlockId::new(),
-        kind: ShellWidgetHandoffKind::CtrlR,
+        apply_mode: ShellWidgetApplyMode::Replace,
+        cursor_offset: None,
     }
 }
 
@@ -132,10 +133,8 @@ fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
         original_buffer: "echo ".to_string(),
         selection: None,
         block_id: BlockId::new(),
-        kind: ShellWidgetHandoffKind::CtrlT {
-            apply_mode: CtrlTApplyMode::Splice,
-            cursor_offset: ByteOffset::from(5),
-        },
+        apply_mode: ShellWidgetApplyMode::Splice,
+        cursor_offset: Some(ByteOffset::from(5)),
     }
 }
 
@@ -1914,7 +1913,7 @@ fn user_block_completed_for_test(command: &str) -> BlockType {
 /// block. Returns the resulting buffer text and the byte offset the cursor/selection ends up at.
 async fn complete_ctrl_t_handoff(
     app: &mut App,
-    apply_mode: CtrlTApplyMode,
+    apply_mode: ShellWidgetApplyMode,
     original_buffer: &str,
     cursor_offset: usize,
     insertion: Option<&str>,
@@ -1928,10 +1927,8 @@ async fn complete_ctrl_t_handoff(
             original_buffer: original_buffer.to_string(),
             selection: insertion.map(str::to_string),
             block_id: block_id.clone(),
-            kind: ShellWidgetHandoffKind::CtrlT {
-                apply_mode,
-                cursor_offset: ByteOffset::from(cursor_offset),
-            },
+            apply_mode,
+            cursor_offset: Some(ByteOffset::from(cursor_offset)),
         });
         input.deferred_remote_operations.latest_block_id = BlockId::new();
         input.handle_block_completed_event(
@@ -1971,7 +1968,8 @@ async fn complete_ctrl_r_handoff(
             original_buffer: original_buffer.to_string(),
             selection: selection.map(str::to_string),
             block_id: block_id.clone(),
-            kind: ShellWidgetHandoffKind::CtrlR,
+            apply_mode: ShellWidgetApplyMode::Replace,
+            cursor_offset: None,
         });
         input.deferred_remote_operations.latest_block_id = BlockId::new();
         input.handle_block_completed_event(
@@ -2015,7 +2013,7 @@ fn ctrl_t_handoff_splices_selection_in_middle_of_line() {
         // with both the preceding and following text preserved.
         let (buffer, cursor) = complete_ctrl_t_handoff(
             &mut app,
-            CtrlTApplyMode::Splice,
+            ShellWidgetApplyMode::Splice,
             "echo START END",
             11,
             Some("FILE.txt "),
@@ -2032,7 +2030,7 @@ fn ctrl_t_handoff_splices_selection_at_end_of_line() {
         initialize_app(&mut app);
         let (buffer, cursor) = complete_ctrl_t_handoff(
             &mut app,
-            CtrlTApplyMode::Splice,
+            ShellWidgetApplyMode::Splice,
             "echo ",
             5,
             Some("FILE.txt"),
@@ -2047,9 +2045,14 @@ fn ctrl_t_handoff_splices_selection_at_end_of_line() {
 fn ctrl_t_handoff_splices_selection_into_empty_buffer() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        let (buffer, cursor) =
-            complete_ctrl_t_handoff(&mut app, CtrlTApplyMode::Splice, "", 0, Some("FILE.txt"))
-                .await;
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "",
+            0,
+            Some("FILE.txt"),
+        )
+        .await;
         assert_eq!(buffer, "FILE.txt");
         assert_eq!(cursor, ByteOffset::from("FILE.txt".len()));
     });
@@ -2066,7 +2069,7 @@ fn ctrl_t_handoff_splices_selection_after_multi_byte_character() {
         let cursor_offset = original.len();
         let (buffer, cursor) = complete_ctrl_t_handoff(
             &mut app,
-            CtrlTApplyMode::Splice,
+            ShellWidgetApplyMode::Splice,
             original,
             cursor_offset,
             Some("dest.txt"),
@@ -2087,7 +2090,7 @@ fn ctrl_t_handoff_splices_selection_after_multi_byte_character() {
 fn ctrl_t_handoff_cancel_restores_cursor_to_original_offset_mid_line() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        for apply_mode in [CtrlTApplyMode::Splice, CtrlTApplyMode::Replace] {
+        for apply_mode in [ShellWidgetApplyMode::Splice, ShellWidgetApplyMode::Replace] {
             // Cursor originally sat right after "echo START ", before "END".
             let (buffer, cursor) =
                 complete_ctrl_t_handoff(&mut app, apply_mode, "echo START END", 11, None).await;
@@ -2132,7 +2135,7 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
         });
 
         let started = input.update(&mut app, |input, ctx| {
-            input.trigger_external_ctrl_t_file_search(CtrlTApplyMode::Splice, ctx)
+            input.trigger_external_ctrl_t_file_search(ShellWidgetApplyMode::Splice, ctx)
         });
         assert!(started, "the handoff command should have started");
 
@@ -2182,7 +2185,7 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
 }
 
 /// fish's `fzf-file-widget` already performs its own token-aware replacement, so its selection
-/// (see `CtrlTApplyMode::Replace`) must land as the finished buffer wholesale -- not spliced into
+/// (see `ShellWidgetApplyMode::Replace`) must land as the finished buffer wholesale -- not spliced into
 /// `original_buffer` the way bash/zsh's plain-path selection is. Using a `cursor_offset` that
 /// would splice into the *middle* of `original_buffer` if `Replace` were mishandled as `Splice`
 /// makes that distinction observable: a regression here would interleave `original_buffer` and
@@ -2193,7 +2196,7 @@ fn ctrl_t_handoff_replace_mode_lands_selection_wholesale() {
         initialize_app(&mut app);
         let (buffer, cursor) = complete_ctrl_t_handoff(
             &mut app,
-            CtrlTApplyMode::Replace,
+            ShellWidgetApplyMode::Replace,
             "vim src/ END",
             8,
             Some("vim src/nested.rs "),
@@ -2217,7 +2220,7 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
         // splices it into the token at the captured cursor offset.
         let (splice_buffer, splice_cursor) = complete_ctrl_t_handoff(
             &mut app,
-            CtrlTApplyMode::Splice,
+            ShellWidgetApplyMode::Splice,
             "vim src/ END",
             8,
             Some("nested.rs "),
@@ -2230,7 +2233,7 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
         // finished line, landed wholesale.
         let (replace_buffer, replace_cursor) = complete_ctrl_t_handoff(
             &mut app,
-            CtrlTApplyMode::Replace,
+            ShellWidgetApplyMode::Replace,
             "vim src/ END",
             8,
             Some("vim src/nested.rs  END"),
