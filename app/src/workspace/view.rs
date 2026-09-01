@@ -17342,7 +17342,7 @@ impl Workspace {
                     input_handle.read(ctx, |input, ctx| input.menu_positioning(ctx))
                 });
 
-            let current_cwd = self.active_session_cwd(ctx);
+            let cwd = self.active_session_cwd(ctx);
 
             if !self.current_workspace_state.is_command_search_open {
                 send_telemetry_from_ctx!(
@@ -17365,7 +17365,7 @@ impl Workspace {
                 view.reset_state(
                     session_id,
                     session_context,
-                    current_cwd,
+                    cwd,
                     initial_query,
                     query_filter,
                     menu_positioning,

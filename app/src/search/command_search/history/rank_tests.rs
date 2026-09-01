@@ -20,7 +20,7 @@ struct Scenario {
     command: &'static str,
     query: &'static str,
     start_ts: Option<DateTime<Local>>,
-    frequency: u32,
+    execution_count: u32,
     session_id: Option<SessionId>,
     pwd: Option<&'static str>,
     exit_ok: bool,
@@ -33,7 +33,7 @@ impl Scenario {
             command,
             query,
             start_ts: None,
-            frequency: 1,
+            execution_count: 1,
             session_id: None,
             pwd: None,
             exit_ok: true,
@@ -46,8 +46,8 @@ impl Scenario {
         self
     }
 
-    fn frequency(mut self, frequency: u32) -> Self {
-        self.frequency = frequency;
+    fn execution_count(mut self, execution_count: u32) -> Self {
+        self.execution_count = execution_count;
         self
     }
 
@@ -71,7 +71,7 @@ impl Scenario {
         self
     }
 
-    fn rank(&self, current_session_id: SessionId, current_cwd: Option<&str>) -> OrderedFloat<f64> {
+    fn rank(&self, current_session_id: SessionId, cwd: Option<&str>) -> OrderedFloat<f64> {
         let tokens = tokenize_query(self.query);
         let (_, match_quality) = match_history_command(self.command, &tokens)
             .expect("scenario command should match its own query");
@@ -84,11 +84,11 @@ impl Scenario {
 
         rank(RankInputs {
             entry: &entry,
-            frequency: self.frequency,
+            execution_count: self.execution_count,
             match_quality,
             now: now(),
             current_session_id,
-            current_cwd,
+            cwd,
             newer_candidate_count: self.newer_candidate_count,
             is_blank_query: false,
         })
@@ -174,10 +174,10 @@ fn frequency_prior_favors_more_common_commands() {
     let session = SessionId::from(1);
     let frequent = Scenario::new("git status", "git status")
         .days_ago(1)
-        .frequency(20);
+        .execution_count(20);
     let rare = Scenario::new("git status", "git status")
         .days_ago(1)
-        .frequency(1);
+        .execution_count(1);
 
     assert!(frequent.rank(session, None) > rare.rank(session, None));
 }
@@ -212,7 +212,7 @@ fn cwd_prior_favors_the_current_directory() {
 
 #[test]
 fn unknown_cwd_is_neutral_between_a_match_and_a_mismatch() {
-    // When we don't know the current cwd (e.g. it couldn't be determined), we can't tell whether
+    // When we don't know the cwd (e.g. it couldn't be determined), we can't tell whether
     // a candidate's pwd would have matched it, so it shouldn't score as badly as a *confirmed*
     // mismatch.
     let session = SessionId::from(1);
@@ -220,17 +220,17 @@ fn unknown_cwd_is_neutral_between_a_match_and_a_mismatch() {
         .days_ago(1)
         .pwd("/repo");
 
-    let unknown_current_cwd = candidate.rank(session, None);
-    let matching_current_cwd = candidate.rank(session, Some("/repo"));
-    let mismatched_current_cwd = candidate.rank(session, Some("/other"));
+    let unknown_cwd = candidate.rank(session, None);
+    let matching_cwd = candidate.rank(session, Some("/repo"));
+    let mismatched_cwd = candidate.rank(session, Some("/other"));
 
     assert!(
-        unknown_current_cwd > mismatched_current_cwd,
-        "an unknown current cwd shouldn't score as badly as a confirmed mismatch"
+        unknown_cwd > mismatched_cwd,
+        "an unknown cwd shouldn't score as badly as a confirmed mismatch"
     );
     assert!(
-        unknown_current_cwd < matching_current_cwd,
-        "an unknown current cwd shouldn't score as well as a confirmed match"
+        unknown_cwd < matching_cwd,
+        "an unknown cwd shouldn't score as well as a confirmed match"
     );
 }
 
@@ -268,11 +268,11 @@ fn match_score_floor_filters_out_low_quality_matches() {
     let entry = HistoryEntry::command_only("noise".to_owned());
     let result = rank(RankInputs {
         entry: &entry,
-        frequency: 1,
+        execution_count: 1,
         match_quality: low_quality,
         now: now(),
         current_session_id: SessionId::from(1),
-        current_cwd: None,
+        cwd: None,
         newer_candidate_count: 0,
         is_blank_query: false,
     });
@@ -303,14 +303,14 @@ fn blank_query_ignores_priors_and_yields_a_result() {
     let mut rare_old = HistoryEntry::command_only("ls -la".to_owned());
     rare_old.start_ts = Some(days_ago(30));
 
-    let rank_of = |entry: &HistoryEntry, frequency: u32| {
+    let rank_of = |entry: &HistoryEntry, execution_count: u32| {
         rank(RankInputs {
             entry,
-            frequency,
+            execution_count,
             match_quality: zero_quality,
             now: now(),
             current_session_id: SessionId::from(1),
-            current_cwd: None,
+            cwd: None,
             newer_candidate_count: 0,
             is_blank_query: true,
         })

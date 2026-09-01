@@ -220,7 +220,7 @@ impl CommandSearchView {
         &mut self,
         session_id: SessionId,
         session_context: Option<SessionContext>,
-        current_cwd: Option<String>,
+        cwd: Option<String>,
         ai_execution_context: Option<WarpAiExecutionContext>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -290,12 +290,7 @@ impl CommandSearchView {
 
             if History::as_ref(ctx).is_queryable(&session_id) {
                 let source = History::handle(ctx).read(ctx, |history_model, app| {
-                    history_data_source_for_session(
-                        session_id,
-                        current_cwd.clone(),
-                        history_model,
-                        app,
-                    )
+                    history_data_source_for_session(session_id, cwd.clone(), history_model, app)
                 });
                 mixer.add_async_source(
                     source,
@@ -308,7 +303,7 @@ impl CommandSearchView {
                     ctx,
                 );
             } else {
-                let current_cwd = current_cwd.clone();
+                let cwd = cwd.clone();
                 ctx.subscribe_to_model(
                     &History::handle(ctx),
                     move |mixer, _, history_event, ctx| match history_event {
@@ -316,7 +311,7 @@ impl CommandSearchView {
                             if id == &session_id {
                                 let source = history_data_source_for_session(
                                     session_id,
-                                    current_cwd.clone(),
+                                    cwd.clone(),
                                     History::as_ref(ctx),
                                     ctx,
                                 );
@@ -348,7 +343,7 @@ impl CommandSearchView {
         &mut self,
         session_id: SessionId,
         session_context: Option<SessionContext>,
-        current_cwd: Option<String>,
+        cwd: Option<String>,
         initial_query: String,
         query_filter: Option<QueryFilter>,
         menu_positioning: MenuPositioning,
@@ -358,7 +353,7 @@ impl CommandSearchView {
         self.reset_command_search_mixer(
             session_id,
             session_context,
-            current_cwd,
+            cwd,
             ai_execution_context,
             ctx,
         );

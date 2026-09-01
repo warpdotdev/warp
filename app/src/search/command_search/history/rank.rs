@@ -212,11 +212,11 @@ fn longest_consecutive_run(indices: &[usize]) -> usize {
 pub(crate) struct RankInputs<'a> {
     pub entry: &'a HistoryEntry,
     /// Number of times this command has been executed, per `History::command_execution_count`.
-    pub frequency: u32,
+    pub execution_count: u32,
     pub match_quality: MatchQuality,
     pub now: DateTime<Local>,
     pub current_session_id: SessionId,
-    pub current_cwd: Option<&'a str>,
+    pub cwd: Option<&'a str>,
     /// Number of other candidates newer than this one in the full (chronologically-ordered)
     /// history list. Used as an age proxy for entries with no timestamp; see `age_days`.
     pub newer_candidate_count: usize,
@@ -251,13 +251,14 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
 
     let age_days = age_days(inputs.entry, inputs.now, inputs.newer_candidate_count);
     let recency = (-std::f64::consts::LN_2 * age_days / RECENCY_HALF_LIFE_DAYS).exp();
-    let frequency =
-        ((inputs.frequency as f64 + 1.0).ln() / (FREQUENCY_SATURATION_COUNT + 1.0).ln()).min(1.0);
+    let frequency = ((inputs.execution_count as f64 + 1.0).ln()
+        / (FREQUENCY_SATURATION_COUNT + 1.0).ln())
+    .min(1.0);
     let session = f64::from(inputs.entry.session_id == Some(inputs.current_session_id));
     // If either side is unknown, we can't tell whether it would have matched, so treat it as
     // neutral (the midpoint between a match and a mismatch) rather than scoring it as a mismatch.
-    let cwd = match (inputs.entry.pwd.as_deref(), inputs.current_cwd) {
-        (Some(entry_pwd), Some(current_cwd)) => f64::from(entry_pwd == current_cwd),
+    let cwd = match (inputs.entry.pwd.as_deref(), inputs.cwd) {
+        (Some(entry_pwd), Some(session_cwd)) => f64::from(entry_pwd == session_cwd),
         _ => 0.5,
     };
     let exit_penalty = f64::from(

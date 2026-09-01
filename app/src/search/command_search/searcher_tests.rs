@@ -317,7 +317,7 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
 }
 
 #[test]
-fn test_current_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
+fn test_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
     // Regression test: `HistoryEntry::pwd` is captured when a command *starts*, so the most
     // recently executed command's `pwd` reflects the directory it was run *from*, not the live
     // cwd after it runs (e.g. immediately after `cd /repo`). The cwd prior must use the live cwd
@@ -335,7 +335,7 @@ fn test_current_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
         matches_live_cwd.pwd = Some("/repo".to_owned());
 
         // The most recently executed command (last in the list), whose pwd is exactly what the
-        // old, buggy heuristic (the last candidate's `pwd`) would have picked as "current_cwd",
+        // old, buggy heuristic (the last candidate's `pwd`) would have picked as the live cwd,
         // even though the live cwd is actually `/repo`.
         let mut stale_last_entry = HistoryEntry::command_only("npm test -- home".to_owned());
         stale_last_entry.start_ts = Some(same_ts);
