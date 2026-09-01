@@ -90,6 +90,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            cloud_handoff_task_id: None,
         },
         RestorationMode::Continue => AgentConversationData {
             server_conversation_token: Some(
@@ -111,6 +112,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             autoexecute_override: None,
             last_event_sequence: None,
             pinned: false,
+            cloud_handoff_task_id: None,
         },
     };
 
