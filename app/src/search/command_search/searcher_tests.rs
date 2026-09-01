@@ -176,9 +176,6 @@ fn test_add_source_to_mixer() {
 
 #[test]
 fn test_exact_matches_rank_above_prefix_matches() {
-    // The exact-whole-line bonus that makes this ordering deterministic only exists behind
-    // `HistorySearchRankingV2`; raw Skim alone scores a whole-line match identically to a
-    // prefix match of a longer command (see `EXACT_WHOLE_LINE_BONUS`'s doc comment).
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -447,8 +444,6 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
 
 #[test]
 fn test_no_query_filter_runs_all_data_sources() {
-    // See `test_exact_matches_rank_above_prefix_matches`: the exact-whole-line bonus that makes
-    // "git" deterministically outrank "git checkout" only exists behind this flag.
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
@@ -500,8 +495,6 @@ fn test_no_query_filter_runs_all_data_sources() {
 
 #[test]
 fn test_query_filter_limits_data_sources() {
-    // See `test_exact_matches_rank_above_prefix_matches`: the exact-whole-line bonus that makes
-    // "git" deterministically outrank "git checkout" only exists behind this flag.
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
 
     App::test((), |mut app| async move {
