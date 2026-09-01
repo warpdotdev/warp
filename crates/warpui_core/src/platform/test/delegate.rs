@@ -42,6 +42,26 @@ pub struct IntegrationTestDelegate {
 
 pub struct Window {
     callbacks: WindowCallbacks,
+    #[cfg(test)]
+    background_blur_radius_pixels: Option<u8>,
+    #[cfg(test)]
+    background_blur_texture: bool,
+}
+
+#[cfg(test)]
+impl Window {
+    /// Test-only accessor for the background blur radius that was passed to
+    /// [`platform::WindowManager::open_window`] for this window. Used to verify that windows
+    /// are (re)opened with the caller's configured blur settings.
+    pub(crate) fn background_blur_radius_pixels(&self) -> Option<u8> {
+        self.background_blur_radius_pixels
+    }
+
+    /// Test-only accessor for the background blur texture flag that was passed to
+    /// [`platform::WindowManager::open_window`] for this window.
+    pub(crate) fn background_blur_texture(&self) -> bool {
+        self.background_blur_texture
+    }
 }
 
 impl AppDelegate {
@@ -77,11 +97,22 @@ impl platform::WindowManager for WindowManager {
     fn open_window(
         &mut self,
         window_id: WindowId,
-        _window_options: WindowOptions,
+        window_options: WindowOptions,
         callbacks: WindowCallbacks,
     ) -> Result<()> {
-        self.windows
-            .insert(window_id, Rc::new(Window { callbacks }));
+        #[cfg(test)]
+        let window = Window {
+            callbacks,
+            background_blur_radius_pixels: window_options.background_blur_radius_pixels,
+            background_blur_texture: window_options.background_blur_texture,
+        };
+        #[cfg(not(test))]
+        let window = {
+            let _ = window_options;
+            Window { callbacks }
+        };
+
+        self.windows.insert(window_id, Rc::new(window));
         Ok(())
     }
 
