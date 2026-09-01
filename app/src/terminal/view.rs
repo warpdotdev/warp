@@ -9221,14 +9221,6 @@ impl TerminalView {
     /// [`EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG`] shell plugin tag, e.g. by fzf or atuin), hands the
     /// keypress off to that widget instead of opening Warp's own command search.
     ///
-    /// The handoff runs a bootstrap-installed helper through the normal command-execution path
-    /// (as if the user had typed and submitted it), so the existing long-running-command
-    /// machinery hides the input editor and forwards keystrokes to the widget's PTY-driven UI.
-    /// The command the user selects (or the buffer they had before ctrl-r, if they cancel) is
-    /// restored into the input editor once the helper's block completes; see
-    /// [`Input::trigger_external_shell_widget_handoff`] and
-    /// [`Input::set_external_shell_widget_selection`].
-    ///
     /// Returns `true` if the handoff was triggered, in which case the caller should not open
     /// Warp's command search.
     pub fn maybe_trigger_external_ctrl_r_history_search(
@@ -9259,7 +9251,7 @@ impl TerminalView {
             input.trigger_external_shell_widget_handoff(
                 EXTERNAL_CTRL_R_HELPER_COMMAND,
                 ShellWidgetApplyMode::Replace,
-                false,
+                false, /* capture_cursor */
                 ctx,
             )
         })
@@ -9311,7 +9303,7 @@ impl TerminalView {
             input.trigger_external_shell_widget_handoff(
                 EXTERNAL_CTRL_T_HELPER_COMMAND,
                 apply_mode,
-                true,
+                true, /* capture_cursor */
                 ctx,
             )
         })

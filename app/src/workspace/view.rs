@@ -17297,10 +17297,6 @@ impl Workspace {
             return;
         }
 
-        // If the active session's shell has rebound ctrl-r away from its default history
-        // search (e.g. to fzf or atuin), hand the keypress off to that widget instead of
-        // opening command search. Only applies to the default (ctrl-r-shaped) invocation, not
-        // the dedicated history-search binding, which explicitly asks for Warp's own UI.
         if query_filter.is_none()
             && let Some(terminal_view_handle) = self.active_session_view(ctx)
             && terminal_view_handle.update(ctx, |terminal_view, ctx| {
@@ -17388,10 +17384,7 @@ impl Workspace {
     }
 
     /// If the active session's shell has rebound ctrl-t to an external file-search widget
-    /// (e.g. fzf), hands the keypress off to it. Unlike [`Self::show_command_search`], ctrl-t
-    /// has no Warp-native UI to fall back to, so when the handoff doesn't trigger (feature
-    /// off, no matching shell plugin, alt-screen active, or the helper failed to start), the
-    /// raw keystroke is forwarded to the pty instead of being swallowed.
+    /// (e.g. fzf), hands the keypress off to it.
     fn trigger_external_ctrl_t_file_search(&mut self, ctx: &mut ViewContext<Self>) {
         if self.is_readonly_shared_session_active(ctx) {
             return;

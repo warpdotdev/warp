@@ -7683,25 +7683,9 @@ impl Input {
         handoff.maybe_apply_selection(session_id, selection);
     }
 
-    /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and
-    /// submitted it, snapshotting the current buffer so it can be restored once the command's block
-    /// completes -- unless [`Self::set_external_shell_widget_selection`] supplies a selection in
-    /// the meantime. Returns `true` if the command was started.
-    ///
-    /// When `capture_cursor` is set, the caret is restored on cancel. Combined with Replace, the
-    /// command also gets `{char_cursor}:{hex_draft}` so a fish file widget can seed itself. Hex
-    /// keeps the draft a single token, and combining it with the cursor keeps an empty draft from
-    /// vanishing under shell word-splitting. `char_cursor` converts the captured byte offset to
-    /// characters because fish's `commandline -C` takes characters.
-    ///
-    /// The command is prefixed with a leading space, honoring the "ignorespace" convention that
-    /// bash/zsh support and atuin explicitly implements itself (independent of the shell's own
-    /// history settings -- see atuin's docs on excluding commands). Our own per-shell exclusions
-    /// (zsh's `_warp_zshaddhistory`, bash's `HISTIGNORE`, fish's `fish_should_add_to_history`
-    /// wrapper) only ever stopped the *shell's* history file from recording this invocation.
-    /// atuin records through its own preexec hook straight into its own database, which none of
-    /// that touches, so without this it would otherwise show up in the very history list this
-    /// feature exists to search.
+    /// Runs `helper_command` (a bootstrap-installed shell function), snapshotting the current
+    /// buffer so it can be restored once the command's block completes. Returns `true` if the
+    /// command was started.
     pub fn trigger_external_shell_widget_handoff(
         &mut self,
         helper_command: &str,
@@ -7719,6 +7703,7 @@ impl Input {
                 .end_byte_index_of_last_selection(ctx)
         });
         let block_id = self.model.lock().block_list().active_block_id().clone();
+        // Prefixed with a leading space, the "ignorespace" convention.
         let mut command = format!(" {helper_command}");
         if let Some(cursor_offset) = cursor_offset
             && apply_mode == ShellWidgetApplyMode::Replace
@@ -7726,11 +7711,10 @@ impl Input {
             let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
             command.push_str(&format!(" {char_cursor}:{}", hex::encode(&original_buffer)));
         }
-        // Not a command the user ran: Warp's history is independent of the shell histfile.
         let started = self.try_execute_command_from_source(
             &command,
             CommandExecutionSource::User,
-            false,
+            false, /* should_add_command_to_history */
             ctx,
         );
         if started {

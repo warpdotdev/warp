@@ -1860,12 +1860,6 @@ fn test_workspace_sessions_retrieves_tabs() {
     });
 }
 
-/// `WorkspaceAction::TriggerExternalCtrlTFileSearch` has no Warp-native UI to fall back to, so
-/// when no external ctrl-t widget is detected (the default for a freshly created session, since
-/// no `external_ctrl_t_file` shell_plugins tag has been reported), the action must forward a
-/// plain ctrl-t byte to the pty rather than silently swallowing the keystroke. Dispatches the
-/// real action through `Workspace::handle_action` -- not the terminal-view method directly --
-/// so that deleting the production fallback would make this test fail.
 #[test]
 fn ctrl_t_action_forwards_to_pty_when_no_external_widget_detected() {
     App::test((), |mut app| async move {

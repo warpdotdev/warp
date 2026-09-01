@@ -977,11 +977,7 @@ pub enum FeatureFlag {
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
 
-    /// Prototype: when the active session's shell has rebound a key (ctrl-r, ctrl-t) away
-    /// from its default line-editor binding to an external tool's widget (e.g. fzf or
-    /// atuin, detected during bootstrap and reported via a per-binding shell plugin tag
-    /// such as `external_ctrl_r_history` or `external_ctrl_t_file`), hands that keypress
-    /// off to the tool's widget instead of Warp's own UI for it.
+    /// Uses fzf or atuin for history search instead of Warp's command search.
     ShellWidgetHandoff,
 
     /// Attaches process-tree liveness signals to long-running command
