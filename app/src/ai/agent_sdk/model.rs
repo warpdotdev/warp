@@ -9,6 +9,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::llms::LLMPreferences;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// Handle model-related CLI commands.
 pub fn run(
@@ -45,8 +46,9 @@ impl ModelCommandRunner {
             }
 
             let llm_prefs = LLMPreferences::as_ref(ctx);
+            let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
             let mut ids = BTreeSet::new();
-            for info in llm_prefs.get_base_llm_choices_for_agent_mode(ctx) {
+            for info in llm_prefs.get_base_llm_choices_for_agent_mode_for_team_uid(team_uid, ctx) {
                 ids.insert(info.id.to_string());
             }
 

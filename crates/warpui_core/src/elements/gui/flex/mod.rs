@@ -561,6 +561,14 @@ See https://www.notion.so/warpdev/Debugging-Flex-acc03383be5644a8af29d9c52b1142b
             Some(texts.join(separator))
         }
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.children
+            .iter()
+            .flat_map(|child| child.debug_child_view_ids())
+            .collect()
+    }
 }
 
 impl SelectableElement for Flex {

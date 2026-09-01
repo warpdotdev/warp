@@ -25,13 +25,14 @@ use warp::tui_export::{
     AskUserQuestionType, BlockPadding, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
     ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMId,
     LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
-    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
-    Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
-    TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
-    TuiUpArrowHistoryItemKind, UserTakeOverReason, UserWorkspaces, WarpConfig,
-    WarpConfigUpdateEvent, export_conversation_markdown, forkable_tui_conversation_for_test,
-    queue_tui_permission_action, register_tui_session_view_test_singletons,
-    set_tui_default_team_admin_for_test, set_tui_workspace_teams_for_test, slash_commands,
+    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
+    ResolvedTeamScope, ServerOutputId, Session, Shared, SizeInfo, SizeUpdate,
+    SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
+    TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind,
+    UserTakeOverReason, UserWorkspaces, WarpConfig, WarpConfigUpdateEvent,
+    export_conversation_markdown, forkable_tui_conversation_for_test, queue_tui_permission_action,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    set_tui_workspace_teams_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -1659,21 +1660,25 @@ fn accepted_model_only_changes_the_current_session() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
-            let mut alternate = preferences.get_default_base_model(ctx).clone();
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_resolver_for_test()(ctx),
+            );
+            let mut alternate = preferences.get_default_base_model(&scope, ctx).clone();
             alternate.id = "tui-session-override".into();
             alternate.display_name = "TUI session override".to_owned();
-            preferences.add_agent_mode_model_for_test(alternate);
+            preferences.add_agent_mode_model_for_test(&scope, alternate, ctx);
         });
         let (first_view, _) = add_focus_test_session(&mut app, &fixture, true);
         let (second_view, _) = add_focus_test_session(&mut app, &fixture, false);
         let (profile_default_id, alternate_id) = app.read(|ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let preferences = LLMPreferences::as_ref(ctx);
             let profile_default_id = preferences
-                .get_active_profile_base_model(ctx, None)
+                .get_active_profile_base_model(&scope, ctx, None)
                 .id
                 .clone();
             let alternate_id = preferences
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                 .find(|model| model.id != profile_default_id && model.disable_reason.is_none())
                 .expect("test model catalog should include an alternate model")
                 .id
@@ -1686,24 +1691,25 @@ fn accepted_model_only_changes_the_current_session() {
         });
 
         app.read(|ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let preferences = LLMPreferences::as_ref(ctx);
             let first_surface_id = first_view.as_ref(ctx).terminal_surface_id;
             let second_surface_id = second_view.as_ref(ctx).terminal_surface_id;
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(first_surface_id))
+                    .get_active_base_model(&scope, ctx, Some(first_surface_id))
                     .id,
                 alternate_id
             );
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(second_surface_id))
+                    .get_active_base_model(&scope, ctx, Some(second_surface_id))
                     .id,
                 profile_default_id
             );
             assert_eq!(
                 preferences
-                    .get_active_profile_base_model(ctx, Some(first_surface_id))
+                    .get_active_profile_base_model(&scope, ctx, Some(first_surface_id))
                     .id,
                 profile_default_id
             );
@@ -1721,8 +1727,9 @@ fn model_menu_labels_the_profile_default_model() {
         });
 
         view.read(&app, |view, ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let default_name = LLMPreferences::as_ref(ctx)
-                .get_active_profile_base_model(ctx, Some(view.terminal_surface_id))
+                .get_active_profile_base_model(&scope, ctx, Some(view.terminal_surface_id))
                 .display_name
                 .clone();
             let snapshot = view
@@ -2646,8 +2653,9 @@ fn footer_model_label_is_a_bounded_click_target() {
         });
 
         let model_name = view.read(&app, |view, ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             LLMPreferences::as_ref(ctx)
-                .get_active_base_model(ctx, Some(view.terminal_surface_id))
+                .get_active_base_model(&scope, ctx, Some(view.terminal_surface_id))
                 .display_name
                 .clone()
         });

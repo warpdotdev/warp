@@ -66,6 +66,7 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
+use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
     ConversationStatusUpdate, FinalizeReason, finalize_recording_for_conversation,
@@ -106,7 +107,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
 
 pub(crate) mod attachments;
@@ -257,6 +258,21 @@ fn ephemeral_mcp_installation_id(
     }
 }
 
+/// Abstraction over how [`IdleTimeoutSender::end_run_after`] waits out its deadline, so tests
+/// can substitute a controllable wait for a real, wall-clock-dependent `thread::sleep` and
+/// deterministically exercise the moment the timer commits to firing.
+trait IdleWait: Send + Sync {
+    fn wait(&self, duration: Duration);
+}
+
+struct RealIdleWait;
+
+impl IdleWait for RealIdleWait {
+    fn wait(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
 /// IdleTimeoutSender is wrapper around a sender that signals when a run is done after
 /// an idle timeout. Used for both Oz runs and third-party harnesses.
 ///
@@ -276,6 +292,14 @@ struct IdleTimeoutSender<T: Send + 'static> {
     /// Most recent [`Self::arm_refreshable`] call. Held here rather than by the caller so a
     /// long-lived refresher cannot re-arm with a superseded outcome.
     pending: Arc<Mutex<Option<(T, Duration)>>>,
+    wait: Arc<dyn IdleWait>,
+    /// Invoked synchronously, on whichever thread wins the race to complete the run,
+    /// immediately before the value is sent — including on `end_run_after`'s background
+    /// timer thread, before it ever touches the oneshot. Lets a caller commit
+    /// externally-observable state (e.g. "this conversation's ambient run is exiting") at the
+    /// exact moment of commitment, rather than only after the completion reaches the model
+    /// thread via the oneshot and any further async plumbing (QUALITY-1801).
+    on_commit: Arc<dyn Fn() + Send + Sync>,
 }
 
 // Hand-written so cloning does not require `T: Clone`. Every field is a shared handle, so
@@ -286,6 +310,8 @@ impl<T: Send + 'static> Clone for IdleTimeoutSender<T> {
             tx_cell: Arc::clone(&self.tx_cell),
             generation: Arc::clone(&self.generation),
             pending: Arc::clone(&self.pending),
+            wait: Arc::clone(&self.wait),
+            on_commit: Arc::clone(&self.on_commit),
         }
     }
 }
@@ -296,7 +322,16 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             tx_cell: Arc::new(Mutex::new(Some(tx))),
             generation: Arc::new(AtomicUsize::new(0)),
             pending: Arc::new(Mutex::new(None)),
+            wait: Arc::new(RealIdleWait),
+            on_commit: Arc::new(|| {}),
         }
+    }
+
+    /// Registers `on_commit` to run synchronously, on whichever thread performs it, immediately
+    /// before every future completion send.
+    fn with_on_commit(mut self, on_commit: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_commit = Arc::new(on_commit);
+        self
     }
 
     /// End the run by sending `value` immediately.
@@ -304,6 +339,7 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         if let Ok(mut guard) = self.tx_cell.lock()
             && let Some(sender) = guard.take()
         {
+            (self.on_commit)();
             let _ = sender.send(value);
         }
     }
@@ -315,11 +351,13 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
         let current_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let tx_cell = Arc::clone(&self.tx_cell);
         let generation = Arc::clone(&self.generation);
+        let wait = Arc::clone(&self.wait);
+        let on_commit = Arc::clone(&self.on_commit);
 
         // Spawn a background thread that will complete the oneshot after the idle timeout,
         // unless a follow-up query resets the timer (by bumping the generation counter).
         thread::spawn(move || {
-            thread::sleep(timeout);
+            wait.wait(timeout);
 
             // Check if our timer generation is still current. If not, a follow-up
             // query or other activity has "cancelled" this timer by bumping the generation.
@@ -329,7 +367,10 @@ impl<T: Send + 'static> IdleTimeoutSender<T> {
             if let Ok(mut guard) = tx_cell.lock()
                 && let Some(sender) = guard.take()
             {
-                // Send the value after the idle timeout expires.
+                // Commit before sending: this is the only signal the model layer ever gets
+                // that a deferred window has elapsed, so it must land before the completion
+                // is observable at all (QUALITY-1801).
+                on_commit();
                 let _ = sender.send(value);
             }
         });
@@ -4182,11 +4223,15 @@ impl AgentDriver {
         model_id: LLMId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), AgentDriverError> {
-        let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+        let terminal_view = self.terminal_driver.as_ref(ctx).terminal_view();
+        let terminal_view_id = terminal_view.id();
+        let scope = ResolvedTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_window(terminal_view.window_id(ctx)),
+        );
         log::info!("Selecting base agent model {model_id} (from agent driver)");
 
         LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
-            preferences.update_preferred_agent_mode_llm(&model_id, terminal_view_id, ctx);
+            preferences.update_preferred_agent_mode_llm(&scope, &model_id, terminal_view_id, ctx);
         });
         Ok(())
     }
@@ -4199,9 +4244,46 @@ impl AgentDriver {
         task_prompt: AgentRunPrompt,
         ctx: &mut ModelContext<Self>,
     ) -> Receiver<SDKConversationOutputStatus> {
-        // Create a oneshot channel to signal task completion.
-        let (tx, rx) = oneshot::channel();
-        let run_exit = IdleTimeoutSender::new(tx);
+        // Create a oneshot channel to signal task completion. This is `run_exit`'s
+        // internal signal, not the receiver returned to the caller: see the
+        // `internal_rx` wiring at the end of this function for why.
+        let (internal_tx, internal_rx) = oneshot::channel();
+        // Tracks this run's conversation id for `on_commit` below, which can run on a
+        // background timer thread with no model access of its own. Seeded from
+        // `self.run_conversation_id` so a resumed conversation — already known at
+        // construction time, per `AgentDriver::new` — is covered from the start; a fresh
+        // run instead learns it later, updated alongside `me.run_conversation_id` once
+        // `ConversationServerTokenAssigned` fires below.
+        let committed_conversation_id: Arc<Mutex<Option<AIConversationId>>> =
+            Arc::new(Mutex::new(self.run_conversation_id));
+        let exit_commit_handle = OrchestrationEventService::as_ref(ctx).exit_commit_handle();
+        #[cfg(test)]
+        let post_commit_gate = tests::test_post_commit_gate();
+        #[cfg_attr(not(test), allow(unused_mut))]
+        let mut run_exit = IdleTimeoutSender::new(internal_tx).with_on_commit({
+            let committed_conversation_id = Arc::clone(&committed_conversation_id);
+            move || {
+                if let Ok(guard) = committed_conversation_id.lock()
+                    && let Some(conversation_id) = *guard
+                {
+                    exit_commit_handle.commit(conversation_id);
+                }
+                // Test-only: lets a test pause deterministically right here — the commit has
+                // already landed, but the completion value has not been sent yet, so nothing
+                // (including the async forwarder that runs model-side cleanup) can have
+                // observed this run ending.
+                #[cfg(test)]
+                if let Some(gate) = &post_commit_gate {
+                    gate.wait(Duration::ZERO);
+                }
+            }
+        });
+        #[cfg(test)]
+        {
+            if let Some(wait) = tests::test_idle_wait_override() {
+                run_exit = run_exit.with_wait(wait);
+            }
+        }
         let restored_conversation_id = self.restored_conversation_id;
 
         // ServerSide prompts enter the agent view and emit
@@ -4258,6 +4340,9 @@ impl AgentDriver {
                 } = event
                 {
                     me.run_conversation_id = Some(*conversation_id);
+                    if let Ok(mut guard) = committed_conversation_id.lock() {
+                        *guard = Some(*conversation_id);
+                    }
                     stamp_parent_agent_id_if_some(
                         *conversation_id,
                         me.parent_run_id.as_deref(),
@@ -4463,7 +4548,18 @@ impl AgentDriver {
                             {
                                 me.arm_debug_window(run_exit.clone(), output_status, window, ctx);
                             }
-                            _ => run_exit.complete_with_optional_idle(idle_window, output_status),
+                            // Whether the run exits immediately (no idle window) or a deferred
+                            // window later elapses on its own, `run_exit`'s `on_commit` hook
+                            // (see `execute_run`) commits the conversation exiting
+                            // synchronously, on whichever thread completes the run, strictly
+                            // before the completion signal is observable. That covers both
+                            // cases uniformly, closing off any orchestration event still
+                            // buffered for this conversation before it could otherwise race the
+                            // teardown that follows and get cancelled, leaving the run stuck
+                            // `InProgress` (QUALITY-1801).
+                            None | Some(_) => {
+                                run_exit.complete_with_optional_idle(idle_window, output_status);
+                            }
                         }
                     }
                 }
@@ -4593,7 +4689,24 @@ impl AgentDriver {
             });
         }
 
-        rx
+        // Wrap `internal_rx` instead of returning it directly: once the run's `on_commit` has
+        // committed the exiting flag (synchronously, on whichever thread completed the run),
+        // this drops any orchestration events still queued for the conversation, for every exit
+        // path, immediate or deferred. That drop needs model access, which `on_commit` doesn't
+        // have on a background timer thread, so it happens here instead, once the completion
+        // value reaches this model's own executor.
+        let (external_tx, external_rx) = oneshot::channel();
+        ctx.spawn(internal_rx, move |me, result, ctx| {
+            if let Some(conversation_id) = me.run_conversation_id {
+                OrchestrationEventService::handle(ctx).update(ctx, |service, _| {
+                    service.drop_pending_events_for_exiting_conversation(conversation_id);
+                });
+            }
+            if let Ok(status) = result {
+                let _ = external_tx.send(status);
+            }
+        });
+        external_rx
     }
 
     /// Write the inputs to an exchange to stdout.
@@ -5074,6 +5187,9 @@ fn typed_secret_entries(secret: &ManagedSecretValue) -> Vec<(&'static str, &str)
         ManagedSecretValue::OpenaiApiKey { api_key, .. } => {
             vec![("OPENAI_API_KEY", api_key.as_str())]
         }
+        // A registry credential authenticates an image pull, not the agent process, and
+        // is never injected into the terminal session.
+        ManagedSecretValue::DockerRegistry { .. } => vec![],
     }
 }
 

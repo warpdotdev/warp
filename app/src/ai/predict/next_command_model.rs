@@ -27,11 +27,13 @@ use super::generate_ai_input_suggestions::{
     create_generate_ai_input_suggestions_request, get_context_messages,
 };
 use crate::ai::block_context::BlockContext;
+use crate::ai::blocklist::BlocklistAIController;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::completer::SessionContext;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::{AIApiError, ServerApi};
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 #[cfg(feature = "local_fs")]
 use crate::terminal::ShellHost;
@@ -136,6 +138,9 @@ pub struct NextCommandModel {
     sessions: ModelHandle<Sessions>,
     model: Arc<FairMutex<TerminalModel>>,
     server_api: Arc<ServerApi>,
+    /// The window's Agent Mode controller, consulted for the team the window is scoped to
+    /// so next-command requests resolve against that team rather than the server's default.
+    ai_controller: ModelHandle<BlocklistAIController>,
     #[cfg(feature = "local_fs")]
     conn: Option<Arc<Mutex<SqliteConnection>>>,
 
@@ -160,6 +165,7 @@ impl NextCommandModel {
         sessions: ModelHandle<Sessions>,
         model: Arc<FairMutex<TerminalModel>>,
         server_api: Arc<ServerApi>,
+        ai_controller: ModelHandle<BlocklistAIController>,
     ) -> Self {
         #[cfg(feature = "local_fs")]
         let conn = database_file_path_for_current_scope()
@@ -173,6 +179,7 @@ impl NextCommandModel {
             sessions,
             model,
             server_api,
+            ai_controller,
             #[cfg(feature = "local_fs")]
             conn,
             next_command_state: NextCommandSuggestionState::None,
@@ -370,6 +377,8 @@ impl NextCommandModel {
         let server_api = self.server_api.clone();
         let terminal_model = self.model.clone();
         let cached_next_command_context = self.cached_zerostate_next_command_context.clone();
+        let team_scope =
+            RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
 
         let completion_context = completer_data.completion_session_context(ctx);
         // This is only needed if we have a prefix.
@@ -491,7 +500,9 @@ impl NextCommandModel {
                     // For zero-state next command suggestions, return the result immediately.
                     let Some(prefix) = prefix else {
                         return (
-                            server_api.generate_ai_input_suggestions(&request).await,
+                            server_api
+                                .generate_ai_input_suggestions(&request, team_scope)
+                                .await,
                             request,
                             true,
                             start_ts_ms,
@@ -571,7 +582,9 @@ impl NextCommandModel {
                     };
 
                     // Only if we have no commands from history and no completions, use the LLM to generate a partial suggestion.
-                    let response = server_api.generate_ai_input_suggestions(&request).await;
+                    let response = server_api
+                        .generate_ai_input_suggestions(&request, team_scope)
+                        .await;
                     (
                         response,
                         request,

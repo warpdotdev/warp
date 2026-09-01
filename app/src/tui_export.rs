@@ -121,7 +121,8 @@ pub use crate::ai::blocklist::{
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
-    PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
+    PreparedLocalOzChildLaunch, apply_child_agent_model_override,
+    finish_local_oz_child_conversation, prepare_local_oz_child_launch,
 };
 pub use crate::ai::cloud_environments::{
     CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
@@ -190,6 +191,8 @@ pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
+#[cfg(feature = "voice_input")]
+pub use crate::server::team_scope::RequestTeamScope;
 pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
 pub use crate::settings::{AISettingsChangedEvent, InputSettings};
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
@@ -276,8 +279,10 @@ pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_
 pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
+pub use crate::workspaces::update_manager::TeamUpdateManager;
 pub use crate::workspaces::user_workspaces::{
-    TeamContext, TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+    UserWorkspacesEvent,
 };
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 

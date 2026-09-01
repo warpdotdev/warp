@@ -72,6 +72,17 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             [BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($str)).Replace('-', '')
         }
 
+        function Warp-Decode-HexString([string]$hex) {
+            # Guard empty/missing input: otherwise the loop leaves $bytes null and GetString throws.
+            if ([string]::IsNullOrEmpty($hex)) {
+                return ''
+            }
+            $bytes = for ($i = 0; $i -lt $hex.Length; $i += 2) {
+                [Convert]::ToByte($hex.Substring($i, 2), 16)
+            }
+            [System.Text.Encoding]::UTF8.GetString($bytes)
+        }
+
         # Hex-encodes the given argument and writes it to the PTY, wrapped in the OSC
         # sequences for generator output.
         #
@@ -812,6 +823,62 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     }
 
+    # Computes native shell completions for a command line and emits them over the OSC 9280 wire
+    # protocol.
+    function Warp-Run-GeneratorCommand-NativeCompletion {
+        [CmdletBinding()]
+        param([string]$hexEncodedLine)
+
+        $status = $?
+        $code = $global:LASTEXITCODE
+        $script:generatorCommand = $true
+
+        Write-Host -NoNewline "$([char]0x1b)]9280;A$oscEnd"
+        try {
+            $line = Warp-Decode-HexString $hexEncodedLine
+
+            # An empty line has no useful completions.
+            if (-not [string]::IsNullOrEmpty($line)) {
+                $completion = [System.Management.Automation.CommandCompletion]::CompleteInput(
+                    $line, $line.Length, $null)
+                # ReplacementIndex/ReplacementLength are UTF-16 code-unit offsets, but the client
+                # slices a UTF-8 buffer, so convert to byte offsets here (a multi-byte char left of
+                # the token otherwise lands mid-character and panicked the app).
+                if ($completion.ReplacementIndex -ge 0) {
+                    $utf8 = [System.Text.Encoding]::UTF8
+                    $replacementStartBytes = $utf8.GetByteCount($line.Substring(0, $completion.ReplacementIndex))
+                    # Clamp to $line.Length: a `Substring` past the end throws, which the surrounding
+                    # try/catch would otherwise turn into a silent, warning-free empty response.
+                    $replacementEnd = [Math]::Min($completion.ReplacementIndex + $completion.ReplacementLength, $line.Length)
+                    $replacementEndBytes = $utf8.GetByteCount($line.Substring(0, $replacementEnd))
+                    Write-Host -NoNewline "$([char]0x1b)]9280;S;$replacementStartBytes,$($replacementEndBytes - $replacementStartBytes)$oscEnd"
+                }
+                foreach ($match in $completion.CompletionMatches) {
+                    Write-Host -NoNewline "$([char]0x1b)]9280;C;$(Warp-Encode-HexString $match.CompletionText)$oscEnd"
+                    if (-not [string]::IsNullOrEmpty($match.ToolTip) -and $match.ToolTip -ne $match.CompletionText) {
+                        # Cmdlet/parameter tooltips can span multiple lines; collapse to one line.
+                        $description = ($match.ToolTip -split '\r?\n' | Where-Object { $_.Trim() -ne '' }) -join ' '
+                        Write-Host -NoNewline "$([char]0x1b)]9280;D?description;$(Warp-Encode-HexString $description)$oscEnd"
+                    }
+                }
+            }
+        } catch {
+            Write-Verbose "Native completions failed: $($_.Exception.Message)"
+        } finally {
+            Write-Host -NoNewline "$([char]0x1b)]9280;B$oscEnd"
+            # Restore the user's error status.
+            $global:LASTEXITCODE = $code
+            if ($status -eq $false) {
+                $PSCmdlet.WriteError([System.Management.Automation.ErrorRecord]::new(
+                        [Exception]::new("$([char]0x00)"),
+                        'warp-reset-error',
+                        [System.Management.Automation.ErrorCategory]::NotSpecified,
+                        $null
+                    ))
+            }
+        }
+    }
+
     function Warp-Render-Prompt {
         param([bool]$status, [int]$code, [bool]$isGeneratorCommand)
 
@@ -1011,7 +1078,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
     # bootstrap logic pasted into the PTY and the output of shell startup files.
     Warp-Precmd -status $global:? -code $global:LASTEXITCODE
 
-    Export-ModuleMember -Function clear, Clear-Host, Get-EpochTime, Warp-Finish-Update, Warp-Handle-DistUpgrade, Warp-Run-GeneratorCommand, Warp-Finish-Bootstrap
+    Export-ModuleMember -Function clear, Clear-Host, Get-EpochTime, Warp-Finish-Update, Warp-Handle-DistUpgrade, Warp-Run-GeneratorCommand, Warp-Run-GeneratorCommand-NativeCompletion, Warp-Finish-Bootstrap
 }
 
 # Finally, get ready to source the user's RC files. This must be done in the global scope (not

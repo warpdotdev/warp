@@ -26,7 +26,7 @@ use std::sync::Arc;
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
 use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Local};
 use cli_controller::{CLISubagentController, CLISubagentEvent};
 use find::FindState;
 use indexmap::IndexMap;
@@ -39,9 +39,9 @@ pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockE
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
 use rustc_hash::FxHashSet;
-use secret_redaction::*;
 use serde::Serialize;
 use settings::Setting as _;
+use string_offset::StringRange;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
@@ -57,8 +57,8 @@ use warpui::assets::asset_cache::AssetCache;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SecretRange,
-    SelectionBound, SelectionHandle, TableStateHandle, get_rich_content_position_id,
+    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SelectionBound,
+    SelectionHandle, TableStateHandle, get_rich_content_position_id,
 };
 use warpui::image_cache::ImageType;
 use warpui::keymap::FixedBinding;
@@ -72,6 +72,7 @@ use warpui::{
 };
 
 use self::model::{AIBlockModel, AIBlockModelHelper};
+use self::secret_redaction::*;
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
 use super::controller::ClientIdentifiers;
@@ -198,6 +199,7 @@ use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
+use crate::util::time_format::format_message_timestamp;
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
@@ -475,6 +477,7 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the overflow menu button
     overflow_menu_handle: MouseStateHandle,
+    query_timestamp_tooltip_handle: MouseStateHandle,
 
     menu_accept_button_handle: MouseStateHandle,
     menu_reject_button_handle: MouseStateHandle,
@@ -1222,7 +1225,8 @@ impl AIBlock {
                     ctx.notify();
                 }
                 AISettingsChangedEvent::ThinkingDisplayMode { .. }
-                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
+                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. }
+                | AISettingsChangedEvent::UsageDisplayUnit { .. } => {
                     ctx.notify();
                 }
                 _ => {}
@@ -3911,6 +3915,7 @@ impl AIBlock {
                 document.title.clone()
             };
 
+            let will_auto_open = !opened_first;
             let (document_id, created_new) = model_handle.update(ctx, |model, model_ctx| {
                 let (document_id, created_new) = model
                     .get_or_create_streaming_document_for_create_documents(
@@ -3920,6 +3925,7 @@ impl AIBlock {
                         &title,
                         document.content.clone(),
                         file_link_resolution_context.clone(),
+                        will_auto_open,
                         model_ctx,
                     );
                 if !created_new {
@@ -3933,7 +3939,7 @@ impl AIBlock {
                 (document_id, created_new)
             });
 
-            if created_new && !opened_first {
+            if created_new && will_auto_open {
                 ctx.emit(AIBlockEvent::OpenAIDocumentPane {
                     document_id,
                     document_version: AIDocumentVersion::default(),
@@ -4503,6 +4509,10 @@ impl AIBlock {
 
     pub fn output_status(&self, app: &AppContext) -> AIBlockOutputStatus {
         self.model.status(app)
+    }
+
+    pub fn query_sent_at(&self, app: &AppContext) -> Option<DateTime<Local>> {
+        self.model.query_sent_at(app)
     }
 
     /// Returns `true` if this AI block contains user input.
@@ -5371,7 +5381,7 @@ impl AIBlock {
     fn show_secret_tooltip(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(hoverable_secret) = self
@@ -5395,7 +5405,7 @@ impl AIBlock {
     pub fn set_secret_redaction_state(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         is_obfuscated: bool,
     ) {
         self.secret_redaction_state
@@ -5705,7 +5715,7 @@ impl AIBlock {
 
         // Get the model name from the input metadata.
         let mut model_name = LLMPreferences::as_ref(app)
-            .get_llm_info(base_model_id)
+            .get_llm_info(base_model_id, app)
             .map(|info| info.display_name.clone())
             .unwrap_or_default();
 
@@ -5714,7 +5724,7 @@ impl AIBlock {
             let model_id = self.model.model_id(app);
             if let Some(model_id) = model_id
                 && let Some(output_model_name) = LLMPreferences::as_ref(app)
-                    .get_llm_info(&model_id)
+                    .get_llm_info(&model_id, app)
                     .map(|info| info.display_name.clone())
             {
                 model_name = output_model_name;
@@ -6323,7 +6333,7 @@ pub enum AIBlockAction {
         location: TextLocation,
     },
     ChangedHoverOnSecret {
-        secret_range: SecretRange,
+        secret_range: StringRange,
         location: TextLocation,
         is_hovering: bool,
     },
@@ -6332,7 +6342,7 @@ pub enum AIBlockAction {
         location: TextLocation,
     },
     OpenSecretTooltip {
-        secret_range: SecretRange,
+        secret_range: StringRange,
         location: TextLocation,
     },
     OpenCitation(AIAgentCitation),
@@ -6366,6 +6376,7 @@ pub enum AIBlockAction {
     /// Copy the content from the previous user query.
     /// Note that this block may not have the user query.
     CopyQuery,
+    CopyTimestamp,
     /// Copy all AI output from the previous user query to the next user query.
     /// Note that this contains more than just this block, since from the user perspective everything after the user query appears like one block.
     CopyOutput,
@@ -6870,6 +6881,14 @@ impl TypedActionView for AIBlock {
                 let prompt_text = self.get_preceding_user_query(ctx);
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(prompt_text));
+            }
+            AIBlockAction::CopyTimestamp => {
+                if let Some(timestamp) = self.query_sent_at(ctx) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(format_message_timestamp(
+                            &timestamp,
+                        )));
+                }
             }
             AIBlockAction::CopyOutput => {
                 // Copy all AI output from preceding user query until the next user query

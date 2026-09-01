@@ -1054,7 +1054,7 @@ fn fill_filterable_dropdown<F>(
     let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
     let items = available_model_menu_items(
         LLMPreferences::as_ref(ctx)
-            .get_base_llm_choices_for_agent_mode(ctx)
+            .get_base_llm_choices_for_agent_mode(&scope, ctx)
             .filter(|llm| !is_auto_target(llm.id.as_str()))
             .collect_vec(),
         |llm| DropdownAction::select_action_and_close(make_action(llm.id.to_string())),

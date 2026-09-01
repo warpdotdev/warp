@@ -48,6 +48,7 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
               isDisabled
             }
             visibility
+            featureModelChoice { ... }
           }
           billingMetadata {
             customerType

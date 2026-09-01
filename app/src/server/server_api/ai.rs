@@ -10,6 +10,8 @@ use ai::index::full_source_code_embedding::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
+#[cfg(not(target_family = "wasm"))]
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use cloud_object_models::CodeForge;
 use cynic::{MutationBuilder, QueryBuilder};
@@ -115,8 +117,9 @@ use warp_graphql::queries::task_attachments::{
     Task as TaskAttachmentsQuery, TaskInput, TaskResult, TaskVariables,
 };
 use warp_graphql::queries::task_git_credentials::{
-    TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsResult,
-    TaskGitCredentialsVariables,
+    TaskGitCredentials, TaskGitCredentialsInput, TaskGitCredentialsLegacy,
+    TaskGitCredentialsLegacyInput, TaskGitCredentialsLegacyResult,
+    TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
 use warp_multi_agent_api::ConversationData;
 
@@ -729,6 +732,24 @@ pub struct GitCredential {
     pub host: String,
 }
 
+impl std::fmt::Debug for GitCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitCredential")
+            .field("host", &self.host)
+            .field("username_present", &self.username.is_some())
+            .field("email_present", &self.email.is_some())
+            .field("token_present", &!self.token.is_empty())
+            .finish()
+    }
+}
+
+/// One credential-retrieval cycle's outcome.
+#[derive(Clone, Default)]
+pub struct TaskGitCredentialsResponse {
+    pub credentials: Vec<GitCredential>,
+    pub failed_hosts: Vec<String>,
+}
+
 /// Filter parameters for listing ambient agent tasks.
 #[derive(Clone, Debug, Default)]
 pub struct TaskListFilter {
@@ -1311,9 +1332,28 @@ pub trait AIClient: 'static + Send + Sync {
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
     #[cfg(not(target_family = "wasm"))]
+    async fn download_run_transcript(
+        &self,
+        run_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<Bytes, anyhow::Error>;
+
+    #[cfg(not(target_family = "wasm"))]
     async fn download_run_transcript_to_path(
         &self,
         run_id: &AmbientAgentTaskId,
+        destination: &Path,
+    ) -> anyhow::Result<(), anyhow::Error>;
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_conversation_transcript(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Bytes, anyhow::Error>;
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_conversation_transcript_to_path(
+        &self,
+        conversation_id: &str,
         destination: &Path,
     ) -> anyhow::Result<(), anyhow::Error>;
 
@@ -1447,7 +1487,8 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error>;
+        accepts_partial_refresh: bool,
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
     /// session, called by the sharer with its own workload token. Anything short of `Ok(true)`
@@ -1641,6 +1682,99 @@ impl ServerApi {
         let response = response.json::<ReadAgentMessageResponse>().await?;
         Ok(response)
     }
+
+    async fn get_task_git_credentials_current(
+        &self,
+        task_id: String,
+        workload_token: String,
+        accepts_partial_refresh: bool,
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+        let variables = TaskGitCredentialsVariables {
+            input: TaskGitCredentialsInput {
+                task_id: cynic::Id::new(task_id),
+                workload_token,
+                accepts_partial_refresh: Some(accepts_partial_refresh),
+            },
+            request_context: get_request_context(),
+        };
+        let operation = TaskGitCredentials::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.task_git_credentials {
+            TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
+                Ok(TaskGitCredentialsResponse {
+                    credentials: output
+                        .credentials
+                        .into_iter()
+                        .map(into_git_credential)
+                        .collect(),
+                    failed_hosts: output.failed_hosts,
+                })
+            }
+            TaskGitCredentialsResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            TaskGitCredentialsResult::Unknown => {
+                Err(anyhow!("Failed to fetch task git credentials"))
+            }
+        }
+    }
+
+    async fn get_task_git_credentials_legacy(
+        &self,
+        task_id: String,
+        workload_token: String,
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+        let variables = TaskGitCredentialsLegacyVariables {
+            input: TaskGitCredentialsLegacyInput {
+                task_id: cynic::Id::new(task_id),
+                workload_token,
+            },
+            request_context: get_request_context(),
+        };
+        let operation = TaskGitCredentialsLegacy::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.task_git_credentials {
+            TaskGitCredentialsLegacyResult::TaskGitCredentialsOutput(output) => {
+                Ok(TaskGitCredentialsResponse {
+                    credentials: output
+                        .credentials
+                        .into_iter()
+                        .map(into_git_credential)
+                        .collect(),
+                    failed_hosts: Vec::new(),
+                })
+            }
+            TaskGitCredentialsLegacyResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            TaskGitCredentialsLegacyResult::Unknown => {
+                Err(anyhow!("Failed to fetch task git credentials"))
+            }
+        }
+    }
+}
+
+fn into_git_credential(
+    credential: warp_graphql::queries::task_git_credentials::TaskGitCredential,
+) -> GitCredential {
+    GitCredential {
+        token: credential.token,
+        username: credential.username,
+        email: credential.email,
+        host: credential.host,
+    }
+}
+
+fn is_unknown_git_credential_schema_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    let names_partial_refresh_field =
+        message.contains("failedHosts") || message.contains("acceptsPartialRefresh");
+    names_partial_refresh_field
+        && (message.contains("Cannot query field")
+            || message.contains("Unknown argument")
+            || message.contains("is not defined by type"))
 }
 
 /// Convert a cynic `FileArtifactUploadField` into the shared [`UploadField`]
@@ -2686,37 +2820,25 @@ impl AIClient for ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<Vec<GitCredential>, anyhow::Error> {
-        let variables = TaskGitCredentialsVariables {
-            input: TaskGitCredentialsInput {
-                task_id: cynic::Id::new(task_id),
-                workload_token,
-            },
-            request_context: get_request_context(),
-        };
-        let operation = TaskGitCredentials::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
-
-        match response.task_git_credentials {
-            TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
-                let credentials = output
-                    .credentials
-                    .into_iter()
-                    .map(|c| GitCredential {
-                        token: c.token,
-                        username: c.username,
-                        email: c.email,
-                        host: c.host,
-                    })
-                    .collect();
-                Ok(credentials)
+        accepts_partial_refresh: bool,
+    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+        match self
+            .get_task_git_credentials_current(
+                task_id.clone(),
+                workload_token.clone(),
+                accepts_partial_refresh,
+            )
+            .await
+        {
+            Ok(response) => Ok(response),
+            Err(error) if is_unknown_git_credential_schema_error(&error) => {
+                log::info!(
+                    "taskGitCredentials partial-refresh fields are unavailable; falling back to the pre-deploy schema"
+                );
+                self.get_task_git_credentials_legacy(task_id, workload_token)
+                    .await
             }
-            TaskGitCredentialsResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
-            }
-            TaskGitCredentialsResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -2938,6 +3060,17 @@ impl AIClient for ServerApi {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    async fn download_run_transcript(
+        &self,
+        run_id: &AmbientAgentTaskId,
+    ) -> anyhow::Result<Bytes, anyhow::Error> {
+        let response = self
+            .get_public_api_response(&format!("agent/runs/{run_id}/transcript"))
+            .await?;
+        Ok(response.bytes().await?)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     async fn download_run_transcript_to_path(
         &self,
         run_id: &AmbientAgentTaskId,
@@ -2945,6 +3078,29 @@ impl AIClient for ServerApi {
     ) -> anyhow::Result<(), anyhow::Error> {
         let response = self
             .get_public_api_response(&format!("agent/runs/{run_id}/transcript"))
+            .await?;
+        write_response_body_to_path(response, destination).await
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_conversation_transcript(
+        &self,
+        conversation_id: &str,
+    ) -> anyhow::Result<Bytes, anyhow::Error> {
+        let response = self
+            .get_public_api_response(&format!("agent/conversations/{conversation_id}/transcript"))
+            .await?;
+        Ok(response.bytes().await?)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    async fn download_conversation_transcript_to_path(
+        &self,
+        conversation_id: &str,
+        destination: &Path,
+    ) -> anyhow::Result<(), anyhow::Error> {
+        let response = self
+            .get_public_api_response(&format!("agent/conversations/{conversation_id}/transcript"))
             .await?;
         write_response_body_to_path(response, destination).await
     }

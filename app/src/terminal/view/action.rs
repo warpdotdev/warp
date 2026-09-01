@@ -189,7 +189,8 @@ pub enum TerminalAction {
     ControlSequence(Vec<u8>),
     RunNativeShellCompletions {
         buffer_text: String,
-        results_tx: async_channel::Sender<Vec<ShellCompletion>>,
+        results_tx:
+            async_channel::Sender<(Vec<ShellCompletion>, Option<warp_completer::meta::Span>)>,
     },
     KeyDown(String),
     TypedCharacters(String),

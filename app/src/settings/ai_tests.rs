@@ -498,6 +498,37 @@ fn test_toolbar_command_map_matched_agent() {
 }
 
 #[test]
+fn usage_display_unit_defaults_to_credits_and_round_trips() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(settings.usage_display_unit, UsageDisplayUnit::Credits);
+        });
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            report_if_error!(
+                settings
+                    .usage_display_unit
+                    .set_value(UsageDisplayUnit::Dollars, ctx)
+            );
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(settings.usage_display_unit, UsageDisplayUnit::Dollars);
+        });
+    });
+}
+
+#[test]
+fn usage_display_unit_toml_path() {
+    assert_eq!(
+        UsageDisplayUnit::toml_path(),
+        Some("agents.warp_agent.other.usage_display_unit")
+    );
+}
+
+#[test]
 fn orchestration_is_enabled_when_ai_is_enabled() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

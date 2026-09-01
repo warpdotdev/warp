@@ -2298,6 +2298,7 @@ pub(crate) fn initialize_app(
             ctx,
         )
     });
+    ai::custom_endpoints::init(launch_mode, ctx);
 
     // LogManager must be registered before any subsystem (e.g. MCP, LSP) that creates file-based loggers.
     ctx.add_singleton_model(|_| simple_logger::manager::LogManager::new());

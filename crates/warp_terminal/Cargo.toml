@@ -40,7 +40,9 @@ pathfinder_geometry.workspace = true
 rand.workspace = true
 rangemap.workspace = true
 regex.workspace = true
-regex-automata = "0.4.6"
+regex-automata.workspace = true
+regex_dfas.workspace = true
+secret_redaction.workspace = true
 sentry = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -120,7 +122,10 @@ warp_core = { workspace = true, features = ["test-util"] }
 
 [features]
 crash_reporting = ["dep:sentry", "warp_errors/crash_reporting"]
-integration_tests = ["warp_core/integration_tests", "warpui_core/integration_tests"]
+integration_tests = [
+    "warp_core/integration_tests",
+    "warpui_core/integration_tests",
+]
 local_fs = ["warp_core/local_fs"]
 local_tty = []
 remote_tty = []

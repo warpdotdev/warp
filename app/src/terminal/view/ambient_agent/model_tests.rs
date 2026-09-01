@@ -1,10 +1,10 @@
 use url::Url;
-use warpui::{App, EntityId};
+use warpui::App;
 
 use super::*;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
-use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
 fn attachment() -> AttachmentInput {
@@ -16,7 +16,11 @@ fn attachment() -> AttachmentInput {
 }
 
 fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
-    app.add_model(|ctx| AmbientAgentViewModel::new(EntityId::new(), ctx))
+    let terminal_view = add_window_with_terminal(app, None);
+    let terminal_view_id = terminal_view.id();
+    app.add_model(|ctx| {
+        AmbientAgentViewModel::new(terminal_view_id, terminal_view.downgrade(), ctx)
+    })
 }
 
 #[test]
@@ -129,7 +133,8 @@ fn spawn_config_honors_pane_model_override() {
             };
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                 prefs.update_feature_model_choices(Ok(models), ctx);
-                prefs.update_preferred_agent_mode_llm(
+                prefs.update_preferred_agent_mode_llm_for_team_uid(
+                    None,
                     &LLMId::from("auto-genius"),
                     terminal_view_id,
                     ctx,

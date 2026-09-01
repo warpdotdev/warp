@@ -56,12 +56,12 @@ use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::server::telemetry::{InputUXChangeOrigin, TelemetryEvent};
 use crate::settings::app_icon::{AppIcon, AppIconSettings, ShowDockIconState};
 use crate::settings::{
-    AIFontName, AISettings, AppEditorSettings, CodeSettings, CursorBlink, CursorBlinkEnabled,
-    CursorDisplayType, DEFAULT_MONOSPACE_FONT_NAME, EnforceMinimumContrast, FocusPaneOnHover,
-    FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
-    InputModeState, InputSettings, InputSettingsChangedEvent, MonospaceFontName, PaneSettings,
-    ShouldDimInactivePanes, ThemeSettings, UseSystemTheme, UseThinStrokes, active_theme_kind,
-    respect_system_theme,
+    AIFontName, AISettings, AISettingsChangedEvent, AppEditorSettings, CodeSettings, CursorBlink,
+    CursorBlinkEnabled, CursorDisplayType, DEFAULT_MONOSPACE_FONT_NAME, EnforceMinimumContrast,
+    FocusPaneOnHover, FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType,
+    InputModeSettings, InputModeState, InputSettings, InputSettingsChangedEvent, MonospaceFontName,
+    PaneSettings, ShouldDimInactivePanes, ThemeSettings, UsageDisplayUnit, UseSystemTheme,
+    UseThinStrokes, active_theme_kind, respect_system_theme,
 };
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::blockgrid_element::BlockGridElement;
@@ -525,6 +525,7 @@ pub enum AppearancePageAction {
     RemoveDefaultDirectoryTabColor {
         path: PathBuf,
     },
+    SetUsageDisplayUnit(UsageDisplayUnit),
 }
 
 pub struct AppearanceSettingsPageView {
@@ -546,6 +547,7 @@ pub struct AppearanceSettingsPageView {
     #[allow(dead_code)]
     thin_strokes_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     enforce_min_contrast_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
+    usage_display_unit_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_mode_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
     input_type_radio_state: RadioButtonStateHandle,
     app_icon_dropdown: ViewHandle<Dropdown<AppearancePageAction>>,
@@ -622,6 +624,12 @@ impl TypedActionView for AppearanceSettingsPageView {
             }
             SetWorkspaceDecorationVisibility(value) => {
                 self.set_workspace_decoration_visibility(*value, ctx)
+            }
+            SetUsageDisplayUnit(value) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.usage_display_unit.set_value(*value, ctx));
+                });
+                ctx.notify();
             }
             ToggleWorkspaceDecorationVisibility => self.toggle_workspace_decoration_visiblity(ctx),
             ToggleJumpToBottomOfBlockButton => self.toggle_jump_to_bottom_of_block_button(ctx),
@@ -1039,6 +1047,19 @@ impl AppearanceSettingsPageView {
             ctx.notify();
         });
 
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                let current_value = AISettings::as_ref(ctx).usage_display_unit;
+                me.usage_display_unit_dropdown.update(ctx, |dropdown, ctx| {
+                    dropdown.set_selected_by_action(
+                        AppearancePageAction::SetUsageDisplayUnit(current_value),
+                        ctx,
+                    );
+                });
+                ctx.notify();
+            }
+        });
+
         let line_height_editor = Self::editor(
             |me, event, ctx| me.handle_line_editor_event(event, ctx),
             &format!("{line_height_ratio}"),
@@ -1273,6 +1294,37 @@ impl AppearanceSettingsPageView {
             dropdown
         });
 
+        let usage_display_unit_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+
+            let values = vec![UsageDisplayUnit::Credits, UsageDisplayUnit::Dollars];
+            let current_value = AISettings::as_ref(ctx).usage_display_unit;
+            let selected_index = values
+                .iter()
+                .position(|val| *val == current_value)
+                .unwrap_or_else(|| {
+                    report_error!(
+                        "Could not find current UsageDisplayUnit value in dropdown option list"
+                    );
+                    0
+                });
+
+            dropdown.add_items(
+                values
+                    .into_iter()
+                    .map(|val| {
+                        DropdownItem::new(
+                            val.display_name(),
+                            AppearancePageAction::SetUsageDisplayUnit(val),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            dropdown.set_selected_by_index(selected_index, ctx);
+            dropdown
+        });
+
         let context_chips = Self::get_context_chip_renderers(ctx);
 
         let alt_screen_padding_editor = {
@@ -1325,6 +1377,7 @@ impl AppearanceSettingsPageView {
             input_type_radio_state,
             app_icon_dropdown,
             enforce_min_contrast_dropdown,
+            usage_display_unit_dropdown,
             workspace_decorations_dropdown: Self::build_workspace_decoration_visibility_dropdown(
                 ctx,
             ),
@@ -1539,6 +1592,11 @@ impl AppearanceSettingsPageView {
         categories.push(Category::new(
             "Full-screen Apps",
             vec![Box::new(AltScreenPaddingWidget::default())],
+        ));
+
+        categories.push(Category::new(
+            "Usage",
+            vec![Box::new(UsageDisplayUnitWidget::default())],
         ));
 
         PageType::new_categorized(categories, None)
@@ -4601,6 +4659,43 @@ impl SettingsWidget for MinimumContrastWidget {
             ),
             None,
             &view.enforce_min_contrast_dropdown,
+        )
+    }
+}
+
+#[derive(Default)]
+struct UsageDisplayUnitWidget {}
+
+impl SettingsWidget for UsageDisplayUnitWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "usage credits dollars cost spend display unit pricing transparency"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::PricingTransparency.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        render_dropdown_item(
+            appearance,
+            "Usage display unit",
+            Some("Select the unit for usage and spend amounts."),
+            None,
+            LocalOnlyIconState::for_setting(
+                UsageDisplayUnit::storage_key(),
+                UsageDisplayUnit::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            None,
+            &view.usage_display_unit_dropdown,
         )
     }
 }

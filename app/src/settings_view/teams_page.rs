@@ -320,6 +320,9 @@ pub enum TeamsPageViewEvent {
         message: String,
         flavor: ToastFlavor,
     },
+    /// One of this page's modals opened or closed. [`SettingsView`] owns the
+    /// slot they render in, so it has to re-render to pick the change up.
+    ModalVisibilityChanged,
 }
 
 #[derive(Default)]
@@ -1156,6 +1159,9 @@ impl TeamsPageView {
         target: TeamActionConfirmationTarget,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Only one modal renders (see `get_modal_content`), so opening one must clear the other
+        // rather than leave it queued behind for a target the user has moved on from.
+        self.clear_transfer_ownership_modal(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1165,21 +1171,30 @@ impl TeamsPageView {
                 ctx.notify();
             });
         self.show_team_action_confirmation_dialog = true;
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
-    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Drops the confirmation dialog's state without announcing it. Callers that change what is on
+    /// screen emit [`TeamsPageViewEvent::ModalVisibilityChanged`] once for the whole transition.
+    fn clear_team_action_confirmation(&mut self) {
         self.pending_team_action_confirmation = None;
         self.show_team_action_confirmation_dialog = false;
+    }
+
+    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
     fn confirm_pending_team_action(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(target) = self.pending_team_action_confirmation.take() else {
-            self.hide_team_action_confirmation(ctx);
+        // Take the target first: hiding clears it.
+        let target = self.pending_team_action_confirmation.take();
+        self.hide_team_action_confirmation(ctx);
+        let Some(target) = target else {
             return;
         };
-        self.show_team_action_confirmation_dialog = false;
         match target {
             TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
                 self.leave_team(ctx);
@@ -1191,20 +1206,17 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
-            )
-    }
-
-    fn should_show_remove_user_from_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::RemoveUser { .. })
-            )
+    /// This page's modal overlays, rendered by [`SettingsView`] in its top-level stack rather than
+    /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
+    /// centered on it lands wherever the scroll offset happens to put it.
+    pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
+        if self.transfer_ownership_modal_state.is_open() {
+            Some(self.transfer_ownership_modal_state.render())
+        } else if self.show_team_action_confirmation_dialog {
+            Some(ChildView::new(&self.team_action_confirmation_dialog).finish())
+        } else {
+            None
+        }
     }
 
     /// Scroll to the team membership settings. If an email is provided, it's prepopulated in the
@@ -1276,12 +1288,10 @@ impl TeamsPageView {
                 team_uid,
             } => {
                 self.set_team_member_role(*new_owner_uid, *team_uid, MembershipRole::Owner, ctx);
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
             TransferOwnershipConfirmationEvent::Cancel => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
         }
     }
@@ -1292,11 +1302,22 @@ impl TeamsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ModalEvent::Close => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
-            }
+            ModalEvent::Close => self.close_transfer_ownership_modal(ctx),
         }
+    }
+
+    /// Closes the transfer-ownership modal and takes back the focus it was given on open, so
+    /// Escape stops dispatching into a view that is no longer rendered. Announcing the change is
+    /// the caller's job, as it is for [`Self::clear_team_action_confirmation`].
+    fn clear_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.transfer_ownership_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_transfer_ownership_modal(ctx);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
     }
 
     fn show_transfer_ownership_modal(
@@ -1306,6 +1327,7 @@ impl TeamsPageView {
         team_uid: ServerId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.clear_team_action_confirmation();
         self.transfer_ownership_modal_state
             .view
             .update(ctx, |modal, ctx| {
@@ -1315,6 +1337,10 @@ impl TeamsPageView {
                 });
             });
         self.transfer_ownership_modal_state.open();
+        // Focus the modal so Escape closes it (the modal's escape binding only
+        // fires while something inside the modal holds focus).
+        ctx.focus(&self.transfer_ownership_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
@@ -2451,7 +2477,6 @@ impl TeamsWidget {
                 Container::new(self.render_leave_or_delete_team_button(
                     is_owner,
                     delete_disabled_reason.is_none(),
-                    view,
                     appearance,
                 ))
                 .with_padding_right(24.)
@@ -3499,11 +3524,8 @@ impl TeamsWidget {
         &self,
         is_team_owner: bool,
         can_team_be_deleted: bool,
-        view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let mut stack = Stack::new();
-
         let (label, action) = if is_team_owner {
             (
                 DELETE_TEAM_BUTTON_LABEL,
@@ -3550,26 +3572,10 @@ impl TeamsWidget {
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         };
 
-        stack.add_child(
-            Container::new(hoverable.finish())
-                .with_padding_top(CONTENT_SEPARATION_PADDING)
-                .with_padding_bottom(CONTENT_SEPARATION_PADDING)
-                .finish(),
-        );
-
-        if view.should_show_delete_or_leave_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::Unbounded,
-                    ParentAnchor::Center,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-        }
-
-        stack.finish()
+        Container::new(hoverable.finish())
+            .with_padding_top(CONTENT_SEPARATION_PADDING)
+            .with_padding_bottom(CONTENT_SEPARATION_PADDING)
+            .finish()
     }
 
     fn render_delete_disabled_help_text(
@@ -4734,33 +4740,9 @@ impl SettingsWidget for TeamsWidget {
                 .finish()
         };
 
-        let mut stack = Stack::new();
-        stack.add_child(Flex::column().with_child(content).finish());
-
-        if view.transfer_ownership_modal_state.is_open() {
-            stack.add_positioned_overlay_child(
-                view.transfer_ownership_modal_state.render(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-        if view.should_show_remove_user_from_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-
-        stack.finish()
+        // The page's modals are rendered by `SettingsView`, not here; see
+        // `TeamsPageView::get_modal_content`.
+        Flex::column().with_child(content).finish()
     }
 }
 

@@ -45,11 +45,12 @@ pub struct CloudAgentComputerUseState {
 }
 fn effective_base_model<'a>(profile: &AIExecutionProfile, app: &'a AppContext) -> &'a LLMInfo {
     let prefs = LLMPreferences::as_ref(app);
+    let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
     profile
         .base_model
         .as_ref()
-        .and_then(|id| prefs.get_llm_info(id))
-        .unwrap_or_else(|| prefs.get_default_base_model(app))
+        .and_then(|id| prefs.get_llm_info(id, app))
+        .unwrap_or_else(|| prefs.get_default_base_model_for_team_uid(team_uid, app))
 }
 
 /// Resolves the effective cloud agent computer use state by reading the workspace

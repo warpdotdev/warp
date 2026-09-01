@@ -27,6 +27,8 @@ use string_offset::{ByteOffset, CharOffset};
 use vim::vim::{MotionType, VimMode, VimModel, VimSubscriber as _};
 use warp::editor::{CodeEditorModel, CodeEditorModelEvent};
 use warp::settings::AppEditorSettings;
+#[cfg(feature = "voice_input")]
+use warp::tui_export::UserWorkspaces;
 use warp::tui_export::{
     AcceptSlashCommandOrSavedPrompt, BlocklistAIInputModel, InputType,
     InputTypeAutoDetectionSource, LLMId, TuiMcpAction, TuiUpArrowHistoryItemKind,
@@ -341,7 +343,12 @@ impl TuiInputView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         #[cfg(feature = "voice_input")]
-        let voice_input = ctx.add_model(|ctx| TuiVoiceInputModel::new(input_mode.clone(), ctx));
+        let voice_input = {
+            let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+            ctx.add_model(|ctx| {
+                TuiVoiceInputModel::new(input_mode.clone(), team_context_resolver, ctx)
+            })
+        };
         let vim_model = ctx.add_model(|_| VimModel::new());
         // Subscribe to vim events: VimSubscriber blanket impl (TuiInputView: VimHandler)
         // dispatches each VimEvent to the appropriate VimHandler method.

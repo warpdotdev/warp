@@ -2205,27 +2205,6 @@ impl GridHandler {
         self.regex_iter(end, start, Direction::Left, dfas)
     }
 
-    /// Find the next regex match to the left of the `right` Point by searching leftwards from
-    /// `right` until the `left` Point is reached.
-    ///
-    /// The origin is always included in the regex.
-    fn regex_search_leftwards(&self, dfas: &RegexDFAs, right: Point, left: Point) -> Option<Match> {
-        dfas.regex_search_leftwards(right, left, self)
-    }
-
-    /// Find the next regex match to the right of the origin point by beginning at the `left` Point
-    /// and searching until the `right` Point is reached, inclusive of both points.
-    ///
-    /// The origin is always included in the regex.
-    fn regex_search_rightwards(
-        &self,
-        dfas: &RegexDFAs,
-        left: Point,
-        right: Point,
-    ) -> Option<Match> {
-        dfas.regex_search_rightwards(left, right, self)
-    }
-
     /// Computes the [`Point`] that `point` would be if
     /// the grid had no wrapping. In essence, this computes
     /// a grid-agnostic point.

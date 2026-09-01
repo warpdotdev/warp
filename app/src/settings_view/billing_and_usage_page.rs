@@ -49,7 +49,7 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::ai::AISettings;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::settings_view::settings_page::TOGGLE_BUTTON_RIGHT_PADDING;
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
@@ -319,6 +319,12 @@ impl BillingAndUsagePageView {
         });
         // On page init, fetch the usage history for the current user.
         usage_history_model.update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
+
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
 
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 

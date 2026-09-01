@@ -19,7 +19,7 @@ use crate::server::ids::ServerId;
 use crate::settings_view::SettingsSection;
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
@@ -91,33 +91,43 @@ impl PromptAlertView {
         let api_key_manager = ApiKeyManager::handle(ctx);
 
         ctx.subscribe_to_model(&request_usage_model, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&user_workspaces, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&network_status, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&api_key_manager, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state =
+                Self::determine_state(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx), ctx);
             ctx.notify();
         });
 
+        let state = {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces.team_context_for_view(ctx);
+            Self::determine_state(&scope, ctx)
+        };
+
         Self {
             view_handle: ctx.handle(),
-            state: Self::determine_state(ctx),
+            state,
             action_hyperlink: Default::default(),
         }
     }
 
-    pub fn determine_state(app: &AppContext) -> PromptAlertState {
+    pub fn determine_state<S: TeamScope + ?Sized>(scope: &S, app: &AppContext) -> PromptAlertState {
         // First, if the user is offline, no AI features will work.
         if !NetworkStatus::as_ref(app).is_online() {
             return PromptAlertState::NoConnection;
@@ -149,7 +159,7 @@ impl PromptAlertView {
         // The server-authoritative availability decision drives the alert once
         // it has been fetched; local data below is only a pre-fetch fallback.
         if let Some(availability) = request_usage_model.server_availability() {
-            return Self::state_from_server_availability(availability, app);
+            return Self::state_from_server_availability(availability, scope, app);
         }
 
         // Legacy locally derived fallback, used only before the first
@@ -163,7 +173,7 @@ impl PromptAlertView {
         }
 
         // If there is ever any ai remaining, no alert
-        if request_usage_model.has_any_ai_remaining(app) {
+        if request_usage_model.has_any_ai_remaining(scope, app) {
             return PromptAlertState::NoAlert;
         }
 
@@ -173,8 +183,9 @@ impl PromptAlertView {
     /// Maps the server-authoritative availability decision to presentation
     /// state. The server decides *whether* AI is available; workspace policy
     /// only shapes the call-to-action copy.
-    fn state_from_server_availability(
+    fn state_from_server_availability<S: TeamScope + ?Sized>(
         availability: AICreditAvailability,
+        scope: &S,
         app: &AppContext,
     ) -> PromptAlertState {
         if availability.available {
@@ -194,7 +205,7 @@ impl PromptAlertView {
                 // An out-of-credits denial only means the server found no path
                 // it can see; a locally stored API key still permits requests,
                 // which `has_any_ai_remaining` accounts for.
-                if AIRequestUsageModel::as_ref(app).has_any_ai_remaining(app) {
+                if AIRequestUsageModel::as_ref(app).has_any_ai_remaining(scope, app) {
                     return PromptAlertState::NoAlert;
                 }
                 Self::out_of_credits_presentation(app)
@@ -232,8 +243,11 @@ impl PromptAlertView {
         &self.state
     }
 
-    pub fn does_alert_block_ai_requests(app: &AppContext) -> bool {
-        does_alert_block_ai_requests(&Self::determine_state(app))
+    pub fn does_alert_block_ai_requests<S: TeamScope + ?Sized>(
+        scope: &S,
+        app: &AppContext,
+    ) -> bool {
+        does_alert_block_ai_requests(&Self::determine_state(scope, app))
     }
 
     fn primary_text(
@@ -420,13 +434,14 @@ impl View for PromptAlertView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let state = Self::determine_state(app);
+        let workspaces = UserWorkspaces::as_ref(app);
+        let scope = workspaces.team_context(&self.view_handle, app);
+        let state = Self::determine_state(&scope, app);
         let mut text_fragments = vec![];
 
         self.primary_text(&state, &mut text_fragments);
 
         let auth_state = AuthStateProvider::as_ref(app).get();
-        let workspaces = UserWorkspaces::as_ref(app);
         let current_team = workspaces.team_for_view_handle(&self.view_handle, app);
         // A teamless user can be considered the admin of their non-existent team.
         let has_admin_permissions = current_team.is_none_or(|team| {

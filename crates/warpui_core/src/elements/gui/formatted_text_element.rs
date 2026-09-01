@@ -10,7 +10,7 @@ use itertools::Itertools;
 use markdown_parser::{Action, FormattedText, FormattedTextFragment, FormattedTextLine, Hyperlink};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
-use string_offset::{ByteOffset, CharOffset};
+use string_offset::{ByteOffset, CharOffset, StringRange};
 use vec1::vec1;
 use warp_errors::report_error;
 
@@ -18,7 +18,7 @@ use super::{Highlight, ListNumbering, Selection};
 use crate::elements::{
     Axis, ClickableCharRange, CornerRadius, Fill, HighlightedRange, HoverableCharRange,
     MouseStateHandle, PartialClickableElement, Point, Radius, SELECTED_HIGHLIGHT_COLOR,
-    SecretRange, SelectableElement, SelectionFragment, SmartSelectFn, ZIndex,
+    SelectableElement, SelectionFragment, SmartSelectFn, ZIndex,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::fonts::{FamilyId, Properties, Style, Weight};
@@ -1453,7 +1453,7 @@ pub struct FrameMouseHandlers {
     hover_handlers: Vec<HoverableCharRange>,
     glyph_offset: CharOffset,
     byte_offset: ByteOffset,
-    secret_replacement: Vec<(SecretRange, Cow<'static, str>)>,
+    secret_replacement: Vec<(StringRange, Cow<'static, str>)>,
     styles: Vec<HighlightedRange>,
 }
 
@@ -1520,7 +1520,7 @@ impl PartialClickableElement for FrameMouseHandlers {
         self
     }
 
-    fn replace_text_range(&mut self, range: SecretRange, replacement: Cow<'static, str>) {
+    fn replace_text_range(&mut self, range: StringRange, replacement: Cow<'static, str>) {
         self.secret_replacement.push((range, replacement));
     }
 }
@@ -1530,7 +1530,7 @@ impl PartialClickableElement for FrameMouseHandlers {
 fn apply_secret_replacements(
     text: &mut String,
     glyph_offset: usize,
-    secret_replacements: &[(SecretRange, Cow<'static, str>)],
+    secret_replacements: &[(StringRange, Cow<'static, str>)],
 ) {
     let mut replacements = secret_replacements.to_vec();
     replacements.sort_by_key(|(range, _)| Reverse(range.char_range.start));

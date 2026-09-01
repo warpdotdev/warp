@@ -104,8 +104,7 @@ use crate::ai::blocklist::keyboard_navigable_buttons::KeyboardNavigableButtons;
 use crate::ai::blocklist::secret_redaction::SecretRedactionState;
 use crate::ai::blocklist::usage::rollup::compute_orchestration_rollup;
 use crate::ai::blocklist::view_util::{
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_credits_with_cost, format_usage_parenthetical,
-    should_show_failed_output_usage_notice,
+    FAILED_OUTPUT_USAGE_NOTICE_TEXT, format_usage, should_show_failed_output_usage_notice,
 };
 use crate::ai::blocklist::{AIBlockResponseRating, BlocklistAIActionModel, SuggestionChipView};
 use crate::ai::paths::shell_native_absolute_path;
@@ -116,6 +115,7 @@ use crate::ai::skills::{
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
+use crate::settings::AISettings;
 use crate::settings_view::SettingsSection;
 use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
@@ -3722,9 +3722,14 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         Icon::ChevronRight
     };
 
+    let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
     let total_credits_spent = headline_credits;
-    let mut credit_usage_text =
-        format_credits_with_cost(total_credits_spent, headline_tokens, headline_cost_in_cents);
+    let mut usage_text = format_usage(
+        total_credits_spent,
+        headline_tokens,
+        headline_cost_in_cents,
+        usage_display_unit,
+    );
     if let Some(credits_spent_for_last_block) = conversation.credits_spent_for_last_block() {
         // Only show the credits spent for the last block if it is different from the total credits spent
         // and we spent a non-zero amount of credits for the last block.
@@ -3734,26 +3739,17 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
             && total_credits_spent != credits_spent_for_last_block
             && props.model.status(app).error().is_none()
         {
-            // If the first part of the decimal is 0, we just display the whole number.
-            let last_block_credits_text = if credits_spent_for_last_block.fract() < 0.1 {
-                format!("{}", credits_spent_for_last_block.trunc() as i32)
-            } else {
-                format!("{credits_spent_for_last_block:.1}")
-            };
             // The last-block figure has no rollup equivalent: it stays
             // bound to the orchestrator's own last block, same as
             // `credits_spent_for_last_block` above.
             let last_block_charged_usage = conversation.charged_usage_for_last_block();
-            let last_block_detail = format_usage_parenthetical(
+            let last_block_text = format_usage(
+                credits_spent_for_last_block,
                 last_block_charged_usage.map(|usage| usage.total_tokens()),
                 last_block_charged_usage.map(|usage| usage.total_cost_in_cents()),
+                usage_display_unit,
             );
-            credit_usage_text = match last_block_detail {
-                Some(detail) => {
-                    format!("{credit_usage_text} (+{last_block_credits_text}, {detail})")
-                }
-                None => format!("{credit_usage_text} (+{last_block_credits_text})"),
-            };
+            usage_text = format!("{usage_text} (+{last_block_text})");
         }
     }
 
@@ -3764,7 +3760,7 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         .with_child(
             Container::new(
                 Text::new_inline(
-                    credit_usage_text,
+                    usage_text,
                     appearance.ui_font_family(),
                     appearance.monospace_font_size(),
                 )

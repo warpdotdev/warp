@@ -7,13 +7,13 @@ use itertools::Itertools;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::util::EPSILON;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
-use string_offset::CharOffset;
+use string_offset::{CharOffset, StringRange};
 
 use super::{
     AfterLayoutContext, AppContext, Axis, ClickableCharRange, Element, EventContext, Fill,
     HoverableCharRange, LayoutContext, MouseStateHandle, PaintContext, PartialClickableElement,
-    Point, RectF, SELECTED_HIGHLIGHT_COLOR, SecretRange, SelectableElement, Selection,
-    SelectionFragment, SizeConstraint,
+    Point, RectF, SELECTED_HIGHLIGHT_COLOR, SelectableElement, Selection, SelectionFragment,
+    SizeConstraint,
 };
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::fonts::{Cache as FontCache, FamilyId, Properties};
@@ -1430,7 +1430,7 @@ impl PartialClickableElement for Text {
         self
     }
 
-    fn replace_text_range(&mut self, range: SecretRange, replacement: Cow<'static, str>) {
+    fn replace_text_range(&mut self, range: StringRange, replacement: Cow<'static, str>) {
         self.replace_byte_range(range.byte_range, &replacement);
     }
 }

@@ -68,8 +68,6 @@ enum SpawnMode {
         persist_running_state_to_sqlite: bool,
     },
     /// Reconnection after transport closed - preserves logs, no telemetry.
-    ///
-    /// Waiters are notified via `pending_reconnections` when the connection completes.
     Reconnect,
 }
 
@@ -85,10 +83,6 @@ impl SpawnMode {
                 persist_running_state_to_sqlite: true
             }
         )
-    }
-
-    fn is_reconnect(&self) -> bool {
-        matches!(self, SpawnMode::Reconnect)
     }
 }
 
@@ -400,6 +394,7 @@ impl TemplatableMCPServerManager {
             server_states: Default::default(),
             active_servers: Default::default(),
             spawned_servers: Default::default(),
+            reconnectable_ephemeral_installations: Default::default(),
             server_credentials: Default::default(),
             file_based_server_credentials: Default::default(),
             locally_installed_servers,
@@ -746,6 +741,8 @@ impl TemplatableMCPServerManager {
     ) {
         let installation_uuid = installation.uuid();
         log::debug!("Spawning ephemeral server with installation_uuid {installation_uuid}");
+        self.reconnectable_ephemeral_installations
+            .insert(installation_uuid, installation.clone());
 
         self.spawn_server_impl(
             installation,
@@ -895,12 +892,10 @@ impl TemplatableMCPServerManager {
                         extra: { "template_uuid" => %template_uuid }
                     );
                     self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
-                    if mode.is_reconnect() {
-                        self.notify_reconnect_waiters(
-                            installation_uuid,
-                            Err("Template contains no servers".to_string()),
-                        );
-                    }
+                    self.notify_reconnect_waiters(
+                        installation_uuid,
+                        Err("Template contains no servers".to_string()),
+                    );
                     return;
                 }
             },
@@ -911,9 +906,7 @@ impl TemplatableMCPServerManager {
                     extra: { "template_uuid" => %template_uuid }
                 );
                 self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
-                if mode.is_reconnect() {
-                    self.notify_reconnect_waiters(installation_uuid, Err(detail));
-                }
+                self.notify_reconnect_waiters(installation_uuid, Err(detail));
                 return;
             }
         };
@@ -945,12 +938,10 @@ impl TemplatableMCPServerManager {
                     });
                 }
 
-                if mode.is_reconnect() {
-                    self.notify_reconnect_waiters(
-                        installation_uuid,
-                        Err("PATH not available".to_string()),
-                    );
-                }
+                self.notify_reconnect_waiters(
+                    installation_uuid,
+                    Err("PATH not available".to_string()),
+                );
                 return;
             }
 
@@ -1000,12 +991,10 @@ impl TemplatableMCPServerManager {
                     full: ("Failed to register MCP log file for {template_uuid}: {e}")
                 );
                 self.change_server_state(installation_uuid, MCPServerState::FailedToStart, ctx);
-                if mode.is_reconnect() {
-                    self.notify_reconnect_waiters(
-                        installation_uuid,
-                        Err("Failed to register MCP log file".to_string()),
-                    );
-                }
+                self.notify_reconnect_waiters(
+                    installation_uuid,
+                    Err("Failed to register MCP log file".to_string()),
+                );
                 return;
             }
         };
@@ -1134,7 +1123,6 @@ impl TemplatableMCPServerManager {
         // Extract values from mode before moving it into the closure.
         let should_persist = mode.should_persist_running_state_to_sqlite();
         let should_send_telemetry = mode.should_send_telemetry();
-        let is_reconnect = mode.is_reconnect();
 
         self.change_server_state(installation_uuid, MCPServerState::Starting, ctx);
         let task = ctx.spawn(
@@ -1165,10 +1153,7 @@ impl TemplatableMCPServerManager {
                             Self::persist_is_mcp_running(installation_uuid, true, ctx);
                         }
                         me.change_server_state(installation_uuid, MCPServerState::Running, ctx);
-
-                        if is_reconnect {
-                            me.notify_reconnect_waiters(installation_uuid, Ok(peer));
-                        }
+                        me.notify_reconnect_waiters(installation_uuid, Ok(peer));
                         None
                     }
                     Err(e) => {
@@ -1192,9 +1177,7 @@ impl TemplatableMCPServerManager {
 
                         me.delete_credentials_from_secure_storage(installation_uuid, ctx);
 
-                        if is_reconnect {
-                            me.notify_reconnect_waiters(installation_uuid, Err(error_message));
-                        }
+                        me.notify_reconnect_waiters(installation_uuid, Err(error_message));
 
                         Some(e.into())
                     }
@@ -1244,6 +1227,9 @@ impl TemplatableMCPServerManager {
         if let Some(spawned_info) = self.spawned_servers.remove(&installation_uuid) {
             spawned_info.abort_handle.abort();
         }
+        self.reconnectable_ephemeral_installations
+            .remove(&installation_uuid);
+        self.notify_reconnect_waiters(installation_uuid, Err("Server shut down".to_string()));
         // Close the log stream now rather than when async teardown drops the
         // last logger clone, so an immediate respawn of the same server can
         // re-register its log path.
@@ -1863,40 +1849,25 @@ impl TemplatableMCPServerManager {
     ) {
         log::debug!("Reconnecting MCP server with installation uuid {installation_uuid}");
 
-        // If a reconnection is already in progress, add this caller to the waiting list.
-        if let Some(waiters) = self.pending_reconnections.get_mut(&installation_uuid) {
+        if let Some(peer) = self.get_peer_if_connected(installation_uuid) {
+            let _ = result_tx.send(Ok(peer));
+            return;
+        }
+        if !self.register_reconnect_waiter(installation_uuid, result_tx) {
             log::debug!(
-                "Reconnection already in progress for {installation_uuid}, adding to waiters"
+                "Connection already in progress for {installation_uuid}, adding to waiters"
             );
-            waiters.push(result_tx);
             return;
         }
 
-        // Start tracking this reconnection with this caller as the first waiter.
-        self.pending_reconnections
-            .insert(installation_uuid, vec![result_tx]);
-
-        // Remove the old server from active_servers if it exists.
         self.active_servers.remove(&installation_uuid);
-
-        // Cancel any in-flight spawn.
-        if let Some(spawned_info) = self.spawned_servers.remove(&installation_uuid) {
-            spawned_info.abort_handle.abort();
-        }
-        // Release the old instance's log path so the respawn below can
-        // re-register it.
         if let Some(logger) = self.server_loggers.remove(&installation_uuid) {
             logger.close();
         }
         self.pending_oauth_csrf
             .retain(|_, v| *v != installation_uuid);
 
-        // Look up the installation to get server details.
-        let Some(installation) = self
-            .locally_installed_servers
-            .get(&installation_uuid)
-            .cloned()
-        else {
+        let Some(installation) = self.reconnectable_installation(installation_uuid).cloned() else {
             self.notify_reconnect_waiters(
                 installation_uuid,
                 Err("Installation not found".to_string()),
@@ -1905,23 +1876,6 @@ impl TemplatableMCPServerManager {
         };
 
         self.spawn_server_impl(installation, SpawnMode::Reconnect, ctx);
-    }
-
-    /// Notifies all pending reconnection waiters for the given installation UUID.
-    ///
-    /// This removes the waiters from `pending_reconnections` and sends the result to each.
-    fn notify_reconnect_waiters(
-        &mut self,
-        installation_uuid: Uuid,
-        result: Result<rmcp::Peer<rmcp::RoleClient>, String>,
-    ) {
-        if let Some(waiters) = self.pending_reconnections.remove(&installation_uuid) {
-            for tx in waiters {
-                // Clone the result for each waiter. For Ok, we clone the peer.
-                // For Err, we clone the error message.
-                let _ = tx.send(result.clone());
-            }
-        }
     }
 
     /// Returns a reconnecting peer for a server that has the given tool.

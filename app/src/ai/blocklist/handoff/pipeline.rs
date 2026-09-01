@@ -58,6 +58,7 @@ use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
 use crate::settings::AISettings;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
@@ -540,9 +541,10 @@ pub fn prepare_handoff(
         .into_iter()
         .map(|environment| environment.id)
         .collect();
+    let scope = ResolvedTeamScope::from_scope(&controller.as_ref(ctx).team_context(ctx));
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
-        .get_active_base_model(ctx, Some(terminal_surface_id))
+        .get_active_base_model(&scope, ctx, Some(terminal_surface_id))
         .id;
     let model_id = preferences.cloud_runnable_oz_model_id_or_fallback(active_model_id);
     let model_is_cloud_runnable =

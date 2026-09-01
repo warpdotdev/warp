@@ -223,6 +223,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ExpandEditToPane,
         #[cfg(feature = "fallback_model_load_output_messaging")]
         FeatureFlag::FallbackModelLoadOutputMessaging,
+        #[cfg(feature = "warping_model_name")]
+        FeatureFlag::WarpingModelName,
         #[cfg(feature = "tab_close_button_on_left")]
         FeatureFlag::TabCloseButtonOnLeft,
         #[cfg(feature = "profiles_design_revamp")]
@@ -375,6 +377,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::ClassicCompletions,
         #[cfg(feature = "force_classic_completions")]
         FeatureFlag::ForceClassicCompletions,
+        #[cfg(feature = "native_shell_completions")]
+        FeatureFlag::NativeShellCompletions,
         #[cfg(feature = "agent_view_conversation_list_view")]
         FeatureFlag::AgentViewConversationListView,
         #[cfg(feature = "inline_history_menu")]

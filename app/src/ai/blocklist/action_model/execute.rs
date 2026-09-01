@@ -5,6 +5,7 @@ pub(super) mod edit_documents;
 pub(super) mod fetch_conversation;
 pub(super) mod file_glob;
 pub(super) mod grep;
+pub(super) mod lrc_activity;
 pub(super) mod read_documents;
 pub(super) mod read_files;
 pub(super) mod read_mcp_resource;
@@ -97,6 +98,7 @@ use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 #[cfg(feature = "local_fs")]
 use crate::ai::{agent::AnyFileContent, paths::host_native_absolute_path};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::model::session::{ExecuteCommandOptions, Session};
@@ -690,10 +692,15 @@ impl BlocklistAIActionExecutor {
             AIAgentActionType::UploadArtifact(..) => self
                 .upload_artifact_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx)),
-            AIAgentActionType::SearchCodebase(..) => self
-                .search_codebase_executor
-                .update(ctx, |executor, ctx| executor.execute(input, ctx))
-                .into(),
+            AIAgentActionType::SearchCodebase(..) => {
+                let team_context_resolver = self.team_context_resolver.clone();
+                self.search_codebase_executor
+                    .update(ctx, |executor, ctx| {
+                        let team_scope = RequestTeamScope::from_scope(&team_context_resolver(ctx));
+                        executor.execute(input, team_scope, ctx)
+                    })
+                    .into()
+            }
             AIAgentActionType::Grep { .. } => self
                 .grep_executor
                 .update(ctx, |executor, ctx| executor.execute(input, ctx))

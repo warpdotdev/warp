@@ -142,7 +142,7 @@ enum CommandBuilder<'a> {
 }
 
 impl CommandBuilder<'_> {
-    fn build(self, command_string: &str, shell_config_flag: &str) -> Command {
+    fn build(self, command_string: &str, shell_config_flag: Option<&str>) -> Command {
         match self {
             #[cfg(windows)]
             CommandBuilder::CmdExe => {
@@ -164,7 +164,9 @@ impl CommandBuilder<'_> {
                         shell_type.name()
                     });
                 let mut command = Command::new_with_process_group(program_to_execute);
-                command.arg(shell_config_flag);
+                if let Some(shell_config_flag) = shell_config_flag {
+                    command.arg(shell_config_flag);
+                }
                 command.arg("-c");
                 command.arg(command_string);
                 command
@@ -205,10 +207,10 @@ impl LocalCommandExecutor {
         execute_command_options: ExecuteCommandOptions,
     ) -> Result<CommandOutput> {
         let shell_config_flag = match self.shell_type {
-            ShellType::Zsh => "-f",
-            ShellType::Bash => "--norc",
-            ShellType::Fish => "--no-config",
-            ShellType::PowerShell => "-NoProfile",
+            ShellType::Zsh => Some("-f"),
+            ShellType::Bash => Some("--norc"),
+            ShellType::Fish => Some("--no-config"),
+            ShellType::PowerShell => Some("-NoProfile"),
         };
 
         self.execute_local_command_internal(
@@ -228,8 +230,12 @@ impl LocalCommandExecutor {
         environment_variables: Option<HashMap<String, String>>,
     ) -> Result<CommandOutput> {
         let shell_config_flag = match self.shell_type {
-            ShellType::Bash | ShellType::Zsh | ShellType::Fish => "-l",
-            ShellType::PowerShell => "-Login",
+            ShellType::Bash | ShellType::Zsh | ShellType::Fish => Some("-l"),
+            #[cfg(not(windows))]
+            ShellType::PowerShell => Some("-Login"),
+            // Windows PowerShell 5.1 does not support `-Login` and loads the user's profile by default.
+            #[cfg(windows)]
+            ShellType::PowerShell => None,
         };
 
         self.execute_local_command_internal(
@@ -282,7 +288,7 @@ impl LocalCommandExecutor {
         // The value of shell_config_flag is appended as an argument
         // indicating the supplied command should be run under some configuration,
         // i.e. in a login shell or without sourcing .rc files
-        shell_config_flag: &str,
+        shell_config_flag: Option<&str>,
         execute_command_options: ExecuteCommandOptions,
     ) -> Result<CommandOutput> {
         let command_builder = self.command_builder(execute_command_options);

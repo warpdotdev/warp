@@ -287,7 +287,9 @@ fn workspaces_for_permission_fixture(
                     None,
                     None,
                     None,
+                    None,
                 )]),
+                None,
             )]
         }
         ConversationPermissionFixture::CurrentUserOwner
@@ -417,6 +419,31 @@ fn routing_is_live_remote_vm_for_retained_failed_execution() {
                     is_executor: false,
                     ambient_agent_task_id: Some(task_id),
                 }
+            );
+        });
+    });
+}
+
+#[test]
+fn routing_starts_new_cloud_vm_for_editable_third_party_disconnected_pane() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::ClaudeCode,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+
+        app.update(|ctx| {
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::NewCloudVm { task_id });
+            assert_eq!(
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::NewCloudVm)
             );
         });
     });
@@ -1252,10 +1279,9 @@ fn routing_is_local_for_non_cloud_pane() {
     App::test((), |mut app| async move {
         let model = TerminalModel::mock(None, None);
         app.update(|ctx| {
-            assert_eq!(
-                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
-                AIQueryRouting::Local
-            );
+            let routing = resolve_ai_query_routing(EntityId::new(), None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::Local);
+            assert_eq!(routing.cloud_routing_indicator(), None);
         });
     });
 }
@@ -1272,12 +1298,17 @@ fn routing_is_live_remote_vm_for_active_viewer() {
         app.add_singleton_model(AgentConversationsModel::new);
         let model = ambient_pane_model(ambient_task_id(1), SharedSessionStatus::reader());
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(EntityId::new(), None, &model, ctx);
             assert_eq!(
-                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                routing,
                 AIQueryRouting::LiveRemoteVm {
                     is_executor: false,
                     ambient_agent_task_id: Some(ambient_task_id(1)),
                 }
+            );
+            assert_eq!(
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::LiveSession)
             );
         });
     });
@@ -1291,13 +1322,15 @@ fn routing_omits_task_id_for_non_ambient_shared_session_viewer() {
         let mut model = TerminalModel::mock(None, None);
         model.set_shared_session_status(SharedSessionStatus::executor());
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(EntityId::new(), None, &model, ctx);
             assert_eq!(
-                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                routing,
                 AIQueryRouting::LiveRemoteVm {
                     is_executor: true,
                     ambient_agent_task_id: None,
                 }
             );
+            assert_eq!(routing.cloud_routing_indicator(), None);
         });
     });
 }
@@ -1332,9 +1365,11 @@ fn routing_is_new_cloud_vm_for_owned_oz_disconnected_pane() {
         );
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::NewCloudVm { task_id });
             assert_eq!(
-                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::NewCloudVm { task_id }
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::NewCloudVm)
             );
         });
     });
@@ -1354,10 +1389,9 @@ fn routing_is_read_only_for_non_owner_disconnected_pane() {
         );
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
-            assert_eq!(
-                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::UnconnectedReadOnly
-            );
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::UnconnectedReadOnly);
+            assert_eq!(routing.cloud_routing_indicator(), None);
         });
     });
 }
@@ -1379,13 +1413,52 @@ fn routing_is_live_remote_vm_for_active_execution_without_attached_viewer() {
         });
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
             assert_eq!(
-                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                routing,
                 AIQueryRouting::LiveRemoteVm {
                     is_executor: false,
                     ambient_agent_task_id: Some(task_id),
                 }
             );
+            assert_eq!(
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::LiveSession)
+            );
         });
     });
+}
+
+#[test]
+fn cloud_routing_indicator_matches_footer_chip_policy() {
+    let task_id = ambient_task_id(1);
+    assert_eq!(
+        AIQueryRouting::LiveRemoteVm {
+            is_executor: true,
+            ambient_agent_task_id: Some(task_id),
+        }
+        .cloud_routing_indicator(),
+        Some(CloudRoutingIndicator::LiveSession)
+    );
+    assert_eq!(
+        AIQueryRouting::LiveRemoteVm {
+            is_executor: true,
+            ambient_agent_task_id: None,
+        }
+        .cloud_routing_indicator(),
+        None
+    );
+    assert_eq!(
+        AIQueryRouting::NewCloudVm { task_id }.cloud_routing_indicator(),
+        Some(CloudRoutingIndicator::NewCloudVm)
+    );
+    assert_eq!(
+        AIQueryRouting::RetainedSetupFailureDebug { task_id }.cloud_routing_indicator(),
+        Some(CloudRoutingIndicator::LiveSession)
+    );
+    assert_eq!(
+        AIQueryRouting::UnconnectedReadOnly.cloud_routing_indicator(),
+        None
+    );
+    assert_eq!(AIQueryRouting::Local.cloud_routing_indicator(), None);
 }

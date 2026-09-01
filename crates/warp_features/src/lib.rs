@@ -345,6 +345,11 @@ pub enum FeatureFlag {
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
 
+    /// Names the model doing the work in the warping indicator (e.g. "Warping with
+    /// Claude Sonnet 4.5.") once the server reports which model a response is
+    /// running on, rather than only naming it when the model is a fallback.
+    WarpingModelName,
+
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
 
@@ -971,6 +976,11 @@ pub enum FeatureFlag {
     /// always forwarded unchanged and the harness process/sandbox are never
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
+
+    /// Attaches process-tree liveness signals to long-running command
+    /// snapshots, giving the agent evidence that a silent command is still
+    /// doing work before it decides to cancel.
+    LrcActivitySignal,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1045,11 +1055,14 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::WarpingModelName,
+    FeatureFlag::LrcActivitySignal,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::NativeShellCompletions];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

@@ -22,6 +22,7 @@ use crate::ai::blocklist::context_model::{
 use crate::ai::blocklist::queued_query::{QueuedQueryId, QueuedQueryModel};
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::terminal::input::slash_commands::SlashCommandTrigger;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 pub enum SlashCommandRequest {
     CreateNewProject {
@@ -170,6 +171,7 @@ impl SlashCommandRequest {
         };
         let task_id = conversation.get_root_task_id().clone();
 
+        let scope = ResolvedTeamScope::from_scope(&controller.team_context(ctx));
         let request_input = RequestInput::for_task(
             inputs,
             task_id,
@@ -177,6 +179,7 @@ impl SlashCommandRequest {
             controller.get_current_response_initiator(),
             conversation_id,
             controller.terminal_surface_id,
+            &scope,
             ctx,
         );
         let model_id = request_input.model_id.clone();

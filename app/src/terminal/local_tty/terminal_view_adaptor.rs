@@ -73,6 +73,9 @@ use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as Termi
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};
 use crate::view_components::ToastFlavor;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::workspaces::user_workspaces::TeamScope;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 
@@ -370,6 +373,7 @@ fn wire_up_terminal_view_session_sharing(
     // Send model selection updates during session sharing
     let session_sharer_for_models = session_sharer.clone();
     let terminal_view_id = view.id();
+    let weak_view_for_models = view.downgrade();
     let model_remote_update_guard = sharer_remote_update_guard.clone();
     ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
         // Only react to agent mode LLM changes
@@ -382,9 +386,15 @@ fn wire_up_terminal_view_session_sharing(
         }
 
         if let Some(network) = session_sharer_for_models.borrow().as_ref() {
+            let Some(window_id) = weak_view_for_models.window_id(ctx) else {
+                return;
+            };
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+            );
             let llm_prefs = LLMPreferences::as_ref(ctx);
             let selected_model_id: String = llm_prefs
-                .get_active_base_model(ctx, Some(terminal_view_id))
+                .get_active_base_model(&scope, ctx, Some(terminal_view_id))
                 .id
                 .clone()
                 .into();
@@ -916,6 +926,10 @@ impl TerminalManager<TerminalView> {
                     cli_agent_session,
                 };
 
+                let team_uid = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+                )
+                .team_uid();
                 let network = ctx.add_model(|ctx| {
                     Network::new(
                         model.clone(),
@@ -925,6 +939,7 @@ impl TerminalManager<TerminalView> {
                         selection,
                         input_replica_id,
                         terminal_view.id(),
+                        team_uid,
                         universal_developer_input_context,
                         lifetime,
                         source.clone(),
@@ -1614,9 +1629,16 @@ impl TerminalManager<TerminalView> {
 
                 if let Some(ref model) = context_update.selected_model {
                     let terminal_view_id = terminal_view.id();
+                    let weak_view_handle = terminal_view.downgrade();
 
                     // Update LLMPreferences to match the selected model received from the server.
-                    apply_selected_agent_model_update(terminal_view_id, model, &active_remote_update, ctx);
+                    apply_selected_agent_model_update(
+                        &weak_view_handle,
+                        terminal_view_id,
+                        model,
+                        &active_remote_update,
+                        ctx,
+                    );
                 }
                 if let Some(ref input_mode) = context_update.input_mode {
                     let weak_view_handle = terminal_view.downgrade();

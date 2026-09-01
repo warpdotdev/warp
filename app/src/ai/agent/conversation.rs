@@ -124,6 +124,13 @@ pub enum RecordingSpanStatus {
     Captured,
 }
 
+/// The wire counters are `uint64` while the persisted and displayed usage rows
+/// are `u32`, so an oversized count saturates instead of wrapping to a small
+/// number that would read as a plausible total.
+fn narrow_token_count(tokens: u64) -> u32 {
+    u32::try_from(tokens).unwrap_or(u32::MAX)
+}
+
 fn footer_model_token_usage(
     usage_metadata: &stream_finished::ConversationUsageMetadata,
     llm_preferences: &LLMPreferences,
@@ -142,12 +149,15 @@ fn footer_model_token_usage(
                 model_id: model_id.clone(),
                 ..Default::default()
             });
-        entry.warp_tokens += usage.total_tokens;
+        entry.warp_tokens = entry
+            .warp_tokens
+            .saturating_add(narrow_token_count(usage.total_tokens));
         for (category, tokens) in &usage.token_usage_by_category {
-            *entry
+            let category_tokens = entry
                 .warp_token_usage_by_category
                 .entry(category.clone())
-                .or_default() += *tokens;
+                .or_default();
+            *category_tokens = category_tokens.saturating_add(narrow_token_count(*tokens));
         }
     }
     for (model_id, usage) in &usage_metadata.byok_token_usage {
@@ -157,12 +167,15 @@ fn footer_model_token_usage(
                 model_id: model_id.clone(),
                 ..Default::default()
             });
-        entry.byok_tokens += usage.total_tokens;
+        entry.byok_tokens = entry
+            .byok_tokens
+            .saturating_add(narrow_token_count(usage.total_tokens));
         for (category, tokens) in &usage.token_usage_by_category {
-            *entry
+            let category_tokens = entry
                 .byok_token_usage_by_category
                 .entry(category.clone())
-                .or_default() += *tokens;
+                .or_default();
+            *category_tokens = category_tokens.saturating_add(narrow_token_count(*tokens));
         }
     }
 
@@ -175,12 +188,15 @@ fn footer_model_token_usage(
                 model_id: label,
                 ..Default::default()
             });
-        entry.custom_endpoint_tokens += usage.total_tokens;
+        entry.custom_endpoint_tokens = entry
+            .custom_endpoint_tokens
+            .saturating_add(narrow_token_count(usage.total_tokens));
         for (category, tokens) in &usage.token_usage_by_category {
-            *entry
+            let category_tokens = entry
                 .custom_endpoint_token_usage_by_category
                 .entry(category.clone())
-                .or_default() += *tokens;
+                .or_default();
+            *category_tokens = category_tokens.saturating_add(narrow_token_count(*tokens));
         }
     }
 

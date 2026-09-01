@@ -65,7 +65,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlock
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
@@ -171,6 +171,7 @@ use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::{
     self, CommandSearchOptions, PaneViewLocator, TabBarLocation, WorkspaceAction,
 };
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 mod ambient_pane_restoration;
@@ -1752,8 +1753,16 @@ impl PaneGroup {
                     && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override)
                 {
                     log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
-                    crate::ai::llms::LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
-                        llm_prefs.update_preferred_agent_mode_llm(&llm_id, terminal_view_id, ctx);
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
+                        llm_prefs.update_preferred_agent_mode_llm(
+                            &scope,
+                            &llm_id,
+                            terminal_view_id,
+                            ctx,
+                        );
                     });
                 }
 
@@ -4787,6 +4796,12 @@ impl PaneGroup {
             return;
         }
 
+        // Remove any share modal associated with the closing session before
+        // taking an early return for the last pane or an already-hidden pane.
+        if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
+            self.terminal_with_open_share_block_modal = None;
+        }
+
         // Child agent panes return to off-tree state instead of being
         // destroyed; future pill clicks re-host the same view. The view
         // keeps ownership of its conversation, so we skip the
@@ -4862,11 +4877,6 @@ impl PaneGroup {
                 self.hide_closed_pane(pane_id, ctx);
             }
 
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
-
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
             }
@@ -4896,11 +4906,6 @@ impl PaneGroup {
             }
 
             self.clean_up_pane(pane_id, ctx);
-
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
 
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;

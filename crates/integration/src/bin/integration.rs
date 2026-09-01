@@ -215,6 +215,12 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_function_completions);
     register_test!(test_builtin_completions);
     register_test!(test_keyword_completions);
+    register_test!(test_native_shell_completions_menu);
+    register_test!(test_command_runs_cleanly_after_native_shell_completion);
+    register_test!(test_native_shell_completions_used_when_no_bundled_spec);
+    register_test!(test_native_shell_completions_skipped_when_a_bundled_spec_answers);
+    register_test!(test_native_shell_completions_reach_a_spec_command_native_only);
+    register_test!(test_native_shell_completions_powershell_member_access);
     register_test!(test_with_launch_config);
     register_test!(test_command_xray_hover);
     register_test!(test_command_xray_for_partial_command);
@@ -490,6 +496,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
 
     // AI document tests
     register_test!(test_copy_ai_document_as_markdown_from_overflow_menu);
+    register_test!(test_restored_ai_document_populates_code_block_after_first_layout);
 
     // Keyboard protocol tests
     register_test!(test_keyboard_protocol_disabled_shift_enter);

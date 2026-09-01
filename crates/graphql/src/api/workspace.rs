@@ -303,6 +303,7 @@ pub struct Team {
     pub color: Option<String>,
     pub invite_link: Option<String>,
     pub visibility: TeamVisibility,
+    pub feature_model_choice: FeatureModelChoice,
 }
 
 /// Governs which workspace members can discover and join a team. Orthogonal to

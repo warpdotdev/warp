@@ -1,13 +1,17 @@
 //! Unit tests for ambient agent CLI argument mapping and message helpers.
+use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use warp_cli::SortOrderArg;
 use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSourceArg, RunStateArg,
 };
+use warp_server_client::HttpStatusError;
 
 use super::*;
-use crate::server::server_api::ai::{ArtifactType, ExecutionLocation, RunSortBy, RunSortOrder};
+use crate::server::server_api::ai::{
+    ArtifactType, ExecutionLocation, MockAIClient, RunSortBy, RunSortOrder,
+};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
@@ -218,4 +222,305 @@ fn task_id_from_oz_run_id_env_rejects_invalid_value() {
     unsafe { std::env::remove_var(warp_cli::OZ_RUN_ID_ENV) };
 
     assert!(err.to_string().contains("Invalid OZ_RUN_ID"));
+}
+
+fn http_error(status: u16, body: &str) -> anyhow::Error {
+    anyhow::Error::new(HttpStatusError {
+        status,
+        body: body.to_string(),
+    })
+    .context(format!("API request failed with status {status}"))
+}
+
+fn operation_not_supported_error() -> anyhow::Error {
+    http_error(
+        422,
+        r#"{"type":"https://docs.warp.dev/errors/operation_not_supported","title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )
+}
+
+fn native_conversation() -> serde_json::Value {
+    serde_json::json!({
+        "conversation_id": "conv-native",
+        "steps": []
+    })
+}
+
+#[test]
+fn normalized_conversation_unsupported_matches_rfc7807_type() {
+    assert!(is_normalized_conversation_unsupported(
+        &operation_not_supported_error()
+    ));
+}
+
+#[test]
+fn normalized_conversation_unsupported_matches_type_regardless_of_title() {
+    assert!(is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"type":"https://docs.warp.dev/errors/operation_not_supported","title":"forking is not supported"}"#,
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_title_only_rfc7807() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_arbitrary_substrings() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        "https://docs.warp.dev/errors/operation_not_supported normalized conversations are only supported for Warp-native transcripts",
+    )));
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"error":"validation failed"}"#,
+    )));
+    assert!(!is_normalized_conversation_unsupported(&anyhow::anyhow!(
+        "operation_not_supported"
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_wrong_problem_type() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"type":"https://docs.warp.dev/errors/invalid_request","title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_non_422_status() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        404,
+        r#"{"type":"https://docs.warp.dev/errors/operation_not_supported","title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )));
+}
+
+#[test]
+fn write_conversation_cli_output_pretty_prints_normalized_json() {
+    let mut buf = Vec::new();
+    write_conversation_cli_output(
+        &ConversationCliOutput::Normalized(serde_json::json!({"conversation_id": "c-1"})),
+        &mut buf,
+    )
+    .unwrap();
+
+    assert_eq!(buf, b"{\n  \"conversation_id\": \"c-1\"\n}\n");
+}
+
+#[test]
+fn write_conversation_cli_output_writes_raw_transcript_bytes_exactly() {
+    let mut without_newline = Vec::new();
+    write_conversation_cli_output(
+        &ConversationCliOutput::RawTranscript(Bytes::from_static(b"no trailing newline")),
+        &mut without_newline,
+    )
+    .unwrap();
+    assert_eq!(without_newline, b"no trailing newline");
+
+    let mut non_utf8 = Vec::new();
+    write_conversation_cli_output(
+        &ConversationCliOutput::RawTranscript(Bytes::from_static(&[0xff, 0xfe, 0x00, b'x'])),
+        &mut non_utf8,
+    )
+    .unwrap();
+    assert_eq!(non_utf8, vec![0xff, 0xfe, 0x00, b'x']);
+}
+
+#[tokio::test]
+async fn load_run_conversation_returns_normalized_json_for_native_runs() {
+    let conversation = native_conversation();
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation().times(1).returning({
+        let conversation = conversation.clone();
+        move |run_id| {
+            assert_eq!(run_id, TASK_ID);
+            Ok(conversation.clone())
+        }
+    });
+    mock.expect_download_run_transcript().times(0);
+
+    let output = load_run_conversation(&mock, TASK_ID).await.unwrap();
+
+    assert_eq!(output, ConversationCliOutput::Normalized(conversation));
+}
+
+#[tokio::test]
+async fn load_run_conversation_falls_back_to_raw_transcript_for_third_party_harness() {
+    const RAW_TRANSCRIPT: &[u8] = b"{\"type\":\"claude_code\"}\n";
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_run_transcript()
+        .times(1)
+        .returning(|run_id| {
+            assert_eq!(run_id.to_string(), TASK_ID);
+            Ok(Bytes::from_static(RAW_TRANSCRIPT))
+        });
+
+    let output = load_run_conversation(&mock, TASK_ID).await.unwrap();
+
+    assert_eq!(
+        output,
+        ConversationCliOutput::RawTranscript(Bytes::from_static(RAW_TRANSCRIPT))
+    );
+}
+
+#[tokio::test]
+async fn load_run_conversation_preserves_unrelated_422() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| Err(http_error(422, r#"{"error":"validation failed"}"#)));
+    mock.expect_download_run_transcript().times(0);
+
+    let err = load_run_conversation(&mock, TASK_ID).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("API request failed with status 422")
+    );
+    assert!(
+        err.chain().any(|cause| cause
+            .downcast_ref::<HttpStatusError>()
+            .is_some_and(|status| {
+                status.status == 422 && status.body.contains("validation failed")
+            }))
+    );
+}
+
+#[tokio::test]
+async fn load_run_conversation_preserves_not_found() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| {
+            Err(http_error(
+                404,
+                r#"{"type":"https://docs.warp.dev/errors/resource_not_found","title":"conversation not found"}"#,
+            ))
+        });
+    mock.expect_download_run_transcript().times(0);
+
+    let err = load_run_conversation(&mock, TASK_ID).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("API request failed with status 404")
+    );
+}
+
+#[tokio::test]
+async fn load_run_conversation_reports_missing_raw_transcript() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_run_transcript()
+        .times(1)
+        .returning(|_| {
+            Err(http_error(
+                404,
+                r#"{"type":"https://docs.warp.dev/errors/resource_not_found","title":"no transcript path in manifest"}"#,
+            ))
+        });
+
+    let err = load_run_conversation(&mock, TASK_ID).await.unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Raw transcript not found for run 00000000-0000-0000-0000-000000000001. It may not have been uploaded yet."
+    );
+}
+
+#[tokio::test]
+async fn load_public_conversation_returns_normalized_json() {
+    let conversation = native_conversation();
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation().times(1).returning({
+        let conversation = conversation.clone();
+        move |conversation_id| {
+            assert_eq!(conversation_id, "conv-native");
+            Ok(conversation.clone())
+        }
+    });
+    mock.expect_download_conversation_transcript().times(0);
+
+    let output = load_public_conversation(&mock, "conv-native")
+        .await
+        .unwrap();
+
+    assert_eq!(output, ConversationCliOutput::Normalized(conversation));
+}
+
+#[tokio::test]
+async fn load_public_conversation_falls_back_to_raw_transcript_for_third_party_harness() {
+    const RAW_TRANSCRIPT: &[u8] = b"{\"type\":\"claude_code\"}\n";
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_conversation_transcript()
+        .times(1)
+        .returning(|conversation_id| {
+            assert_eq!(conversation_id, "conv-third-party");
+            Ok(Bytes::from_static(RAW_TRANSCRIPT))
+        });
+
+    let output = load_public_conversation(&mock, "conv-third-party")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        output,
+        ConversationCliOutput::RawTranscript(Bytes::from_static(RAW_TRANSCRIPT))
+    );
+}
+
+#[tokio::test]
+async fn load_public_conversation_preserves_unrelated_422() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation()
+        .times(1)
+        .returning(|_| Err(http_error(422, r#"{"error":"validation failed"}"#)));
+    mock.expect_download_conversation_transcript().times(0);
+
+    let err = load_public_conversation(&mock, "conv-third-party")
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("API request failed with status 422")
+    );
+}
+
+#[tokio::test]
+async fn load_public_conversation_reports_missing_raw_transcript() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_conversation_transcript()
+        .times(1)
+        .returning(|_| {
+            Err(http_error(
+                404,
+                r#"{"type":"https://docs.warp.dev/errors/resource_not_found","title":"no transcript path in manifest"}"#,
+            ))
+        });
+
+    let err = load_public_conversation(&mock, "conv-third-party")
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Raw transcript not found for conversation conv-third-party. It may not have been uploaded yet."
+    );
 }

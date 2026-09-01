@@ -194,6 +194,41 @@ Evaluate whether the agent ran the relevant tests before finishing. Return
 return `tests_skipped`.
 ```
 
+## Webhook source
+`webhooks/ci.yaml`, a token-authenticated source:
+
+```yaml
+authMode: token
+secretName: CI_WEBHOOK_TOKEN
+```
+
+`webhooks/github-events.yaml`, verifying GitHub's own signature scheme:
+
+```yaml
+authMode: signature
+signatureScheme: github
+secretName: GITHUB_WEBHOOK_SECRET
+deliveryIdHeader: X-GitHub-Delivery
+enabled: true
+```
+
+`secretName` is required in every `authMode` and names a managed secret that
+already exists; the file never carries the secret itself, and the server does
+not mint one for a file-declared source. The source's name is the file name.
+
+An automation subscribes to a source by the UID the server assigned it, not by
+the file name:
+
+```yaml
+triggers:
+  - provider: webhook
+    event: received
+    filter:
+      webhook_ids: [wh_01J9Z2K3M4N5P6Q7R8S9T0]
+      payload:
+        action: [opened, reopened]
+```
+
 ## Scoped skills
 A skill under `skills/` is available to every agent in the factory. A skill
 under `agents/<name>/skills/` is available only to that agent.
