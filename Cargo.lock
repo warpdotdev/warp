@@ -8199,6 +8199,7 @@ dependencies = [
  "cfg-if",
  "cloud_object_models",
  "futures",
+ "handlebars",
  "http 1.4.0",
  "log",
  "oauth2",

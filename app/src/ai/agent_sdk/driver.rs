@@ -172,6 +172,23 @@ where
     }
 }
 
+/// Warn that an MCP server's `{{secret_name}}` references resolved to nothing.
+/// Logs secret names only; resolved values must never reach a log line.
+fn log_unresolved_secret_refs(
+    installation: &TemplatableMCPServerInstallation,
+    unresolved_secret_names: &[String],
+) {
+    if unresolved_secret_names.is_empty() {
+        return;
+    }
+    log::warn!(
+        "MCP server '{}' references secret(s) that are not available to this run: {}. \
+         Check that each secret exists and is attached to this agent or run.",
+        installation.templatable_mcp_server().name,
+        unresolved_secret_names.join(", ")
+    );
+}
+
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Bound on the end-of-run wait for `LocalAgentTaskSyncModel` to finish
@@ -743,6 +760,14 @@ pub enum AgentDriverError {
     MCPJsonParseError(String),
     #[error("MCP server configuration is missing required variables")]
     MCPMissingVariables,
+    #[error(
+        "MCP server '{server_name}' references secret(s) that are not available to this run: {}",
+        .secret_names.join(", ")
+    )]
+    MCPUnresolvedSecrets {
+        server_name: String,
+        secret_names: Vec<String>,
+    },
     #[error("Agent profile \"{0}\" not found")]
     ProfileError(String),
     #[error(
@@ -1673,7 +1698,13 @@ impl AgentDriver {
         let mut result = HashMap::new();
 
         for installation in installations.iter_mut() {
-            installation.apply_secrets(secrets);
+            let unresolved_secret_names = installation.apply_secrets(secrets);
+            if !unresolved_secret_names.is_empty() {
+                return Err(AgentDriverError::MCPUnresolvedSecrets {
+                    server_name: installation.templatable_mcp_server().name.clone(),
+                    secret_names: unresolved_secret_names,
+                });
+            }
             let resolved = resolve_json(installation);
             let servers: HashMap<String, JSONMCPServer> = serde_json::from_str(&resolved)
                 .map_err(|e| AgentDriverError::MCPJsonParseError(e.to_string()))?;
@@ -1681,6 +1712,31 @@ impl AgentDriver {
         }
 
         Ok(result)
+    }
+
+    fn apply_secrets_to_ephemeral_mcp_installations(
+        installations: Vec<TemplatableMCPServerInstallation>,
+        secrets: &HashMap<String, ManagedSecretValue>,
+    ) -> (Vec<TemplatableMCPServerInstallation>, Vec<String>) {
+        let mut ready = Vec::with_capacity(installations.len());
+        let mut failures = Vec::new();
+
+        for mut installation in installations {
+            let unresolved_secret_names = installation.apply_secrets(secrets);
+            if unresolved_secret_names.is_empty() {
+                ready.push(installation);
+                continue;
+            }
+
+            log_unresolved_secret_refs(&installation, &unresolved_secret_names);
+            failures.push(format!(
+                "'{}' was not started: unresolved secret reference(s): {}",
+                installation.templatable_mcp_server().name,
+                unresolved_secret_names.join(", ")
+            ));
+        }
+
+        (ready, failures)
     }
 
     /// Resolve MCP specs into local UUIDs and ephemeral installations. UUIDs
@@ -2223,19 +2279,18 @@ impl AgentDriver {
     /// These servers are not persisted and exist only for the duration of the agent run.
     fn start_ephemeral_mcp_servers(
         &self,
-        mut installations: Vec<TemplatableMCPServerInstallation>,
+        installations: Vec<TemplatableMCPServerInstallation>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
         if installations.is_empty() {
             return Either::Right(future::ready(Ok(())));
         }
+        let (installations, mut unresolved_failures) =
+            Self::apply_secrets_to_ephemeral_mcp_installations(installations, &self.secrets);
 
-        // Inject secrets into the ephemeral MCP server installations.
-        for installation in installations.iter_mut() {
-            installation.apply_secrets(&self.secrets);
+        if !installations.is_empty() {
+            log::info!("Starting {} ephemeral MCP servers...", installations.len());
         }
-
-        log::info!("Starting {} ephemeral MCP servers...", installations.len());
 
         let named_servers: HashMap<Uuid, String> = installations
             .iter()
@@ -2256,7 +2311,20 @@ impl AgentDriver {
             }
         });
 
-        Either::Left(wait)
+        Either::Left(async move {
+            let mut failures = match wait.await {
+                Ok(()) => Vec::new(),
+                Err(AgentDriverError::MCPStartupFailed { details }) => details,
+                Err(other) => return Err(other),
+            };
+            failures.append(&mut unresolved_failures);
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                failures.sort();
+                Err(AgentDriverError::MCPStartupFailed { details: failures })
+            }
+        })
     }
 
     /// Subscribe to [`FileBasedMCPManagerEvent::CloudEnvMcpScanComplete`]

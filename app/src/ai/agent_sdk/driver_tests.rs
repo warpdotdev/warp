@@ -461,21 +461,44 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
 }
 
 #[test]
-fn managed_command_config_missing_secret_leaves_placeholder() {
+fn managed_command_config_missing_secret_is_rejected_before_serialization() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
         None,
         "github",
     )
-    .unwrap();
-    let rendered = render_installations(installations, HashMap::new());
+    .expect("managed MCP config should parse");
+    let error = AgentDriver::mcp_installations_to_json(installations, &HashMap::new())
+        .expect_err("an unresolved secret must not reach the harness config");
 
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { args, .. } => {
-            assert_eq!(args, &vec!["--token={{API_TOKEN}}".to_string()]);
+    match error {
+        AgentDriverError::MCPUnresolvedSecrets {
+            server_name,
+            secret_names,
+        } => {
+            assert_eq!(server_name, "GitHub MCP");
+            assert_eq!(secret_names, vec!["API_TOKEN".to_string()]);
         }
-        other => panic!("expected CLI server, got {other:?}"),
+        other => panic!("expected unresolved MCP secrets, got {other:?}"),
     }
+}
+
+#[test]
+fn ephemeral_mcp_missing_secret_is_filtered_before_spawn() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://example.com/mcp","headers":{"Authorization":"Bearer {{API_TOKEN}}"}}}}"#,
+        None,
+        "github",
+    )
+    .expect("managed MCP config should parse");
+    let (ready, failures) =
+        AgentDriver::apply_secrets_to_ephemeral_mcp_installations(installations, &HashMap::new());
+
+    assert!(ready.is_empty());
+    assert_eq!(
+        failures,
+        vec!["'GitHub MCP' was not started: unresolved secret reference(s): API_TOKEN".to_string()]
+    );
 }
 
 // ── Ephemeral MCP installation ids: stable across rebuilds ─────────────────
