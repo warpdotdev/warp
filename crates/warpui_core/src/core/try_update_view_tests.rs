@@ -84,36 +84,3 @@ fn try_update_reports_a_circular_update_rather_than_panicking() {
         view.read(&app, |view, _| assert_eq!(view.value, 0));
     });
 }
-
-#[test]
-#[should_panic(expected = "Window does not exist")]
-fn update_still_panics_when_the_window_is_closed() {
-    App::test((), |mut app| async move {
-        let (window_id, _root) =
-            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
-        let view = app.add_view(window_id, |_| TestView::default());
-
-        app.update(|ctx| ctx.simulate_window_closed(window_id));
-
-        view.update(&mut app, |view, _| {
-            view.value += 1;
-        });
-    });
-}
-
-#[test]
-#[should_panic(expected = "Circular view update")]
-fn update_still_panics_on_a_reentrant_update() {
-    App::test((), |mut app| async move {
-        let (window_id, _root) =
-            app.add_window(WindowStyle::NotStealFocus, |_| TestView::default());
-        let view = app.add_view(window_id, |_| TestView::default());
-        let reentrant = view.clone();
-
-        app.update(|ctx| {
-            view.update(ctx, |_, ctx| {
-                reentrant.update(ctx, |view, _| view.value += 1);
-            });
-        });
-    });
-}

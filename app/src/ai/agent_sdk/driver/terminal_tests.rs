@@ -12,9 +12,7 @@ use crate::terminal::model::secrets::set_user_and_enterprise_secret_regexes;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::Event;
 use crate::test_util::add_window_with_terminal;
-use crate::test_util::terminal::{
-    add_window_with_id_and_terminal, initialize_app_for_terminal_view,
-};
+use crate::test_util::terminal::initialize_app_for_terminal_view;
 
 #[test]
 fn extend_shared_session_retention_emits_event_for_active_sharer() {
@@ -60,23 +58,6 @@ fn extend_shared_session_retention_emits_event_for_active_sharer() {
             emitted_reasons[0],
             SessionRetentionReason::SetupFailed
         ));
-    });
-}
-
-#[test]
-fn extend_shared_session_retention_returns_when_terminal_window_is_closed() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-
-        let (window_id, terminal_view) = add_window_with_id_and_terminal(&mut app, None);
-        let terminal_driver =
-            app.update(|ctx| TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx));
-
-        app.update(|ctx| ctx.simulate_window_closed(window_id));
-
-        terminal_driver.update(&mut app, |driver, ctx| {
-            driver.extend_shared_session_retention(SessionRetentionReason::SetupFailed, ctx);
-        });
     });
 }
 

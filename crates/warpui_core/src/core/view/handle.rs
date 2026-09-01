@@ -75,16 +75,10 @@ impl<T: Entity> ViewHandle<T> {
         app.update_view(self, update)
     }
 
-    /// The non-panicking counterpart to [`Self::update`], reporting a
-    /// [`ViewUpdateError`] when the view cannot be checked out.
-    ///
-    /// A [`ViewHandle`] keeps the view's ref count alive but does not keep its
-    /// window open, so any update that can outlive its window — typically one
-    /// driven by a spawned task that resolves after the user closed the window
-    /// — would otherwise panic.
-    ///
-    /// Only the checkout is fallible; the `update` closure is free to panic on
-    /// its own terms.
+    /// A [`ViewHandle`] keeps the view's ref count alive but does not keep its window open, so any
+    /// update that can outlive its window — typically one driven by a spawned task that resolves
+    /// after the user closed the window — would otherwise panic. Only the checkout is fallible; the
+    /// `update` closure is free to panic on its own terms.
     pub fn try_update<A, F, S>(&self, app: &mut A, update: F) -> Result<S, ViewUpdateError>
     where
         A: UpdateView,
@@ -377,8 +371,6 @@ pub trait UpdateView: ReadView {
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S;
 
-    /// Fallible counterpart to [`Self::update_view`] that reports why the view could not be
-    /// checked out instead of panicking.
     fn try_update_view<T, F, S>(
         &mut self,
         handle: &ViewHandle<T>,
