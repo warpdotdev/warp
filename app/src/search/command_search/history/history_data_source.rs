@@ -18,7 +18,7 @@ use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
 
 pub(crate) struct HistorySnapshot {
-    candidates: Arc<[Arc<HistoryEntry>]>,
+    commands: Arc<[Arc<HistoryEntry>]>,
     query_text: String,
     current_session_id: SessionId,
 }
@@ -28,19 +28,23 @@ pub(crate) struct HistorySnapshot {
 pub fn history_data_source(
     commands: Vec<HistoryEntry>,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
-    let candidates: Arc<[Arc<HistoryEntry>]> = commands.into_iter().map(Arc::new).collect();
-    history_data_source_from_shared(candidates, SessionId::from(0))
+    let commands: Arc<[Arc<HistoryEntry>]> = commands.into_iter().map(Arc::new).collect();
+    history_data_source_from_shared(commands, SessionId::from(0))
 }
 
 fn history_data_source_from_shared(
-    candidates: Arc<[Arc<HistoryEntry>]>,
+    commands: Arc<[Arc<HistoryEntry>]>,
     current_session_id: SessionId,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(
         move |query: &Query, _app: &AppContext| HistorySnapshot {
-            // Historical commands are all stored as Arcs (with COW semantics and very infrequent writes),
-            // so cloning the commands to pass them in to the async sort function is a negligible cost.
-            candidates: candidates.clone(),
+            // Historical commands are all stored as Arcs, so cloning the commands to pass them in
+            // to the async sort function is a cheap refcount bump, not a deep copy. Because the
+            // entries themselves are copy-on-write (`Arc::make_mut` in `mark_command_as_finished`),
+            // a snapshot taken before an in-flight command completes keeps pointing at the
+            // pre-completion entry rather than seeing the update -- that staleness is expected and
+            // resolved by the next query.
+            commands: commands.clone(),
             query_text: query.text.clone(),
             current_session_id,
         },
@@ -54,13 +58,13 @@ pub(crate) fn history_data_source_for_session(
     app: &AppContext,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     let include_agent_commands = *AISettings::as_ref(app).include_agent_commands_in_history;
-    let candidates: Arc<[Arc<HistoryEntry>]> = history_model
+    let commands: Arc<[Arc<HistoryEntry>]> = history_model
         .commands_shared(session_id)
         .unwrap_or_default()
         .into_iter()
         .filter(|entry| include_agent_commands || !entry.is_agent_executed)
         .collect();
-    history_data_source_from_shared(candidates, session_id)
+    history_data_source_from_shared(commands, session_id)
 }
 
 pub(crate) fn fuzzy_match_history(
@@ -76,23 +80,23 @@ pub(crate) fn fuzzy_match_history(
         let now = Local::now();
         let is_blank_query = snapshot.query_text.trim().is_empty();
         let tokens = rank::tokenize_query(&snapshot.query_text);
-        let total_candidates = snapshot.candidates.len();
+        let total_candidates = snapshot.commands.len();
 
         // History entries are cheap to match (single short string), so we use a large chunk
         // size to reduce yield overhead while still allowing cancellation of stale queries.
         const CHUNK_SIZE: usize = 512;
-        for (chunk_index, chunk) in snapshot.candidates.chunks(CHUNK_SIZE).enumerate() {
+        for (chunk_index, chunk) in snapshot.commands.chunks(CHUNK_SIZE).enumerate() {
             let chunk_start = chunk_index * CHUNK_SIZE;
-            for (offset, candidate) in chunk.iter().enumerate() {
+            for (offset, entry) in chunk.iter().enumerate() {
                 let Some((match_result, match_quality)) =
-                    rank::match_history_command(candidate.command.as_str(), &tokens)
+                    rank::match_history_command(entry.command.as_str(), &tokens)
                 else {
                     continue;
                 };
 
                 let index = chunk_start + offset;
                 let Some(score) = rank::rank(RankInputs {
-                    entry: candidate.as_ref(),
+                    entry: entry.as_ref(),
                     match_quality,
                     now,
                     current_session_id: snapshot.current_session_id,
@@ -104,7 +108,7 @@ pub(crate) fn fuzzy_match_history(
 
                 results.push(
                     HistorySearchItem {
-                        entry: candidate.clone(),
+                        entry: entry.clone(),
                         match_result,
                         score,
                     }
@@ -133,10 +137,10 @@ fn fuzzy_match_history_legacy(
         // History entries are cheap to match (single short string), so we use a large chunk
         // size to reduce yield overhead while still allowing cancellation of stale queries.
         const CHUNK_SIZE: usize = 512;
-        for chunk in snapshot.candidates.chunks(CHUNK_SIZE) {
-            for candidate in chunk {
+        for chunk in snapshot.commands.chunks(CHUNK_SIZE) {
+            for entry in chunk {
                 let Some(match_result) = fuzzy_match::match_indices_case_insensitive(
-                    candidate.command.as_str(),
+                    entry.command.as_str(),
                     snapshot.query_text.as_str(),
                 ) else {
                     continue;
@@ -145,7 +149,7 @@ fn fuzzy_match_history_legacy(
 
                 results.push(
                     HistorySearchItem {
-                        entry: candidate.clone(),
+                        entry: entry.clone(),
                         match_result,
                         score,
                     }
