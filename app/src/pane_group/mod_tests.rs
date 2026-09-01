@@ -96,6 +96,7 @@ use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
     SharedSessionSource, SharedSessionStatus,
 };
+use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseStack;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -571,6 +572,56 @@ fn enter_agent_view_for_conversation(
                 ctx,
             );
         });
+}
+
+/// A conversation shaped like one the user could rename by hand: synced to the server and
+/// carrying a server-backed root task with an exchange, which the history model requires
+/// before it accepts a rename.
+fn renamable_conversation(title: &str) -> AIConversation {
+    let root_task_id = "root-task";
+    let mut root_task = create_api_task(
+        root_task_id,
+        vec![create_message("root-task-message", root_task_id)],
+    );
+    root_task.description = title.to_string();
+
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![root_task],
+        Some(AgentConversationData {
+            server_conversation_token: Some("test-server-token".to_string()),
+            conversation_usage_metadata: None,
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: None,
+            artifacts_json: None,
+            parent_agent_id: None,
+            agent_name: None,
+            orchestration_harness_type: None,
+            parent_conversation_id: None,
+            is_remote_child: false,
+            root_task_is_optimistic: None,
+            run_id: None,
+            autoexecute_override: None,
+            last_event_sequence: None,
+            pinned: false,
+        }),
+    )
+    .expect("restored conversation should build")
+}
+
+fn conversation_title(conversation_id: AIConversationId, ctx: &AppContext) -> Option<String> {
+    BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&conversation_id)
+        .and_then(AIConversation::title)
+}
+
+fn custom_pane_name(panes: &PaneGroup, pane_id: PaneId, ctx: &AppContext) -> Option<String> {
+    let pane_configuration = panes
+        .pane_by_id(pane_id)
+        .expect("pane should exist")
+        .pane_configuration();
+    let custom_title = pane_configuration.as_ref(ctx).custom_vertical_tabs_title();
+    custom_title.map(str::to_owned)
 }
 
 fn create_already_fullscreen_parent_pane_data(
@@ -1912,6 +1963,108 @@ fn test_create_missing_child_agent_panes_restores_remote_child_from_history_mode
             );
             assert_eq!(active_conversation_id, Some(child_conversation_id));
             assert_eq!(panes.focused_pane_id(ctx), parent_pane_id);
+        });
+    });
+}
+
+#[test]
+fn renaming_a_pane_renames_the_agent_conversation_it_hosts() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let terminal_view_id = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("pane should have a terminal view")
+                .id();
+            let conversation_id = restore_conversation_for_terminal_view(
+                terminal_view_id,
+                renamable_conversation("Original conversation title"),
+                ctx,
+            );
+            enter_agent_view_for_conversation(panes, pane_id, conversation_id, ctx);
+
+            panes.set_custom_pane_name(pane_id, "Payments migration".to_string(), ctx);
+
+            assert_eq!(
+                custom_pane_name(panes, pane_id, ctx).as_deref(),
+                Some("Payments migration"),
+            );
+            assert_eq!(
+                conversation_title(conversation_id, ctx).as_deref(),
+                Some("Payments migration"),
+                "conversation history should find the conversation under the pane's new name",
+            );
+        });
+    });
+}
+
+#[test]
+fn renaming_a_pane_twice_in_quick_succession_lands_on_the_final_name() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let terminal_view_id = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("pane should have a terminal view")
+                .id();
+            let conversation_id = restore_conversation_for_terminal_view(
+                terminal_view_id,
+                renamable_conversation("Original conversation title"),
+                ctx,
+            );
+            enter_agent_view_for_conversation(panes, pane_id, conversation_id, ctx);
+
+            // The second rename lands while the first one's request is still in flight.
+            panes.set_custom_pane_name(pane_id, "First name".to_string(), ctx);
+            panes.set_custom_pane_name(pane_id, "Second name".to_string(), ctx);
+
+            assert_eq!(
+                custom_pane_name(panes, pane_id, ctx).as_deref(),
+                Some("Second name"),
+            );
+            assert_eq!(
+                conversation_title(conversation_id, ctx).as_deref(),
+                Some("Second name"),
+                "the last pane name should win, not the one that started renaming first",
+            );
+        });
+    });
+}
+
+#[test]
+fn renaming_a_pane_without_an_open_agent_view_leaves_conversation_titles_alone() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            let terminal_view_id = panes
+                .terminal_view_from_pane_id(pane_id, ctx)
+                .expect("pane should have a terminal view")
+                .id();
+            let conversation_id = restore_conversation_for_terminal_view(
+                terminal_view_id,
+                renamable_conversation("Original conversation title"),
+                ctx,
+            );
+
+            panes.set_custom_pane_name(pane_id, "Payments migration".to_string(), ctx);
+
+            assert_eq!(
+                custom_pane_name(panes, pane_id, ctx).as_deref(),
+                Some("Payments migration"),
+            );
+            assert_eq!(
+                conversation_title(conversation_id, ctx).as_deref(),
+                Some("Original conversation title"),
+            );
         });
     });
 }
