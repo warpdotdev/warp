@@ -1886,9 +1886,6 @@ fn queued_command_completion_preserves_draft() {
     });
 }
 
-/// Builds a `BlockType::User` completion for `command`, for use with
-/// `Input::handle_block_completed_event` in tests that don't care about the block's other
-/// (lazily-computed) fields.
 fn user_block_completed_for_test(command: &str) -> BlockType {
     BlockType::User(UserBlockCompleted::new_for_test(
         BlockIndex::zero(),
@@ -1907,10 +1904,6 @@ fn user_block_completed_for_test(command: &str) -> BlockType {
     ))
 }
 
-/// Drives a completed ctrl-t handoff (see `Input::handle_block_completed_event`) directly,
-/// without going through the full trigger/selection flow: constructs the pending handoff with
-/// the given `apply_mode`/`original_buffer`/`cursor_offset`/`insertion`, then completes its
-/// block. Returns the resulting buffer text and the byte offset the cursor/selection ends up at.
 async fn complete_ctrl_t_handoff(
     app: &mut App,
     apply_mode: ShellWidgetApplyMode,
@@ -2009,8 +2002,6 @@ fn ctrl_r_handoff_cancel_restores_draft() {
 fn ctrl_t_handoff_splices_selection_in_middle_of_line() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        // Cursor sits right after "echo START ", before "END": the insertion must land there
-        // with both the preceding and following text preserved.
         let (buffer, cursor) = complete_ctrl_t_handoff(
             &mut app,
             ShellWidgetApplyMode::Splice,
@@ -2058,9 +2049,6 @@ fn ctrl_t_handoff_splices_selection_into_empty_buffer() {
     });
 }
 
-/// A cursor byte offset mistakenly treated as a char offset would panic or corrupt the buffer
-/// the moment a multi-byte character (here, "caf\u{e9}", where \u{e9} is 2 bytes in UTF-8)
-/// precedes the cursor.
 #[test]
 fn ctrl_t_handoff_splices_selection_after_multi_byte_character() {
     App::test((), |mut app| async move {
@@ -2080,18 +2068,11 @@ fn ctrl_t_handoff_splices_selection_after_multi_byte_character() {
     });
 }
 
-/// Cancelling (`insertion: None`) on a mid-line draft must restore the cursor to the byte
-/// offset it was captured at, not merely leave the surrounding text untouched. `set_buffer_text`
-/// alone would leave the cursor at the end of the restored text; only the explicit
-/// `select_ranges_by_byte_offset` call in the `None` arm of `Input::handle_block_completed_event`
-/// repositions it back to where ctrl-t was originally pressed. Covers both apply modes: cancel
-/// behaves identically regardless of which shell started the handoff.
 #[test]
 fn ctrl_t_handoff_cancel_restores_cursor_to_original_offset_mid_line() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         for apply_mode in [ShellWidgetApplyMode::Splice, ShellWidgetApplyMode::Replace] {
-            // Cursor originally sat right after "echo START ", before "END".
             let (buffer, cursor) =
                 complete_ctrl_t_handoff(&mut app, apply_mode, "echo START END", 11, None).await;
             assert_eq!(
@@ -2108,13 +2089,6 @@ fn ctrl_t_handoff_cancel_restores_cursor_to_original_offset_mid_line() {
     });
 }
 
-/// Exercises the real trigger path (`Input::trigger_external_ctrl_t_file_search`), not just the
-/// completion-side apply function: the cursor offset the cancel restore uses must be the one
-/// actually captured live when ctrl-t was pressed, not a hand-picked value fed straight into
-/// `handle_block_completed_event`. A regression that stales or drops the captured offset between
-/// trigger and completion would still pass
-/// `ctrl_t_handoff_cancel_restores_cursor_to_original_offset_mid_line` (which never calls the
-/// trigger) but fail this one.
 #[test]
 fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
     App::test((), |mut app| async move {
@@ -2122,8 +2096,6 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
         let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
         let input = terminal.read(&app, |view, _| view.input().clone());
 
-        // Cursor sits right after "echo START ", before "MIDDLE" -- mirrors a user typing the
-        // command, arrowing left, then pressing ctrl-t.
         input.update(&mut app, |input, ctx| {
             input.user_insert("echo START MIDDLE", ctx);
             input.editor().update(ctx, |editor, ctx| {
@@ -2135,7 +2107,12 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
         });
 
         let started = input.update(&mut app, |input, ctx| {
-            input.trigger_external_ctrl_t_file_search(ShellWidgetApplyMode::Splice, ctx)
+            input.trigger_external_shell_widget_handoff(
+                EXTERNAL_CTRL_T_HELPER_COMMAND,
+                ShellWidgetApplyMode::Splice,
+                true,
+                ctx,
+            )
         });
         assert!(started, "the handoff command should have started");
 
@@ -2143,18 +2120,10 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
             terminal.model.lock().block_list().active_block_id().clone()
         });
 
-        // The test harness never actually advances the block list in response to
-        // `Event::ExecuteCommand` (no pty is running), so `block_id` above is still the same
-        // block `deferred_remote_operations.latest_block_id` was last set to -- unlike the real
-        // flow, where the helper command's block is a genuinely new one. Force it stale here so
-        // `handle_block_completed_event`'s restore branch actually runs, exactly as
-        // `complete_ctrl_t_handoff` does for the same reason.
         input.update(&mut app, |input, _ctx| {
             input.deferred_remote_operations.latest_block_id = BlockId::new();
         });
 
-        // Simulate the shell reporting no selection (the user cancelled) -- without ever telling
-        // `Input` what cursor_offset to use; it must come from what the trigger captured.
         input.update(&mut app, |input, ctx| {
             input.handle_block_completed_event(
                 BlockCompletedEvent {
@@ -2184,12 +2153,6 @@ fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
     });
 }
 
-/// fish's `fzf-file-widget` already performs its own token-aware replacement, so its selection
-/// (see `ShellWidgetApplyMode::Replace`) must land as the finished buffer wholesale -- not spliced into
-/// `original_buffer` the way bash/zsh's plain-path selection is. Using a `cursor_offset` that
-/// would splice into the *middle* of `original_buffer` if `Replace` were mishandled as `Splice`
-/// makes that distinction observable: a regression here would interleave `original_buffer` and
-/// `insertion` instead of replacing outright.
 #[test]
 fn ctrl_t_handoff_replace_mode_lands_selection_wholesale() {
     App::test((), |mut app| async move {
@@ -2207,17 +2170,11 @@ fn ctrl_t_handoff_replace_mode_lands_selection_wholesale() {
     });
 }
 
-/// States the `Splice`/`Replace` fork as an explicit contract: the same pre-handoff draft and
-/// cursor, completed with each shell's own realistic selection shape, must diverge exactly as
-/// each mode specifies. A regression that collapses the two modes together (e.g. always splicing,
-/// or always replacing) would fail one arm of this test while possibly leaving the other passing.
 #[test]
 fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
-        // bash/zsh: the helper reports a plain path with no knowledge of the draft, so Warp
-        // splices it into the token at the captured cursor offset.
         let (splice_buffer, splice_cursor) = complete_ctrl_t_handoff(
             &mut app,
             ShellWidgetApplyMode::Splice,
@@ -2229,8 +2186,6 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
         assert_eq!(splice_buffer, "vim src/nested.rs  END");
         assert_eq!(splice_cursor, ByteOffset::from("vim src/nested.rs ".len()));
 
-        // fish: fzf-file-widget already replaced the token itself, so its report is the whole
-        // finished line, landed wholesale.
         let (replace_buffer, replace_cursor) = complete_ctrl_t_handoff(
             &mut app,
             ShellWidgetApplyMode::Replace,
@@ -2247,11 +2202,6 @@ fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
     });
 }
 
-/// While `ShellWidgetHandoff` is disabled (its default state, matching a user who hasn't opted
-/// into this prototype), the `workspace:trigger_external_ctrl_t_file_search` binding must be
-/// completely ineligible -- not merely a no-op when triggered -- so ctrl-t falls through to
-/// whatever the input editor does with an unhandled key, exactly as it did before this feature
-/// existed. See `EditableBinding::with_enabled` on `init()`'s registration of this binding.
 #[test]
 fn ctrl_t_binding_is_ineligible_when_shell_widget_handoff_flag_is_disabled() {
     App::test((), |mut app| async move {

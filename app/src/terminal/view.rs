@@ -417,8 +417,9 @@ use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
-    CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
-    MenuPositioningProvider, ShellWidgetApplyMode,
+    CommandExecutionSource, EXTERNAL_CTRL_R_HELPER_COMMAND, EXTERNAL_CTRL_T_HELPER_COMMAND,
+    InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning, MenuPositioningProvider,
+    ShellWidgetApplyMode,
 };
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
@@ -9216,7 +9217,7 @@ impl TerminalView {
     /// machinery hides the input editor and forwards keystrokes to the widget's PTY-driven UI.
     /// The command the user selects (or the buffer they had before ctrl-r, if they cancel) is
     /// restored into the input editor once the helper's block completes; see
-    /// [`Input::trigger_external_ctrl_r_history_search`] and
+    /// [`Input::trigger_external_shell_widget_handoff`] and
     /// [`Input::set_external_shell_widget_selection`].
     ///
     /// Returns `true` if the handoff was triggered, in which case the caller should not open
@@ -9246,7 +9247,12 @@ impl TerminalView {
         }
 
         self.input.update(ctx, |input, ctx| {
-            input.trigger_external_ctrl_r_history_search(ctx)
+            input.trigger_external_shell_widget_handoff(
+                EXTERNAL_CTRL_R_HELPER_COMMAND,
+                ShellWidgetApplyMode::Replace,
+                false,
+                ctx,
+            )
         })
     }
 
@@ -9255,7 +9261,7 @@ impl TerminalView {
     /// plugin tag, e.g. by fzf), hands the keypress off to that widget. Mirrors
     /// [`Self::maybe_trigger_external_ctrl_r_history_search`], but lands the selection either by
     /// inserting it into the input editor at the cursor position or by replacing the whole
-    /// buffer, depending on the session's shell; see [`Input::trigger_external_ctrl_t_file_search`]
+    /// buffer, depending on the session's shell; see [`Input::trigger_external_shell_widget_handoff`]
     /// and [`ShellWidgetApplyMode`].
     ///
     /// Returns `true` if the handoff was triggered, in which case the caller should not pass
@@ -9293,7 +9299,12 @@ impl TerminalView {
         };
 
         self.input.update(ctx, |input, ctx| {
-            input.trigger_external_ctrl_t_file_search(apply_mode, ctx)
+            input.trigger_external_shell_widget_handoff(
+                EXTERNAL_CTRL_T_HELPER_COMMAND,
+                apply_mode,
+                true,
+                ctx,
+            )
         })
     }
 

@@ -1921,12 +1921,12 @@ impl PendingShellWidgetHandoff {
 /// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
 /// own external history widget. Must match the function name defined in
 /// `app/assets/bundled/bootstrap/zsh_body.sh`.
-const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
+pub(crate) const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
 
 /// Name of the bootstrap-installed shell function invoked to hand ctrl-t off to the shell's own
 /// external file-search widget. Must match the function name defined in
 /// `app/assets/bundled/bootstrap/zsh_body.sh`.
-const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
+pub(crate) const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
 
 struct AmbientAgentViewState {
     view_model: ModelHandle<AmbientAgentViewModel>,
@@ -7685,10 +7685,24 @@ impl Input {
         self.try_execute_command_with_options(command, false, ctx)
     }
 
-    /// Runs [`EXTERNAL_CTRL_R_HELPER_COMMAND`] (a bootstrap-installed shell function) as if the
-    /// user had typed and submitted it, snapshotting the current buffer contents so they're restored
-    /// once the command's block completes -- unless [`Self::set_external_shell_widget_selection`]
-    /// supplies a selected command in the meantime. Returns `true` if the command was started.
+    /// Applies `selection` only if `session_id` matches the in-flight handoff.
+    pub fn set_external_shell_widget_selection(&mut self, session_id: SessionId, selection: &str) {
+        let Some(handoff) = self.pending_shell_widget_handoff.as_mut() else {
+            return;
+        };
+        handoff.maybe_apply_selection(session_id, selection);
+    }
+
+    /// Runs `helper_command` (a bootstrap-installed shell function) as if the user had typed and
+    /// submitted it, snapshotting the current buffer so it can be restored once the command's block
+    /// completes -- unless [`Self::set_external_shell_widget_selection`] supplies a selection in
+    /// the meantime. Returns `true` if the command was started.
+    ///
+    /// When `capture_cursor` is set, the caret is restored on cancel. Combined with Replace, the
+    /// command also gets `{char_cursor}:{hex_draft}` so a fish file widget can seed itself. Hex
+    /// keeps the draft a single token, and combining it with the cursor keeps an empty draft from
+    /// vanishing under shell word-splitting. `char_cursor` converts the captured byte offset to
+    /// characters because fish's `commandline -C` takes characters.
     ///
     /// The command is prefixed with a leading space, honoring the "ignorespace" convention that
     /// bash/zsh support and atuin explicitly implements itself (independent of the shell's own
@@ -7698,76 +7712,27 @@ impl Input {
     /// atuin records through its own preexec hook straight into its own database, which none of
     /// that touches, so without this it would otherwise show up in the very history list this
     /// feature exists to search.
-    pub fn trigger_external_ctrl_r_history_search(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        let Some(session_id) = self.active_block_session_id() else {
-            return false;
-        };
-        let current_input = self.buffer_text(ctx);
-        let block_id = self.model.lock().block_list().active_block_id().clone();
-        let command = format!(" {EXTERNAL_CTRL_R_HELPER_COMMAND}");
-        // Not a command the user ran: Warp's history is independent of the shell histfile.
-        let started = self.try_execute_command_from_source(
-            &command,
-            CommandExecutionSource::User,
-            false,
-            ctx,
-        );
-        if started {
-            self.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
-                session_id,
-                original_buffer: current_input,
-                selection: None,
-                block_id,
-                apply_mode: ShellWidgetApplyMode::Replace,
-                cursor_offset: None,
-            });
-        }
-        started
-    }
-
-    /// Applies `selection` only if `session_id` matches the in-flight handoff.
-    pub fn set_external_shell_widget_selection(&mut self, session_id: SessionId, selection: &str) {
-        let Some(handoff) = self.pending_shell_widget_handoff.as_mut() else {
-            return;
-        };
-        handoff.maybe_apply_selection(session_id, selection);
-    }
-
-    /// Runs [`EXTERNAL_CTRL_T_HELPER_COMMAND`] (a bootstrap-installed shell function) as if the
-    /// user had typed and submitted it, mirroring [`Self::trigger_external_ctrl_r_history_search`].
-    /// Unlike ctrl-r, which replaces the whole buffer with the selection, ctrl-t either splices the
-    /// selection into the buffer at the cursor position ctrl-t was pressed at, or replaces the
-    /// buffer wholesale, depending on `apply_mode` (see [`ShellWidgetApplyMode`]) -- so this
-    /// snapshots the current buffer text and cursor byte offset separately, rather than a single
-    /// restorable string. Returns `true` if the command was started.
-    ///
-    /// See [`Self::trigger_external_ctrl_r_history_search`] for why the command is prefixed with
-    /// a leading space.
-    ///
-    /// When `apply_mode` is [`ShellWidgetApplyMode::Replace`], the command is also given the draft
-    /// line and cursor as `{char_cursor}:{hex_draft}` so the fish helper can seed its widget. Hex
-    /// keeps the draft a single token, and combining it with the cursor avoids an empty hex field
-    /// (an empty draft) vanishing under the shell's own word-splitting, since the invocation is
-    /// typed into the terminal as literal text. `char_cursor` is `cursor_offset` converted to a
-    /// character offset, since fish's `commandline -C` takes characters while `cursor_offset` is a
-    /// byte offset. Bash/zsh never need this, since their helper searches independently of the
-    /// draft and reports a plain path for Warp to splice in itself.
-    pub fn trigger_external_ctrl_t_file_search(
+    pub fn trigger_external_shell_widget_handoff(
         &mut self,
+        helper_command: &str,
         apply_mode: ShellWidgetApplyMode,
+        capture_cursor: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         let Some(session_id) = self.active_block_session_id() else {
             return false;
         };
         let original_buffer = self.buffer_text(ctx);
-        let cursor_offset = self
-            .editor
-            .as_ref(ctx)
-            .end_byte_index_of_last_selection(ctx);
+        let cursor_offset = capture_cursor.then(|| {
+            self.editor
+                .as_ref(ctx)
+                .end_byte_index_of_last_selection(ctx)
+        });
         let block_id = self.model.lock().block_list().active_block_id().clone();
-        let mut command = format!(" {EXTERNAL_CTRL_T_HELPER_COMMAND}");
-        if apply_mode == ShellWidgetApplyMode::Replace {
+        let mut command = format!(" {helper_command}");
+        if let Some(cursor_offset) = cursor_offset
+            && apply_mode == ShellWidgetApplyMode::Replace
+        {
             let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
             command.push_str(&format!(" {char_cursor}:{}", hex::encode(&original_buffer)));
         }
@@ -7785,7 +7750,7 @@ impl Input {
                 selection: None,
                 block_id,
                 apply_mode,
-                cursor_offset: Some(cursor_offset),
+                cursor_offset,
             });
         }
         started
