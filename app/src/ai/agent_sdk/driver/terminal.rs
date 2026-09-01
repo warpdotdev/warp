@@ -721,8 +721,6 @@ impl TerminalDriver {
             log::info!("Emitting request to extend shared session retention: {reason:?}");
             ctx.emit(Event::ExtendSessionRetention { reason });
         });
-        // A closed window is an expected race here, so `ViewUpdateError` classifies it as
-        // non-actionable and this only warns; a circular update would reach Sentry.
         report_if_error!(
             result.context("Could not extend shared session retention"),
             extra: { "retention_reason" => ?reason }
