@@ -703,10 +703,7 @@ impl TerminalDriver {
         reason: SessionRetentionReason,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(terminal_view) = self.terminal_view.downgrade().upgrade(ctx) else {
-            return;
-        };
-        terminal_view.update(ctx, |terminal, ctx| {
+        let updated = self.terminal_view.try_update(ctx, |terminal, ctx| {
             if !terminal
                 .model
                 .lock()
@@ -722,6 +719,13 @@ impl TerminalDriver {
             log::info!("Emitting request to extend shared session retention: {reason:?}");
             ctx.emit(Event::ExtendSessionRetention { reason });
         });
+
+        if updated.is_none() {
+            log::warn!(
+                "Tried to extend shared session retention after the terminal window closed: \
+                 {reason:?}"
+            );
+        }
     }
 }
 
