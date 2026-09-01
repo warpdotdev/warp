@@ -17,6 +17,8 @@ use crate::terminal;
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
 
+const CHUNK_SIZE: usize = 512;
+
 pub(crate) struct HistorySnapshot {
     commands: Arc<[Arc<HistoryEntry>]>,
     query_text: String,
@@ -38,12 +40,6 @@ fn history_data_source_from_shared(
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(
         move |query: &Query, _app: &AppContext| HistorySnapshot {
-            // Historical commands are all stored as Arcs, so cloning the commands to pass them in
-            // to the async sort function is a cheap refcount bump, not a deep copy. Because the
-            // entries themselves are copy-on-write (`Arc::make_mut` in `mark_command_as_finished`),
-            // a snapshot taken before an in-flight command completes keeps pointing at the
-            // pre-completion entry rather than seeing the update -- that staleness is expected and
-            // resolved by the next query.
             commands: commands.clone(),
             query_text: query.text.clone(),
             current_session_id,
@@ -82,9 +78,6 @@ pub(crate) fn fuzzy_match_history(
         let tokens = rank::tokenize_query(&snapshot.query_text);
         let total_candidates = snapshot.commands.len();
 
-        // History entries are cheap to match (single short string), so we use a large chunk
-        // size to reduce yield overhead while still allowing cancellation of stale queries.
-        const CHUNK_SIZE: usize = 512;
         for (chunk_index, chunk) in snapshot.commands.chunks(CHUNK_SIZE).enumerate() {
             let chunk_start = chunk_index * CHUNK_SIZE;
             for (offset, entry) in chunk.iter().enumerate() {
@@ -122,11 +115,6 @@ pub(crate) fn fuzzy_match_history(
     })
 }
 
-/// The pre-[`FeatureFlag::HistorySearchRankingV2`] matching behavior: the whole query as a
-/// single fuzzy pattern against each command (no whitespace tokenization), scored directly by
-/// Skim's raw match score with no history priors and no floor. This is the exact code path
-/// history search used before APP-5650, not an approximation of it, so disabling the flag is a
-/// genuine escape hatch back to the previous behavior.
 fn fuzzy_match_history_legacy(
     snapshot: HistorySnapshot,
 ) -> BoxFuture<'static, Result<Vec<QueryResult<CommandSearchItemAction>>, DataSourceRunErrorWrapper>>
@@ -134,9 +122,6 @@ fn fuzzy_match_history_legacy(
     Box::pin(async move {
         let mut results = Vec::new();
 
-        // History entries are cheap to match (single short string), so we use a large chunk
-        // size to reduce yield overhead while still allowing cancellation of stale queries.
-        const CHUNK_SIZE: usize = 512;
         for chunk in snapshot.commands.chunks(CHUNK_SIZE) {
             for entry in chunk {
                 let Some(match_result) = fuzzy_match::match_indices_case_insensitive(

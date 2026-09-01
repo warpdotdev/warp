@@ -1,13 +1,13 @@
+//! `rank()`'s formula is `score = adjusted_skim * f(priors)`: `adjusted_skim` is the match-quality
+//! component (raw Skim score plus the corrections in `adjusted_skim()`) and `f(priors)` is a
+//! bounded multiplier built from recency, session, and exit status.
+
 use chrono::{DateTime, Local};
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
 
 use crate::terminal::HistoryEntry;
 use crate::terminal::model::session::SessionId;
-
-// `rank()`'s formula is `score = adjusted_skim * f(priors)`: `adjusted_skim` is the match-quality
-// component (raw Skim score plus the corrections in `adjusted_skim()`) and `f(priors)` is a
-// bounded multiplier built from recency, session, and exit status.
 
 /// Bottom of `f(priors)`'s range.
 const PRIOR_MULTIPLIER_BASELINE: f64 = 0.8;
@@ -34,17 +34,11 @@ const RECENCY_HALF_LIFE_DAYS: f64 = 3.0;
 const RAW_SKIM_FLOOR_PER_CHAR: f64 = 8.0;
 
 /// Per-character bonus for a run of contiguously-matched characters, folded into `adjusted_skim`.
-/// Fixes issue #1810, where Skim's word-boundary bonus made a scattered match outscore a
-/// contiguous one.
 const CONSECUTIVE_BONUS_PER_CHAR: f64 = 4.0;
 
 /// Bonus added once to `adjusted_skim` when the query exactly matches the whole command; needed
 /// because SkimMatcherV2 scores a query identically whether it's the whole command or just a
 /// prefix of a longer one.
-///
-/// This is a deliberate product policy, not an oversight: it intentionally lets an exact
-/// whole-line history match outrank an equally-matching item from another Command Search source,
-/// because history is Ctrl+R's primary result type. See APP-5650.
 const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
 
 /// Synthetic "days per list position" used to derive an age for entries with no timestamp, so a
@@ -91,9 +85,6 @@ pub(crate) fn tokenize_query(query: &str) -> Vec<&str> {
 
 /// Matches every term in `tokens` against `command` as an independent fuzzy subsequence and ANDs
 /// the results together, returning `None` if any term fails to match anywhere in `command`.
-///
-/// On a match, returns a [`FuzzyMatchResult`] whose `matched_indices` is the union of every
-/// term's matched indices (for highlighting) alongside the resulting [`MatchQuality`].
 pub(crate) fn match_history_command(
     command: &str,
     tokens: &[&str],
@@ -196,18 +187,8 @@ pub(crate) struct RankInputs<'a> {
 
 /// Combines a candidate's match quality with its history priors into a single sortable score, or
 /// `None` if the match quality doesn't clear [`RAW_SKIM_FLOOR_PER_CHAR`].
-///
-/// The result is `adjusted_skim * f(priors)`, staying on the same raw Skim scale every other
-/// Command Search source's own score lives on: `f(priors)` is a narrow `[0.8, 1.2]` multiplier
-/// (see [`PRIOR_MULTIPLIER_SWING`]), so priors can reorder two candidates only when their raw
-/// match quality is already within that ~1.5x ratio of each other -- including a history
-/// candidate against another source's fixed (unscaled) score -- and can't let a fresh weak match
-/// outrank a meaningfully stronger old one. Higher is better, consistent with `SearchItem::score`.
 pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
     if inputs.is_blank_query {
-        // Every blank-query candidate ties at the same score, so the mixer's stable sort leaves
-        // `History::commands_shared()`'s chronological order intact, exactly as it did before
-        // this ranking existed (Skim scores every candidate 0 for an empty pattern too).
         return Some(OrderedFloat(0.0));
     }
 
