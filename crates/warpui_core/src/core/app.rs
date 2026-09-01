@@ -4634,39 +4634,23 @@ impl AppContext {
         self.flush_effects();
     }
 
-    /// Whether an update targeting `view_id` can be checked out, and if not, why.
-    ///
-    /// A view is absent from its window's view map while an update against it is in flight, so
-    /// that absence means reentrancy rather than teardown. The two must stay distinguishable:
-    /// [`ViewUpdateError::WindowClosed`] is an expected race, while
-    /// [`ViewUpdateError::CircularUpdate`] is a bug worth reporting.
-    fn check_view_available_for_update(&self, view_id: EntityId) -> Result<(), ViewUpdateError> {
-        let Some(window) = self
-            .view_to_window
-            .get(&view_id)
-            .and_then(|window_id| self.windows.get(window_id))
-        else {
-            return Err(ViewUpdateError::WindowClosed);
-        };
-        if !window.views.contains_key(&view_id) {
-            return Err(ViewUpdateError::CircularUpdate);
-        }
-        Ok(())
-    }
-
     /// Removes the view with the given ID so that an update closure can run against it.
     ///
     /// This bookkeeping is not generic, so it is compiled once instead of being duplicated into
-    /// every instantiation of [`UpdateView::update_view`].
-    fn take_view_for_update(&mut self, window_id: WindowId, view_id: EntityId) -> StoredView {
-        self.pending_flushes += 1;
+    /// every instantiation of [`UpdateView`].
+    fn take_view_for_update(
+        &mut self,
+        window_id: WindowId,
+        view_id: EntityId,
+    ) -> Result<StoredView, ViewUpdateError> {
         let Some(window) = self.windows.get_mut(&window_id) else {
-            panic!("Window does not exist");
+            return Err(ViewUpdateError::WindowClosed);
         };
         let Some(view) = window.views.remove(&view_id) else {
-            panic!("Circular view update");
+            return Err(ViewUpdateError::CircularUpdate);
         };
-        view
+        self.pending_flushes += 1;
+        Ok(view)
     }
 
     /// Restores a view removed by [`Self::take_view_for_update`] and flushes pending effects.
@@ -4719,12 +4703,11 @@ impl UpdateView for AppContext {
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
-        let window_id = handle.window_id(self);
-        let mut view = self.take_view_for_update(window_id, handle.id());
-        let mut ctx = ViewContext::new(self, window_id, handle.id());
-        let result = update(downcast_view_mut(&mut view), &mut ctx);
-        self.finish_view_update(window_id, handle.id(), view);
-        result
+        match self.try_update_view(handle, update) {
+            Ok(result) => result,
+            Err(ViewUpdateError::WindowClosed) => panic!("Window does not exist"),
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
+        }
     }
 
     fn try_update_view<T, F, S>(
@@ -4736,8 +4719,12 @@ impl UpdateView for AppContext {
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
-        self.check_view_available_for_update(handle.id())?;
-        Ok(self.update_view(handle, update))
+        let window_id = handle.window_id(self);
+        let mut view = self.take_view_for_update(window_id, handle.id())?;
+        let mut ctx = ViewContext::new(self, window_id, handle.id());
+        let result = update(downcast_view_mut(&mut view), &mut ctx);
+        self.finish_view_update(window_id, handle.id(), view);
+        Ok(result)
     }
 }
 
