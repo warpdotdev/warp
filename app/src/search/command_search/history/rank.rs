@@ -9,8 +9,8 @@ use crate::terminal::model::session::SessionId;
 //
 // Everything below shapes `rank()`'s formula: `score = adjusted_skim * f(priors)`, where
 // `adjusted_skim` is the match-quality component (raw Skim score plus the corrections in
-// `adjusted_skim()`) and `f(priors)` is a bounded multiplier built from recency, frequency,
-// session, cwd, and exit status. Change a value, rebuild, and re-run
+// `adjusted_skim()`) and `f(priors)` is a bounded multiplier built from recency, session, and
+// exit status. Change a value, rebuild, and re-run
 // `cargo test -p warp --lib search::command_search::history` to see the effect against the
 // golden fixtures in `rank_tests.rs`.
 
@@ -29,17 +29,9 @@ const PRIOR_MULTIPLIER_SWING: f64 = 0.4;
 /// freshness matter more.
 const RECENCY_WEIGHT: f64 = 0.30;
 
-/// How much of `f(priors)` is driven by how often a command has been run. Raise to make
-/// frequently-used commands rank higher.
-const FREQUENCY_WEIGHT: f64 = 0.08;
-
 /// How much of `f(priors)` is driven by whether a command ran in the current session. Raise to
 /// favor the current session's own history more.
 const SESSION_WEIGHT: f64 = 0.05;
-
-/// How much of `f(priors)` is driven by whether a command ran in the current working directory.
-/// Raise to favor commands run from here more.
-const CWD_WEIGHT: f64 = 0.02;
 
 /// How much `f(priors)` is reduced for a command whose last run failed. Raise to penalize failed
 /// commands more.
@@ -48,10 +40,6 @@ const EXIT_PENALTY_WEIGHT: f64 = 0.03;
 /// Days for the recency term to decay by half. Lower makes recent commands matter more (and older
 /// ones fade faster); raise for a longer memory.
 const RECENCY_HALF_LIFE_DAYS: f64 = 3.0;
-
-/// Execution count at which the frequency term saturates (maxes out). Lower means fewer repeats
-/// are needed to count as "frequent"; raise to require more repeats.
-const FREQUENCY_SATURATION_COUNT: f64 = 20.0;
 
 /// Minimum adjusted-Skim score, per character of the query, for a match to be shown at all. Raise
 /// to filter out more loose/scattered matches; lower to show more borderline ones. Legitimate
@@ -88,7 +76,7 @@ const PRIOR_SUM_MIN: f64 = -EXIT_PENALTY_WEIGHT;
 
 /// Derived, not meant to be hand-tuned: theoretical upper bound of the weighted prior sum, reached
 /// when every positive prior is fully satisfied and the command's last run succeeded.
-const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + FREQUENCY_WEIGHT + SESSION_WEIGHT + CWD_WEIGHT;
+const PRIOR_SUM_MAX: f64 = RECENCY_WEIGHT + SESSION_WEIGHT;
 
 // ----- End tunable constants -----
 
@@ -211,20 +199,17 @@ fn longest_consecutive_run(indices: &[usize]) -> usize {
 /// gate.
 pub(crate) struct RankInputs<'a> {
     pub entry: &'a HistoryEntry,
-    /// Number of times this command has been executed, per `History::command_execution_count`.
-    pub execution_count: u32,
     pub match_quality: MatchQuality,
     pub now: DateTime<Local>,
     pub current_session_id: SessionId,
-    pub cwd: Option<&'a str>,
     /// Number of other candidates newer than this one in the full (chronologically-ordered)
     /// history list. Used as an age proxy for entries with no timestamp; see `age_days`.
     pub newer_candidate_count: usize,
     /// Whether the query is empty (the zero-state case, where `SearchMixer` still invokes
-    /// history so it has something to show before the user types). Priors like frequency and cwd
-    /// are only meaningful relative to an actual query; applying them here would reorder the
-    /// zero state away from its established chronological order, so [`rank`] gives every blank
-    /// query the same score instead of computing one from priors.
+    /// history so it has something to show before the user types). Priors like session are only
+    /// meaningful relative to an actual query; applying them here would reorder the zero state
+    /// away from its established chronological order, so [`rank`] gives every blank query the
+    /// same score instead of computing one from priors.
     pub is_blank_query: bool,
 }
 
@@ -251,16 +236,7 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
 
     let age_days = age_days(inputs.entry, inputs.now, inputs.newer_candidate_count);
     let recency = (-std::f64::consts::LN_2 * age_days / RECENCY_HALF_LIFE_DAYS).exp();
-    let frequency = ((inputs.execution_count as f64 + 1.0).ln()
-        / (FREQUENCY_SATURATION_COUNT + 1.0).ln())
-    .min(1.0);
     let session = f64::from(inputs.entry.session_id == Some(inputs.current_session_id));
-    // If either side is unknown, we can't tell whether it would have matched, so treat it as
-    // neutral (the midpoint between a match and a mismatch) rather than scoring it as a mismatch.
-    let cwd = match (inputs.entry.pwd.as_deref(), inputs.cwd) {
-        (Some(entry_pwd), Some(session_cwd)) => f64::from(entry_pwd == session_cwd),
-        _ => 0.5,
-    };
     let exit_penalty = f64::from(
         inputs
             .entry
@@ -268,11 +244,8 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
             .is_some_and(|code| !code.was_successful()),
     );
 
-    let prior_sum = RECENCY_WEIGHT * recency
-        + FREQUENCY_WEIGHT * frequency
-        + SESSION_WEIGHT * session
-        + CWD_WEIGHT * cwd
-        - EXIT_PENALTY_WEIGHT * exit_penalty;
+    let prior_sum =
+        RECENCY_WEIGHT * recency + SESSION_WEIGHT * session - EXIT_PENALTY_WEIGHT * exit_penalty;
     let normalized_priors =
         ((prior_sum - PRIOR_SUM_MIN) / (PRIOR_SUM_MAX - PRIOR_SUM_MIN)).clamp(0.0, 1.0);
     let prior_multiplier = PRIOR_MULTIPLIER_BASELINE + PRIOR_MULTIPLIER_SWING * normalized_priors;

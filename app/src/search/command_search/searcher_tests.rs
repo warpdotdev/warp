@@ -16,7 +16,7 @@ use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::search::ai_queries::fuzzy_match::FuzzyMatchAIQueryResults;
 use crate::search::command_search::ai_queries::AIQuerySearchResultItem;
-use crate::search::command_search::history::{history_data_source, history_data_source_with_cwd};
+use crate::search::command_search::history::history_data_source;
 use crate::search::command_search::searcher::CommandSearchMixer;
 use crate::search::command_search::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::search::data_source::{Query, QueryResult};
@@ -311,68 +311,6 @@ fn test_blank_query_preserves_chronological_order_despite_differing_priors() {
                     command,
                     ..
                 })) if command == "git log"
-            ));
-        });
-    });
-}
-
-#[test]
-fn test_cwd_prior_uses_live_cwd_not_stale_last_entry_pwd() {
-    // Regression test: `HistoryEntry::pwd` is captured when a command *starts*, so the most
-    // recently executed command's `pwd` reflects the directory it was run *from*, not the live
-    // cwd after it runs (e.g. immediately after `cd /repo`). The cwd prior must use the live cwd
-    // passed in from the caller, not fall back to guessing from history entries.
-    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
-
-    App::test((), |mut app| async move {
-        initialize_app(&mut app);
-
-        // Both entries share a timestamp so recency is identical between them, isolating the cwd
-        // prior as the only difference in their final score.
-        let same_ts = Local::now();
-        let mut matches_live_cwd = HistoryEntry::command_only("npm test -- repo".to_owned());
-        matches_live_cwd.start_ts = Some(same_ts);
-        matches_live_cwd.pwd = Some("/repo".to_owned());
-
-        // The most recently executed command (last in the list), whose pwd is exactly what the
-        // old, buggy heuristic (the last candidate's `pwd`) would have picked as the live cwd,
-        // even though the live cwd is actually `/repo`.
-        let mut stale_last_entry = HistoryEntry::command_only("npm test -- home".to_owned());
-        stale_last_entry.start_ts = Some(same_ts);
-        stale_last_entry.pwd = Some("/home/user".to_owned());
-
-        let mixer = app.add_model(|_| CommandSearchMixer::new());
-        mixer.update(&mut app, |mixer, ctx| {
-            mixer.add_async_source(
-                history_data_source_with_cwd(
-                    vec![matches_live_cwd, stale_last_entry],
-                    Some("/repo".to_owned()),
-                ),
-                HashSet::from([QueryFilter::History]),
-                AddAsyncSourceOptions {
-                    debounce_interval: None,
-                    run_in_zero_state: false,
-                    run_when_unfiltered: true,
-                },
-                ctx,
-            );
-            mixer.run_query("npm test".into(), ctx);
-        });
-
-        Timer::after(Duration::from_millis(200)).await;
-
-        app.read(|app| {
-            let results = mixer.as_ref(app).results();
-            assert_eq!(results.len(), 2);
-
-            // The entry whose pwd matches the live cwd should rank last (best), even though it
-            // isn't the most recently executed command.
-            assert!(matches!(
-                results.last().map(|result| result.accept_result()),
-                Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
-                    command,
-                    ..
-                })) if command == "npm test -- repo"
             ));
         });
     });
@@ -931,7 +869,7 @@ fn test_history_search_disabled_flag_skips_whitespace_tokenization() {
 fn test_history_search_disabled_flag_scores_raw_skim_with_no_priors() {
     // With `HistorySearchRankingV2` disabled, a match's score must be exactly the raw Skim
     // score fuzzy_match produces, unaffected by the exact-whole-line bonus or any history prior
-    // (recency, frequency, session, cwd, exit status) -- even for an old, low-priority entry.
+    // (recency, session, exit status) -- even for an old, low-priority entry.
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
 
     App::test((), |mut app| async move {

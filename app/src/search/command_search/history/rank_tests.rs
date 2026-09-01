@@ -15,14 +15,12 @@ fn days_ago(days: i64) -> DateTime<Local> {
 }
 
 /// A single candidate to be ranked, built up with the setup that matters for a given fixture and
-/// defaulted otherwise (untracked timestamp, no session/cwd match, successful exit).
+/// defaulted otherwise (untracked timestamp, no session match, successful exit).
 struct Scenario {
     command: &'static str,
     query: &'static str,
     start_ts: Option<DateTime<Local>>,
-    execution_count: u32,
     session_id: Option<SessionId>,
-    pwd: Option<&'static str>,
     exit_ok: bool,
     newer_candidate_count: usize,
 }
@@ -33,9 +31,7 @@ impl Scenario {
             command,
             query,
             start_ts: None,
-            execution_count: 1,
             session_id: None,
-            pwd: None,
             exit_ok: true,
             newer_candidate_count: 0,
         }
@@ -43,11 +39,6 @@ impl Scenario {
 
     fn days_ago(mut self, days: i64) -> Self {
         self.start_ts = Some(days_ago(days));
-        self
-    }
-
-    fn execution_count(mut self, execution_count: u32) -> Self {
-        self.execution_count = execution_count;
         self
     }
 
@@ -61,17 +52,12 @@ impl Scenario {
         self
     }
 
-    fn pwd(mut self, pwd: &'static str) -> Self {
-        self.pwd = Some(pwd);
-        self
-    }
-
     fn exit_failed(mut self) -> Self {
         self.exit_ok = false;
         self
     }
 
-    fn rank(&self, current_session_id: SessionId, cwd: Option<&str>) -> OrderedFloat<f64> {
+    fn rank(&self, current_session_id: SessionId) -> OrderedFloat<f64> {
         let tokens = tokenize_query(self.query);
         let (_, match_quality) = match_history_command(self.command, &tokens)
             .expect("scenario command should match its own query");
@@ -79,16 +65,13 @@ impl Scenario {
         let mut entry = HistoryEntry::command_only(self.command.to_owned());
         entry.start_ts = self.start_ts;
         entry.session_id = self.session_id;
-        entry.pwd = self.pwd.map(str::to_owned);
         entry.exit_code = Some(ExitCode::from(if self.exit_ok { 0 } else { 1 }));
 
         rank(RankInputs {
             entry: &entry,
-            execution_count: self.execution_count,
             match_quality,
             now: now(),
             current_session_id,
-            cwd,
             newer_candidate_count: self.newer_candidate_count,
             is_blank_query: false,
         })
@@ -108,7 +91,7 @@ fn older_exact_match_outranks_fresher_weak_match() {
     let new_weak = Scenario::new("list docker containers", "id").days_ago(0);
 
     assert!(
-        old_exact.rank(session, None) > new_weak.rank(session, None),
+        old_exact.rank(session) > new_weak.rank(session),
         "a 30-day-old whole-line match must still outrank a brand new scattered match"
     );
 }
@@ -126,10 +109,10 @@ fn recency_breaks_ties_among_equal_quality_substring_matches() {
     let make_baz = Scenario::new("make baz", "make").days_ago(10);
     let fresh_make_bar = Scenario::new("OS=linux make bar", "make").days_ago(0);
 
-    let fresh_rank = fresh_make_bar.rank(session, None);
+    let fresh_rank = fresh_make_bar.rank(session);
     for older in [&make_foo, &make_bar, &make_baz] {
         assert!(
-            fresh_rank > older.rank(session, None),
+            fresh_rank > older.rank(session),
             "a fresh substring match should outrank an equally-old, equally-good substring match"
         );
     }
@@ -170,19 +153,6 @@ fn consecutive_substrings_beat_scattered_boundary_matches() {
 }
 
 #[test]
-fn frequency_prior_favors_more_common_commands() {
-    let session = SessionId::from(1);
-    let frequent = Scenario::new("git status", "git status")
-        .days_ago(1)
-        .execution_count(20);
-    let rare = Scenario::new("git status", "git status")
-        .days_ago(1)
-        .execution_count(1);
-
-    assert!(frequent.rank(session, None) > rare.rank(session, None));
-}
-
-#[test]
 fn session_prior_favors_the_current_session() {
     let session = SessionId::from(7);
     let other_session = SessionId::from(8);
@@ -194,44 +164,7 @@ fn session_prior_favors_the_current_session() {
         .days_ago(1)
         .session(other_session);
 
-    assert!(same_session.rank(session, None) > different_session.rank(session, None));
-}
-
-#[test]
-fn cwd_prior_favors_the_current_directory() {
-    let session = SessionId::from(1);
-    let same_cwd = Scenario::new("npm test", "npm test")
-        .days_ago(1)
-        .pwd("/repo");
-    let different_cwd = Scenario::new("npm test", "npm test")
-        .days_ago(1)
-        .pwd("/other");
-
-    assert!(same_cwd.rank(session, Some("/repo")) > different_cwd.rank(session, Some("/repo")));
-}
-
-#[test]
-fn unknown_cwd_is_neutral_between_a_match_and_a_mismatch() {
-    // When we don't know the cwd (e.g. it couldn't be determined), we can't tell whether
-    // a candidate's pwd would have matched it, so it shouldn't score as badly as a *confirmed*
-    // mismatch.
-    let session = SessionId::from(1);
-    let candidate = Scenario::new("npm test", "npm test")
-        .days_ago(1)
-        .pwd("/repo");
-
-    let unknown_cwd = candidate.rank(session, None);
-    let matching_cwd = candidate.rank(session, Some("/repo"));
-    let mismatched_cwd = candidate.rank(session, Some("/other"));
-
-    assert!(
-        unknown_cwd > mismatched_cwd,
-        "an unknown cwd shouldn't score as badly as a confirmed mismatch"
-    );
-    assert!(
-        unknown_cwd < matching_cwd,
-        "an unknown cwd shouldn't score as well as a confirmed match"
-    );
+    assert!(same_session.rank(session) > different_session.rank(session));
 }
 
 #[test]
@@ -242,7 +175,7 @@ fn exit_failure_is_penalized() {
         .days_ago(1)
         .exit_failed();
 
-    assert!(succeeded.rank(session, None) > failed.rank(session, None));
+    assert!(succeeded.rank(session) > failed.rank(session));
 }
 
 #[test]
@@ -254,7 +187,7 @@ fn missing_timestamp_falls_back_to_list_position_instead_of_reading_as_infinitel
     let recent_untracked = Scenario::new("ls -la", "ls -la").newer_candidates(0);
     let old_untracked = Scenario::new("ls -la", "ls -la").newer_candidates(200);
 
-    assert!(recent_untracked.rank(session, None) > old_untracked.rank(session, None));
+    assert!(recent_untracked.rank(session) > old_untracked.rank(session));
 }
 
 #[test]
@@ -268,11 +201,9 @@ fn match_score_floor_filters_out_low_quality_matches() {
     let entry = HistoryEntry::command_only("noise".to_owned());
     let result = rank(RankInputs {
         entry: &entry,
-        execution_count: 1,
         match_quality: low_quality,
         now: now(),
         current_session_id: SessionId::from(1),
-        cwd: None,
         newer_candidate_count: 0,
         is_blank_query: false,
     });
@@ -287,44 +218,42 @@ fn match_score_floor_filters_out_low_quality_matches() {
 fn blank_query_ignores_priors_and_yields_a_result() {
     // `SearchMixer` invokes history with an empty query for the zero state (`run_in_zero_state:
     // true`), where match quality is necessarily zero. Bypassing only the score floor isn't
-    // enough: priors (frequency, cwd, session, exit status, recency) must also be bypassed, or
-    // they'd reorder the zero state away from `History::commands_shared()`'s established
-    // chronological order. Two candidates with wildly different priors must therefore score
-    // identically here, not just both clear the floor.
+    // enough: priors (session, exit status, recency) must also be bypassed, or they'd reorder
+    // the zero state away from `History::commands_shared()`'s established chronological order.
+    // Two candidates with wildly different priors must therefore score identically here, not
+    // just both clear the floor.
     let zero_quality = MatchQuality {
         adjusted_skim: 0.0,
         adjusted_skim_per_char: 0.0,
     };
     assert!(zero_quality.adjusted_skim_per_char < RAW_SKIM_FLOOR_PER_CHAR);
 
-    let mut frequent_recent = HistoryEntry::command_only("ls -la".to_owned());
-    frequent_recent.start_ts = Some(now());
+    let mut recent = HistoryEntry::command_only("ls -la".to_owned());
+    recent.start_ts = Some(now());
 
-    let mut rare_old = HistoryEntry::command_only("ls -la".to_owned());
-    rare_old.start_ts = Some(days_ago(30));
+    let mut old = HistoryEntry::command_only("ls -la".to_owned());
+    old.start_ts = Some(days_ago(30));
 
-    let rank_of = |entry: &HistoryEntry, execution_count: u32| {
+    let rank_of = |entry: &HistoryEntry| {
         rank(RankInputs {
             entry,
-            execution_count,
             match_quality: zero_quality,
             now: now(),
             current_session_id: SessionId::from(1),
-            cwd: None,
             newer_candidate_count: 0,
             is_blank_query: true,
         })
     };
 
-    let frequent_recent_score = rank_of(&frequent_recent, 20);
-    let rare_old_score = rank_of(&rare_old, 1);
+    let recent_score = rank_of(&recent);
+    let old_score = rank_of(&old);
 
     assert!(
-        frequent_recent_score.is_some(),
+        recent_score.is_some(),
         "a blank query should bypass the score floor so zero-state history isn't dropped"
     );
     assert_eq!(
-        frequent_recent_score, rare_old_score,
+        recent_score, old_score,
         "a blank query must ignore priors entirely so the mixer's stable sort preserves \
          chronological order, not just bypass the score floor"
     );
