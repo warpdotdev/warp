@@ -514,8 +514,9 @@ impl Cache {
             Err(_) => match self.glyph_advance(font_id, font_size, glyph_id) {
                 Ok(advance) if advance.x().is_finite() && advance.x() > 0.0 => advance.x(),
                 advance => {
-                    log::debug!(
-                        "[em_width] 'm' glyph has no usable horizontal advance; falling back to font_size font_id={font_id:?} font_size={font_size} advance={advance:?}"
+                    log::warn!(
+                        "[em_width] 'm' glyph has no usable horizontal advance; falling back to \
+                         font_size font_id={font_id:?} font_size={font_size} advance={advance:?}"
                     );
                     // Scroll converts pixels with `/ em_width`; keep a positive width.
                     font_size.max(1.0)
