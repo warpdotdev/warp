@@ -703,7 +703,10 @@ impl TerminalDriver {
         reason: SessionRetentionReason,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.terminal_view.update(ctx, |terminal, ctx| {
+        let Some(terminal_view) = self.terminal_view.downgrade().upgrade(ctx) else {
+            return;
+        };
+        terminal_view.update(ctx, |terminal, ctx| {
             if !terminal
                 .model
                 .lock()

@@ -3520,6 +3520,11 @@ impl AppContext {
             .handled
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn simulate_window_closed(&mut self, window_id: WindowId) {
+        let _ = self.handle_window_closed(window_id);
+    }
+
     fn handle_window_event(
         &mut self,
         mut event: Event,
