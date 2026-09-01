@@ -65,6 +65,7 @@ use crate::ai::skills::SkillManager;
 use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
@@ -2049,29 +2050,6 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
 
 // ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
 
-/// Polls `condition` on a short interval until it returns true, or panics with an
-/// actionable message after `timeout` elapses. Used to deterministically await
-/// scheduled async work (e.g. a `ctx.spawn`ed eligibility check) without guessing a
-/// fixed sleep duration that a loaded test runner could exceed.
-async fn poll_until(
-    app: &App,
-    timeout: Duration,
-    description: &str,
-    mut condition: impl FnMut(&App) -> bool,
-) {
-    let deadline = instant::Instant::now() + timeout;
-    loop {
-        if condition(app) {
-            return;
-        }
-        assert!(
-            instant::Instant::now() < deadline,
-            "timed out after {timeout:?} waiting for: {description}"
-        );
-        Timer::after(Duration::from_millis(5)).await;
-    }
-}
-
 /// Creates a conversation on `terminal_id` and attaches an in-flight mock response
 /// stream to it (mirroring an in-progress parent turn), registered through
 /// `ai_controller`. Returns the conversation and stream so the caller can drive the
@@ -2286,17 +2264,13 @@ fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa
         // events lives in `execute_run`'s forwarder, which only runs once the async round trip
         // back from `run_exit`'s internal signal completes — so this is polled rather than
         // checked immediately.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the buffered event to be dropped by the forwarder's model-side cleanup",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    !service.has_pending_events(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                !service.has_pending_events(conversation_id)
+            }),
+            "timed out after 2s waiting for: the buffered event to be dropped by the forwarder's \
+             model-side cleanup"
+        );
     });
 }
 
@@ -2340,20 +2314,16 @@ fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
         // non-child conversation like this one and falls back to direct injection.
         // Poll for that scheduled work to land instead of guessing a fixed sleep
         // duration a loaded test runner could exceed.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the buffered event to be injected as an InProgress follow-up",
-            |app| {
-                BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
-                    matches!(
-                        history.conversation(&conversation_id).map(|c| c.status()),
-                        Some(ConversationStatus::InProgress)
-                    )
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                matches!(
+                    history.conversation(&conversation_id).map(|c| c.status()),
+                    Some(ConversationStatus::InProgress)
+                )
+            }),
+            "timed out after 2s waiting for: the buffered event to be injected as an InProgress \
+             follow-up"
+        );
 
         // The buffered event should have been injected as a real follow-up: the
         // conversation is back `InProgress` and the queue has been drained.
@@ -2515,17 +2485,13 @@ fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restartin
             .send(())
             .expect("background timer thread should still be waiting on the manual release");
 
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the conversation to be marked exiting once the idle window elapses",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    service.is_conversation_exiting(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the conversation to be marked exiting once the idle \
+             window elapses"
+        );
 
         // Deterministically inside the interleaving window now: exiting is committed, and
         // the forwarder cannot have run yet. Give the in-flight eligibility check
@@ -2697,18 +2663,14 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
         // post-commit gate, strictly before sending the completion value. The async
         // forwarder therefore cannot have run yet, so this check is a direct, uncontaminated
         // proof of `on_commit`'s own write, not of the forwarder's fallback.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the resumed conversation to be marked exiting once its idle window elapses, \
-             via on_commit's seeded conversation id (not the async forwarder)",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    service.is_conversation_exiting(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the resumed conversation to be marked exiting once \
+             its idle window elapses, via on_commit's seeded conversation id (not the async \
+             forwarder)"
+        );
 
         // Release the post-commit gate so the run can finish tearing down normally.
         post_commit_release_tx
