@@ -7,6 +7,7 @@ use warp_util::path::LineAndColumnArg;
 use warpui_core::text::words::is_default_word_boundary;
 
 use super::*;
+use crate::model::ansi::Attr;
 use crate::model::blockgrid::BlockGrid;
 use crate::model::char_or_str::CharOrStr;
 use crate::model::secrets::{IsObfuscated, ObfuscateSecrets, SecretLevel};
@@ -1410,6 +1411,41 @@ fn test_serializing_string() {
     n.fg = Color::Named(NamedColor::Red);
     n.flags = Flags::DIM;
     assert_eq!(GridHandler::cell_to_string(&n), "\x1b[31;2mn\x1b[0m");
+
+    let mut curly = Cell::from('u');
+    curly.flags = Flags::CURLY_UNDERLINE;
+    curly.set_underline_color(Some(Color::Spec(ColorU::new(240, 143, 104, 255))));
+    assert_eq!(
+        GridHandler::cell_to_string(&curly),
+        "\x1b[4:3;58:2::240:143:104mu\x1b[0m"
+    );
+}
+
+#[test]
+fn curly_underline_replaces_other_underline_styles_and_keeps_color() {
+    let size = SizeInfo::new_without_font_metrics(2, 10);
+    let mut blockgrid = BlockGrid::new(
+        size,
+        MAX_SCROLL_LIMIT,
+        ChannelEventListener::new_for_test(),
+        ObfuscateSecrets::No,
+        PerformResetGridChecks::default(),
+    );
+    blockgrid.start();
+    blockgrid.terminal_attribute(Attr::Underline);
+    blockgrid.terminal_attribute(Attr::CurlyUnderline);
+    blockgrid.terminal_attribute(Attr::UnderlineColor(Color::Indexed(9)));
+    blockgrid.input('a');
+    blockgrid.terminal_attribute(Attr::Reset);
+    blockgrid.input('b');
+
+    let grid = blockgrid.grid_storage();
+    assert!(grid[0][0].flags.contains(Flags::CURLY_UNDERLINE));
+    assert!(!grid[0][0].flags.contains(Flags::UNDERLINE));
+    assert!(!grid[0][0].flags.contains(Flags::DOUBLE_UNDERLINE));
+    assert_eq!(grid[0][0].underline_color(), Some(Color::Indexed(9)));
+    assert!(!grid[0][1].flags.contains(Flags::CURLY_UNDERLINE));
+    assert_eq!(grid[0][1].underline_color(), None);
 }
 
 #[test]

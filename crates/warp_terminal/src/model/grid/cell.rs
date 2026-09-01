@@ -56,9 +56,10 @@ bitflags! {
         /// Set on cells which are the locations of cursor points and should be
         /// tracked through grid resizes.
         const HAS_CURSOR                = 0b0001_0000_0000_0000;
+        const CURLY_UNDERLINE           = 0b0010_0000_0000_0000;
         /// Equivalent to the union of all of the following: Flags::UNDERLINE,
-        /// Flags::STRIKEOUT, Flags::DOUBLE_UNDERLINE.
-        const CELL_DECORATIONS          = 0b0000_1010_0000_1000;
+        /// Flags::STRIKEOUT, Flags::DOUBLE_UNDERLINE, Flags::CURLY_UNDERLINE.
+        const CELL_DECORATIONS          = 0b0010_1010_0000_1000;
     }
 }
 
@@ -119,6 +120,8 @@ struct CellExtra {
     end_of_prompt: Option<EndOfPromptMarker>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hyperlink_id: Option<super::HyperlinkId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    underline_color: Option<Color>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -294,6 +297,22 @@ impl Cell {
         }
     }
 
+    #[inline]
+    pub fn underline_color(&self) -> Option<Color> {
+        self.extra.as_ref()?.underline_color
+    }
+
+    #[inline]
+    pub fn set_underline_color(&mut self, color: Option<Color>) {
+        if color.is_some() {
+            self.extra
+                .get_or_insert_with(Default::default)
+                .underline_color = color;
+        } else if let Some(extra) = self.extra.as_deref_mut() {
+            extra.underline_color = None;
+        }
+    }
+
     /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker
     /// if present. NOTE: this does NOT preserve `hyperlink_id` — that field is
     /// content-bound and is cleared whenever the cell's content is reset
@@ -322,6 +341,7 @@ impl Cell {
                 Flags::INVERSE
                     | Flags::UNDERLINE
                     | Flags::DOUBLE_UNDERLINE
+                    | Flags::CURLY_UNDERLINE
                     | Flags::STRIKEOUT
                     | Flags::WRAPLINE
                     | Flags::WIDE_CHAR_SPACER

@@ -101,6 +101,7 @@ const DEFAULT_BG_CODE: u8 = 49;
 /// the SGR (Select Graphic Rendition) parameters for 256-color and true-color
 const FG_SGR_PARAM: u8 = 38;
 const BG_SGR_PARAM: u8 = 48;
+const UNDERLINE_SGR_PARAM: u8 = 58;
 
 lazy_static! {
     pub static ref FILE_LINK_SEPARATORS: HashSet<char> =
@@ -713,6 +714,16 @@ impl GridHandler {
         }
     }
 
+    fn color_to_underline_escape_sequence(color: Color) -> String {
+        match color {
+            Color::Indexed(v) => format!("{UNDERLINE_SGR_PARAM}:5:{v}"),
+            Color::Spec(ColorU { r, g, b, .. }) => {
+                format!("{UNDERLINE_SGR_PARAM}:2::{r}:{g}:{b}")
+            }
+            Color::Named(_) => format!("{UNDERLINE_SGR_PARAM}:5:0"),
+        }
+    }
+
     pub fn grapheme_cursor_from(
         &self,
         point: Point,
@@ -989,8 +1000,10 @@ impl GridHandler {
             | Flags::STRIKEOUT
             | Flags::INVERSE
             | Flags::HIDDEN
-            | Flags::DOUBLE_UNDERLINE;
-        let contains_style = cell.flags.intersects(style_checker);
+            | Flags::DOUBLE_UNDERLINE
+            | Flags::CURLY_UNDERLINE;
+        let contains_style =
+            cell.flags.intersects(style_checker) || cell.underline_color().is_some();
 
         let color_sequence = match (cell.fg, cell.bg) {
             (Color::Named(NamedColor::Foreground), Color::Named(NamedColor::Background))
@@ -1016,31 +1029,37 @@ impl GridHandler {
         // and check flags if we know styling (i.e., BOLD, ITALIC, UNDERLINE,
         // or STRIKEOUT) is needed.
         let style_sequence = if contains_style {
-            let mut attributes = Vec::new();
+            let mut attributes: Vec<String> = Vec::new();
 
             if cell.flags().contains(Flags::BOLD) {
-                attributes.push("1");
+                attributes.push("1".to_owned());
             }
             if cell.flags().contains(Flags::DIM) {
-                attributes.push("2");
+                attributes.push("2".to_owned());
             }
             if cell.flags().contains(Flags::ITALIC) {
-                attributes.push("3");
+                attributes.push("3".to_owned());
             }
             if cell.flags().contains(Flags::UNDERLINE) {
-                attributes.push("4");
+                attributes.push("4".to_owned());
             }
             if cell.flags().contains(Flags::DOUBLE_UNDERLINE) {
-                attributes.push("4:2");
+                attributes.push("4:2".to_owned());
+            }
+            if cell.flags().contains(Flags::CURLY_UNDERLINE) {
+                attributes.push("4:3".to_owned());
+            }
+            if let Some(color) = cell.underline_color() {
+                attributes.push(Self::color_to_underline_escape_sequence(color));
             }
             if cell.flags().contains(Flags::INVERSE) {
-                attributes.push("7");
+                attributes.push("7".to_owned());
             }
             if cell.flags().contains(Flags::HIDDEN) {
-                attributes.push("8");
+                attributes.push("8".to_owned());
             }
             if cell.flags().contains(Flags::STRIKEOUT) {
-                attributes.push("9");
+                attributes.push("9".to_owned());
             }
 
             Some(attributes.join(";"))

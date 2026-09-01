@@ -404,6 +404,45 @@ fn parse_truecolor_attr() {
     assert_eq!(handler.attr, Some(Attr::Foreground(Color::Spec(spec))));
 }
 
+fn parse_attr(bytes: &[u8]) -> Option<Attr> {
+    parse_bytes(bytes).1.attr
+}
+
+#[test]
+fn parse_underline_styles() {
+    assert_eq!(parse_attr(b"\x1b[4m"), Some(Attr::Underline));
+    assert_eq!(parse_attr(b"\x1b[4:1m"), Some(Attr::Underline));
+    assert_eq!(parse_attr(b"\x1b[4:2m"), Some(Attr::DoubleUnderline));
+    assert_eq!(parse_attr(b"\x1b[4:3m"), Some(Attr::CurlyUnderline));
+    assert_eq!(parse_attr(b"\x1b[4:0m"), Some(Attr::CancelUnderline));
+    assert_eq!(parse_attr(b"\x1b[24m"), Some(Attr::CancelUnderline));
+}
+
+#[test]
+fn parse_underline_color() {
+    assert_eq!(
+        parse_attr(b"\x1b[58:2::240:143:104m"),
+        Some(Attr::UnderlineColor(Color::Spec(ColorU::new(
+            240, 143, 104, 0xff
+        ))))
+    );
+    assert_eq!(
+        parse_attr(b"\x1b[58:2:10:20:30m"),
+        Some(Attr::UnderlineColor(Color::Spec(ColorU::new(
+            10, 20, 30, 0xff
+        ))))
+    );
+    assert_eq!(
+        parse_attr(b"\x1b[58:5:9m"),
+        Some(Attr::UnderlineColor(Color::Indexed(9)))
+    );
+    assert_eq!(
+        parse_attr(b"\x1b[58;5;12m"),
+        Some(Attr::UnderlineColor(Color::Indexed(12)))
+    );
+    assert_eq!(parse_attr(b"\x1b[59m"), Some(Attr::CancelUnderlineColor));
+}
+
 /// No exactly a test; useful for debugging.
 #[test]
 fn parse_zsh_startup() {

@@ -192,7 +192,7 @@ fn compute_fg_rgb(
 }
 
 /// Get the RGB color from a cell's background color.
-fn compute_bg_rgb(
+pub(super) fn compute_bg_rgb(
     colors: &color::List,
     override_colors: &color::OverrideList,
     bg: Color,

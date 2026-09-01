@@ -946,6 +946,7 @@ impl ansi::Handler for GridHandler {
                 template.fg = Color::Named(NamedColor::Foreground);
                 template.bg = Color::Named(NamedColor::Background);
                 template.flags = Flags::empty();
+                template.set_underline_color(None);
             }
             Attr::Reverse => template.flags.insert(Flags::INVERSE),
             Attr::CancelReverse => template.flags.remove(Flags::INVERSE),
@@ -956,18 +957,30 @@ impl ansi::Handler for GridHandler {
             Attr::Italic => template.flags.insert(Flags::ITALIC),
             Attr::CancelItalic => template.flags.remove(Flags::ITALIC),
             Attr::Underline => {
-                template.flags.remove(Flags::DOUBLE_UNDERLINE);
+                template
+                    .flags
+                    .remove(Flags::DOUBLE_UNDERLINE | Flags::CURLY_UNDERLINE);
                 template.flags.insert(Flags::UNDERLINE);
             }
             Attr::DoubleUnderline => {
-                template.flags.remove(Flags::UNDERLINE);
+                template
+                    .flags
+                    .remove(Flags::UNDERLINE | Flags::CURLY_UNDERLINE);
                 template.flags.insert(Flags::DOUBLE_UNDERLINE);
+            }
+            Attr::CurlyUnderline => {
+                template
+                    .flags
+                    .remove(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE);
+                template.flags.insert(Flags::CURLY_UNDERLINE);
             }
             Attr::CancelUnderline => {
                 template
                     .flags
-                    .remove(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE);
+                    .remove(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::CURLY_UNDERLINE);
             }
+            Attr::UnderlineColor(color) => template.set_underline_color(Some(color)),
+            Attr::CancelUnderlineColor => template.set_underline_color(None),
             Attr::Hidden => template.flags.insert(Flags::HIDDEN),
             Attr::CancelHidden => template.flags.remove(Flags::HIDDEN),
             Attr::Strike => template.flags.insert(Flags::STRIKEOUT),
@@ -1608,6 +1621,7 @@ impl GridHandler {
         let fg = self.grid.cursor().template.fg;
         let bg = self.grid.cursor().template.bg;
         let flags = self.grid.cursor().template.flags;
+        let underline_color = self.grid.cursor().template.underline_color();
         let hyperlink_id = self.active_hyperlink_id;
 
         let cursor_cell = self.grid.cursor_cell();
@@ -1619,6 +1633,7 @@ impl GridHandler {
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
         cursor_cell.set_hyperlink_id(hyperlink_id);
+        cursor_cell.set_underline_color(underline_color);
 
         cursor_cell
     }

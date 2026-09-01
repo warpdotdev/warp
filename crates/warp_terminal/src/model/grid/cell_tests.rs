@@ -2,6 +2,7 @@
 // Apache license; see: crates/warp_terminal/src/model/LICENSE-ALACRITTY.
 
 use super::{Cell, LineLength};
+use crate::model::ansi::Color;
 use crate::model::char_or_str::CharOrStr;
 use crate::model::grid::cell::{Flags, MAX_GRAPHEME_BYTES};
 use crate::model::grid::row::Row;
@@ -44,6 +45,18 @@ fn test_contains_cell_decorations() {
     assert!(Flags::UNDERLINE.intersects(Flags::CELL_DECORATIONS));
     assert!(Flags::STRIKEOUT.intersects(Flags::CELL_DECORATIONS));
     assert!(Flags::DOUBLE_UNDERLINE.intersects(Flags::CELL_DECORATIONS));
+    assert!(Flags::CURLY_UNDERLINE.intersects(Flags::CELL_DECORATIONS));
+}
+
+#[test]
+fn underline_color_round_trips_through_cell_extra() {
+    let mut cell = Cell::default();
+    assert_eq!(cell.underline_color(), None);
+    cell.set_underline_color(Some(Color::Indexed(3)));
+    assert_eq!(cell.underline_color(), Some(Color::Indexed(3)));
+    assert_eq!(std::mem::size_of::<Cell>(), 24);
+    cell.set_underline_color(None);
+    assert_eq!(cell.underline_color(), None);
 }
 
 #[test]

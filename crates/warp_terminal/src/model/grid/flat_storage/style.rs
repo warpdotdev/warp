@@ -20,6 +20,9 @@ pub type FgColorMap = AttributeMap<ansi::Color>;
 /// A map that holds background color and other styling information.
 pub type BgAndStyleMap = AttributeMap<BgAndStyle>;
 
+/// Run-length-encoded SGR 58 underline color (`None` when unset).
+pub type UnderlineColorMap = AttributeMap<Option<ansi::Color>>;
+
 /// A bitmask for flags that represent style information.
 const STYLE_MASK: cell::Flags = cell::Flags::from_bits_truncate(
     cell::Flags::INVERSE.bits()
@@ -27,6 +30,7 @@ const STYLE_MASK: cell::Flags = cell::Flags::from_bits_truncate(
         | cell::Flags::ITALIC.bits()
         | cell::Flags::UNDERLINE.bits()
         | cell::Flags::DOUBLE_UNDERLINE.bits()
+        | cell::Flags::CURLY_UNDERLINE.bits()
         | cell::Flags::DIM.bits()
         | cell::Flags::HIDDEN.bits()
         | cell::Flags::STRIKEOUT.bits(),

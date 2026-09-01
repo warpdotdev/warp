@@ -2,6 +2,7 @@ use itertools::Itertools;
 use testing::{ToRows as _, assert_rows_equal};
 
 use super::*;
+use crate::model::ansi;
 use crate::model::char_or_str::CharOrStr;
 use crate::model::grid::cell::{Cell, Flags};
 
@@ -351,4 +352,24 @@ fn test_blank_cells_before_hyperlink_are_not_clickable() {
     assert_eq!(flat[1].hyperlink_id(), None);
     assert_eq!(flat[2].c, 'a');
     assert_eq!(flat[2].hyperlink_id(), Some(id));
+}
+
+#[test]
+fn curly_underline_and_color_survive_flat_storage_roundtrip() {
+    let mut cell = Cell::default();
+    cell.c = 'a';
+    cell.flags.insert(Flags::CURLY_UNDERLINE);
+    cell.set_underline_color(Some(ansi::Color::Indexed(9)));
+
+    let row = Row::from_vec(vec![cell, Cell::default()], 2);
+    let mut storage = FlatStorage::new(5, None, Some(2));
+    storage.push_rows([&row]);
+
+    let flat = storage
+        .rows_from(0)
+        .next()
+        .expect("should materialize the pushed row");
+    assert_eq!(flat[0].c, 'a');
+    assert!(flat[0].flags().contains(Flags::CURLY_UNDERLINE));
+    assert_eq!(flat[0].underline_color(), Some(ansi::Color::Indexed(9)));
 }

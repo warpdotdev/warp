@@ -536,7 +536,10 @@ fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
     if cell.flags.contains(Flags::ITALIC) {
         style = style.add_modifier(Modifier::ITALIC);
     }
-    if cell.flags.contains(Flags::UNDERLINE) || cell.flags.contains(Flags::DOUBLE_UNDERLINE) {
+    if cell.flags.contains(Flags::UNDERLINE)
+        || cell.flags.contains(Flags::DOUBLE_UNDERLINE)
+        || cell.flags.contains(Flags::CURLY_UNDERLINE)
+    {
         style = style.add_modifier(Modifier::UNDERLINED);
     }
     if cell.flags.contains(Flags::INVERSE) {

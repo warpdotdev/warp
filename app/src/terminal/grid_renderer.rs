@@ -969,7 +969,7 @@ fn render_cell(
         cell_size,
         grid_origin,
         glyph_offset,
-        cell_colors.foreground_color,
+        decoration_color(cell, cell_colors.foreground_color, colors, override_colors),
         obfuscate_mode,
     ));
     // We move this in and then return it to avoid an extra copy in `maybe_draw_background`.
@@ -1255,7 +1255,12 @@ fn render_grid_with_ligatures<'a>(
                         cell_size,
                         grid_origin,
                         glyph_offset,
-                        cell_colors.foreground_color,
+                        decoration_color(
+                            &marked_text_cell,
+                            cell_colors.foreground_color,
+                            colors,
+                            override_colors,
+                        ),
                         obfuscate_secrets,
                     ));
 
@@ -1403,7 +1408,7 @@ fn render_grid_with_ligatures<'a>(
                 cell_size,
                 grid_origin,
                 glyph_offset,
-                cell_colors.foreground_color,
+                decoration_color(cell, cell_colors.foreground_color, colors, override_colors),
                 obfuscate_secrets,
             ));
 
@@ -2327,6 +2332,17 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
     }
 }
 
+fn decoration_color(
+    cell: &Cell,
+    foreground_color: ColorU,
+    colors: &color::List,
+    override_colors: &color::OverrideList,
+) -> ColorU {
+    cell.underline_color()
+        .map(|color| cell_type::compute_bg_rgb(colors, override_colors, color))
+        .unwrap_or(foreground_color)
+}
+
 /// Calculate the Rect arguments for the underlines and strikethroughs, but don't actually draw
 /// them yet. Instead, return their data so that they can be drawn later to avoid overlap problems
 /// with the background.
@@ -2338,7 +2354,7 @@ fn calculate_cell_decorations(
     glyph_offset: Vector2F,
     foreground_color: ColorU,
     obfuscate_mode: ObfuscateSecrets,
-) -> Option<DecorationData> {
+) -> Vec<DecorationData> {
     let is_secret_in_highlight_mode = matches!(obfuscate_mode, ObfuscateSecrets::Strikethrough)
         && cell_type.is_unhovered_secret();
 
@@ -2346,7 +2362,7 @@ fn calculate_cell_decorations(
         && !cell_type.is_url()
         && !is_secret_in_highlight_mode
     {
-        return None;
+        return Vec::new();
     }
 
     let thickness = UNDERLINE_THICKNESS_SCALE_FACTOR * cell_size.x().round().max(1.);
@@ -2357,6 +2373,24 @@ fn calculate_cell_decorations(
     // Don't apply strikethrough to secrets that are inside hovered links
     let should_strikethrough_secret =
         is_unhovered_secret && is_in_strikethrough_mode && !cell_type.is_url();
+
+    let column_span = if cell.flags.intersects(Flags::WIDE_CHAR) {
+        2.
+    } else {
+        1.
+    };
+    let cell_origin = grid_origin + glyph_offset;
+
+    if cell.flags.intersects(Flags::CURLY_UNDERLINE) {
+        return curly_underline_rects(
+            cell_origin,
+            cell_size.x(),
+            cell_size.y(),
+            column_span,
+            thickness,
+            foreground_color,
+        );
+    }
 
     let decoration_rect_data = if cell.flags.intersects(Flags::DOUBLE_UNDERLINE) {
         Some((thickness * 2., cell_size.y(), foreground_color))
@@ -2370,16 +2404,62 @@ fn calculate_cell_decorations(
         None
     };
 
-    let actual_cell_size = if cell.flags.intersects(Flags::WIDE_CHAR) {
-        cell_size * vec2f(2., 1.)
-    } else {
-        cell_size
-    };
-    decoration_rect_data.map(|(thickness, y, color)| DecorationData {
-        origin: grid_origin + glyph_offset + vec2f(0., y - thickness),
-        size: vec2f(actual_cell_size.x(), thickness),
-        color,
-    })
+    decoration_rect_data
+        .map(|(thickness, y, color)| DecorationData {
+            origin: cell_origin + vec2f(0., y - thickness),
+            size: vec2f(cell_size.x() * column_span, thickness),
+            color,
+        })
+        .into_iter()
+        .collect()
+}
+
+/// One period per cell, troughs at the edges so adjacent cells join, peak near center.
+fn curly_underline_peak_and_trough(
+    cell_width: f32,
+    cell_height: f32,
+    thickness: f32,
+) -> (f32, f32) {
+    let amplitude = cell_width / std::f32::consts::PI;
+    let trough_y = cell_height - thickness * 0.5;
+    let peak_y = (trough_y - amplitude).max(thickness * 0.5);
+    (peak_y, trough_y)
+}
+
+fn curly_underline_centerline_y(x: f32, period: f32, peak_y: f32, trough_y: f32) -> f32 {
+    let t = (x / period) * 2.0 * std::f32::consts::PI;
+    trough_y + (peak_y - trough_y) * 0.5 * (1.0 - t.cos())
+}
+
+fn curly_underline_rects(
+    cell_origin: Vector2F,
+    cell_width: f32,
+    cell_height: f32,
+    column_span: f32,
+    thickness: f32,
+    color: ColorU,
+) -> Vec<DecorationData> {
+    let width = cell_width * column_span;
+    let thickness = thickness.max(1.);
+    let (peak_y, trough_y) = curly_underline_peak_and_trough(cell_width, cell_height, thickness);
+    let sample_count = (width.ceil() as usize).max(8) + 1;
+    let mut rects = Vec::with_capacity(sample_count.saturating_sub(1));
+    let mut prev_x = 0.;
+    let mut prev_y = curly_underline_centerline_y(0., cell_width, peak_y, trough_y);
+    for i in 1..sample_count {
+        let x = width * (i as f32) / (sample_count - 1) as f32;
+        let y = curly_underline_centerline_y(x, cell_width, peak_y, trough_y);
+        let min_y = prev_y.min(y) - thickness * 0.5;
+        let max_y = prev_y.max(y) + thickness * 0.5;
+        rects.push(DecorationData {
+            origin: cell_origin + vec2f(prev_x, min_y),
+            size: vec2f((x - prev_x).max(1.), (max_y - min_y).max(thickness)),
+            color,
+        });
+        prev_x = x;
+        prev_y = y;
+    }
+    rects
 }
 
 fn calculate_cursor_origin(
