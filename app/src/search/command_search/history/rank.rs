@@ -18,7 +18,7 @@ const PRIOR_MULTIPLIER_BASELINE: f64 = 0.8;
 const PRIOR_MULTIPLIER_SWING: f64 = 0.4;
 
 /// How much of `f(priors)` is driven by recency vs. the other priors below.
-const RECENCY_WEIGHT: f64 = 0.30;
+const RECENCY_WEIGHT: f64 = 0.10;
 
 /// How much of `f(priors)` is driven by whether a command ran in the current session.
 const SESSION_WEIGHT: f64 = 0.05;
@@ -41,10 +41,10 @@ const CONSECUTIVE_BONUS_PER_CHAR: f64 = 4.0;
 /// prefix of a longer one.
 const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
 
-/// Synthetic "days per list position" used to derive an age for entries with no timestamp, so a
-/// commonly-typed command near the tail of an untracked history file still reads as recent
-/// instead of decaying to zero relevance. Reuses [`RECENCY_HALF_LIFE_DAYS`] as the decay rate.
-const FALLBACK_AGE_DAYS_PER_POSITION: f64 = 1.0;
+/// Recency assigned to entries with no timestamp (history-file rows with no matching sqlite
+/// record), i.e. exactly between "as fresh as possible" (1.0) and "as stale as possible" (0.0):
+/// there's no data to justify treating an untracked entry as either.
+const MISSING_TIMESTAMP_RECENCY: f64 = 0.5;
 
 /// Theoretical lower bound of the weighted prior sum, reached when every positive prior is absent
 /// and the command's last run failed. Rescales that sum into `[0, 1]` before it becomes
@@ -174,9 +174,6 @@ pub(crate) struct RankInputs<'a> {
     pub match_quality: MatchQuality,
     pub now: DateTime<Local>,
     pub current_session_id: SessionId,
-    /// Number of other candidates newer than this one in the full (chronologically-ordered)
-    /// history list. Used as an age proxy for entries with no timestamp; see `age_days`.
-    pub newer_candidate_count: usize,
     /// Whether the query is empty (the zero-state case, where `SearchMixer` still invokes
     /// history so it has something to show before the user types). Priors like session are only
     /// meaningful relative to an actual query; applying them here would reorder the zero state
@@ -196,8 +193,13 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
         return None;
     }
 
-    let age_days = age_days(inputs.entry, inputs.now, inputs.newer_candidate_count);
-    let recency = (-std::f64::consts::LN_2 * age_days / RECENCY_HALF_LIFE_DAYS).exp();
+    let recency = match inputs.entry.start_ts {
+        Some(start_ts) => {
+            let age_days = age_days(start_ts, inputs.now);
+            (-std::f64::consts::LN_2 * age_days / RECENCY_HALF_LIFE_DAYS).exp()
+        }
+        None => MISSING_TIMESTAMP_RECENCY,
+    };
     let session = f64::from(inputs.entry.session_id == Some(inputs.current_session_id));
     let exit_penalty = f64::from(
         inputs
@@ -217,15 +219,9 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
     ))
 }
 
-/// Age, in days, used for the recency term. Falls back to a synthetic age based on how many
-/// newer candidates exist for entries with no timestamp (history-file rows with no matching
-/// sqlite record), so they decay gracefully instead of reading as infinitely old.
-fn age_days(entry: &HistoryEntry, now: DateTime<Local>, newer_candidate_count: usize) -> f64 {
-    match entry.start_ts {
-        Some(start_ts) => (now - start_ts).num_seconds() as f64 / 86_400.0,
-        None => newer_candidate_count as f64 * FALLBACK_AGE_DAYS_PER_POSITION,
-    }
-    .max(0.0)
+/// Age, in days, of a command with a known `start_ts`, used for the recency term.
+fn age_days(start_ts: DateTime<Local>, now: DateTime<Local>) -> f64 {
+    ((now - start_ts).num_seconds() as f64 / 86_400.0).max(0.0)
 }
 
 #[cfg(test)]

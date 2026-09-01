@@ -287,9 +287,7 @@ impl CommandSearchView {
             }
 
             if History::as_ref(ctx).is_queryable(&session_id) {
-                let source = History::handle(ctx).read(ctx, |history_model, app| {
-                    history_data_source_for_session(session_id, history_model, app)
-                });
+                let source = history_data_source_for_session(session_id);
                 mixer.add_async_source(
                     source,
                     HashSet::from([QueryFilter::History]),
@@ -306,11 +304,7 @@ impl CommandSearchView {
                     move |mixer, _, history_event, ctx| match history_event {
                         HistoryEvent::Initialized(id) => {
                             if id == &session_id {
-                                let source = history_data_source_for_session(
-                                    session_id,
-                                    History::as_ref(ctx),
-                                    ctx,
-                                );
+                                let source = history_data_source_for_session(session_id);
                                 mixer.add_async_source(
                                     source,
                                     HashSet::from([QueryFilter::History]),

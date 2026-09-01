@@ -22,7 +22,6 @@ struct Scenario {
     start_ts: Option<DateTime<Local>>,
     session_id: Option<SessionId>,
     exit_ok: bool,
-    newer_candidate_count: usize,
 }
 
 impl Scenario {
@@ -33,17 +32,11 @@ impl Scenario {
             start_ts: None,
             session_id: None,
             exit_ok: true,
-            newer_candidate_count: 0,
         }
     }
 
     fn days_ago(mut self, days: i64) -> Self {
         self.start_ts = Some(days_ago(days));
-        self
-    }
-
-    fn newer_candidates(mut self, count: usize) -> Self {
-        self.newer_candidate_count = count;
         self
     }
 
@@ -72,7 +65,6 @@ impl Scenario {
             match_quality,
             now: now(),
             current_session_id,
-            newer_candidate_count: self.newer_candidate_count,
             is_blank_query: false,
         })
         .expect("scenario match quality should clear the score floor")
@@ -171,12 +163,19 @@ fn exit_failure_is_penalized() {
 }
 
 #[test]
-fn missing_timestamp_falls_back_to_list_position_instead_of_reading_as_infinitely_old() {
+fn missing_timestamp_ranks_between_confirmed_fresh_and_confirmed_ancient() {
+    // A missing timestamp gets a neutral, mid-range recency (MISSING_TIMESTAMP_RECENCY) rather
+    // than being guessed at or treated as confirmed-worst. That ordering -- unknown strictly
+    // between a confirmed-fresh and a confirmed-ancient entry -- is the entire point of the
+    // neutral value, so pin it down here: a future change to the weights could otherwise
+    // collapse it without any other test noticing.
     let session = SessionId::from(1);
-    let recent_untracked = Scenario::new("ls -la", "ls -la").newer_candidates(0);
-    let old_untracked = Scenario::new("ls -la", "ls -la").newer_candidates(200);
+    let fresh = Scenario::new("ls -la", "ls -la").days_ago(0);
+    let untracked = Scenario::new("ls -la", "ls -la");
+    let ancient = Scenario::new("ls -la", "ls -la").days_ago(3650);
 
-    assert!(recent_untracked.rank(session) > old_untracked.rank(session));
+    assert!(fresh.rank(session) > untracked.rank(session));
+    assert!(untracked.rank(session) > ancient.rank(session));
 }
 
 #[test]
@@ -193,7 +192,6 @@ fn match_score_floor_filters_out_low_quality_matches() {
         match_quality: low_quality,
         now: now(),
         current_session_id: SessionId::from(1),
-        newer_candidate_count: 0,
         is_blank_query: false,
     });
 
@@ -225,7 +223,6 @@ fn blank_query_ignores_priors_and_yields_a_result() {
             match_quality: zero_quality,
             now: now(),
             current_session_id: SessionId::from(1),
-            newer_candidate_count: 0,
             is_blank_query: true,
         })
     };

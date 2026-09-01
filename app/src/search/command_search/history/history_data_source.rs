@@ -31,36 +31,41 @@ pub fn history_data_source(
     commands: Vec<HistoryEntry>,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     let commands: Arc<[Arc<HistoryEntry>]> = commands.into_iter().map(Arc::new).collect();
-    history_data_source_from_shared(commands, SessionId::from(0))
-}
-
-fn history_data_source_from_shared(
-    commands: Arc<[Arc<HistoryEntry>]>,
-    current_session_id: SessionId,
-) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
     AsyncSnapshotDataSource::new(
         move |query: &Query, _app: &AppContext| HistorySnapshot {
             commands: commands.clone(),
             query_text: query.text.clone(),
-            current_session_id,
+            current_session_id: SessionId::from(0),
         },
         fuzzy_match_history,
     )
 }
 
+/// Rebuilds the candidate list from `History`'s live state on every query, rather than capturing
+/// one fixed snapshot when the panel opens: `History::mark_command_as_finished` updates an
+/// in-flight command's entry via `Arc::make_mut` when it completes, and a fixed capture would
+/// keep pointing at the stale, pre-completion entry (wrong exit status, and any other metadata
+/// filled in on completion) for as long as the panel stays open.
 pub(crate) fn history_data_source_for_session(
     session_id: SessionId,
-    history_model: &terminal::History,
-    app: &AppContext,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {
-    let include_agent_commands = *AISettings::as_ref(app).include_agent_commands_in_history;
-    let commands: Arc<[Arc<HistoryEntry>]> = history_model
-        .commands_shared(session_id)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|entry| include_agent_commands || !entry.is_agent_executed)
-        .collect();
-    history_data_source_from_shared(commands, session_id)
+    AsyncSnapshotDataSource::new(
+        move |query: &Query, app: &AppContext| {
+            let include_agent_commands = *AISettings::as_ref(app).include_agent_commands_in_history;
+            let commands: Arc<[Arc<HistoryEntry>]> = terminal::History::as_ref(app)
+                .commands_shared(session_id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|entry| include_agent_commands || !entry.is_agent_executed)
+                .collect();
+            HistorySnapshot {
+                commands,
+                query_text: query.text.clone(),
+                current_session_id: session_id,
+            }
+        },
+        fuzzy_match_history,
+    )
 }
 
 pub(crate) fn fuzzy_match_history(
@@ -76,24 +81,20 @@ pub(crate) fn fuzzy_match_history(
         let now = Local::now();
         let is_blank_query = snapshot.query_text.trim().is_empty();
         let tokens = rank::tokenize_query(&snapshot.query_text);
-        let total_candidates = snapshot.commands.len();
 
-        for (chunk_index, chunk) in snapshot.commands.chunks(CHUNK_SIZE).enumerate() {
-            let chunk_start = chunk_index * CHUNK_SIZE;
-            for (offset, entry) in chunk.iter().enumerate() {
+        for chunk in snapshot.commands.chunks(CHUNK_SIZE) {
+            for entry in chunk {
                 let Some((match_result, match_quality)) =
                     rank::match_history_command(entry.command.as_str(), &tokens)
                 else {
                     continue;
                 };
 
-                let index = chunk_start + offset;
                 let Some(score) = rank::rank(RankInputs {
                     entry: entry.as_ref(),
                     match_quality,
                     now,
                     current_session_id: snapshot.current_session_id,
-                    newer_candidate_count: total_candidates - 1 - index,
                     is_blank_query,
                 }) else {
                     continue;

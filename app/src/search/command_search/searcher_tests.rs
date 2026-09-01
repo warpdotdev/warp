@@ -1,13 +1,15 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Local;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warpui::r#async::Timer;
 use warpui::elements::Empty;
-use warpui::{App, AppContext, Element};
+use warpui::{App, AppContext, Element, SingletonEntity};
 
 use super::*;
 use crate::ai::blocklist::AIQueryHistoryOutputStatus;
@@ -16,7 +18,9 @@ use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::search::ai_queries::fuzzy_match::FuzzyMatchAIQueryResults;
 use crate::search::command_search::ai_queries::AIQuerySearchResultItem;
-use crate::search::command_search::history::history_data_source;
+use crate::search::command_search::history::{
+    history_data_source, history_data_source_for_session,
+};
 use crate::search::command_search::searcher::CommandSearchMixer;
 use crate::search::command_search::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::search::data_source::{Query, QueryResult};
@@ -29,8 +33,9 @@ use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 use crate::search::{QueryFilter, SyncDataSource};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::HistoryEntry;
-use crate::terminal::model::session::SessionId;
+use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+use crate::terminal::model::session::{Session, SessionId, SessionInfo};
+use crate::terminal::{History, HistoryEntry};
 use crate::test_util::assert_eventually;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSource, WorkflowType};
@@ -170,6 +175,79 @@ fn test_add_source_to_mixer() {
                     .any(|filter| filter == QueryFilter::History)
             );
         });
+    });
+}
+
+#[test]
+fn test_history_data_source_reflects_live_exit_status_update() {
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test().with_id(0),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+        let session_id = session.id();
+
+        let history_handle = History::handle(&app);
+        history_handle.update(&mut app, |history, ctx| {
+            history.init_session_with(session.clone(), async { vec![] }, ctx);
+        });
+        assert_eventually!(
+            history_handle.read(&app, |history, _ctx| history.is_queryable(&session_id)),
+            "history should become queryable once the (empty) histfile read completes"
+        );
+
+        let start_ts = Local::now();
+        history_handle.update(&mut app, |history, _ctx| {
+            let mut entry = HistoryEntry::command_only("deploy prod".to_owned());
+            entry.session_id = Some(session_id);
+            entry.start_ts = Some(start_ts);
+            history.append_commands(session_id, vec![entry]);
+        });
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_for_session(session_id),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("deploy prod".into(), ctx);
+        });
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the first query should finish loading"
+        );
+        let score_while_running = app.read(|app| mixer.as_ref(app).results()[0].score());
+
+        // Mark the command finished, with a failure, while the data source (standing in for a
+        // still-open Command Search panel) is never rebuilt.
+        history_handle.update(&mut app, |history, _ctx| {
+            history.mark_command_as_finished(session_id, start_ts, Local::now(), ExitCode::from(1));
+        });
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.run_query("deploy prod".into(), ctx);
+        });
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the second query should finish loading"
+        );
+        let score_after_failure = app.read(|app| mixer.as_ref(app).results()[0].score());
+
+        assert!(
+            score_after_failure < score_while_running,
+            "the exit-status prior should reflect the command's completion even though the data \
+             source was never rebuilt, proving it re-reads live History state per query rather \
+             than a snapshot captured once when the source was created"
+        );
     });
 }
 
