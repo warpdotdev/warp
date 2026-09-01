@@ -40,8 +40,8 @@ use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::{
     ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
     DispatchEventResult, Element, Empty, EventHandler, Flex, MainAxisAlignment, MainAxisSize,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
-    Wrap, WrapFill, WrapFillEntireRun,
+    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, SavePosition,
+    Shrinkable, Stack, Wrap, WrapFill, WrapFillEntireRun,
 };
 use warpui::{
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
@@ -57,6 +57,9 @@ use crate::ai::blocklist::agent_view::is_in_cloud_context;
 use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::usage::icon_for_context_window_usage;
+use crate::ai::blocklist::usage::usage_popover_view::{
+    UsagePopoverEvent, UsagePopoverView, format_cost_only,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::appearance::Appearance;
@@ -91,7 +94,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
 };
 use crate::terminal::input::models::InlineModelSelectorTab;
-use crate::terminal::input::{HandoffComposeState, MenuPositioningProvider};
+use crate::terminal::input::{HandoffComposeState, MenuPositioning, MenuPositioningProvider};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent};
@@ -133,6 +136,10 @@ const LIVE_REMOTE_VM_INDICATOR_TOOLTIP: &str = "Connected to a live cloud agent 
 const NEW_CLOUD_VM_INDICATOR_TOOLTIP: &str = "Not connected to cloud agent. Your next prompt starts a new cloud machine to continue this conversation.";
 
 const CLOUD_MODE_V2_FOOTER_GAP: f32 = 4.;
+
+/// `SavePosition` id for the usage popover's trigger button, used to anchor the popover
+/// overlay to it.
+const USAGE_BUTTON_SAVE_POSITION_ID: &str = "agent_input_footer::usage_button";
 
 /// How long to wait after session creation before showing the install chip.
 /// Gives the plugin time to connect and send its `SessionStart` event.
@@ -195,6 +202,9 @@ pub struct AgentInputFooter {
     start_remote_control_button: ViewHandle<ActionButton>,
     stop_remote_control_button: ViewHandle<ActionButton>,
     context_window_button: ViewHandle<ActionButton>,
+    /// Trigger for the "Conversation" usage popover. Hovering shows the
+    /// conversation's total cost; clicking toggles `usage_popover`.
+    usage_button: ViewHandle<ActionButton>,
     /// Non-interactive indicators for a cloud follow-up pane: one shown when attached to a live
     /// remote VM, one when the next follow-up will start a new cloud VM. See
     /// [`AIQueryRouting`].
@@ -259,6 +269,15 @@ pub struct AgentInputFooter {
     /// yellow notification dot on the context-window chip when the
     /// `PromptCacheExpiryWarning` flag is enabled.
     prompt_cache_expired: bool,
+
+    /// Used to anchor the usage popover above or below the input box, matching the
+    /// surrounding menu positioning.
+    menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
+    /// The "Conversation" usage popover. A single long-lived instance, pointed at
+    /// the active conversation via `UsagePopoverView::reset_for_conversation` each
+    /// time it opens.
+    usage_popover: ViewHandle<UsagePopoverView>,
+    usage_popover_open: bool,
 }
 
 impl AgentInputFooter {
@@ -684,6 +703,29 @@ impl AgentInputFooter {
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
 
+        let usage_button = ctx.add_typed_action_view(|_ctx| {
+            // Tooltip text is set by `update_usage_button`, which runs during
+            // construction and on every usage update.
+            ActionButton::new("", AgentInputButtonTheme)
+                .with_icon(Icon::PieChart)
+                .with_size(button_size)
+                .with_tooltip_alignment(TooltipAlignment::Left)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AgentInputFooterAction::ToggleUsagePopover);
+                })
+        });
+
+        // Constructed up front, mirroring `agent_todos_popup` and every other lazily-shown
+        // footer popup. Pointed at a conversation via `reset_for_conversation` each time the
+        // popover opens; until then it renders empty.
+        let usage_popover = ctx.add_typed_action_view(|_ctx| UsagePopoverView::new(None));
+        ctx.subscribe_to_view(&usage_popover, |me, _, event, ctx| match event {
+            UsagePopoverEvent::Close => {
+                me.usage_popover_open = false;
+                ctx.notify();
+            }
+        });
+
         // Non-interactive cloud follow-up indicators. Only one is rendered at a time, chosen by
         // `AIQueryRouting` at render time.
         let live_session_indicator = ctx.add_typed_action_view(|_ctx| {
@@ -853,6 +895,7 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. } => {
                         me.sync_fast_forward_button(ctx);
                         me.update_context_window_button(ctx);
+                        me.update_usage_button(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
@@ -861,6 +904,7 @@ impl AgentInputFooter {
                     | BlocklistAIHistoryEvent::AppendedExchange { .. }
                     | BlocklistAIHistoryEvent::UpdatedStreamingExchange { .. } => {
                         me.update_context_window_button(ctx);
+                        me.update_usage_button(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
@@ -917,6 +961,7 @@ impl AgentInputFooter {
             plugin_operation_in_progress: false,
             plugin_chip_ready: false,
             context_window_button,
+            usage_button,
             live_session_indicator,
             new_cloud_vm_indicator,
             model_selector: profile_model_selector_full,
@@ -940,10 +985,14 @@ impl AgentInputFooter {
             v2_model_selector,
             prompt_cache_expiry_timer_handle: None,
             prompt_cache_expired: false,
+            menu_positioning_provider: menu_positioning_provider.clone(),
+            usage_popover,
+            usage_popover_open: false,
         };
         me.sync_fast_forward_button(ctx);
         me.sync_remote_control_button(ctx);
         me.update_context_window_button(ctx);
+        me.update_usage_button(ctx);
         me.update_display_chips(&prompt, ctx);
         // Route ambient wiring through the setter so construction and the lazy shared-session
         // viewer path share one implementation.
@@ -1556,6 +1605,7 @@ impl AgentInputFooter {
             AgentToolbarItemKind::ModelSelector
             | AgentToolbarItemKind::NLDToggle
             | AgentToolbarItemKind::ContextWindowUsage
+            | AgentToolbarItemKind::UsageSummary
             | AgentToolbarItemKind::FastForwardToggle
             | AgentToolbarItemKind::HandoffToCloud => None,
         }
@@ -2102,6 +2152,26 @@ impl AgentInputFooter {
         }
     }
 
+    /// Refreshes the usage button's tooltip with the active conversation's
+    /// total cost — the same figure the popover's header shows.
+    fn update_usage_button(&mut self, ctx: &mut ViewContext<Self>) {
+        // Falls back to the bare label rather than keeping the previous
+        // conversation's figure, which would attribute another conversation's
+        // spend to this one.
+        let tooltip = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id)
+            .map(|conversation| {
+                format!(
+                    "Conversation usage: {}",
+                    format_cost_only(conversation.usage_totals().total_cost_in_cents())
+                )
+            })
+            .unwrap_or_else(|| "Conversation usage".to_string());
+        self.usage_button.update(ctx, |button, ctx| {
+            button.set_tooltip(Some(tooltip), ctx);
+        });
+    }
+
     /// Schedules a refresh of the context-window button at the prompt-cache
     /// expiry instant so the notification dot appears while the conversation is idle.
     fn reschedule_prompt_cache_expiry_timer(
@@ -2232,6 +2302,53 @@ impl AgentInputFooter {
                     stack.finish()
                 })
             }
+            AgentToolbarItemKind::UsageSummary => {
+                // A persisted custom toolbar layout is replayed verbatim at render time, so
+                // the flag has to be checked here rather than only in `default_right` /
+                // `all_available` / `is_available`, none of which the render path consults.
+                if !FeatureFlag::PricingTransparency.is_enabled() {
+                    return None;
+                }
+                let conversation = BlocklistAIHistoryModel::as_ref(app)
+                    .active_conversation(self.terminal_view_id)?;
+                if !conversation.usage_totals().has_usage {
+                    return None;
+                }
+
+                let button = SavePosition::new(
+                    ChildView::new(&self.usage_button).finish(),
+                    USAGE_BUTTON_SAVE_POSITION_ID,
+                )
+                .finish();
+                let mut stack = Stack::new().with_child(button);
+                if self.usage_popover_open {
+                    let positioning = match self.menu_positioning_provider.menu_position(app) {
+                        MenuPositioning::BelowInputBox => {
+                            OffsetPositioning::offset_from_save_position_element(
+                                USAGE_BUTTON_SAVE_POSITION_ID,
+                                vec2f(0., 4.),
+                                warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
+                                warpui::elements::PositionedElementAnchor::BottomRight,
+                                ChildAnchor::TopRight,
+                            )
+                        }
+                        MenuPositioning::AboveInputBox => {
+                            OffsetPositioning::offset_from_save_position_element(
+                                USAGE_BUTTON_SAVE_POSITION_ID,
+                                vec2f(0., -4.),
+                                warpui::elements::PositionedElementOffsetBounds::WindowByPosition,
+                                warpui::elements::PositionedElementAnchor::TopRight,
+                                ChildAnchor::BottomRight,
+                            )
+                        }
+                    };
+                    stack.add_positioned_overlay_child(
+                        ChildView::new(&self.usage_popover).finish(),
+                        positioning,
+                    );
+                }
+                Some(stack.finish())
+            }
             AgentToolbarItemKind::ShareSession => {
                 if is_conversation_transcript_context {
                     return None;
@@ -2342,42 +2459,53 @@ impl View for AgentInputFooter {
                 .with_child(ChildView::new(&self.handoff_environment_selector).finish());
         }
 
-        let terminal_model = self.terminal_model.lock();
-        let shared_status = terminal_model.shared_session_status();
-        let is_cloud_context = super::is_in_cloud_context(&terminal_model);
-        let is_conversation_transcript_context =
-            is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+        // The lock must be dropped before `render_toolbar_item`: its `UsageSummary` branch
+        // calls `menu_positioning_provider.menu_position()`, which re-locks this same
+        // non-reentrant terminal model and deadlocks. Mirrors `render_cli_mode_footer`.
+        let (shared_status, is_cloud_context, is_conversation_transcript_context) = {
+            let terminal_model = self.terminal_model.lock();
+            let shared_status = terminal_model.shared_session_status().clone();
+            let is_cloud_context = super::is_in_cloud_context(&terminal_model);
+            let is_conversation_transcript_context =
+                is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
-        // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
-        // The new-cloud-VM chip uses a yellow icon; the live-session chip uses the default color.
-        match resolve_ai_query_routing(
-            self.terminal_view_id,
-            self.ambient_agent_view_model.as_ref(),
-            &terminal_model,
-            app,
-        ) {
-            AIQueryRouting::LiveRemoteVm {
-                ambient_agent_task_id: Some(_),
-                ..
-            } => {
-                left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
+            // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
+            // The new-cloud-VM chip uses a yellow icon; the live-session chip uses the default color.
+            match resolve_ai_query_routing(
+                self.terminal_view_id,
+                self.ambient_agent_view_model.as_ref(),
+                &terminal_model,
+                app,
+            ) {
+                AIQueryRouting::LiveRemoteVm {
+                    ambient_agent_task_id: Some(_),
+                    ..
+                } => {
+                    left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
+                }
+                AIQueryRouting::NewCloudVm { .. } => {
+                    left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
+                }
+                // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
+                AIQueryRouting::LiveRemoteVm {
+                    ambient_agent_task_id: None,
+                    ..
+                }
+                | AIQueryRouting::UnconnectedReadOnly
+                | AIQueryRouting::Local => {}
             }
-            AIQueryRouting::NewCloudVm { .. } => {
-                left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
-            }
-            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
-            AIQueryRouting::LiveRemoteVm {
-                ambient_agent_task_id: None,
-                ..
-            }
-            | AIQueryRouting::UnconnectedReadOnly
-            | AIQueryRouting::Local => {}
-        }
+
+            (
+                shared_status,
+                is_cloud_context,
+                is_conversation_transcript_context,
+            )
+        };
 
         for item in &left_items {
             if let Some(element) = self.render_toolbar_item(
                 item,
-                shared_status,
+                &shared_status,
                 is_cloud_context,
                 is_conversation_transcript_context,
                 app,
@@ -2404,7 +2532,7 @@ impl View for AgentInputFooter {
             for item in &right_items {
                 if let Some(element) = self.render_toolbar_item(
                     item,
-                    shared_status,
+                    &shared_status,
                     is_cloud_context,
                     is_conversation_transcript_context,
                     app,
@@ -2463,6 +2591,7 @@ pub enum AgentInputFooterAction {
     ShowContextMenu {
         position: Vector2F,
     },
+    ToggleUsagePopover,
 }
 
 impl TypedActionView for AgentInputFooter {
@@ -2668,6 +2797,23 @@ impl TypedActionView for AgentInputFooter {
                 ctx.emit(AgentInputFooterEvent::ShowContextMenu {
                     position: *position,
                 });
+            }
+            AgentInputFooterAction::ToggleUsagePopover => {
+                self.usage_popover_open = !self.usage_popover_open;
+                if self.usage_popover_open {
+                    let conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+                        .active_conversation(self.terminal_view_id)
+                        .map(|conversation| conversation.id());
+                    match conversation_id {
+                        Some(conversation_id) => {
+                            self.usage_popover.update(ctx, |popover, ctx| {
+                                popover.reset_for_conversation(conversation_id, ctx);
+                            });
+                        }
+                        None => self.usage_popover_open = false,
+                    }
+                }
+                ctx.notify();
             }
         }
     }

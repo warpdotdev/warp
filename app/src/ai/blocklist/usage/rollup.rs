@@ -31,9 +31,17 @@ pub enum AgentAvatar {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PerAgentCreditEntry {
     pub conversation_id: AIConversationId,
+    /// Drives sort order only; never displayed (per the "do not show
+    /// credits" pricing-transparency decision).
+    pub credits_spent: f32,
     pub display_name: String,
     pub avatar: AgentAvatar,
-    pub credits_spent: f32,
+    /// This agent's share of [`OrchestrationCreditRollup::total_cost_in_cents`],
+    /// computed with the same accessor so the rows sum to that total.
+    /// `None` when the conversation lacks a known dollar baseline.
+    pub cost_in_cents: Option<f32>,
+    /// This agent's share of [`OrchestrationCreditRollup::total_tokens`].
+    pub tokens: Option<u32>,
 }
 
 /// Aggregated credit usage for an orchestrator and its locally-loaded
@@ -62,6 +70,26 @@ pub struct OrchestrationCreditRollup {
     /// spawn first; orchestrator always sorts before its descendants in a
     /// tie).
     pub per_agent: Vec<PerAgentCreditEntry>,
+}
+
+/// Maximum number of per-agent rows rendered before the remainder is hidden
+/// behind a "Show N more" affordance.
+pub const ROLLUP_TRUNCATION_CAP: usize = 5;
+
+/// Splits the per-agent list into the rows to render now and the count still
+/// hidden, honoring [`ROLLUP_TRUNCATION_CAP`] and the caller's "show all" state.
+pub fn truncate_rollup_rows(
+    entries: &[PerAgentCreditEntry],
+    show_all: bool,
+) -> (&[PerAgentCreditEntry], usize) {
+    if show_all || entries.len() <= ROLLUP_TRUNCATION_CAP {
+        (entries, 0)
+    } else {
+        (
+            &entries[..ROLLUP_TRUNCATION_CAP],
+            entries.len() - ROLLUP_TRUNCATION_CAP,
+        )
+    }
 }
 
 /// Folds one more conversation's optional dollar cost into a running total,
@@ -118,16 +146,12 @@ pub fn compute_orchestration_rollup(
         // must not poison the running total for contributors that have.
         if credits > 0.0 {
             let orchestrator_usage_totals = orchestrator.usage_totals();
-            accumulate_cost(
-                &mut total_cost_in_cents,
-                orchestrator_usage_totals.total_cost_in_cents(),
-            );
-            accumulate_tokens(
-                &mut total_tokens,
-                orchestrator_usage_totals
-                    .charged_usage
-                    .map(|usage| usage.total_tokens()),
-            );
+            let orchestrator_tokens = orchestrator_usage_totals
+                .charged_usage
+                .map(|usage| usage.total_tokens());
+            let orchestrator_cost = orchestrator_usage_totals.total_cost_in_cents();
+            accumulate_cost(&mut total_cost_in_cents, orchestrator_cost);
+            accumulate_tokens(&mut total_tokens, orchestrator_tokens);
             entries.push((
                 0,
                 PerAgentCreditEntry {
@@ -135,6 +159,8 @@ pub fn compute_orchestration_rollup(
                     display_name: orchestrator_display_name(orchestrator),
                     avatar: AgentAvatar::Orchestrator,
                     credits_spent: credits,
+                    cost_in_cents: orchestrator_cost,
+                    tokens: orchestrator_tokens,
                 },
             ));
         }
@@ -150,16 +176,12 @@ pub fn compute_orchestration_rollup(
         // See the matching comment in the orchestrator branch above.
         if credits > 0.0 {
             let descendant_usage_totals = descendant.usage_totals();
-            accumulate_cost(
-                &mut total_cost_in_cents,
-                descendant_usage_totals.total_cost_in_cents(),
-            );
-            accumulate_tokens(
-                &mut total_tokens,
-                descendant_usage_totals
-                    .charged_usage
-                    .map(|usage| usage.total_tokens()),
-            );
+            let descendant_tokens = descendant_usage_totals
+                .charged_usage
+                .map(|usage| usage.total_tokens());
+            let descendant_cost = descendant_usage_totals.total_cost_in_cents();
+            accumulate_cost(&mut total_cost_in_cents, descendant_cost);
+            accumulate_tokens(&mut total_tokens, descendant_tokens);
             entries.push((
                 spawn_idx + 1,
                 PerAgentCreditEntry {
@@ -167,6 +189,8 @@ pub fn compute_orchestration_rollup(
                     display_name: child_display_name(descendant),
                     avatar: AgentAvatar::Child,
                     credits_spent: credits,
+                    cost_in_cents: descendant_cost,
+                    tokens: descendant_tokens,
                 },
             ));
         }

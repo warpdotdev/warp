@@ -52,6 +52,10 @@ pub enum AgentToolbarItemKind {
     ModelSelector,
     NLDToggle,
     ContextWindowUsage,
+    /// Trigger for the "Conversation" usage popover. Gated on
+    /// [`FeatureFlag::PricingTransparency`], since the popover's content is
+    /// entirely dollar figures.
+    UsageSummary,
 
     // CLI agent only
     RichInput,
@@ -85,6 +89,7 @@ impl AgentToolbarItemKind {
             Self::ModelSelector
             | Self::NLDToggle
             | Self::ContextWindowUsage
+            | Self::UsageSummary
             | Self::FastForwardToggle
             | Self::HandoffToCloud => ToolbarAvailability::AgentViewOnly,
             Self::RichInput | Self::Settings => ToolbarAvailability::CLIAgentOnly,
@@ -109,6 +114,7 @@ impl AgentToolbarItemKind {
             | Self::ModelSelector
             | Self::NLDToggle
             | Self::ContextWindowUsage
+            | Self::UsageSummary
             | Self::RichInput
             | Self::VoiceInput => true,
         }
@@ -122,6 +128,7 @@ impl AgentToolbarItemKind {
             Self::VoiceInput => "Voice Input",
             Self::FileAttach => "Attach File",
             Self::ContextWindowUsage => "Context Usage",
+            Self::UsageSummary => "Conversation Usage",
             Self::FileExplorer => "File Explorer",
             Self::RichInput => "Rich Input",
             Self::ShareSession => "/remote-control",
@@ -139,6 +146,7 @@ impl AgentToolbarItemKind {
             Self::VoiceInput => Some(Icon::Microphone),
             Self::FileAttach => Some(Icon::Plus),
             Self::ContextWindowUsage => Some(Icon::ContextRemaining100),
+            Self::UsageSummary => Some(Icon::PieChart),
             Self::FileExplorer => Some(Icon::FileCopy),
             Self::RichInput => Some(Icon::TextInput),
             Self::ShareSession => Some(Icon::Phone01),
@@ -161,6 +169,7 @@ impl AgentToolbarItemKind {
             Self::ContextChip(_)
             | Self::NLDToggle
             | Self::ContextWindowUsage
+            | Self::UsageSummary
             | Self::FastForwardToggle
             | Self::HandoffToCloud
             | Self::ShareSession
@@ -176,6 +185,9 @@ impl AgentToolbarItemKind {
     pub fn is_available(&self, app: &warpui::AppContext) -> bool {
         match self {
             Self::HandoffToCloud => AISettings::as_ref(app).is_cloud_handoff_enabled(app),
+            // Drops the item from the toolbar editor once the flag goes off. The render
+            // path does not consult this method, so it repeats the check itself.
+            Self::UsageSummary => FeatureFlag::PricingTransparency.is_enabled(),
             // Matches the gating on every other project explorer entry point, so the chip
             // cannot open a tool view the rest of the app hides. See
             // `Workspace::compute_left_panel_views` and the `SHOW_PROJECT_EXPLORER`
@@ -218,8 +230,11 @@ impl AgentToolbarItemKind {
         let mut items = vec![
             Self::ContextChip(ContextChipKind::AgentPlanAndTodoList),
             Self::ContextWindowUsage,
-            Self::ModelSelector,
         ];
+        if FeatureFlag::PricingTransparency.is_enabled() {
+            items.push(Self::UsageSummary);
+        }
+        items.push(Self::ModelSelector);
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && FeatureFlag::HOARemoteControl.is_enabled()
         {
@@ -251,6 +266,9 @@ impl AgentToolbarItemKind {
             // Opt-in only: deliberately absent from `default_left`/`default_right`.
             Self::FileExplorer,
         ]);
+        if FeatureFlag::PricingTransparency.is_enabled() {
+            items.push(Self::UsageSummary);
+        }
         if FeatureFlag::FastForwardAutoexecuteButton.is_enabled() {
             items.push(Self::FastForwardToggle);
         }

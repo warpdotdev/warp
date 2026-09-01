@@ -23,7 +23,8 @@ use crate::ai::blocklist::agent_view::orchestration_pill_bar::{
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
 use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
-    AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
+    AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, ROLLUP_TRUNCATION_CAP,
+    compute_orchestration_rollup,
 };
 use crate::ai::blocklist::view_util::{UsageLabelKind, format_credits, format_usage, usage_label};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
@@ -725,8 +726,8 @@ impl ConversationUsageView {
         }
         let total_entries = rollup.per_agent.len();
         let shown_entries: usize =
-            if total_entries > PER_AGENT_BREAKDOWN_TRUNCATION_CAP && !self.show_all_clicked {
-                PER_AGENT_BREAKDOWN_TRUNCATION_CAP
+            if total_entries > ROLLUP_TRUNCATION_CAP && !self.show_all_clicked {
+                ROLLUP_TRUNCATION_CAP
             } else {
                 total_entries
             };
@@ -1228,12 +1229,6 @@ fn render_value_text_placeholder(appearance: &Appearance) -> Box<dyn Element> {
 /// footer's name treatment never exceeds what the pill bar already
 /// enforces at the top of the agent view.
 const PER_AGENT_LABEL_MAX_WIDTH: f32 = 110.;
-
-/// Maximum number of rows shown in the per-agent breakdown before the
-/// "Show N more" affordance truncates the list. Matches PRODUCT
-/// invariants 5e (≤ 5 rows render in full) and 5f (> 5 rows render the
-/// first 5 followed by a "Show N more" link).
-const PER_AGENT_BREAKDOWN_TRUNCATION_CAP: usize = 5;
 
 /// Decimal precision used for visible context-window segment percentages.
 const CONTEXT_WINDOW_SEGMENT_PERCENT_DECIMAL_PLACES: usize = 2;
