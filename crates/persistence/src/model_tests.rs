@@ -4,7 +4,8 @@ use warp_multi_agent_api as api;
 
 use super::{
     AgentConversation, AgentConversationData, AgentConversationSummary, ChargedUsageTotals,
-    ConversationUsageMetadata, ModelTokenUsage,
+    ConversationUsageMetadata, ModelTokenUsage, PersistedModelTokenCost, TurnCounters,
+    TurnUsageBaseline,
 };
 
 fn parentless_task(id: &str, message_count: usize) -> api::Task {
@@ -132,6 +133,170 @@ fn conversation_usage_metadata_preserves_known_zero_provider_cost() {
         serde_json::to_string(&metadata)
             .unwrap()
             .contains("\"total_provider_cost_in_cents\":0.0")
+    );
+}
+
+/// Legacy persisted rows written before `cumulative_token_cost_by_model` and
+/// `TurnUsageBaseline::per_model` existed must still deserialize cleanly,
+/// defaulting both to empty maps.
+#[test]
+fn conversation_usage_metadata_defaults_missing_per_model_usage_to_empty() {
+    let metadata: ConversationUsageMetadata = serde_json::from_str(
+        r#"{"was_summarized":false,"context_window_usage":0.0,"credits_spent":0.0,"turn_usage_baseline":{"tool_calls":1,"files_changed":0,"lines_added":0,"lines_removed":0,"commands_executed":0}}"#,
+    )
+    .unwrap();
+
+    assert!(metadata.cumulative_token_cost_by_model.is_empty());
+    assert!(
+        metadata
+            .turn_usage_baseline
+            .expect("turn_usage_baseline should be present")
+            .per_model
+            .is_empty()
+    );
+}
+
+/// A per-model token/cost snapshot (both the conversation-cumulative map and
+/// the turn-start baseline nested inside it) must round-trip through
+/// serialization exactly, since this is what makes turn-scoped per-model
+/// usage survive an app restart / conversation restore.
+#[test]
+fn conversation_usage_metadata_round_trips_per_model_token_cost() {
+    let metadata = ConversationUsageMetadata {
+        cumulative_token_cost_by_model: HashMap::from([(
+            "claude-sonnet".to_string(),
+            PersistedModelTokenCost {
+                total_input: 1_200,
+                output: 300,
+                input_cache_read: 50,
+                input_cache_write: 20,
+                input_cost_in_cents: 30.0,
+                output_cost_in_cents: 10.0,
+                input_cache_read_cost_in_cents: 1.5,
+                input_cache_write_cost_in_cents: 1.0,
+                web_search_count: 3,
+                web_search_cost_in_cents: 0.5,
+            },
+        )]),
+        turn_usage_baseline: Some(TurnUsageBaseline {
+            counters: TurnCounters {
+                tool_calls: 2,
+                ..Default::default()
+            },
+            per_model: HashMap::from([(
+                "claude-sonnet".to_string(),
+                PersistedModelTokenCost {
+                    total_input: 800,
+                    output: 200,
+                    input_cache_read: 30,
+                    input_cache_write: 10,
+                    input_cost_in_cents: 20.0,
+                    output_cost_in_cents: 8.0,
+                    input_cache_read_cost_in_cents: 1.0,
+                    input_cache_write_cost_in_cents: 1.0,
+                    web_search_count: 1,
+                    web_search_cost_in_cents: 0.2,
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+
+    let serialized = serde_json::to_string(&metadata).expect("should serialize");
+    let deserialized: ConversationUsageMetadata =
+        serde_json::from_str(&serialized).expect("should deserialize");
+
+    // `HashMap` equality doesn't depend on iteration order, so a direct
+    // struct comparison is safe here.
+    assert_eq!(
+        deserialized.cumulative_token_cost_by_model,
+        metadata.cumulative_token_cost_by_model
+    );
+    assert_eq!(
+        deserialized.turn_usage_baseline,
+        metadata.turn_usage_baseline
+    );
+}
+
+/// When the baseline exceeds the current snapshot on every field (e.g. a
+/// restored conversation whose baseline predates a counter reset), every
+/// output field must clamp to zero rather than go negative.
+#[test]
+fn persisted_model_token_cost_saturating_sub_clamps_when_baseline_is_larger() {
+    let current = PersistedModelTokenCost {
+        total_input: 10,
+        output: 5,
+        input_cache_read: 1,
+        input_cache_write: 1,
+        input_cost_in_cents: 1.0,
+        output_cost_in_cents: 1.0,
+        input_cache_read_cost_in_cents: 1.0,
+        input_cache_write_cost_in_cents: 1.0,
+        web_search_count: 1,
+        web_search_cost_in_cents: 1.0,
+    };
+    let baseline = PersistedModelTokenCost {
+        total_input: 100,
+        output: 50,
+        input_cache_read: 10,
+        input_cache_write: 10,
+        input_cost_in_cents: 10.0,
+        output_cost_in_cents: 10.0,
+        input_cache_read_cost_in_cents: 10.0,
+        input_cache_write_cost_in_cents: 10.0,
+        web_search_count: 10,
+        web_search_cost_in_cents: 10.0,
+    };
+
+    let delta = current.saturating_sub(&baseline);
+
+    assert_eq!(delta, PersistedModelTokenCost::default());
+}
+
+/// Normal case: every field's delta is the straightforward difference.
+#[test]
+fn persisted_model_token_cost_saturating_sub_computes_normal_delta() {
+    let current = PersistedModelTokenCost {
+        total_input: 150,
+        output: 60,
+        input_cache_read: 15,
+        input_cache_write: 12,
+        input_cost_in_cents: 30.0,
+        output_cost_in_cents: 12.0,
+        input_cache_read_cost_in_cents: 3.0,
+        input_cache_write_cost_in_cents: 2.4,
+        web_search_count: 5,
+        web_search_cost_in_cents: 2.5,
+    };
+    let baseline = PersistedModelTokenCost {
+        total_input: 100,
+        output: 20,
+        input_cache_read: 5,
+        input_cache_write: 2,
+        input_cost_in_cents: 20.0,
+        output_cost_in_cents: 4.0,
+        input_cache_read_cost_in_cents: 1.0,
+        input_cache_write_cost_in_cents: 0.4,
+        web_search_count: 2,
+        web_search_cost_in_cents: 1.0,
+    };
+
+    let delta = current.saturating_sub(&baseline);
+
+    assert_eq!(
+        delta,
+        PersistedModelTokenCost {
+            total_input: 50,
+            output: 40,
+            input_cache_read: 10,
+            input_cache_write: 10,
+            input_cost_in_cents: 10.0,
+            output_cost_in_cents: 8.0,
+            input_cache_read_cost_in_cents: 2.0,
+            input_cache_write_cost_in_cents: 2.0,
+            web_search_count: 3,
+            web_search_cost_in_cents: 1.5,
+        }
     );
 }
 

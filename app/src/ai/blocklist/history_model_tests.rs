@@ -1424,17 +1424,8 @@ fn create_server_metadata(
 
     // Create ConversationUsageMetadata from persistence model
     let usage = ConversationUsageMetadata {
-        was_summarized: false,
-        context_window_usage: 0.0,
         credits_spent,
-        platform_credits_spent: 0.0,
-        total_provider_cost_in_cents: None,
-        credits_spent_for_last_block: None,
-        charged_usage_for_last_block: None,
-        total_charged_usage: None,
-        token_usage: vec![],
-        tool_usage_metadata: Default::default(),
-        context_window_segments: Vec::new(),
+        ..Default::default()
     };
 
     ServerAIConversationMetadata {
@@ -3804,6 +3795,71 @@ fn test_fork_then_bind_handoff_token_persists_to_restored_conversation() {
                 .forked_from_server_conversation_token()
                 .map(|token| token.as_str()),
             Some("src-token"),
+        );
+    });
+}
+
+/// A request completion carrying only `RequestCharges` must still emit
+/// `ConversationUsageMetadataUpdated`, so subscribers refresh.
+#[test]
+fn charges_only_completion_emits_conversation_usage_metadata_updated_event() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        app.add_singleton_model(|_| crate::network::NetworkStatus::new());
+        app.add_singleton_model(|_| crate::server::server_api::ServerApiProvider::new_for_test());
+        app.add_singleton_model(crate::workspaces::user_workspaces::UserWorkspaces::default_mock);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(crate::auth::auth_manager::AuthManager::new_for_test);
+        app.add_singleton_model(crate::ai::llms::LLMPreferences::new);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+
+        let conversation_id = history_model.update(&mut app, |history, ctx| {
+            history.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        let captured_events = Arc::new(Mutex::new(Vec::new()));
+        app.update(|ctx| {
+            let captured_events = captured_events.clone();
+            ctx.subscribe_to_model(&history_model, move |_, event, _| {
+                captured_events.lock().unwrap().push(event.clone());
+            });
+        });
+
+        let request_charges =
+            warp_multi_agent_api::response_event::stream_finished::RequestCharges {
+                usage_by_category: HashMap::from([(
+                    "primary_agent".to_string(),
+                    warp_multi_agent_api::response_event::stream_finished::ChargedUsage {
+                        direct_api_inference_usage: HashMap::new(),
+                        byok_inference_usage: HashMap::new(),
+                        custom_endpoint_inference_usage: HashMap::new(),
+                        platform_usage_in_cents: 5.0,
+                    },
+                )]),
+            };
+
+        history_model.update(&mut app, |model, ctx| {
+            model.update_conversation_cost_and_usage_for_request(
+                conversation_id,
+                None,
+                None,
+                Some(request_charges),
+                vec![],
+                None,
+                true,
+                ctx,
+            );
+        });
+
+        let events = captured_events.lock().unwrap().clone();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { conversation_id: id }
+                    if *id == conversation_id
+            )),
+            "a charges-only completion must still emit ConversationUsageMetadataUpdated so subscribers refresh",
         );
     });
 }

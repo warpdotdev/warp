@@ -1004,6 +1004,8 @@ impl ApiKeyManager {
                             |m| api::request::settings::custom_model_providers::CustomModel {
                                 slug: m.name.clone(),
                                 config_key: m.config_key.clone(),
+                                // Not yet exposed in `CustomEndpointModel`; unset
+                                // preserves the provider's default behavior.
                                 reasoning_effort: String::new(),
                             },
                         )

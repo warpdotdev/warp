@@ -64,7 +64,8 @@ use crate::notebooks::NotebookId;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
     AgentConversationData, ChargedUsageTotals, ContextWindowSegment, ConversationUsageMetadata,
-    ModelTokenUsage, PersistedAutoexecuteMode, ToolUsageMetadata,
+    ModelTokenUsage, PersistedAutoexecuteMode, PersistedModelTokenCost, ToolUsageMetadata,
+    TurnCounters, TurnUsageBaseline, TurnUsageSnapshot,
 };
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
@@ -387,6 +388,10 @@ pub struct AIConversation {
     dismissed_suggestion_ids: HashSet<SuggestedLoggingId>,
 
     total_request_cost: RequestCost,
+    /// Live, per-request running totals per model, consumed only by the
+    /// `total_token_usage()` getter used in integration tests. Not
+    /// persisted; turn-scoped per-model usage instead reads the persisted
+    /// `conversation_usage_metadata.cumulative_token_cost_by_model`.
     total_token_usage_by_model: HashMap<String, TokenUsage>,
     /// Server-authoritative cumulative provider cost in US cents. New
     /// conversations start at a known zero; restored legacy conversations can
@@ -460,6 +465,24 @@ pub(crate) fn artifact_from_fork_proto(
         Some(ProtoArtifact::File(file)) => Some(Artifact::from(file.clone())),
         None => None,
     }
+}
+
+/// Cap on `ConversationUsageMetadata::turn_usage_by_exchange`, so a
+/// long-lived conversation with the flag enabled doesn't grow it forever.
+const MAX_TURN_USAGE_SNAPSHOTS: usize = 50;
+
+/// Request-scoped usage inputs accumulated by a single completed request
+/// within a turn. Passed to [`AIConversation::update_cost_and_usage_for_request`].
+pub struct RequestUsageUpdate {
+    pub request_cost: Option<RequestCost>,
+    /// The platform-only portion of `request_cost` (from the wire
+    /// `RequestCost.platform_credits` field); `request_cost` remains the
+    /// combined total.
+    pub platform_credits_for_request: Option<f32>,
+    pub request_charges: Option<stream_finished::RequestCharges>,
+    pub token_usage: Vec<TokenUsage>,
+    pub usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
+    pub was_user_initiated_request: bool,
 }
 
 impl AIConversation {
@@ -903,11 +926,128 @@ impl AIConversation {
     }
 
     // Credits spent over the last block, where the block comprises
-    // all agent outputs since the most recent user input.
+    // all agent outputs since the most recent user input. Combines both
+    // inference and platform credits; see `inference_credits_spent_for_last_block`
+    // and `platform_credits_spent_for_last_block` for the split.
     pub fn credits_spent_for_last_block(&self) -> Option<f32> {
         self.conversation_usage_metadata
             .credits_spent_for_last_block
             .map(|credits| (credits * 10.0).round() / 10.0)
+    }
+
+    /// The platform-only portion of `credits_spent_for_last_block`. See
+    /// [`ConversationUsageMetadata::platform_credits_spent_for_last_block`].
+    fn platform_credits_spent_for_last_block(&self) -> Option<f32> {
+        self.conversation_usage_metadata
+            .platform_credits_spent_for_last_block
+            .map(|credits| (credits * 10.0).round() / 10.0)
+    }
+
+    /// The inference-only portion of `credits_spent_for_last_block`, derived
+    /// as the combined total minus the platform-only portion. Returns `None`
+    /// if either figure is unknown, since a missing platform split must not
+    /// be treated as zero.
+    fn inference_credits_spent_for_last_block(&self) -> Option<f32> {
+        let combined = self
+            .conversation_usage_metadata
+            .credits_spent_for_last_block?;
+        let platform = self
+            .conversation_usage_metadata
+            .platform_credits_spent_for_last_block?;
+        Some(((combined - platform) * 10.0).round() / 10.0)
+    }
+
+    /// Platform usage charged (in US cents) over the last block (turn). See
+    /// [`ConversationUsageMetadata::platform_usage_in_cents_for_last_block`].
+    fn platform_usage_in_cents_for_last_block(&self) -> Option<f32> {
+        self.conversation_usage_metadata
+            .platform_usage_in_cents_for_last_block
+    }
+
+    /// Turn-scoped usage for the conversation's *current* turn (the most
+    /// recent user-initiated request and everything since), computed live
+    /// off the conversation's present state. `None` until the first block
+    /// completes. Prefer [`Self::turn_usage_for_exchange`] when you have an
+    /// exchange id, since it also covers historical turns via
+    /// [`Self::turn_usage_snapshot_for_exchange`].
+    pub fn current_turn_usage(&self) -> Option<TurnUsageSnapshot> {
+        let metadata = &self.conversation_usage_metadata;
+        let baseline = metadata.turn_usage_baseline.as_ref()?;
+        Some(TurnUsageSnapshot {
+            counters: TurnCounters {
+                tool_calls: metadata.total_tool_calls() - baseline.counters.tool_calls,
+                files_changed: metadata
+                    .tool_usage_metadata
+                    .apply_file_diff_stats
+                    .files_changed
+                    - baseline.counters.files_changed,
+                lines_added: metadata
+                    .tool_usage_metadata
+                    .apply_file_diff_stats
+                    .lines_added
+                    - baseline.counters.lines_added,
+                lines_removed: metadata
+                    .tool_usage_metadata
+                    .apply_file_diff_stats
+                    .lines_removed
+                    - baseline.counters.lines_removed,
+                commands_executed: metadata
+                    .tool_usage_metadata
+                    .run_command_stats
+                    .commands_executed
+                    - baseline.counters.commands_executed,
+            },
+            per_model: self.per_model_usage_for_last_block(),
+            context_window_usage: metadata.context_window_usage,
+            platform_usage_in_cents: self.platform_usage_in_cents_for_last_block(),
+            inference_credits_spent: self.inference_credits_spent_for_last_block(),
+            platform_credits_spent: self.platform_credits_spent_for_last_block(),
+            time_to_first_token_ms: self.time_to_first_token_for_last_user_query_ms(),
+            total_agent_response_time_ms: self.total_agent_response_time_since_last_user_query_ms(),
+            wall_to_wall_response_time_ms: self.wall_to_wall_response_time_since_last_query(),
+        })
+    }
+
+    /// Turn-scoped usage for the turn associated with `exchange_id`.
+    /// Prefers the archived snapshot (accurate for historical turns), and
+    /// falls back to [`Self::current_turn_usage`] for conversations
+    /// persisted before the snapshot archive existed.
+    pub fn turn_usage_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<TurnUsageSnapshot> {
+        self.turn_usage_snapshot_for_exchange(exchange_id)
+            .cloned()
+            .or_else(|| self.current_turn_usage())
+    }
+
+    /// Per-model token/cost usage during the last block (turn), one entry
+    /// per model with activity this turn, keyed by display label. Derived as
+    /// the delta between the persisted `cumulative_token_cost_by_model` and
+    /// the baseline snapshotted in `turn_usage_baseline.per_model`, so
+    /// (unlike the live-only `total_token_usage_by_model`) it survives
+    /// restarts/restores. Empty when there is no baseline yet.
+    pub fn per_model_usage_for_last_block(&self) -> Vec<(String, PersistedModelTokenCost)> {
+        let Some(baseline) = self
+            .conversation_usage_metadata
+            .turn_usage_baseline
+            .as_ref()
+        else {
+            return Vec::new();
+        };
+        self.conversation_usage_metadata
+            .cumulative_token_cost_by_model
+            .iter()
+            .filter_map(|(model_id, current)| {
+                let base = baseline
+                    .per_model
+                    .get(model_id)
+                    .copied()
+                    .unwrap_or_default();
+                let turn = current.saturating_sub(&base);
+                turn.has_activity().then(|| (model_id.clone(), turn))
+            })
+            .collect()
     }
 
     /// Per-category charged-usage breakdown over the last block, where the
@@ -2307,13 +2447,65 @@ impl AIConversation {
 
     pub fn update_cost_and_usage_for_request(
         &mut self,
-        request_cost: Option<RequestCost>,
-        request_charges: Option<stream_finished::RequestCharges>,
-        token_usage: Vec<TokenUsage>,
-        usage_metadata: Option<stream_finished::ConversationUsageMetadata>,
-        was_user_initiated_request: bool,
+        update: RequestUsageUpdate,
         ctx: &AppContext,
     ) -> Result<(), UpdateConversationError> {
+        let RequestUsageUpdate {
+            request_cost,
+            platform_credits_for_request,
+            request_charges,
+            token_usage,
+            usage_metadata,
+            was_user_initiated_request,
+        } = update;
+
+        // A new turn must reset every `_for_last_block` figure unconditionally
+        // on `was_user_initiated_request` (not only when this request itself
+        // has data), otherwise a turn whose first request carries no data
+        // would retain the previous turn's totals. The baseline snapshot
+        // captures conversation-cumulative totals before this call's updates
+        // land, so turn-scoped values can later be derived as
+        // `current - baseline` (see `ConversationUsageMetadata::turn_usage_baseline`).
+        if was_user_initiated_request {
+            self.conversation_usage_metadata.turn_usage_baseline = Some(TurnUsageBaseline {
+                counters: TurnCounters {
+                    tool_calls: self.conversation_usage_metadata.total_tool_calls(),
+                    files_changed: self
+                        .conversation_usage_metadata
+                        .tool_usage_metadata
+                        .apply_file_diff_stats
+                        .files_changed,
+                    lines_added: self
+                        .conversation_usage_metadata
+                        .tool_usage_metadata
+                        .apply_file_diff_stats
+                        .lines_added,
+                    lines_removed: self
+                        .conversation_usage_metadata
+                        .tool_usage_metadata
+                        .apply_file_diff_stats
+                        .lines_removed,
+                    commands_executed: self
+                        .conversation_usage_metadata
+                        .tool_usage_metadata
+                        .run_command_stats
+                        .commands_executed,
+                },
+                per_model: self
+                    .conversation_usage_metadata
+                    .cumulative_token_cost_by_model
+                    .clone(),
+            });
+            self.conversation_usage_metadata
+                .credits_spent_for_last_block = Some(0.);
+            self.conversation_usage_metadata
+                .platform_credits_spent_for_last_block = Some(0.);
+            self.conversation_usage_metadata
+                .platform_usage_in_cents_for_last_block = Some(0.);
+            self.conversation_usage_metadata
+                .charged_usage_for_last_block = None;
+        }
+
         self.has_usage_metadata |=
             request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
         for usage in token_usage.into_iter() {
@@ -2345,28 +2537,86 @@ impl AIConversation {
                 .credits_spent_for_last_block
                 .get_or_insert(0.0);
 
-            // If this exchange begins with a user input (implying it is initiating a new response),
-            // reset credits spent to only include credits for this new response.
-            if was_user_initiated_request {
-                *credits_spent_for_last_block = 0.;
-            }
-
             // Accumulate response credit usage.
             *credits_spent_for_last_block += request_cost.value() as f32;
             self.total_request_cost += request_cost;
         }
 
-        // Mirrors the `credits_spent_for_last_block` reset above: a
-        // user-initiated request starts a new response block. Reset
-        // unconditionally (not only inside the `Some(request_charges)`
-        // branch below) so a later request in the same turn that happens
-        // to carry no charges (e.g. the flag is off for it) doesn't leave
-        // the previous block's stale totals in place, which would pair a
-        // fresh credits figure with stale token/cost details.
-        if was_user_initiated_request {
-            self.conversation_usage_metadata
-                .charged_usage_for_last_block = None;
+        if let Some(platform_credits_for_request) = platform_credits_for_request {
+            let platform_credits_spent_for_last_block = self
+                .conversation_usage_metadata
+                .platform_credits_spent_for_last_block
+                .get_or_insert(0.0);
+            *platform_credits_spent_for_last_block += platform_credits_for_request;
         }
+
+        if let Some(request_charges) = &request_charges {
+            let platform_usage_for_last_block = self
+                .conversation_usage_metadata
+                .platform_usage_in_cents_for_last_block
+                .get_or_insert(0.0);
+
+            let platform_usage_in_cents_this_request: f32 = request_charges
+                .usage_by_category
+                .values()
+                .map(|usage| usage.platform_usage_in_cents)
+                .sum();
+            *platform_usage_for_last_block += platform_usage_in_cents_this_request;
+        }
+
+        // Sourced from the same `RequestCharges` as platform usage above,
+        // since `InferenceUsage` reports token counts and costs together per
+        // model. Accumulates directly onto the conversation-cumulative map;
+        // turn-scoped usage is derived separately via baseline diffing in
+        // `per_model_usage_for_last_block`.
+        if let Some(request_charges) = &request_charges {
+            let llm_preferences = LLMPreferences::as_ref(ctx);
+            for charged_usage in request_charges.usage_by_category.values() {
+                // `direct_api_inference_usage`/`byok_inference_usage` are
+                // already keyed by the model's display label, but
+                // `custom_endpoint_inference_usage` is keyed by the custom
+                // model's `config_key`, which must be resolved to its
+                // display label before merging -- otherwise the raw
+                // config_key UUID would leak into the Turn panel.
+                let standard_usage = charged_usage
+                    .direct_api_inference_usage
+                    .iter()
+                    .chain(charged_usage.byok_inference_usage.iter())
+                    .map(|(model_id, usage)| (model_id.clone(), usage));
+                let custom_usage = charged_usage.custom_endpoint_inference_usage.iter().map(
+                    |(config_key, usage)| {
+                        (
+                            llm_preferences.custom_endpoint_usage_display_label(config_key),
+                            usage,
+                        )
+                    },
+                );
+                for (model_id, usage) in standard_usage.chain(custom_usage) {
+                    let entry = self
+                        .conversation_usage_metadata
+                        .cumulative_token_cost_by_model
+                        .entry(model_id)
+                        .or_default();
+                    if let Some(token_count) = usage.token_count.as_ref() {
+                        entry.total_input += token_count.input as u64;
+                        entry.output += token_count.output as u64;
+                        entry.input_cache_read += token_count.input_cache_read as u64;
+                        entry.input_cache_write += token_count.input_cache_write as u64;
+                    }
+                    if let Some(token_cost) = usage.token_cost.as_ref() {
+                        entry.input_cost_in_cents += token_cost.input_cost_in_cents;
+                        entry.output_cost_in_cents += token_cost.output_cost_in_cents;
+                        entry.input_cache_read_cost_in_cents +=
+                            token_cost.input_cache_read_cost_in_cents;
+                        entry.input_cache_write_cost_in_cents +=
+                            token_cost.input_cache_write_cost_in_cents;
+                    }
+                    entry.web_search_count += usage.web_search_count as u64;
+                    entry.web_search_cost_in_cents += usage.web_search_cost_in_cents;
+                }
+            }
+        }
+
         if let Some(request_charges) = request_charges {
             let totals = ChargedUsageTotals::from(&request_charges);
             let charged_usage_for_last_block = self
@@ -2413,7 +2663,57 @@ impl AIConversation {
         }
         self.conversation_usage_metadata
             .total_provider_cost_in_cents = self.total_provider_cost_in_cents;
+
+        // Archive a point-in-time snapshot of this turn's usage keyed by the
+        // most recently updated exchange, so a specific historical turn's
+        // data stays available. Gated behind the feature flag to avoid the
+        // storage cost when it's off.
+        if FeatureFlag::PricingTransparency.is_enabled()
+            && let Some(exchange_id) = self.latest_exchange().map(|exchange| exchange.id)
+            && let Some(snapshot) = self.current_turn_usage()
+        {
+            self.conversation_usage_metadata
+                .turn_usage_by_exchange
+                .insert(exchange_id.to_string(), snapshot);
+            self.prune_turn_usage_snapshots();
+        }
+
         Ok(())
+    }
+
+    /// The archived usage snapshot for the turn containing `exchange_id`, if
+    /// any request has completed for that turn. See
+    /// [`ConversationUsageMetadata::turn_usage_by_exchange`].
+    pub fn turn_usage_snapshot_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Option<&TurnUsageSnapshot> {
+        self.conversation_usage_metadata
+            .turn_usage_by_exchange
+            .get(&exchange_id.to_string())
+    }
+
+    /// Evicts the oldest archived turn-usage snapshots (in conversation
+    /// order) beyond [`MAX_TURN_USAGE_SNAPSHOTS`], so a long-lived
+    /// conversation doesn't grow this map without bound.
+    fn prune_turn_usage_snapshots(&mut self) {
+        let by_exchange = &self.conversation_usage_metadata.turn_usage_by_exchange;
+        if by_exchange.len() <= MAX_TURN_USAGE_SNAPSHOTS {
+            return;
+        }
+        let excess = by_exchange.len() - MAX_TURN_USAGE_SNAPSHOTS;
+        let stale_keys: Vec<String> = self
+            .all_exchanges()
+            .into_iter()
+            .map(|exchange| exchange.id.to_string())
+            .filter(|id| by_exchange.contains_key(id))
+            .take(excess)
+            .collect();
+        for key in stale_keys {
+            self.conversation_usage_metadata
+                .turn_usage_by_exchange
+                .remove(&key);
+        }
     }
 
     pub fn mark_request_completed(

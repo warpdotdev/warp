@@ -115,7 +115,8 @@ use crate::ai::skills::{
 use crate::appearance::Appearance;
 use crate::code::diff_viewer::DisplayMode;
 use crate::code::editor_management::CodeSource;
-use crate::settings::AISettings;
+use crate::persistence::model::TurnUsageSnapshot;
+use crate::settings::{AISettings, UsageDisplayUnit};
 use crate::settings_view::SettingsSection;
 use crate::terminal::ShellLaunchData;
 #[cfg(not(target_family = "wasm"))]
@@ -184,6 +185,7 @@ pub(crate) struct Props<'a> {
     pub(super) has_accepted_edits: bool,
     pub(super) finish_reason: Option<&'a FinishReason>,
     pub(super) is_usage_footer_expanded: bool,
+    pub(super) is_turn_panel_expanded: bool,
     pub(super) shared_session_status: &'a SharedSessionStatus,
     pub(super) terminal_view_id: EntityId,
     pub(super) is_conversation_transcript_viewer: bool,
@@ -3634,7 +3636,35 @@ fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Elem
         flex.add_child(fork_button);
     }
 
-    flex.add_child(render_usage_button(props, app));
+    // The turn-scoped usage panel is gated behind `PricingTransparency`. When it's enabled
+    // and there's an archived turn-usage snapshot for *this block's own exchange* (not just
+    // the conversation's current turn), its pie-chart trigger icon replaces the legacy
+    // credit-count button rather than sitting alongside it.
+    let turn_usage_snapshot = FeatureFlag::PricingTransparency
+        .is_enabled()
+        .then(|| {
+            props
+                .model
+                .exchange_id(app)
+                .zip(props.model.conversation(app))
+        })
+        .flatten()
+        .and_then(|(exchange_id, conversation)| {
+            conversation
+                .turn_usage_snapshot_for_exchange(exchange_id)
+                .cloned()
+        });
+    if let Some(turn_usage) = turn_usage_snapshot {
+        flex.add_child(render_turn_panel_button(
+            props,
+            turn_usage,
+            style_override,
+            style_override_with_background,
+            app,
+        ));
+    } else {
+        flex.add_child(render_usage_button(props, app));
+    }
 
     // Review changes button.
     if props.has_accepted_edits && !props.shared_session_status.is_viewer() {
@@ -3839,6 +3869,72 @@ fn render_usage_button(props: Props, app: &AppContext) -> Box<dyn Element> {
         ctx.dispatch_typed_action(AIBlockAction::ToggleIsUsageFooterExpanded);
     })
     .with_cursor(Cursor::PointingHand)
+    .finish()
+}
+
+/// Renders the per-turn icon that, on click, opens/closes the docked "Turn"
+/// panel. Uses the same hover-tooltip/click-to-open pattern as the usage
+/// button above, but is otherwise an independent trigger with no
+/// cross-navigation to the usage footer / "Conversation" popover.
+fn render_turn_panel_button(
+    props: Props,
+    turn_usage: TurnUsageSnapshot,
+    style_override: UiComponentStyles,
+    style_override_with_background: UiComponentStyles,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let ui_builder = appearance.ui_builder().clone();
+    // Sum turn-scoped per-model cost for the tooltip, so it reads as the
+    // same total the panel's per-model rows add up to.
+    let turn_cost_in_cents: f32 = turn_usage
+        .per_model
+        .iter()
+        .map(|(_, model_usage)| model_usage.cost_in_cents())
+        .sum();
+    let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+    let turn_cost = Some(turn_cost_in_cents).filter(|&cost| cost > 0.0);
+    // `inference_credits_spent`/`platform_credits_spent` are only both
+    // `Some` once the platform/inference split is known; a missing split
+    // must not be treated as zero (see `AIConversation::inference_credits_spent_for_last_block`).
+    let credits_spent_for_last_block = match (
+        turn_usage.inference_credits_spent,
+        turn_usage.platform_credits_spent,
+    ) {
+        (Some(inference), Some(platform)) => Some(inference + platform),
+        _ => None,
+    };
+    let tooltip_text = match (credits_spent_for_last_block, turn_cost) {
+        (Some(credits), _) => format!(
+            "Turn: {}",
+            format_usage(credits, None, turn_cost, usage_display_unit)
+        ),
+        // The credits split is unknown, but a dollar cost is known and the
+        // user prefers dollars -- show that rather than a fabricated
+        // combined credits total.
+        (None, Some(cost)) if usage_display_unit == UsageDisplayUnit::Dollars => {
+            format!("Turn: ${:.2}", cost / 100.0)
+        }
+        (None, _) => "Turn".to_string(),
+    };
+
+    icon_button(
+        appearance,
+        Icon::TurnUsagePie,
+        // Keep the trigger visibly "active" while the panel is open, not
+        // just while hovered/clicked, so the icon stays legible as the
+        // panel's open/closed toggle.
+        props.is_turn_panel_expanded,
+        props.state_handles.turn_panel_button_handle.clone(),
+    )
+    .with_tooltip(move || ui_builder.tool_tip(tooltip_text.clone()).build().finish())
+    .with_style(style_override)
+    .with_hovered_styles(style_override_with_background)
+    .with_active_styles(style_override_with_background)
+    .build()
+    .on_click(|ctx, _, _| {
+        ctx.dispatch_typed_action(AIBlockAction::ToggleIsTurnPanelExpanded);
+    })
     .finish()
 }
 

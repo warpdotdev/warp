@@ -1,22 +1,24 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
+use chrono::Local;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    ConversationUsageTotals, RecordingSpanStatus, RequestUsageUpdate, RestoreConversationError,
     artifact_from_fork_proto, footer_model_token_usage,
 };
+use crate::ai::agent::{AIAgentExchange, AIAgentExchangeId, AIAgentOutputStatus};
 use crate::ai::artifacts::Artifact;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::network::NetworkStatus;
 use crate::persistence::model::{
-    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
+    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata, PersistedModelTokenCost,
 };
 use crate::server::server_api::ServerApiProvider;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -667,11 +669,14 @@ fn restored_usage_totals_preserve_server_provider_cost_and_add_follow_up() {
             app.read(|ctx| {
                 conversation
                     .update_cost_and_usage_for_request(
-                        None,
-                        None,
-                        vec![stream_token_usage("model-a", 10, 2, 1.2)],
-                        Some(credits_usage_metadata(1.0, 0.0)),
-                        false,
+                        RequestUsageUpdate {
+                            request_cost: None,
+                            platform_credits_for_request: None,
+                            request_charges: None,
+                            token_usage: vec![stream_token_usage("model-a", 10, 2, 1.2)],
+                            usage_metadata: Some(credits_usage_metadata(1.0, 0.0)),
+                            was_user_initiated_request: false,
+                        },
                         ctx,
                     )
                     .expect("follow-up usage should update");
@@ -741,11 +746,14 @@ fn restored_legacy_conversation_keeps_provider_cost_unavailable_after_follow_up(
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
-                    None,
-                    None,
-                    vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
-                    Some(credits_usage_metadata(1.0, 0.0)),
-                    false,
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![stream_token_usage("legacy-model", 10, 2, 1.5)],
+                        usage_metadata: Some(credits_usage_metadata(1.0, 0.0)),
+                        was_user_initiated_request: false,
+                    },
                     ctx,
                 )
                 .expect("follow-up usage should update");
@@ -783,11 +791,14 @@ fn update_cost_and_usage_resolves_custom_endpoint_alias_for_footer_usage() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
-                    None,
-                    None,
-                    vec![],
-                    Some(custom_endpoint_usage_metadata("config-key", 6)),
-                    false,
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![],
+                        usage_metadata: Some(custom_endpoint_usage_metadata("config-key", 6)),
+                        was_user_initiated_request: false,
+                    },
                     ctx,
                 )
                 .expect("custom endpoint usage should update");
@@ -819,11 +830,17 @@ fn update_cost_and_usage_uses_fallback_label_for_unknown_custom_endpoint() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
-                    None,
-                    None,
-                    vec![],
-                    Some(custom_endpoint_usage_metadata("missing-config-key", 9)),
-                    false,
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![],
+                        usage_metadata: Some(custom_endpoint_usage_metadata(
+                            "missing-config-key",
+                            9,
+                        )),
+                        was_user_initiated_request: false,
+                    },
                     ctx,
                 )
                 .expect("fallback custom endpoint usage should update");
@@ -902,11 +919,14 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
         app.read(|ctx| {
             conversation
                 .update_cost_and_usage_for_request(
-                    None,
-                    None,
-                    vec![stream_token_usage("model-a", 100, 20, 1.5)],
-                    Some(credits_usage_metadata(2.0, 0.5)),
-                    false,
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![stream_token_usage("model-a", 100, 20, 1.5)],
+                        usage_metadata: Some(credits_usage_metadata(2.0, 0.5)),
+                        was_user_initiated_request: false,
+                    },
                     ctx,
                 )
                 .expect("usage should update");
@@ -915,11 +935,14 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
             // summing, while provider cost accumulates per request.
             conversation
                 .update_cost_and_usage_for_request(
-                    None,
-                    None,
-                    vec![stream_token_usage("model-a", 50, 10, 1.2)],
-                    Some(credits_usage_metadata(3.0, 0.5)),
-                    false,
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![stream_token_usage("model-a", 50, 10, 1.2)],
+                        usage_metadata: Some(credits_usage_metadata(3.0, 0.5)),
+                        was_user_initiated_request: false,
+                    },
                     ctx,
                 )
                 .expect("usage should update");
@@ -936,6 +959,43 @@ fn usage_totals_reads_gui_credits_and_accumulates_provider_cost() {
                 < 1e-6
         );
     });
+}
+
+fn request_charges_for_model(
+    model_id: &str,
+    total_input: u32,
+    output: u32,
+    cost_in_cents: f32,
+) -> api::response_event::stream_finished::RequestCharges {
+    api::response_event::stream_finished::RequestCharges {
+        usage_by_category: HashMap::from([(
+            "primary_agent".to_string(),
+            api::response_event::stream_finished::ChargedUsage {
+                direct_api_inference_usage: HashMap::from([(
+                    model_id.to_string(),
+                    api::response_event::stream_finished::InferenceUsage {
+                        token_count: Some(api::response_event::stream_finished::TokenCount {
+                            input: total_input,
+                            output,
+                            input_cache_read: 0,
+                            input_cache_write: 0,
+                        }),
+                        token_cost: Some(api::response_event::stream_finished::TokenCost {
+                            input_cost_in_cents: cost_in_cents,
+                            output_cost_in_cents: 0.0,
+                            input_cache_read_cost_in_cents: 0.0,
+                            input_cache_write_cost_in_cents: 0.0,
+                        }),
+                        web_search_count: 0,
+                        web_search_cost_in_cents: 0.0,
+                    },
+                )]),
+                byok_inference_usage: HashMap::new(),
+                custom_endpoint_inference_usage: HashMap::new(),
+                platform_usage_in_cents: 0.0,
+            },
+        )]),
+    }
 }
 
 /// APP-5579 regression: for a single-response conversation, the footer's
@@ -991,6 +1051,10 @@ fn total_cost_in_cents_falls_back_to_provider_baseline_without_charged_usage() {
     assert_eq!(unknown.usage_totals().total_cost_in_cents(), None);
 }
 
+/// A new user-initiated turn must reset `charged_usage_for_last_block`
+/// even when the request that starts it carries no `RequestCharges` at
+/// all -- otherwise a stale breakdown from a previous (charged) turn
+/// would leak into a subsequent uncharged turn.
 #[test]
 fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_turn() {
     App::test((), |mut app| async move {
@@ -1008,7 +1072,17 @@ fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_t
 
         app.read(|ctx| {
             conversation
-                .update_cost_and_usage_for_request(None, None, vec![], None, true, ctx)
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
                 .expect("usage should update");
         });
 
@@ -1018,6 +1092,581 @@ fn update_cost_and_usage_resets_stale_charged_usage_for_last_block_on_new_user_t
             "a new user-initiated turn must clear the previous block's stale charged usage, \
              even when this turn's request itself carries no charges"
         );
+    });
+}
+
+/// Per-model turn-scoped usage is derived from persisted state
+/// (`ConversationUsageMetadata::cumulative_token_cost_by_model` diffed
+/// against `turn_usage_baseline.per_model`), so it must still be correct
+/// after a conversation is torn down and reloaded from persisted data --
+/// unlike the live-only `total_token_usage_by_model` map, which does not
+/// survive a restore. `cumulative_token_cost_by_model` is sourced
+/// exclusively from `RequestCharges` (see
+/// [`AIConversation::update_cost_and_usage_for_request`]), so this test
+/// drives that field rather than `token_usage`.
+#[test]
+fn per_model_usage_for_last_block_survives_restore() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            // First turn: establishes a baseline for the next turn.
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_for_model("model-a", 100, 20, 1.5)),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+            // Second turn: only this call's usage should count as "last block".
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_for_model("model-a", 50, 10, 2.5)),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let live_usage = conversation.per_model_usage_for_last_block();
+        assert_eq!(
+            live_usage,
+            vec![(
+                "model-a".to_string(),
+                PersistedModelTokenCost {
+                    total_input: 50,
+                    output: 10,
+                    input_cache_read: 0,
+                    input_cache_write: 0,
+                    input_cost_in_cents: 2.5,
+                    output_cost_in_cents: 0.0,
+                    input_cache_read_cost_in_cents: 0.0,
+                    input_cache_write_cost_in_cents: 0.0,
+                    web_search_count: 0,
+                    web_search_cost_in_cents: 0.0,
+                }
+            )]
+        );
+
+        // Simulate an app restart: persist and reload only the conversation's
+        // usage metadata, dropping all in-memory-only state (e.g.
+        // `total_token_usage_by_model`).
+        let restored = restored_conversation(Some(AgentConversationData {
+            conversation_usage_metadata: Some(conversation.usage_metadata()),
+            ..conversation_data_with_provider_cost(None)
+        }));
+
+        assert_eq!(
+            restored.per_model_usage_for_last_block(),
+            live_usage,
+            "per-model turn usage must survive a restore now that it is persisted"
+        );
+    });
+}
+
+/// A new user-initiated turn must reset `platform_usage_in_cents_for_last_block`
+/// to zero even when the request that starts it carries no `RequestCharges`
+/// at all -- otherwise the previous (charged) turn's platform usage would
+/// leak into a subsequent uncharged turn.
+#[test]
+fn platform_usage_resets_when_a_new_turn_has_no_charges() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            let mut charged = request_charges_for_model("model-a", 100, 20, 1.5);
+            charged
+                .usage_by_category
+                .get_mut("primary_agent")
+                .expect("category should exist")
+                .platform_usage_in_cents = 42.0;
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(charged),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+        assert_eq!(
+            conversation.platform_usage_in_cents_for_last_block(),
+            Some(42.0)
+        );
+
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: None,
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation.platform_usage_in_cents_for_last_block(),
+            Some(0.0),
+            "a new turn with no charged request must not retain the previous turn's platform usage"
+        );
+    });
+}
+
+/// A restored/legacy conversation may have a known combined
+/// `credits_spent_for_last_block` with no recorded platform split. The
+/// inference-only getter must return `None` in that case rather than
+/// treating the unknown platform portion as zero.
+#[test]
+fn inference_credits_spent_for_last_block_is_none_when_platform_split_is_unknown() {
+    let conversation = restored_conversation(Some(AgentConversationData {
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            credits_spent_for_last_block: Some(5.0),
+            platform_credits_spent_for_last_block: None,
+            ..Default::default()
+        }),
+        ..conversation_data_with_provider_cost(None)
+    }));
+
+    assert_eq!(conversation.inference_credits_spent_for_last_block(), None);
+}
+
+/// When both the combined and platform-only credits are known, the
+/// inference-only getter returns the subtracted inference-only portion.
+#[test]
+fn inference_credits_spent_for_last_block_subtracts_known_platform_portion() {
+    let conversation = restored_conversation(Some(AgentConversationData {
+        conversation_usage_metadata: Some(ConversationUsageMetadata {
+            credits_spent_for_last_block: Some(7.5),
+            platform_credits_spent_for_last_block: Some(2.5),
+            ..Default::default()
+        }),
+        ..conversation_data_with_provider_cost(None)
+    }));
+
+    assert_eq!(
+        conversation.inference_credits_spent_for_last_block(),
+        Some(5.0)
+    );
+}
+
+/// `platform_credits_for_request` accumulates additively across multiple
+/// requests within the same turn, mirroring `credits_spent_for_last_block`.
+#[test]
+fn platform_credits_for_request_accumulates_across_requests_in_one_turn() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: Some(1.5),
+                        request_charges: None,
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: Some(2.0),
+                        request_charges: None,
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: false,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation.platform_credits_spent_for_last_block(),
+            Some(3.5)
+        );
+    });
+}
+
+fn request_charges_with_web_search_only(
+    model_id: &str,
+    web_search_count: u32,
+    web_search_cost_in_cents: f32,
+) -> api::response_event::stream_finished::RequestCharges {
+    api::response_event::stream_finished::RequestCharges {
+        usage_by_category: HashMap::from([(
+            "primary_agent".to_string(),
+            api::response_event::stream_finished::ChargedUsage {
+                direct_api_inference_usage: HashMap::from([(
+                    model_id.to_string(),
+                    api::response_event::stream_finished::InferenceUsage {
+                        token_count: None,
+                        token_cost: None,
+                        web_search_count,
+                        web_search_cost_in_cents,
+                    },
+                )]),
+                byok_inference_usage: HashMap::new(),
+                custom_endpoint_inference_usage: HashMap::new(),
+                platform_usage_in_cents: 0.0,
+            },
+        )]),
+    }
+}
+
+/// A model with web-search activity but no token/cost activity must still
+/// show up in the turn's per-model usage -- `tokens()`/`cost_in_cents()`
+/// deliberately exclude web search, so the "has activity" check must
+/// consider web search separately.
+#[test]
+fn per_model_usage_for_last_block_includes_web_search_only_activity() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_with_web_search_only(
+                            "model-a", 3, 1.2,
+                        )),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        assert_eq!(
+            conversation.per_model_usage_for_last_block(),
+            vec![(
+                "model-a".to_string(),
+                PersistedModelTokenCost {
+                    web_search_count: 3,
+                    web_search_cost_in_cents: 1.2,
+                    ..Default::default()
+                }
+            )],
+            "a model with only web-search activity (no tokens/cost) must not be filtered out"
+        );
+    });
+}
+
+/// `custom_endpoint_inference_usage` is keyed by the custom model's raw
+/// `config_key`, which must be resolved to its display label before landing
+/// in `cumulative_token_cost_by_model` -- otherwise the Turn panel would
+/// show the raw config_key UUID instead of a readable model name.
+#[test]
+fn cumulative_token_cost_by_model_resolves_custom_endpoint_alias() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.add_custom_endpoint(
+                CustomEndpointParams {
+                    name: "Endpoint".to_string(),
+                    url: "https://custom.example".to_string(),
+                    api_key: "key".to_string(),
+                    models: vec![(
+                        "raw-model".to_string(),
+                        Some("Resolved custom".to_string()),
+                        Some("config-key".to_string()),
+                    )],
+                    schema: CustomEndpointSchema::default(),
+                },
+                ctx,
+            );
+        });
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            let request_charges = api::response_event::stream_finished::RequestCharges {
+                usage_by_category: HashMap::from([(
+                    "primary_agent".to_string(),
+                    api::response_event::stream_finished::ChargedUsage {
+                        direct_api_inference_usage: HashMap::new(),
+                        byok_inference_usage: HashMap::new(),
+                        custom_endpoint_inference_usage: HashMap::from([(
+                            "config-key".to_string(),
+                            api::response_event::stream_finished::InferenceUsage {
+                                token_count: Some(
+                                    api::response_event::stream_finished::TokenCount {
+                                        input: 12,
+                                        output: 3,
+                                        input_cache_read: 0,
+                                        input_cache_write: 0,
+                                    },
+                                ),
+                                token_cost: Some(api::response_event::stream_finished::TokenCost {
+                                    input_cost_in_cents: 0.5,
+                                    output_cost_in_cents: 0.0,
+                                    input_cache_read_cost_in_cents: 0.0,
+                                    input_cache_write_cost_in_cents: 0.0,
+                                }),
+                                web_search_count: 0,
+                                web_search_cost_in_cents: 0.0,
+                            },
+                        )]),
+                        platform_usage_in_cents: 0.0,
+                    },
+                )]),
+            };
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let usage = conversation.per_model_usage_for_last_block();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(
+            usage[0].0, "Resolved custom",
+            "custom endpoint usage must be keyed by its resolved display label, not the raw config_key"
+        );
+    });
+}
+
+fn test_exchange(model_id: &str) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![],
+        output_status: AIAgentOutputStatus::Streaming { output: None },
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from(model_id),
+        request_cost: None,
+        coding_model_id: LLMId::from(model_id),
+        cli_agent_model_id: LLMId::from(model_id),
+        computer_use_model_id: LLMId::from(model_id),
+        response_initiator: None,
+    }
+}
+
+/// The Turn panel is opened for a specific historical response (exchange),
+/// so its usage must reflect that turn's own data -- not whatever the
+/// conversation's current turn happens to be by the time the panel is
+/// opened. This exercises `turn_usage_snapshot_for_exchange` across two
+/// completed turns.
+#[test]
+fn turn_usage_snapshot_for_exchange_preserves_historical_turn_data() {
+    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        let root_task_id = conversation.get_root_task_id().clone();
+
+        let exchange_1 = test_exchange("model-a");
+        let exchange_1_id = exchange_1.id;
+        conversation
+            .append_exchange_to_task(&root_task_id, exchange_1)
+            .expect("first exchange should append");
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_for_model("model-a", 100, 20, 1.5)),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let exchange_2 = test_exchange("model-b");
+        let exchange_2_id = exchange_2.id;
+        conversation
+            .append_exchange_to_task(&root_task_id, exchange_2)
+            .expect("second exchange should append");
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_for_model("model-b", 30, 5, 0.7)),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let first_turn_snapshot = conversation
+            .turn_usage_snapshot_for_exchange(exchange_1_id)
+            .expect("first turn's snapshot should be archived");
+        assert_eq!(
+            first_turn_snapshot.per_model,
+            vec![(
+                "model-a".to_string(),
+                PersistedModelTokenCost {
+                    total_input: 100,
+                    output: 20,
+                    input_cost_in_cents: 1.5,
+                    ..Default::default()
+                }
+            )],
+            "the first turn's archived snapshot must not be affected by a later turn"
+        );
+
+        let second_turn_snapshot = conversation
+            .turn_usage_snapshot_for_exchange(exchange_2_id)
+            .expect("second turn's snapshot should be archived");
+        assert_eq!(
+            second_turn_snapshot.per_model,
+            vec![(
+                "model-b".to_string(),
+                PersistedModelTokenCost {
+                    total_input: 30,
+                    output: 5,
+                    input_cost_in_cents: 0.7,
+                    ..Default::default()
+                }
+            )],
+            "opening the panel for an older response must not show a newer turn's usage"
+        );
+    });
+}
+
+/// `turn_usage_for_exchange` is the method the UI actually calls: for a
+/// historical exchange with an archived snapshot, it must return exactly
+/// that snapshot.
+#[test]
+fn turn_usage_for_exchange_returns_the_archived_snapshot() {
+    let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        let root_task_id = conversation.get_root_task_id().clone();
+
+        let exchange = test_exchange("model-a");
+        let exchange_id = exchange.id;
+        conversation
+            .append_exchange_to_task(&root_task_id, exchange)
+            .expect("exchange should append");
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_for_model("model-a", 100, 20, 1.5)),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        let via_helper = conversation
+            .turn_usage_for_exchange(exchange_id)
+            .expect("turn usage should be available via turn_usage_for_exchange");
+        let archived = conversation
+            .turn_usage_snapshot_for_exchange(exchange_id)
+            .expect("archived snapshot should exist")
+            .clone();
+        assert_eq!(via_helper, archived);
+    });
+}
+
+/// Before an archived snapshot exists for an exchange (e.g. a legacy
+/// conversation persisted before `turn_usage_by_exchange` existed),
+/// `turn_usage_for_exchange` falls back to `current_turn_usage`.
+#[test]
+fn turn_usage_for_exchange_falls_back_to_current_turn_usage_without_an_archived_snapshot() {
+    App::test((), |mut app| async move {
+        initialize_custom_endpoint_usage_test_app(&mut app);
+        app.add_singleton_model(LLMPreferences::new);
+
+        let mut conversation = AIConversation::new(false, false);
+        app.read(|ctx| {
+            conversation
+                .update_cost_and_usage_for_request(
+                    RequestUsageUpdate {
+                        request_cost: None,
+                        platform_credits_for_request: None,
+                        request_charges: Some(request_charges_for_model("model-a", 100, 20, 1.5)),
+                        token_usage: vec![],
+                        usage_metadata: None,
+                        was_user_initiated_request: true,
+                    },
+                    ctx,
+                )
+                .expect("usage should update");
+        });
+
+        // No snapshot was ever archived (the flag is off in this test), so
+        // any exchange id must fall back to the live computation.
+        let missing_exchange_id = AIAgentExchangeId::new();
+        let fallback = conversation
+            .turn_usage_for_exchange(missing_exchange_id)
+            .expect("should fall back to current_turn_usage");
+        let current = conversation
+            .current_turn_usage()
+            .expect("current turn usage should be available");
+        assert_eq!(fallback, current);
     });
 }
 

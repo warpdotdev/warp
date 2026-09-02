@@ -3331,13 +3331,20 @@ impl BlocklistAIController {
             // Update conversation cost and usage information before updating and
             // persisting the conversation.
             #[allow(deprecated)]
-            let request_cost = finished_event.request_cost.map(|cost| {
-                // Total credits charged for this request = inference (`exact`) + platform.
-                RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
-            });
+            let (request_cost, platform_credits_for_request) = match finished_event.request_cost {
+                Some(cost) => (
+                    // Total credits charged for this request = inference (`exact`) + platform.
+                    Some(RequestCost::new(
+                        f64::from(cost.exact) + f64::from(cost.platform_credits),
+                    )),
+                    Some(cost.platform_credits),
+                ),
+                None => (None, None),
+            };
             history_model.update_conversation_cost_and_usage_for_request(
                 conversation_id,
                 request_cost,
+                platform_credits_for_request,
                 finished_event.request_charges.take(),
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),

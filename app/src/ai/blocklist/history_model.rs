@@ -27,8 +27,8 @@ use super::persistence::{PersistedAIInput, PersistedAIInputType};
 use crate::GlobalResourceHandlesProvider;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIConversation, AIConversationId, ConversationStatus, ServerAIConversationMetadata, TodoStatus,
-    UpdateConversationError,
+    AIConversation, AIConversationId, ConversationStatus, RequestUsageUpdate,
+    ServerAIConversationMetadata, TodoStatus, UpdateConversationError,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::task::helper::{MessageExt, ToolCallExt};
@@ -2057,6 +2057,7 @@ impl BlocklistAIHistoryModel {
         &mut self,
         conversation_id: AIConversationId,
         request_cost: Option<RequestCost>,
+        platform_credits_for_request: Option<f32>,
         request_charges: Option<RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
@@ -2074,11 +2075,14 @@ impl BlocklistAIHistoryModel {
             || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
-                request_cost,
-                request_charges,
-                token_usage,
-                usage_metadata,
-                was_user_initiated_request,
+                RequestUsageUpdate {
+                    request_cost,
+                    platform_credits_for_request,
+                    request_charges,
+                    token_usage,
+                    usage_metadata,
+                    was_user_initiated_request,
+                },
                 ctx,
             ) {
                 log::warn!(

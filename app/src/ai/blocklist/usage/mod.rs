@@ -4,6 +4,7 @@ use warpui::Element;
 
 pub mod conversation_usage_view;
 pub mod rollup;
+pub mod turn_usage_view;
 
 pub fn icon_for_context_window_usage(context_window_usage: f32) -> Icon {
     // The circle's solid (white) marks represent the context *remaining*, not

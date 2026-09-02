@@ -1745,6 +1745,20 @@ pub struct ConversationUsageMetadata {
     pub total_provider_cost_in_cents: Option<f32>,
     #[serde(default)]
     pub credits_spent_for_last_block: Option<f32>,
+    /// The platform-only portion of `credits_spent_for_last_block`; the
+    /// remainder is inference credits. Accumulated the same way as
+    /// `credits_spent_for_last_block` (see [`Self::turn_usage_baseline`]
+    /// for why some `_for_last_block` fields accumulate additively rather
+    /// than by baseline subtraction). `None` until the first request with
+    /// cost data completes.
+    #[serde(default)]
+    pub platform_credits_spent_for_last_block: Option<f32>,
+    /// Platform usage charged (in US cents) over the last block. Accumulated
+    /// additively like `credits_spent_for_last_block` (see
+    /// [`Self::turn_usage_baseline`]). `None` until the first request with
+    /// charge data completes.
+    #[serde(default)]
+    pub platform_usage_in_cents_for_last_block: Option<f32>,
     /// Per-category charged-usage breakdown for the most recent block (all
     /// agent outputs since the last user input), summed via
     /// [`ChargedUsageTotals::from`] from `StreamFinished.request_charges`.
@@ -1764,12 +1778,193 @@ pub struct ConversationUsageMetadata {
     pub tool_usage_metadata: ToolUsageMetadata,
     #[serde(default)]
     pub context_window_segments: Vec<ContextWindowSegment>,
+    /// Snapshot of conversation-cumulative tool-call/diff/command/token/cost
+    /// totals as of the start of the current turn, used to derive
+    /// turn-scoped values by subtraction since the server only reports
+    /// cumulative totals for these fields (contrast
+    /// `credits_spent_for_last_block`, which the server reports as
+    /// per-request deltas and so is accumulated additively instead).
+    /// `None` until the first block completes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_usage_baseline: Option<TurnUsageBaseline>,
+    /// Cumulative per-model token count and cost breakdown, across the whole
+    /// conversation, sourced from the server's `RequestCharges` and keyed by
+    /// the model's display label (e.g. "Grok 4.5 (medium reasoning)",
+    /// distinct from the machine-readable `LLMId` slug used elsewhere).
+    /// Diffing this against `turn_usage_baseline.per_model` yields
+    /// turn-scoped per-model usage that survives restarts/restores. Empty
+    /// until the first request with charge data completes.
+    #[serde(default)]
+    pub cumulative_token_cost_by_model: HashMap<String, PersistedModelTokenCost>,
+    /// Archived per-turn usage snapshots, keyed by the string form of the id
+    /// of the most recent exchange updated by that turn's requests. See
+    /// [`TurnUsageSnapshot`]. Gated behind `FeatureFlag::PricingTransparency`
+    /// and capped to the most recent entries (see `MAX_TURN_USAGE_SNAPSHOTS`).
+    #[serde(default)]
+    pub turn_usage_by_exchange: HashMap<String, TurnUsageSnapshot>,
 }
 
 impl ConversationUsageMetadata {
     pub fn total_tool_calls(&self) -> i32 {
         self.tool_usage_metadata.total_tool_calls()
     }
+}
+
+/// The tool-call/diff/command counters shared by [`TurnUsageSnapshot`] and
+/// [`TurnUsageBaseline`]. Flattened into both via `#[serde(flatten)]` so the
+/// persisted JSON shape (five top-level fields) is unchanged from before
+/// this struct existed.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
+pub struct TurnCounters {
+    pub tool_calls: i32,
+    pub files_changed: i32,
+    pub lines_added: i32,
+    pub lines_removed: i32,
+    pub commands_executed: i32,
+}
+
+/// A point-in-time snapshot of a single turn's usage, captured at the end of
+/// each request that contributes to it. See
+/// [`ConversationUsageMetadata::turn_usage_by_exchange`].
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct TurnUsageSnapshot {
+    #[serde(flatten)]
+    pub counters: TurnCounters,
+    /// Per-model token/cost usage for this turn, keyed by the model's
+    /// display label. See
+    /// [`ConversationUsageMetadata::cumulative_token_cost_by_model`].
+    #[serde(default)]
+    pub per_model: Vec<(String, PersistedModelTokenCost)>,
+    /// The conversation's cumulative context window usage (0.0-1.0) as of
+    /// this turn. Context window usage is inherently conversation-level
+    /// (it cannot be scoped to a single turn), so this is captured as a
+    /// point-in-time value rather than a delta, letting a historical turn
+    /// show the usage as it stood at the time rather than the
+    /// conversation's current value.
+    pub context_window_usage: f32,
+    /// Platform usage charged (in US cents) over this turn. `None` when no
+    /// request with charge data completed during this turn.
+    pub platform_usage_in_cents: Option<f32>,
+    /// Inference-only credits spent over this turn. `None` when the
+    /// inference/platform split is unknown (as opposed to genuinely zero).
+    #[serde(default)]
+    pub inference_credits_spent: Option<f32>,
+    /// Platform-only credits spent over this turn. See
+    /// [`Self::inference_credits_spent`].
+    #[serde(default)]
+    pub platform_credits_spent: Option<f32>,
+    /// Time to first token for this turn, in milliseconds.
+    #[serde(default)]
+    pub time_to_first_token_ms: i64,
+    /// Total agent response time for this turn, in milliseconds.
+    #[serde(default)]
+    pub total_agent_response_time_ms: i64,
+    /// Wall-to-wall response time for this turn, in milliseconds, from the
+    /// user query to the last token of the last response.
+    #[serde(default)]
+    pub wall_to_wall_response_time_ms: Option<i64>,
+}
+
+/// Cumulative token count and cost breakdown (input/output/cache-read/
+/// cache-write), plus web search count/cost, for a single model, as of some
+/// point in a conversation. See
+/// [`ConversationUsageMetadata::cumulative_token_cost_by_model`] and
+/// [`TurnUsageBaseline::per_model`].
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
+pub struct PersistedModelTokenCost {
+    #[serde(default)]
+    pub total_input: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub input_cache_read: u64,
+    #[serde(default)]
+    pub input_cache_write: u64,
+    #[serde(default)]
+    pub input_cost_in_cents: f32,
+    #[serde(default)]
+    pub output_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_read_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_write_cost_in_cents: f32,
+    #[serde(default)]
+    pub web_search_count: u64,
+    #[serde(default)]
+    pub web_search_cost_in_cents: f32,
+}
+
+impl PersistedModelTokenCost {
+    /// Billable "headline" token total (input + output). Deliberately
+    /// excludes cache read/write tokens, which are broken out separately in
+    /// the UI and typically priced very differently.
+    pub fn tokens(&self) -> u64 {
+        self.total_input + self.output
+    }
+
+    /// Whether this model recorded any billable activity at all, including
+    /// web search -- unlike `tokens() > 0 || cost_in_cents() > 0.0`, which
+    /// both exclude web search, so a model with only web-search usage and no
+    /// token/cost activity would otherwise be treated as inactive.
+    pub fn has_activity(&self) -> bool {
+        self.tokens() > 0
+            || self.cost_in_cents() > 0.0
+            || self.web_search_count > 0
+            || self.web_search_cost_in_cents > 0.0
+    }
+
+    /// Aggregate cost across all token types (input/output/cache), in US
+    /// cents. Computed rather than stored to avoid any risk of double-
+    /// counting against the per-field costs it's derived from.
+    pub fn cost_in_cents(&self) -> f32 {
+        self.input_cost_in_cents
+            + self.output_cost_in_cents
+            + self.input_cache_read_cost_in_cents
+            + self.input_cache_write_cost_in_cents
+    }
+
+    /// Component-wise delta against an earlier baseline snapshot of the same
+    /// model. Every field, including costs, is clamped to zero rather than
+    /// going negative.
+    pub fn saturating_sub(&self, baseline: &Self) -> Self {
+        Self {
+            total_input: self.total_input.saturating_sub(baseline.total_input),
+            output: self.output.saturating_sub(baseline.output),
+            input_cache_read: self
+                .input_cache_read
+                .saturating_sub(baseline.input_cache_read),
+            input_cache_write: self
+                .input_cache_write
+                .saturating_sub(baseline.input_cache_write),
+            input_cost_in_cents: (self.input_cost_in_cents - baseline.input_cost_in_cents).max(0.0),
+            output_cost_in_cents: (self.output_cost_in_cents - baseline.output_cost_in_cents)
+                .max(0.0),
+            input_cache_read_cost_in_cents: (self.input_cache_read_cost_in_cents
+                - baseline.input_cache_read_cost_in_cents)
+                .max(0.0),
+            input_cache_write_cost_in_cents: (self.input_cache_write_cost_in_cents
+                - baseline.input_cache_write_cost_in_cents)
+                .max(0.0),
+            web_search_count: self
+                .web_search_count
+                .saturating_sub(baseline.web_search_count),
+            web_search_cost_in_cents: (self.web_search_cost_in_cents
+                - baseline.web_search_cost_in_cents)
+                .max(0.0),
+        }
+    }
+}
+
+/// See [`ConversationUsageMetadata::turn_usage_baseline`].
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq)]
+pub struct TurnUsageBaseline {
+    #[serde(flatten)]
+    pub counters: TurnCounters,
+    /// Per-model token/cost baseline as of the start of the block, keyed by
+    /// the same model display label used in
+    /// [`ConversationUsageMetadata::cumulative_token_cost_by_model`].
+    #[serde(default)]
+    pub per_model: HashMap<String, PersistedModelTokenCost>,
 }
 
 #[derive(Debug, Insertable)]
