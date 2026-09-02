@@ -83,7 +83,17 @@ fn run_fish(script: &str) -> Option<String> {
 }
 
 fn fish_sh() -> &'static str {
-    include_str!("../../../app/assets/bundled/bootstrap/fish.sh")
+    static NORMALIZED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NORMALIZED.get_or_init(|| {
+        include_str!("../../../app/assets/bundled/bootstrap/fish.sh").replace('\r', "")
+    })
+}
+
+#[test]
+fn fish_sh_strips_carriage_returns_so_lf_extraction_markers_match() {
+    assert!(!fish_sh().contains('\r'));
+    assert!(fish_sh().contains("function warp_external_ctrl_r_widget\n"));
+    assert!(fish_sh().contains("function warp_run_external_ctrl_r_widget\n"));
 }
 
 fn extract_fish_fn(start_marker: &str, end_marker: &str, what: &str) -> &'static str {
