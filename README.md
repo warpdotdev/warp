@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://www.warp.dev"><img height="20" alt="Built with Warp" src="https://raw.githubusercontent.com/warpdotdev/brand-assets/main/Github/Built-With-Warp-Export@2x.png" /></a>
   &nbsp;
-  <a href="https://warp.dev/factories"><img height="20" alt="Powered by Oz" src="https://raw.githubusercontent.com/warpdotdev/brand-assets/main/Github/Powered-By-Oz-Export@2x.png" /></a>
+  <a href="https://warp.dev/factories"><img height="20" alt="Powered by Warp" src="https://raw.githubusercontent.com/warpdotdev/brand-assets/main/Github/Powered-By-Oz-Export@2x.png" /></a>
 </p>
 
 <p align="center">
