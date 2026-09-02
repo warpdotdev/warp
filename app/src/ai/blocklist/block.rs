@@ -7123,9 +7123,7 @@ impl TypedActionView for AIBlock {
                         .flat_map(|c| c.use_computer_action_ids())
                         .collect();
 
-                let server_api_provider = ServerApiProvider::handle(ctx);
-                let ai_client = server_api_provider.as_ref(ctx).get_ai_client();
-                let http_client = server_api_provider.as_ref(ctx).get_http_client();
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
 
                 // We Arc::clone the result each iteration to release the immutable
                 // borrow on ctx, allowing the mutable AssetCache update in the same
@@ -7165,7 +7163,6 @@ impl TypedActionView for AIBlock {
                                 stored_screenshot_asset_source(
                                     stored_ref.clone(),
                                     ai_client.clone(),
-                                    http_client.clone(),
                                 ),
                             ));
                         }

@@ -10,7 +10,6 @@ use ai::index::full_source_code_embedding::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
-#[cfg(not(target_family = "wasm"))]
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use cloud_object_models::CodeForge;
@@ -593,14 +592,6 @@ pub struct ScreenshotArtifactResponseData {
     pub expires_at: DateTime<Utc>,
     pub content_type: String,
     pub description: Option<String>,
-}
-
-/// Response from the stored computer-use screenshot download endpoint.
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
-pub struct ScreenshotDownloadResponse {
-    /// Short-lived signed URL from which the screenshot bytes can be fetched.
-    pub download_url: String,
-    pub expires_at: DateTime<Utc>,
 }
 
 /// File-specific data from the artifact endpoint.
@@ -1529,13 +1520,13 @@ pub trait AIClient: 'static + Send + Sync {
         artifact_uid: &str,
     ) -> anyhow::Result<ArtifactDownloadResponse, anyhow::Error>;
 
-    /// Fetches a signed download URL for a computer-use screenshot stored in
-    /// Warp-managed object storage. Requires view access to the conversation.
-    async fn get_screenshot_download(
+    /// Downloads the bytes of a computer-use screenshot stored in Warp-managed
+    /// object storage. Requires view access to the conversation.
+    async fn download_stored_screenshot(
         &self,
         conversation_id: &str,
         screenshot_uid: &str,
-    ) -> anyhow::Result<ScreenshotDownloadResponse, anyhow::Error>;
+    ) -> anyhow::Result<Bytes, anyhow::Error>;
 
     async fn prepare_attachments_for_upload(
         &self,
@@ -3018,19 +3009,25 @@ impl AIClient for ServerApi {
         Ok(response)
     }
 
-    async fn get_screenshot_download(
+    async fn download_stored_screenshot(
         &self,
         conversation_id: &str,
         screenshot_uid: &str,
-    ) -> anyhow::Result<ScreenshotDownloadResponse, anyhow::Error> {
-        let response: ScreenshotDownloadResponse = self
-            .get_public_api(&format!(
-                "agent/conversations/{}/screenshots/{}",
+    ) -> anyhow::Result<Bytes, anyhow::Error> {
+        // The endpoint redirects to a short-lived signed URL, which the HTTP
+        // client follows transparently. Strip that URL from body-read errors so
+        // it cannot leak into logs or Sentry breadcrumbs.
+        let response = self
+            .get_public_api_response(&format!(
+                "agent/conversations/{}/screenshots/{}/download",
                 urlencoding::encode(conversation_id),
                 urlencoding::encode(screenshot_uid)
             ))
             .await?;
-        Ok(response)
+        response
+            .bytes()
+            .await
+            .map_err(|error| anyhow::Error::new(error.without_url()))
     }
 
     async fn prepare_attachments_for_upload(
