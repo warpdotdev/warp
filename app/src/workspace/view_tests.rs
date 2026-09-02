@@ -293,6 +293,12 @@ fn test_open_new_window_for_team_reuses_existing_team_window() {
         });
 
         assert_eq!(app.window_ids().len(), initial_window_count);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.windows().last_window_shown_and_focused_for_test(),
+                Some(existing_team_window_id)
+            );
+        });
     });
 }
 

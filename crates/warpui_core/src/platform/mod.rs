@@ -580,6 +580,14 @@ pub trait WindowManager {
     /// a platform that allows the app to run without any open windows.
     fn activate_app(&self, last_active_window: Option<WindowId>) -> Option<WindowId>;
     fn show_window_and_focus_app(&self, window_id: WindowId, behavior: WindowFocusBehavior);
+
+    /// Returns the window most recently passed to `show_window_and_focus_app`. The `test`
+    /// platform is the only implementor that tracks this, since it otherwise has no way to
+    /// observe focus changes; other platforms report focus via `active_window_id` instead.
+    fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        None
+    }
+
     fn hide_app(&self);
     fn hide_window(&self, window_id: WindowId);
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF);
