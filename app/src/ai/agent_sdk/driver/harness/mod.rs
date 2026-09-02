@@ -44,6 +44,7 @@ mod codex;
 pub(crate) mod codex_transcript;
 mod gemini;
 mod json_utils;
+mod process_control;
 mod skill_dirs_publish;
 mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
@@ -533,6 +534,58 @@ pub(crate) trait HarnessRunner: Send + Sync {
 
     /// Gracefully ask the harness to exit.
     async fn exit(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()>;
+
+    /// Terminal driver backing this harness's terminal session. Required so
+    /// the default [`Self::force_kill`] implementation can locate the
+    /// harness's underlying pty/shell process without every implementor
+    /// having to duplicate that lookup.
+    fn terminal_driver(&self) -> ModelHandle<TerminalDriver>;
+
+    /// Sends a follow-up input shortly after [`Self::exit`], without waiting
+    /// to see whether it's needed, to retry a dropped write or dismiss a
+    /// confirmation the harness may have opened (e.g. Claude Code's
+    /// background-task exit confirmation). No-op by default; override for
+    /// harnesses with a known follow-up worth sending blind.
+    async fn exit_followup(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Forcibly terminates the harness's foreground process group, as the
+    /// last resort when [`Self::exit`] and [`Self::exit_followup`] didn't get
+    /// the CLI to exit within the allotted window.
+    ///
+    /// Fire-and-forget: `SIGKILL` cannot be caught or ignored, so the kernel
+    /// guarantees the process will terminate once the signal is delivered.
+    /// Callers do not need to wait for `command_handle` to resolve before
+    /// treating the harness as done.
+    async fn force_kill(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        let terminal_driver = self.terminal_driver();
+        let shell_process_info = foreground
+            .spawn(move |_, ctx| {
+                let terminal = terminal_driver.as_ref(ctx);
+                terminal.shell_process_info(ctx)
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Agent driver dropped while force-killing harness"))?;
+
+        let Some(shell_process_info) = shell_process_info else {
+            anyhow::bail!("No shell process info available; cannot force-kill harness process");
+        };
+
+        match process_control::foreground_pgid(&shell_process_info) {
+            Some(pgid) => process_control::kill_process_group(pgid),
+            None => {
+                log::warn!(
+                    "No foreground process group found for the harness terminal; \
+                     falling back to killing the shell's own process group {}",
+                    shell_process_info.pid
+                );
+                process_control::kill_process_group(shell_process_info.pid);
+            }
+        }
+        Ok(())
+    }
+
     /// Handle a CLI session update such as a prompt submit or completed tool use.
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         Ok(())

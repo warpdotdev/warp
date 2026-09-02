@@ -377,6 +377,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
             )
         }
 
+        // The harness didn't respond to any graceful exit attempt and had to
+        // be forcibly killed. This is a Warp/CLI interaction gap rather than
+        // something the user misconfigured, but the run's own outcome was
+        // already decided before shutdown, so classify like other harness
+        // command-failure variants (FAILED) rather than an internal ERROR.
+        AgentDriverError::HarnessExitTimedOut { harness } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Harness '{harness}' did not exit gracefully and was forcibly terminated."),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
+
         // The sandbox deadline is either a fixed limit (free plan) the user can
         // remove by upgrading, or a configurable limit (paid plan) they can adjust.
         // Either way, it's a task outcome: the user's work didn't fit in the allowed

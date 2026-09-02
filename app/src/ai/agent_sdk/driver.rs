@@ -174,6 +174,16 @@ where
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Delay after the initial exit request before retrying with the harness's
+/// follow-up input (e.g. Claude's confirmation-dialog dismissal). Sent
+/// unconditionally, without waiting to see whether it's needed.
+const HARNESS_EXIT_FOLLOWUP_DELAY: Duration = Duration::from_secs(1);
+/// Delay after the follow-up retry before giving up on a graceful exit and
+/// force-killing the harness's process group. Together with
+/// `HARNESS_EXIT_FOLLOWUP_DELAY` this bounds the whole escalation ladder to
+/// ~15s from the initial exit request — independent of, and much shorter
+/// than, `WARP_SANDBOX_DEADLINE`.
+const HARNESS_EXIT_FORCE_KILL_DELAY: Duration = Duration::from_secs(14);
 /// Bound on the end-of-run wait for `LocalAgentTaskSyncModel` to finish
 /// delivering queued task status updates before the process may exit.
 const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -856,6 +866,14 @@ pub enum AgentDriverError {
         /// Matching row(s) from the harness block, trimmed and capped.
         excerpt: String,
     },
+    /// The harness did not exit within the graceful-shutdown escalation
+    /// ladder (`run_harness`'s exit request, follow-up retry, and force-kill)
+    /// and had to be forcibly terminated.
+    #[error(
+        "Harness '{harness}' did not exit within the graceful shutdown window and was \
+         forcibly terminated."
+    )]
+    HarnessExitTimedOut { harness: String },
     /// `WARP_SANDBOX_DEADLINE` expired before `run_internal` completed.
     /// For free plans, this is a user-facing limit (upgrade to remove it).
     /// For paid plans, it's a configurable limit the user or team set.
@@ -3866,11 +3884,63 @@ impl AgentDriver {
                         .context("Failed to save harness conversation (periodic)"));
                 }
                 _ = harness_exit_rx => {
-                    log::debug!("Requesting harness exit");
+                    log::info!(
+                        "Ambient agent CLI lifecycle: event=harness_exit_attempt \
+                         harness={harness_name} attempt=1 method=exit"
+                    );
+                    Self::send_harness_exit_telemetry(&harness_name, "exit", foreground).await;
                     report_if_error!(runner
                         .exit(foreground)
                         .await
                         .context("Failed to exit harness"));
+
+                    let resolved = futures::select! {
+                        exit_code = command_handle => Some(exit_code),
+                        _ = warpui::r#async::Timer::after(HARNESS_EXIT_FOLLOWUP_DELAY).fuse() => None,
+                    };
+                    if let Some(exit_code) = resolved {
+                        break exit_code;
+                    }
+
+                    log::info!(
+                        "Ambient agent CLI lifecycle: event=harness_exit_attempt \
+                         harness={harness_name} attempt=2 method=exit_followup"
+                    );
+                    Self::send_harness_exit_telemetry(&harness_name, "exit_followup", foreground)
+                        .await;
+                    report_if_error!(runner
+                        .exit_followup(foreground)
+                        .await
+                        .context("Failed to send harness exit follow-up"));
+
+                    let resolved = futures::select! {
+                        exit_code = command_handle => Some(exit_code),
+                        _ = warpui::r#async::Timer::after(HARNESS_EXIT_FORCE_KILL_DELAY).fuse() => None,
+                    };
+                    if let Some(exit_code) = resolved {
+                        break exit_code;
+                    }
+
+                    log::warn!(
+                        "Ambient agent CLI lifecycle: event=harness_exit_attempt \
+                         harness={harness_name} attempt=3 method=force_kill"
+                    );
+                    Self::send_harness_exit_telemetry(&harness_name, "force_kill", foreground)
+                        .await;
+                    if let Err(error) = runner
+                        .force_kill(foreground)
+                        .await
+                        .context("Failed to force-kill harness")
+                    {
+                        report_error!(error);
+                    }
+                    // SIGKILL is uncatchable: we don't wait for `command_handle`
+                    // to confirm the process actually exited before returning
+                    // here — the kernel guarantees it will terminate once the
+                    // signal is delivered.
+                    break Err(AgentDriverError::HarnessExitTimedOut {
+                        harness: harness_name.clone(),
+                    });
                 }
                 detected = scanner_fut => {
                     if let Some(error) = detected {
@@ -3971,16 +4041,54 @@ impl AgentDriver {
             });
         }
 
-        let exit_code = command_result?;
-        log::debug!("Agent harness exited with status {exit_code}");
-
-        if exit_code.was_successful() {
-            Ok(())
-        } else {
-            Err(AgentDriverError::HarnessCommandFailed {
-                exit_code: exit_code.value(),
-            })
+        match command_result {
+            Ok(exit_code) => {
+                log::debug!("Agent harness exited with status {exit_code}");
+                if exit_code.was_successful() {
+                    Ok(())
+                } else {
+                    Err(AgentDriverError::HarnessCommandFailed {
+                        exit_code: exit_code.value(),
+                    })
+                }
+            }
+            // The harness had to be force-killed after failing to exit
+            // gracefully. `harness_exit_rx` only ever fires once the CLI
+            // session's status has already transitioned to a terminal state
+            // (Success/Failed/Blocked/Cancelled) — see
+            // `subscribe_to_cli_agent_session_events` — and
+            // `LocalAgentTaskSyncModel` independently reports that same
+            // transition to the server via its own subscription. Returning
+            // this as a driver-level error here would route through
+            // `report_driver_error` and overwrite that already-correct,
+            // more specific outcome with a generic "forcibly terminated"
+            // failure. The escalation ladder already logged and emitted
+            // telemetry for the force-kill above, so that's the extent of
+            // the observability for this path — the run is otherwise
+            // allowed to complete normally.
+            Err(AgentDriverError::HarnessExitTimedOut { .. }) => Ok(()),
+            Err(err) => Err(err),
         }
+    }
+
+    /// Emits a telemetry event for one attempt in the harness exit
+    /// escalation ladder (`method` is `"exit"`, `"exit_followup"`, or
+    /// `"force_kill"`), so how often graceful exit succeeds vs. requires
+    /// escalation is measurable in production instead of only
+    /// reconstructable from logs.
+    async fn send_harness_exit_telemetry(
+        harness_name: &str,
+        method: &'static str,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        let harness = harness_name.to_owned();
+        let _ = foreground
+            .spawn(move |_, ctx| {
+                use warp_core::telemetry::TelemetryEvent as _;
+                let event = ThirdPartyHarnessTelemetryEvent::ExitEscalation { harness, method };
+                send_telemetry_from_app_ctx!(event, ctx);
+            })
+            .await;
     }
 
     /// Configure the active terminal session with the specified profile.

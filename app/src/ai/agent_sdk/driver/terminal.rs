@@ -32,6 +32,7 @@ use crate::terminal::model::find::RegexDFAs;
 use crate::terminal::model::grid::RespectDisplayedOutput;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::session::ExecuteCommandOptions;
+use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
@@ -423,6 +424,26 @@ impl TerminalDriver {
         self.terminal_view.update(ctx, |terminal, ctx| {
             terminal.submit_text_to_cli_agent_pty(text, ctx);
         });
+    }
+
+    /// Sends a raw Enter (`\r`) to the CLI agent's PTY, bypassing the normal
+    /// rich-input submission pipeline (which no-ops on empty text). Used to
+    /// retry a bare Enter during harness exit escalation — e.g. in case a
+    /// prior exit write was silently dropped, or to dismiss a confirmation
+    /// prompt.
+    pub(super) fn send_bare_enter_to_cli(&self, ctx: &mut ModelContext<Self>) {
+        self.terminal_view.update(ctx, |terminal, ctx| {
+            terminal.submit_bare_enter_to_cli_agent_pty(ctx);
+        });
+    }
+
+    /// The pty's shell process info for this terminal, if the shell has been
+    /// spawned and hasn't exited. Used to locate the actual foreground
+    /// process group when force-killing a harness that didn't exit
+    /// gracefully.
+    pub(super) fn shell_process_info(&self, ctx: &AppContext) -> Option<ShellProcessInfo> {
+        let terminal = self.terminal_view.as_ref(ctx);
+        terminal.model.lock().shell_process_info().copied()
     }
 
     /// Return a snapshot of the block with the given ID.
