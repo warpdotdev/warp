@@ -26564,8 +26564,11 @@ impl View for Workspace {
             }
         }
 
-        #[cfg(target_family = "wasm")]
-        if self.is_conversation_transcript_viewer_focused(app) {
+        #[cfg(any(test, target_family = "wasm"))]
+        if matches!(
+            self.get_simplified_wasm_tab_bar_content(app),
+            Some(SimplifiedWasmTabBarContent::ConversationTranscript { .. })
+        ) {
             context.set.insert("Workspace_CloudConversationWebViewer");
         }
 

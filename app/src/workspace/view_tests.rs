@@ -20,7 +20,7 @@ use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
 use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, AppContext, ViewContext, ViewHandle};
+use warpui::{AddSingletonModel, App, AppContext, View, ViewContext, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -5293,6 +5293,12 @@ fn simplified_wasm_tab_bar_is_none_after_owned_handoff_restore_without_deep_link
             assert!(!workspace.opened_from_content_deep_link);
             assert_owned_handoff_restore_is_chrome_hostile(workspace, ctx);
             assert_eq!(workspace.get_simplified_wasm_tab_bar_content(ctx), None);
+            assert!(
+                !workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_CloudConversationWebViewer")
+            );
         });
     });
 }
@@ -5316,6 +5322,13 @@ fn simplified_wasm_tab_bar_stays_some_after_owned_handoff_cloud_cloud_restore() 
                 Some(SimplifiedWasmTabBarContent::ConversationTranscript {
                     task_id: Some(task_id),
                 })
+            );
+            assert!(
+                workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_CloudConversationWebViewer"),
+                "deep-linked conversation viewers must keep the web-viewer context so the command palette stays disabled"
             );
         });
     });
