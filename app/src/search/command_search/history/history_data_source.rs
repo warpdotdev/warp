@@ -41,11 +41,6 @@ pub fn history_data_source(
     )
 }
 
-/// Rebuilds the candidate list from `History`'s live state on every query, rather than capturing
-/// one fixed snapshot when the panel opens: `History::mark_command_as_finished` updates an
-/// in-flight command's entry via `Arc::make_mut` when it completes, and a fixed capture would
-/// keep pointing at the stale, pre-completion entry (wrong exit status, and any other metadata
-/// filled in on completion) for as long as the panel stays open.
 pub(crate) fn history_data_source_for_session(
     session_id: SessionId,
 ) -> AsyncSnapshotDataSource<HistorySnapshot, CommandSearchItemAction> {

@@ -221,7 +221,8 @@ pub(crate) fn rank(inputs: RankInputs<'_>) -> Option<OrderedFloat<f64>> {
 
 /// Age, in days, of a command with a known `start_ts`, used for the recency term.
 fn age_days(start_ts: DateTime<Local>, now: DateTime<Local>) -> f64 {
-    ((now - start_ts).num_seconds() as f64 / 86_400.0).max(0.0)
+    let seconds_per_day = chrono::TimeDelta::days(1).num_seconds() as f64;
+    ((now - start_ts).num_seconds() as f64 / seconds_per_day).max(0.0)
 }
 
 #[cfg(test)]
