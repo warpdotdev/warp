@@ -40,6 +40,7 @@ pub mod spacectl;
 use spacectl::{MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CAPTURED_STDERR_BYTES: usize = 4 * 1024;
 
 /// Identifiers for a code repository.
 ///
@@ -237,7 +238,10 @@ pub enum CacheSetupError {
     #[error("failed to spawn spacectl")]
     SpawnFailed,
     #[error("spacectl exited unsuccessfully")]
-    NonzeroExit { exit_code: Option<i32> },
+    NonzeroExit {
+        exit_code: Option<i32>,
+        stderr: String,
+    },
     #[error("failed to parse spacectl JSON output")]
     JsonParseFailed,
     #[error("spacectl timed out")]
@@ -260,7 +264,7 @@ impl CacheSetupError {
 
     pub fn exit_code(&self) -> Option<i32> {
         match self {
-            Self::NonzeroExit { exit_code } => *exit_code,
+            Self::NonzeroExit { exit_code, .. } => *exit_code,
             Self::RootCreationFailed
             | Self::SpawnFailed
             | Self::JsonParseFailed
@@ -455,7 +459,7 @@ async fn run_command_with_timeout(
     command
         .kill_on_drop(true)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     let output = async {
         command
             .output()
@@ -470,9 +474,20 @@ async fn run_command_with_timeout(
     if !output.status.success() {
         return Err(CacheSetupError::NonzeroExit {
             exit_code: output.status.code(),
+            stderr: bounded_stderr(&output.stderr),
         });
     }
     Ok(output.stdout)
+}
+
+fn bounded_stderr(stderr: &[u8]) -> String {
+    let truncated = stderr.len() > MAX_CAPTURED_STDERR_BYTES;
+    let stderr = &stderr[..stderr.len().min(MAX_CAPTURED_STDERR_BYTES)];
+    let mut stderr = String::from_utf8_lossy(stderr).trim_end().to_owned();
+    if truncated {
+        stderr.push_str("\n[stderr truncated]");
+    }
+    stderr
 }
 
 /// Set up build caching on the current host. See the crate-level documentation for a description

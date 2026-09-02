@@ -58,10 +58,125 @@ pub enum UploadFieldValue {
     ContentData,
 }
 
+/// Selects how the server names and accounts for a [`SnapshotUploadRequest`]'s uploads.
+///
+/// `Legacy` uses unprefixed names and charges the execution's cumulative attachment quota.
+/// `Checkpoint` signs generation-prefixed names and is charged per attempt at commit time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotUploadMode {
+    #[default]
+    Legacy,
+    Checkpoint,
+}
+
 /// Request body for upload-snapshot upload targets.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SnapshotUploadRequest {
+    /// Omitted when legacy, which the server treats as the default.
+    #[serde(skip_serializing_if = "is_default_mode")]
+    pub mode: SnapshotUploadMode,
+    /// Required in checkpoint mode; the server uploads each file as
+    /// `checkpoint_<generation>__<filename>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<String>,
     pub files: Vec<SnapshotFileInfo>,
+}
+
+fn is_default_mode(mode: &SnapshotUploadMode) -> bool {
+    *mode == SnapshotUploadMode::default()
+}
+
+impl SnapshotUploadRequest {
+    pub fn legacy(files: Vec<SnapshotFileInfo>) -> Self {
+        Self {
+            mode: SnapshotUploadMode::Legacy,
+            generation: None,
+            files,
+        }
+    }
+
+    pub fn checkpoint(generation: CheckpointGeneration, files: Vec<SnapshotFileInfo>) -> Self {
+        Self {
+            mode: SnapshotUploadMode::Checkpoint,
+            generation: Some(generation.into_inner()),
+            files,
+        }
+    }
+}
+
+/// Client-minted identifier for one checkpoint attempt, used to key that attempt's storage
+/// objects as `checkpoint_<generation>__<logical_name>`.
+///
+/// A generation is a storage-keying detail and must never leak into agent-visible paths or
+/// restore commands.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
+pub struct CheckpointGeneration(String);
+
+impl CheckpointGeneration {
+    /// Test-only escape hatch; production code mints generations via
+    /// `snapshot::mint_generation`. Gated to match `driver::snapshot`'s test module, which
+    /// does not build on Windows.
+    #[cfg(all(test, not(windows)))]
+    pub(crate) fn new_for_test(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    /// Mirrors the server's `[A-Za-z0-9._-]{1,128}` format check, including the reserved `__`
+    /// separator that would make `checkpoint_<generation>__<logical_name>` ambiguous.
+    fn is_valid(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && !value.contains("__")
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    }
+
+    /// Construct from a string the caller has already shaped to [`Self::is_valid`].
+    /// `snapshot::mint_generation` is the only production caller and satisfies it by
+    /// construction, so the invariant is a debug assertion rather than a fallible return.
+    pub(crate) fn from_validated(value: String) -> Self {
+        debug_assert!(
+            Self::is_valid(&value),
+            "checkpoint generation must match [A-Za-z0-9._-]{{1,128}} and exclude `__`: {value}"
+        );
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl std::fmt::Display for CheckpointGeneration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Request body for committing a fully uploaded checkpoint generation.
+///
+/// `files` are logical names, exactly as sent to `upload-snapshot`. The server derives each
+/// object's storage name from the generation, so how a checkpoint is laid out in storage stays
+/// entirely server-side.
+///
+/// Exact-set: the server commits only the objects these names resolve to, and selection later
+/// returns exactly that set rather than everything sharing the generation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CommitSnapshotRequest {
+    pub generation: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CommitSnapshotResponse {
+    pub generation: String,
 }
 
 /// Describes a single file in a snapshot upload request.
@@ -228,6 +343,16 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         &self,
         request: &SnapshotUploadRequest,
     ) -> Result<Vec<UploadTarget>>;
+
+    /// Make a fully uploaded checkpoint generation the selected checkpoint.
+    ///
+    /// Only call this once every file in `request.files` (including the manifest) has
+    /// uploaded successfully; the server resolves each name to its object, verifies existence
+    /// and per-attempt size limits, and rejects the whole commit otherwise.
+    async fn commit_snapshot(
+        &self,
+        request: &CommitSnapshotRequest,
+    ) -> Result<CommitSnapshotResponse>;
 
     /// Download the raw third-party harness transcript bytes for the current task's
     /// conversation.
@@ -460,6 +585,14 @@ impl HarnessSupportClient for ServerApi {
             .post_public_api("harness-support/upload-snapshot", request)
             .await?;
         Ok(response.uploads)
+    }
+
+    async fn commit_snapshot(
+        &self,
+        request: &CommitSnapshotRequest,
+    ) -> Result<CommitSnapshotResponse> {
+        self.post_public_api("harness-support/commit-snapshot", request)
+            .await
     }
 
     async fn fetch_transcript(&self) -> Result<bytes::Bytes> {

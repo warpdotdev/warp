@@ -8,11 +8,12 @@ use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
     Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
     OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
-    RunAgentsExecutionMode, RunAgentsRequest, TaskId, register_tui_session_view_test_singletons,
+    RunAgentsExecutionMode, RunAgentsRequest, ServerApiProvider, TaskId, TeamContext,
+    UserWorkspaces, register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, App, ViewHandle};
+use warpui::{AddWindowOptions, App, SingletonEntity as _, ViewHandle};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect};
 use warpui_core::keymap::Keystroke;
 use warpui_core::presenter::tui::TuiPresenter;
@@ -264,6 +265,7 @@ impl OrchestrationBlockController for TestController {
         &self,
         page: ConfigPage,
         state: &OrchestrationConfigState,
+        _scope: &TeamContext,
         _ctx: &warpui::AppContext,
     ) -> OptionSnapshot {
         let (rows, selected_id) = match page {
@@ -350,6 +352,16 @@ fn test_block(
 ) -> (ViewHandle<TuiOrchestrationBlock>, Rc<TestController>) {
     app.add_singleton_model(|_| Appearance::mock());
     app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
+    app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+    app.add_singleton_model(|ctx| {
+        let provider = ServerApiProvider::as_ref(ctx);
+        UserWorkspaces::mock(
+            provider.get_team_client(),
+            provider.get_workspace_client(),
+            Vec::new(),
+            ctx,
+        )
+    });
     let action = AIAgentAction {
         id: AIAgentActionId::from("run-agents-1".to_string()),
         task_id: TaskId::new("task-1".to_string()),
@@ -755,6 +767,29 @@ fn confirming_a_search_result_returns_focus_to_the_acceptance_card() {
             CardMode::Acceptance
         );
         assert_eq!(app.focused_view_id(window_id), Some(block.id()));
+    });
+}
+
+#[test]
+fn background_page_invalidation_does_not_take_focus() {
+    App::test((), |mut app| async move {
+        let (block, _) = test_block(&mut app, &request("oz", RunAgentsExecutionMode::Local));
+        block.update(&mut app, |block, ctx| {
+            block.open_page(ConfigPage::Model, ctx);
+        });
+        let window_id = block.read(&app, |_, ctx| block.window_id(ctx));
+        let focus_target = app.update(|ctx| ctx.add_tui_view(window_id, |_| TestHostView));
+        focus_target.update(&mut app, |_, ctx| ctx.focus_self());
+
+        block.update(&mut app, |block, ctx| {
+            block.return_to_acceptance(ctx);
+        });
+
+        assert!(app.read(|ctx| focus_target.is_focused(ctx)));
+        assert_eq!(
+            block.read(&app, |block, _| block.mode),
+            CardMode::Acceptance
+        );
     });
 }
 #[test]

@@ -1281,6 +1281,8 @@ impl AgentConversationsModel {
         self.tasks.values()
     }
 
+    /// Seeds the task cache so tests can exercise cache-hit paths without a
+    /// server round trip.
     #[cfg(test)]
     pub(crate) fn insert_task_for_test(&mut self, task: AmbientAgentTask) {
         self.tasks.insert(task.task_id, task);
@@ -1725,6 +1727,59 @@ impl AgentConversationsModel {
             ) => Some(error),
             _ => None,
         }
+    }
+
+    /// Updates a cached task to reflect that execution has started and its
+    /// session is now known (from a `run_session_linked` wire event). If the
+    /// task is not yet cached, starts a fetch to retrieve it.
+    ///
+    /// Mutating the cache entry directly avoids a full round-trip while still
+    /// giving `decide_child_pane_materialization` the `InProgress` +
+    /// `is_sandbox_running=true` + `session_id` it needs to return `AttachLive`
+    /// on the next pill click. `TasksUpdated` is emitted so any pending
+    /// re-drives fire immediately.
+    pub fn update_task_as_running_with_session(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        session_id_str: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        use crate::ai::ambient_agents::AmbientAgentTaskState;
+        if let Some(task) = self.tasks.get_mut(task_id) {
+            task.session_id = Some(session_id_str);
+            task.is_sandbox_running = true;
+            // Only promote to InProgress if still in a queued/pending state;
+            // never downgrade a terminal state that may have arrived concurrently.
+            match task.state {
+                AmbientAgentTaskState::Queued
+                | AmbientAgentTaskState::Pending
+                | AmbientAgentTaskState::Claimed => {
+                    task.state = AmbientAgentTaskState::InProgress;
+                }
+                _ => {}
+            }
+            ctx.emit(AgentConversationsModelEvent::TasksUpdated);
+        } else {
+            // Task not cached yet; start a fetch.
+            self.async_fetch_task(task_id, ctx);
+        }
+    }
+
+    /// Evicts a task from the cache and immediately starts a fresh
+    /// `GET /agent/runs/{id}` fetch. Used by the family drain when a terminal
+    /// lifecycle event arrives for a child whose cached state is stale (e.g.
+    /// still shows `Queued` from the initial discovery fetch). The refreshed
+    /// data — including the server conversation token and terminal state —
+    /// enables `decide_child_pane_materialization` to return `LoadTranscript`
+    /// so subsequent pill clicks load the cloud transcript.
+    pub fn evict_and_refetch_task(
+        &mut self,
+        task_id: &AmbientAgentTaskId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.tasks.remove(task_id);
+        self.task_fetch_state.remove(task_id);
+        self.async_fetch_task(task_id, ctx);
     }
 
     /// Get raw task data by task ID, fetching from server if not in memory.

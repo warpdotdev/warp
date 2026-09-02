@@ -10,10 +10,10 @@ use instant::Instant;
 use warp_core::channel::Channel;
 
 use super::{
-    CURRENT_POINTER_NAME, InstallLayout, TuiAutoupdateStatus, UpdateOutcome,
+    CURRENT_POINTER_NAME, InstallLayout, InstallMethod, TuiAutoupdateStatus, UpdateOutcome,
     VERSION_LEASES_DIR_NAME, VersionDirState, VersionLease, create_unique_staging_dir_with,
-    download_endpoint, is_complete_version_dir, is_safe_version_component, latest_version_for,
-    prune_old_versions, settled_status, version_dir_state,
+    download_endpoint, homebrew_update_outcome, is_complete_version_dir, is_safe_version_component,
+    latest_version_for, prune_old_versions, settled_status, version_dir_state,
 };
 #[cfg(unix)]
 use super::{
@@ -55,6 +55,40 @@ fn failed_check_preserves_pending_restart_status() {
         settled_status(&result, TuiAutoupdateStatus::PendingRestart),
         TuiAutoupdateStatus::PendingRestart
     );
+}
+
+#[test]
+fn homebrew_update_is_presented_without_installing() {
+    let outcome = homebrew_update_outcome(
+        "v0.2026.07.22.18.00.stable_00",
+        "v0.2026.07.29.18.00.stable_00".to_owned(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        UpdateOutcome::UpdateAvailable { ref version }
+            if version == "v0.2026.07.29.18.00.stable_00"
+    ));
+    assert_eq!(
+        settled_status(&Ok(outcome), TuiAutoupdateStatus::UpToDate),
+        TuiAutoupdateStatus::UpdateAvailable
+    );
+}
+
+#[test]
+fn homebrew_update_check_never_offers_rollbacks() {
+    let outcome = homebrew_update_outcome(
+        "v0.2026.07.29.18.00.stable_00",
+        "v0.2026.07.22.18.00.stable_00".to_owned(),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        UpdateOutcome::UpToDate { version }
+            if version == "v0.2026.07.29.18.00.stable_00"
+    ));
 }
 
 #[test]
@@ -165,6 +199,36 @@ fn detects_managed_install_layout() {
         Path::new("/home/user/.warp/tui/versions/v0.2026.01.01.00.00.dev_00")
     );
     assert_eq!(layout.binary_name, BINARY_NAME);
+}
+
+#[test]
+fn detects_homebrew_cask_installations_across_supported_prefixes() {
+    for exe in [
+        "/opt/homebrew/Caskroom/warp-agent-cli/v1/warp-tui-stable",
+        "/usr/local/Caskroom/warp-agent-cli/v1/warp-tui-stable",
+        "/home/linuxbrew/.linuxbrew/Caskroom/warp-agent-cli/v1/warp-tui-stable",
+    ] {
+        assert_eq!(
+            InstallMethod::from_canonical_exe_path(Path::new(exe)),
+            InstallMethod::Homebrew,
+            "{exe}"
+        );
+    }
+}
+
+#[test]
+fn rejects_unrelated_homebrew_casks_and_binary_names() {
+    for exe in [
+        "/opt/homebrew/Caskroom/other/v1/warp-tui-stable",
+        "/opt/homebrew/Caskroom/warp-agent-cli/v1/warp-preview",
+        "/opt/homebrew/bin/warp-tui-stable",
+    ] {
+        assert_eq!(
+            InstallMethod::from_canonical_exe_path(Path::new(exe)),
+            InstallMethod::Unmanaged,
+            "{exe}"
+        );
+    }
 }
 
 /// `Path::canonicalize` hands back `\\?\C:\...` on Windows. Passing that

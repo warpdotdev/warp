@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use warp_core::channel::ChannelState;
 use warp_core::operating_system_info::OperatingSystemInfo;
+use warp_errors::{ErrorExt, register_error};
 
 use crate::error::{UserFacingError, UserFacingErrorInterface};
 use crate::request_context::{ClientContext, OsContext, RequestContext};
@@ -54,6 +55,19 @@ pub enum GraphQLError {
     #[error("Failed to deserialize GraphQL response: {0:?}")]
     ResponseError(#[source] reqwest::Error),
 }
+
+impl ErrorExt for GraphQLError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            GraphQLError::RequestError(e) | GraphQLError::ResponseError(e) => e.is_actionable(),
+            GraphQLError::StagingAccessBlocked | GraphQLError::IapChallengeBlocked => false,
+            GraphQLError::HttpError { status, .. } => {
+                !matches!(status.as_u16(), 408 | 429 | 500..=599)
+            }
+        }
+    }
+}
+register_error!(GraphQLError);
 
 /// Options for sending a GraphQL request.
 #[derive(Default)]

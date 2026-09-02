@@ -8,7 +8,7 @@ Param (
 
     [Alias('check-only')]
     [Switch]$CHECK_ONLY,
-    [ValidateSet('app', 'tui')]
+    [ValidateSet('app', 'tui', 'cli')]
     [String]$ARTIFACT = 'app',
 
     [ValidateSet('local', 'dev', 'preview', 'stable', 'oss')]
@@ -60,6 +60,31 @@ if ($ARCH -eq 'arm64') {
     $PLATFORM_TARGET = 'x86_64-pc-windows-msvc'
 }
 
+# Windows-on-ARM64 hosts can run x64 binaries via built-in emulation, but x64
+# hosts cannot run arm64 binaries at all, so only that direction is unsafe.
+# Resolve it once so the settings-schema default below (which assumes the
+# just-built binary is executable) can fail clearly instead of the process
+# simply failing to start.
+#
+# PROCESSOR_ARCHITECTURE reports the architecture of the running process, not
+# the host: an x64 PowerShell process running under WOW64 on a Windows-on-ARM
+# machine reports AMD64 even though the host is natively ARM64.
+# PROCESSOR_ARCHITEW6432 carries the true native host architecture in that
+# case, so prefer it when present.
+$NATIVE_PROCESSOR_ARCHITECTURE = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} else {
+    $env:PROCESSOR_ARCHITECTURE
+}
+$HOST_ARCH = if ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+    'x64'
+} elseif ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+    'arm64'
+} else {
+    throw "Unsupported host architecture: $NATIVE_PROCESSOR_ARCHITECTURE"
+}
+$CAN_EXECUTE_ARCH = -not ($ARCH -eq 'arm64' -and $HOST_ARCH -eq 'x64')
+
 $ErrorActionPreference = 'Stop'
 
 function Assert-ValidSignature {
@@ -76,16 +101,17 @@ function Assert-ValidSignature {
     }
 }
 
-$WORKSPACE_ROOT_DIR = $(Get-Location).Path
+$WORKSPACE_ROOT_DIR = $PWD.Path
 $CARGO_TARGET_DIR = $WORKSPACE_ROOT_DIR + '\target'
 $WINDOWS_INSTALLER_DIR = $WORKSPACE_ROOT_DIR + '\script\windows'
 $IS_TUI = $ARTIFACT -eq 'tui'
+$IS_CLI = $ARTIFACT -eq 'cli'
 
 if ($DEBUG_BUILD) {
     $CARGO_PROFILE = 'dev'
-} elseif ($IS_TUI -and (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev'))) {
+} elseif (($IS_TUI -or $IS_CLI) -and (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev'))) {
     $CARGO_PROFILE = 'rclida'
-} elseif ($IS_TUI) {
+} elseif ($IS_TUI -or $IS_CLI) {
     $CARGO_PROFILE = 'rcli'
 } elseif (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
     # For dev bundles, we want to enable debug assertions to
@@ -169,6 +195,16 @@ if ($IS_TUI) {
     if ("$CHANNEL" -ne 'oss') {
         $FEATURES = "$FEATURES,crash_reporting"
     }
+} elseif ($IS_CLI) {
+    # The CLI ships the same channel binary target as the app (no separate bin), so keep
+    # $WARP_BIN and the channel-scoped $FEATURES set above (crash_reporting, preview_channel,
+    # agent_mode_debug, etc.) but swap the app's `gui` feature for `standalone`, mirroring the
+    # macOS and Linux `--artifact cli` builds. Filtering (rather than overwriting) $FEATURES is
+    # required so per-channel additions above -- e.g. preview_channel, required by the `preview`
+    # cargo target -- survive into the CLI build.
+    $BINARY_NAME = "$WARP_BIN.exe"
+    $FEATURES = (($FEATURES -split ',') | Where-Object { $_ -ne 'gui' }) -join ','
+    $FEATURES = "$FEATURES,standalone"
 } else {
     # All app channels ship the v3 classifier and v2 heuristic.
     $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
@@ -249,14 +285,32 @@ if ($SKIP_BUILD_INSTALLER) {
 Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 
 # Prepare bundled resources
+if ($env:SKIP_SETTINGS_SCHEMA -ne '1' -and -not $env:SETTINGS_SCHEMA_EXECUTABLE -and -not $env:SETTINGS_SCHEMA_SOURCE) {
+    if ($IS_TUI -or $IS_CLI) {
+        Write-Error 'TUI and CLI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif ($SKIP_BUILD_BINARY) {
+        Write-Error '-skip_build_binary requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif (-not $CAN_EXECUTE_ARCH) {
+        Write-Error "Cannot execute the just-built $ARCH binary on this $HOST_ARCH host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE."
+        exit 1
+    }
+    $env:SETTINGS_SCHEMA_EXECUTABLE = $BINARY_PATH
+}
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output 'Preparing bundled resources...'
-& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
+& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL"
 if (-Not $?) {
     Write-Error 'Failed to prepare bundled resources'
     exit 1
 }
-if ($IS_TUI) {
+if ($IS_TUI -or $IS_CLI) {
+    # Both the TUI and CLI ship the ConPTY/OpenConsole payload and MSVC redistributable DLLs
+    # alongside the binary (see the packaging step in create_release.yml for the CLI, and the
+    # Inno Setup script for the TUI). Verify the files exist, and -- when requested -- are
+    # signed, before the CLI branch below hands off to the workflow's own packaging step,
+    # which otherwise has no way to detect a missing or unsigned sidecar file.
     $WINDOWS_ASSETS_DIR = "$WORKSPACE_ROOT_DIR\app\assets\windows\$ARCH"
     $requiredPayloadFiles = @(
         $BINARY_PATH,
@@ -274,6 +328,19 @@ if ($IS_TUI) {
             Assert-ValidSignature -Path $requiredFile
         }
     }
+}
+if ($IS_CLI) {
+    # The CLI ships as a bare binary plus its resources dir, mirroring the macOS and Linux
+    # `--artifact cli` builds; it has no installer to build, so stop here rather than
+    # falling through to the Inno Setup section below.
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        Write-Output '::echo::on'
+        "binary_path=$BINARY_PATH" >> "$env:GITHUB_OUTPUT"
+        "pdb_file_path=$PDB_PATH" >> "$env:GITHUB_OUTPUT"
+        "bundled_resources_dir=$BUNDLED_RESOURCES_DIR" >> "$env:GITHUB_OUTPUT"
+        Write-Output '::echo::off'
+    }
+    exit 0
 }
 
 Write-Output 'Building Warp installer'

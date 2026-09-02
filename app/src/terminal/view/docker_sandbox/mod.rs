@@ -22,8 +22,12 @@ use warpui::{SingletonEntity, View, ViewHandle};
 use super::TerminalView;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::{
-    WARP_DRIVE_SYNC_TIMEOUT, environment::prepare_environment, terminal::TerminalDriver,
+    WARP_DRIVE_SYNC_TIMEOUT,
+    environment::{RepositoryPreparationOptions, prepare_environment},
+    terminal::TerminalDriver,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::environment_snapshot::EnvironmentSnapshotReporter;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 #[cfg(not(target_family = "wasm"))]
@@ -244,10 +248,11 @@ impl TerminalView {
         let terminal_driver = TerminalDriver::create_from_existing_view(terminal_view.clone(), ctx);
         // Local Docker sandbox tabs are not backed by an Oz run ID, so setup event reporting is
         // intentionally disabled for this environment preparation path.
-        let setup_events = SetupClientEventReporter::noop(
-            ServerApiProvider::as_ref(ctx).get_ai_client().clone(),
-            ctx.background_executor().clone(),
-        );
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client().clone();
+        let background = ctx.background_executor();
+        let setup_events = SetupClientEventReporter::noop(ai_client.clone(), background.clone());
+        let environment_snapshot_reporter =
+            EnvironmentSnapshotReporter::noop(ai_client, background.clone());
 
         let spawner = terminal_driver.update(ctx, |_, ctx| ctx.spawner());
         let sync_future = UpdateManager::as_ref(ctx).initial_load_complete();
@@ -294,12 +299,17 @@ impl TerminalView {
                 let prepare_future = spawner
                     .spawn(|_, ctx| {
                         prepare_environment(
-                            source_repos,
-                            setup_commands,
                             DOCKER_SANDBOX_HOME_DIR.into(),
                             true, /* is_sandbox */
                             Harness::Oz,
+                            RepositoryPreparationOptions::new(
+                                source_repos,
+                                setup_commands,
+                                Vec::new(),
+                                false,
+                            ),
                             setup_events,
+                            environment_snapshot_reporter,
                             ctx,
                         )
                     })
@@ -327,10 +337,7 @@ impl TerminalView {
                     log::info!("Prepared Docker Sandbox environment");
                 }
                 Err(err) => {
-                    report_error!(
-                        "Docker Sandbox environment setup failed",
-                        extra: { "error" => %err }
-                    );
+                    log::warn!("Docker Sandbox environment setup failed: {err}");
                 }
             },
         );

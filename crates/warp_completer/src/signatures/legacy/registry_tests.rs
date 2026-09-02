@@ -1,7 +1,64 @@
+use warp_command_signatures::{Priority, Signature};
+use warp_core::channel::Channel;
+
 use crate::completer::testing::FakeCompletionContext;
 use crate::completer::{CompletionContext, TopLevelCommandCaseSensitivity};
-use crate::signatures::registry::SignatureResult;
+use crate::signatures::registry::{MAX_CACHEABLE_COMMAND_LEN, SignatureResult};
 use crate::signatures::testing::{create_test_command_registry, test_signature};
+
+/// A minimal signature with the given `name`, for exercising `SignatureCache` boundary
+/// conditions that don't care about arguments, subcommands, or options.
+fn signature_with_name(name: &str) -> Signature {
+    Signature {
+        name: name.to_string(),
+        alias_generator: None,
+        description: None,
+        arguments: None,
+        subcommands: None,
+        options: None,
+        priority: Priority::default(),
+        parser_directives: Default::default(),
+    }
+}
+
+/// Recursively finds the longest `Signature::name` in `signature` or any of its (possibly
+/// nested) subcommands, updating `longest` in place if a longer one is found.
+fn track_longest_name(signature: &Signature, longest: &mut (usize, String)) {
+    if signature.name.len() > longest.0 {
+        *longest = (signature.name.len(), signature.name.clone());
+    }
+    for subcommand in signature.subcommands() {
+        track_longest_name(subcommand, longest);
+    }
+}
+
+#[test]
+fn test_all_known_signature_names_are_within_the_length_cap() {
+    let mut longest = (0, String::new());
+
+    for signature in warp_command_signatures::commands() {
+        track_longest_name(&signature, &mut longest);
+    }
+
+    for channel in [Channel::Stable, Channel::Preview, Channel::Dev] {
+        let mut clap_cmd = <warp_cli::Args as clap::CommandFactory>::command();
+        let signature = crate::signatures::clap::signature_from_clap_command(
+            &mut clap_cmd,
+            channel.cli_command_name(),
+        );
+        track_longest_name(&signature, &mut longest);
+    }
+
+    let (max_len, longest_name) = longest;
+    assert!(
+        max_len <= MAX_CACHEABLE_COMMAND_LEN,
+        "found a command/subcommand name of length {max_len} ({longest_name:?}), longer than \
+         MAX_CACHEABLE_COMMAND_LEN ({MAX_CACHEABLE_COMMAND_LEN}); SignatureCache::get's \
+         oversized-token fast path assumes no such name exists and would make this one \
+         unresolvable -- raise MAX_CACHEABLE_COMMAND_LEN or add back a fallback lookup path for \
+         oversized tokens"
+    );
+}
 
 #[test]
 fn test_find_command_from_a_top_level_signature() {
@@ -202,6 +259,130 @@ fn test_alias_expansion_path_skips_flag_with_value_before_subcommand() {
     };
     assert_eq!(found_signature.signature.name(), "get");
     assert_eq!(found_signature.token_index, 3);
+}
+
+#[test]
+fn test_oversized_command_is_not_cached_and_resolves_to_none() {
+    let registry = create_test_command_registry([test_signature()]);
+    let positive_len_before = registry.signatures.signatures.len();
+    let negative_len_before = registry.signatures.misses.len();
+
+    let oversized_command = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
+    assert_eq!(registry.signature(&oversized_command), None);
+    assert_eq!(
+        registry.signatures.signatures.len(),
+        positive_len_before,
+        "looking up an oversized command should not add an entry to the positive cache"
+    );
+    assert_eq!(
+        registry.signatures.misses.len(),
+        negative_len_before,
+        "looking up an oversized command should not add an entry to the negative cache either -- \
+         that would just move the leak this cap exists to fix into the negative cache"
+    );
+}
+
+#[test]
+fn test_misses_are_never_cached_in_the_positive_cache() {
+    let registry = create_test_command_registry([test_signature()]);
+    let len_before = registry.signatures.signatures.len();
+
+    assert_eq!(registry.signature("not-a-real-command"), None);
+    assert_eq!(registry.signature("not-a-real-command"), None);
+    assert_eq!(registry.signatures.signatures.len(), len_before);
+}
+
+#[test]
+fn test_oversized_later_token_does_not_bypass_the_length_guard() {
+    let sudo = warp_command_signatures::signature_by_name("sudo")
+        .expect("global command signatures should include 'sudo'");
+    let registry = create_test_command_registry([sudo]);
+    let positive_len_before = registry.signatures.signatures.len();
+    let negative_len_before = registry.signatures.misses.len();
+
+    let oversized_token = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
+    let tokens = ["sudo", oversized_token.as_str()];
+
+    let found_signature = registry
+        .signature_from_tokens(
+            &tokens,
+            false,
+            TopLevelCommandCaseSensitivity::CaseSensitive,
+        )
+        .expect("sudo signature from tokens should exist");
+    assert_eq!(
+        found_signature.signature.name(),
+        "sudo",
+        "an oversized later token shouldn't resolve to a replacement signature"
+    );
+    assert_eq!(
+        registry.signatures.signatures.len(),
+        positive_len_before,
+        "looking up an oversized later token should not add an entry to the positive cache"
+    );
+    assert_eq!(
+        registry.signatures.misses.len(),
+        negative_len_before,
+        "looking up an oversized later token should not add an entry to the negative cache"
+    );
+
+    let sudo = warp_command_signatures::signature_by_name("sudo")
+        .expect("global command signatures should include 'sudo'");
+    let ctx =
+        FakeCompletionContext::new(create_test_command_registry([sudo])).with_case_sensitivity();
+    let result = warpui_core::r#async::block_on(
+        ctx.command_registry()
+            .signature_with_alias_expansion(&tokens, false, &ctx),
+    );
+    let SignatureResult::Success(found_signature) = result else {
+        panic!("expected SignatureResult::Success");
+    };
+    assert_eq!(found_signature.signature.name(), "sudo");
+}
+
+#[test]
+fn test_ordinary_commands_still_resolve_and_are_cached() {
+    let registry = create_test_command_registry([test_signature()]);
+
+    let found = registry.signature("TEST");
+    assert_eq!(found.map(|s| s.name.as_str()), Some("test"));
+
+    let len_after_first_lookup = registry.signatures.signatures.len();
+    assert_eq!(registry.signature("test"), found);
+    assert_eq!(registry.signatures.signatures.len(), len_after_first_lookup);
+}
+
+#[test]
+fn test_registered_signature_longer_than_the_cap_is_unresolvable() {
+    let long_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
+    let registry = create_test_command_registry([signature_with_name(&long_name)]);
+
+    assert_eq!(registry.signature(&long_name), None);
+}
+
+#[cfg(windows)]
+#[test]
+fn test_exe_suffix_is_trimmed_before_the_length_check() {
+    let max_length_name = "a".repeat(MAX_CACHEABLE_COMMAND_LEN);
+    let registry = create_test_command_registry([signature_with_name(&max_length_name)]);
+
+    let token = format!("{max_length_name}.exe");
+    assert_eq!(
+        registry.signature(&token).map(|s| s.name.as_str()),
+        Some(max_length_name.as_str())
+    );
+}
+
+#[test]
+fn test_registered_commands_unaffected_by_oversized_lookups() {
+    let registry = create_test_command_registry([test_signature()]);
+
+    let oversized_command = "a".repeat(MAX_CACHEABLE_COMMAND_LEN + 1);
+    assert_eq!(registry.signature(&oversized_command), None);
+    assert_eq!(registry.signature("not-a-real-command"), None);
+
+    let registered = registry.registered_commands().collect::<Vec<_>>();
+    assert_eq!(registered, vec!["test"]);
 }
 
 #[test]

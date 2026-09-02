@@ -740,7 +740,7 @@ impl EnvironmentCommandRunner {
         );
         let client_id = ClientId::default();
 
-        let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+        let owner = match super::common::resolve_owner(&scope, ctx) {
             Ok(owner) => owner,
             Err(e) => {
                 super::report_fatal_error(e, ctx);
@@ -989,7 +989,7 @@ impl EnvironmentCommandRunner {
         }
 
         // Update the environment via UpdateManager
-        let revision = environment.metadata.revision.clone();
+        let revision = environment.metadata.revision;
         UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
             update_manager
                 .update_object::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>(

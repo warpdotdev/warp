@@ -1,6 +1,14 @@
 use std::collections::HashMap;
 
-use super::tab_group_menu_entry_flags;
+use warpui::platform::keyboard::KeyCode;
+
+use super::{
+    SelectedTabColor, ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES,
+    TAB_ACTIVATE_LAST_BINDING_NAME, TabShortcutModifierState, next_tab_color,
+    tab_activate_binding_name, tab_group_menu_entry_flags,
+};
+use crate::themes::theme::AnsiColorIdentifier;
+use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 
 /// Build a `tab_groups` map containing exactly the given group ids.
@@ -31,6 +39,68 @@ fn sole_member_of_group_hides_new_group_and_offers_remove() {
         show_remove_from_group,
         "a tab in a group should offer 'Remove from group'"
     );
+}
+
+#[test]
+fn tab_shortcut_modifier_state_clear_reports_whether_state_changed() {
+    let mut state = TabShortcutModifierState::new();
+
+    assert!(!state.clear_held_keys());
+
+    assert!(state.held_keys.insert(KeyCode::SuperLeft));
+    assert!(state.held_kinds().is_empty());
+    assert!(state.reveal_key_if_held(KeyCode::SuperLeft));
+    assert_eq!(
+        state.held_kinds(),
+        [ShortcutModifierKind::Super].into_iter().collect()
+    );
+
+    assert!(state.clear_held_keys());
+    assert!(state.held_kinds().is_empty());
+    assert!(!state.clear_held_keys());
+}
+
+#[test]
+fn tab_shortcut_modifier_state_only_reveals_keys_that_remain_held() {
+    let mut state = TabShortcutModifierState::new();
+
+    assert!(!state.reveal_key_if_held(KeyCode::SuperLeft));
+
+    assert!(state.held_keys.insert(KeyCode::SuperLeft));
+    assert!(state.held_keys.remove(&KeyCode::SuperLeft));
+    assert!(!state.reveal_key_if_held(KeyCode::SuperLeft));
+    assert!(state.held_kinds().is_empty());
+}
+
+#[test]
+fn tab_activate_binding_name_prefers_numbered_binding_for_final_tab() {
+    assert_eq!(
+        tab_activate_binding_name(2, 3),
+        Some(TAB_ACTIVATE_BINDING_NAMES[2])
+    );
+    assert_eq!(
+        tab_activate_binding_name(7, 8),
+        Some(TAB_ACTIVATE_BINDING_NAMES[7])
+    );
+}
+
+#[test]
+fn tab_activate_binding_name_uses_last_tab_binding_beyond_numbered_tabs() {
+    assert_eq!(
+        tab_activate_binding_name(8, 9),
+        Some(TAB_ACTIVATE_LAST_BINDING_NAME)
+    );
+    assert_eq!(
+        tab_activate_binding_name(9, 10),
+        Some(TAB_ACTIVATE_LAST_BINDING_NAME)
+    );
+}
+
+#[test]
+fn tab_activate_binding_name_omits_unbound_and_out_of_bounds_tabs() {
+    assert_eq!(tab_activate_binding_name(8, 10), None);
+    assert_eq!(tab_activate_binding_name(10, 10), None);
+    assert_eq!(tab_activate_binding_name(0, 0), None);
 }
 
 // GH-13073 follow-up: a tab that shares a group with siblings SHOULD still be
@@ -88,4 +158,31 @@ fn move_to_group_only_shown_when_other_groups_exist() {
     // Ungrouped tab with an existing group: offer "Move to group".
     let (_n, move_ungrouped, _r) = tab_group_menu_entry_flags(None, &groups(&[other]), false);
     assert!(move_ungrouped);
+}
+
+#[test]
+fn next_tab_color_follows_the_canonical_palette_and_clears_after_the_last_color() {
+    assert_eq!(
+        next_tab_color(None),
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+    );
+    for adjacent_colors in TAB_COLOR_OPTIONS.windows(2) {
+        assert_eq!(
+            next_tab_color(Some(adjacent_colors[0])),
+            SelectedTabColor::Color(adjacent_colors[1])
+        );
+    }
+    let last_color = TAB_COLOR_OPTIONS
+        .last()
+        .copied()
+        .expect("the canonical tab color palette should not be empty");
+    assert_eq!(next_tab_color(Some(last_color)), SelectedTabColor::Cleared);
+    assert_eq!(
+        next_tab_color(SelectedTabColor::Cleared.resolve(None)),
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+    );
+    assert_eq!(
+        next_tab_color(Some(AnsiColorIdentifier::White)),
+        SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+    );
 }

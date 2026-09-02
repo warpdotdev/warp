@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use anyhow::Context as _;
 use futures::channel::oneshot;
 use session_sharing_protocol::common::{Role, SessionId};
 use session_sharing_protocol::sharer::SessionRetentionReason;
@@ -14,6 +15,7 @@ use warp_cli::share::{ShareAccessLevel, ShareRequest, ShareSubject};
 use warp_completer::completer::CommandOutput;
 use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
+use warp_errors::report_if_error;
 use warp_terminal::model::grid::Dimensions;
 use warp_util::path::ShellFamily;
 use warpui::r#async::FutureExt;
@@ -703,7 +705,7 @@ impl TerminalDriver {
         reason: SessionRetentionReason,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.terminal_view.update(ctx, |terminal, ctx| {
+        let result = self.terminal_view.try_update(ctx, |terminal, ctx| {
             if !terminal
                 .model
                 .lock()
@@ -719,6 +721,10 @@ impl TerminalDriver {
             log::info!("Emitting request to extend shared session retention: {reason:?}");
             ctx.emit(Event::ExtendSessionRetention { reason });
         });
+        report_if_error!(
+            result.context("Could not extend shared session retention"),
+            extra: { "retention_reason" => ?reason }
+        );
     }
 }
 

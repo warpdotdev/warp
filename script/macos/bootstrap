@@ -76,6 +76,7 @@ if ! pwsh --version >/dev/null 2>&1; then
 fi
 brew install pkgconf
 brew install llvm
+brew install protobuf
 
 # Install PSScriptAnalyzer for PowerShell linting
 pwsh -Command "Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser"

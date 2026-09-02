@@ -850,7 +850,7 @@ impl CodebaseIndexManager {
     fn watch_path(
         &self,
         root_path: &Path,
-        gitignores: Arc<Vec<Gitignore>>,
+        gitignores: Vec<Arc<Gitignore>>,
         ctx: &mut ModelContext<Self>,
     ) {
         // The codebase indexer only cares about source files:

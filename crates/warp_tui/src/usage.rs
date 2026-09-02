@@ -35,7 +35,7 @@ impl UsageToggle {
     /// setting (the element pass only has an immutable [`AppContext`]).
     ///
     /// The credits⇄dollars toggle is gated behind
-    /// [`FeatureFlag::TuiCostTransparency`]. When the flag is disabled
+    /// [`FeatureFlag::PricingTransparency`]. When the flag is disabled
     /// (prod/stable), this falls back to the pre-CODE-1831 behavior: a static,
     /// non-interactive credits total. The usage entry is still shown — only the
     /// click-to-toggle affordance is removed, and the persisted display mode is
@@ -49,7 +49,7 @@ impl UsageToggle {
         on_click: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
         let builder = TuiUiBuilder::from_app(app);
-        if !FeatureFlag::TuiCostTransparency.is_enabled() {
+        if !FeatureFlag::PricingTransparency.is_enabled() {
             return TuiText::new(entry_text(TuiUsageDisplayMode::Credits, totals))
                 .with_style(builder.muted_text_style())
                 .truncate()

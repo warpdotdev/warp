@@ -9,7 +9,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::ClientId;
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::team::Team;
+use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
 
@@ -51,15 +51,17 @@ pub fn join_a_workspace() -> TestStep {
                     uid: "team_uid12345678912345".try_into().expect("ID is valid"),
                     name: "My Team".to_string(),
                     color: None,
-                    invite_code: Default::default(),
+                    invite_link: Default::default(),
                     members: Default::default(),
                     pending_email_invites: Default::default(),
                     invite_link_domain_restrictions: Default::default(),
                     billing_metadata: Default::default(),
                     stripe_customer_id: None,
                     settings: Default::default(),
+                    feature_model_choice: Default::default(),
                     is_eligible_for_discovery: false,
                     has_billing_history: false,
+                    visibility: TeamVisibility::Open,
                 }];
                 let workspaces: Vec<Workspace> = vec![Workspace {
                     uid: workspace_uid,
@@ -71,7 +73,7 @@ pub fn join_a_workspace() -> TestStep {
                     billing_cycle_usage: None,
                     has_billing_history: false,
                     settings: Default::default(),
-                    invite_code: Default::default(),
+                    feature_model_choice: Default::default(),
                     invite_link_domain_restrictions: Default::default(),
                     pending_email_invites: Default::default(),
                     is_eligible_for_discovery: false,

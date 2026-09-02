@@ -273,10 +273,11 @@ warp_core::register_telemetry_event!(TuiConversationRestoreTelemetryEvent);
 pub(crate) enum TuiAutoupdateTelemetryEvent {
     /// A background update check completed.
     CheckCompleted {
-        /// `"up_to_date"`, `"installed"`, `"pending_restart"`, or `"locked"`.
+        /// `"up_to_date"`, `"installed"`, `"pending_restart"`,
+        /// `"update_available"`, or `"locked"`.
         outcome: &'static str,
         /// The relevant version: the running version when up to date, or the
-        /// newly installed / staged version.
+        /// newly installed, staged, or available version.
         version: Option<String>,
     },
     /// A background update check failed (e.g. network or install errors).

@@ -16,11 +16,13 @@ use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
+    ViewHandle, WeakViewHandle,
 };
 
 use crate::ai::blocklist::BlocklistAIPermissions;
-use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
+use crate::ai::execution_profiles::model_menu_items::{
+    CollapsedModelVariants, available_model_menu_items,
+};
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent,
 };
@@ -46,7 +48,9 @@ use crate::view_components::{
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamScope, UserWorkspacesEvent,
+};
 use crate::{Appearance, TemplatableMCPServerManager, UserWorkspaces};
 
 const MODEL_MENU_WIDTH: f32 = 250.;
@@ -237,6 +241,7 @@ pub enum ExecutionProfileEditorViewAction {
 
 pub struct ExecutionProfileEditorView {
     profile_id: ExecutionProfileId,
+    self_handle: WeakViewHandle<Self>,
     pane_configuration: ModelHandle<PaneConfiguration>,
     focus_handle: Option<PaneFocusHandle>,
     clipped_scroll_state: ClippedScrollStateHandle,
@@ -278,6 +283,7 @@ pub struct ExecutionProfileEditorView {
 
 impl ExecutionProfileEditorView {
     pub fn new(profile_id: ExecutionProfileId, ctx: &mut ViewContext<Self>) -> Self {
+        let self_handle = ctx.handle();
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(HEADER_TEXT));
 
         let apply_code_diffs_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -517,7 +523,8 @@ impl ExecutionProfileEditorView {
         });
 
         let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let profile_data = permissions.permissions_profile_for_id(ctx, &profile_id);
+        let team_context = UserWorkspaces::as_ref(ctx).team_context(&self_handle, ctx);
+        let profile_data = permissions.permissions_profile_for_id(&profile_id, &team_context, ctx);
 
         let mcp_allowlist_mouse_state_handles = profile_data
             .mcp_allowlist
@@ -644,6 +651,7 @@ impl ExecutionProfileEditorView {
 
         let mut view = Self {
             profile_id,
+            self_handle,
             pane_configuration,
             focus_handle: None,
             clipped_scroll_state: Default::default(),
@@ -748,16 +756,22 @@ impl ExecutionProfileEditorView {
 
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             let permissions = BlocklistAIPermissions::as_ref(ctx);
-            let current_permissions = permissions.permissions_profile_for_id(ctx, &me.profile_id);
+            let scope = me.team_context(ctx);
+            let current_permissions =
+                permissions.permissions_profile_for_id(&me.profile_id, &scope, ctx);
 
             match event {
                 LLMPreferencesEvent::UpdatedAvailableLLMs => {
                     Self::refresh_filterable_model_dropdown(
                         &me.base_model_dropdown,
                         current_permissions.base_model.clone(),
-                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs
+                                .get_base_llm_choices_for_agent_mode(scope, app)
+                                .collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                        |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                        |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -769,18 +783,26 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.full_terminal_use_model_dropdown,
                         current_permissions.cli_agent_model.clone(),
-                        |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs.get_cli_agent_llm_choices(scope, app).collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
-                        |prefs, app| prefs.get_default_cli_agent_model(app).id.clone(),
+                        |prefs, scope, app| {
+                            prefs.get_default_cli_agent_model(scope, app).id.clone()
+                        },
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
                     Self::refresh_filterable_model_dropdown(
                         &me.computer_use_model_dropdown,
                         current_permissions.computer_use_model.clone(),
-                        |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
+                        |prefs, scope, app| {
+                            prefs.get_computer_use_llm_choices(scope, app).collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
-                        |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
+                        |prefs, scope, app| {
+                            prefs.get_default_computer_use_model(scope, app).id.clone()
+                        },
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -790,9 +812,13 @@ impl ExecutionProfileEditorView {
                     Self::refresh_filterable_model_dropdown(
                         &me.base_model_dropdown,
                         current_permissions.base_model.clone(),
-                        |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                        |prefs, scope, app| {
+                            prefs
+                                .get_base_llm_choices_for_agent_mode(scope, app)
+                                .collect_vec()
+                        },
                         |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                        |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                        |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
@@ -813,14 +839,19 @@ impl ExecutionProfileEditorView {
             &ApiKeyManager::handle(ctx),
             |me, _model, _event: &ApiKeyManagerEvent, ctx| {
                 let permissions = BlocklistAIPermissions::as_ref(ctx);
+                let scope = me.team_context(ctx);
                 let current_permissions =
-                    permissions.permissions_profile_for_id(ctx, &me.profile_id);
+                    permissions.permissions_profile_for_id(&me.profile_id, &scope, ctx);
                 Self::refresh_filterable_model_dropdown(
                     &me.base_model_dropdown,
                     current_permissions.base_model.clone(),
-                    |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+                    |prefs, scope, app| {
+                        prefs
+                            .get_base_llm_choices_for_agent_mode(scope, app)
+                            .collect_vec()
+                    },
                     |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-                    |prefs, app| prefs.get_default_base_model(app).id.clone(),
+                    |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
                     &me.upgrade_footer_mouse_state,
                     ctx,
                 );
@@ -845,23 +876,22 @@ impl ExecutionProfileEditorView {
         );
 
         let workspace = UserWorkspaces::handle(ctx);
-        ctx.subscribe_to_model(&workspace, |me, workspace, event, ctx| {
+        ctx.subscribe_to_model(&workspace, |me, _, event, ctx| {
             if let UserWorkspacesEvent::TeamsChanged = event {
-                Self::update_all_editor_interaction_states(me, workspace, ctx);
+                Self::update_all_editor_interaction_states(me, ctx);
                 me.update_mouse_state_handles(ctx);
                 ctx.notify();
             }
         });
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
             if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
-                let workspace = UserWorkspaces::handle(ctx);
-                Self::update_all_editor_interaction_states(me, workspace, ctx);
+                Self::update_all_editor_interaction_states(me, ctx);
                 me.sync_context_window_editor(ctx, true);
                 ctx.notify();
             }
         });
 
-        Self::update_all_editor_interaction_states(&view, workspace, ctx);
+        Self::update_all_editor_interaction_states(&view, ctx);
 
         view.refresh_profile_state(ctx);
 
@@ -874,10 +904,15 @@ impl ExecutionProfileEditorView {
         &self.profile_id
     }
 
+    pub(super) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
+    }
+
     fn update_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
-        let app = ctx;
-        let permissions = BlocklistAIPermissions::as_ref(app);
-        let current_permissions = permissions.permissions_profile_for_id(app, &self.profile_id);
+        let permissions = BlocklistAIPermissions::as_ref(ctx);
+        let scope = self.team_context(ctx);
+        let current_permissions =
+            permissions.permissions_profile_for_id(&self.profile_id, &scope, ctx);
 
         self.command_allowlist_mouse_state_handles = current_permissions
             .command_allowlist
@@ -918,14 +953,18 @@ impl ExecutionProfileEditorView {
 
     fn refresh_profile_state(&mut self, ctx: &mut ViewContext<Self>) {
         let permissions = BlocklistAIPermissions::as_ref(ctx);
-        let current_permissions = permissions.permissions_profile_for_id(ctx, &self.profile_id);
+        let scope = self.team_context(ctx);
+        let current_permissions =
+            permissions.permissions_profile_for_id(&self.profile_id, &scope, ctx);
         let ai_settings = AISettings::as_ref(ctx);
 
-        let apply_code_diffs_disabled = !ai_settings.is_code_diffs_permissions_editable(ctx);
-        let read_files_disabled = !ai_settings.is_read_files_permissions_editable(ctx);
-        let execute_commands_disabled = !ai_settings.is_execute_commands_permissions_editable(ctx);
-        let write_to_pty_disabled = !ai_settings.is_write_to_pty_permissions_editable(ctx);
-        let computer_use_disabled = !ai_settings.is_computer_use_permissions_editable(ctx);
+        let apply_code_diffs_disabled =
+            !ai_settings.is_code_diffs_permissions_editable(&scope, ctx);
+        let read_files_disabled = !ai_settings.is_read_files_permissions_editable(&scope, ctx);
+        let execute_commands_disabled =
+            !ai_settings.is_execute_commands_permissions_editable(&scope, ctx);
+        let write_to_pty_disabled = !ai_settings.is_write_to_pty_permissions_editable(&scope, ctx);
+        let computer_use_disabled = !ai_settings.is_computer_use_permissions_editable(&scope, ctx);
         let ask_user_question_disabled =
             !ai_settings.is_ask_user_question_permissions_editable(ctx);
         let run_agents_disabled = !ai_settings.is_run_agents_permissions_editable(ctx);
@@ -934,9 +973,13 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.base_model_dropdown,
             current_permissions.base_model.clone(),
-            |prefs, app| prefs.get_base_llm_choices_for_agent_mode(app).collect_vec(),
+            |prefs, scope, app| {
+                prefs
+                    .get_base_llm_choices_for_agent_mode(scope, app)
+                    .collect_vec()
+            },
             |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
-            |prefs, app| prefs.get_default_base_model(app).id.clone(),
+            |prefs, scope, app| prefs.get_default_base_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -948,18 +991,18 @@ impl ExecutionProfileEditorView {
         Self::refresh_filterable_model_dropdown(
             &self.full_terminal_use_model_dropdown,
             current_permissions.cli_agent_model.clone(),
-            |prefs, app| prefs.get_cli_agent_llm_choices(app).collect_vec(),
+            |prefs, scope, app| prefs.get_cli_agent_llm_choices(scope, app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
-            |prefs, app| prefs.get_default_cli_agent_model(app).id.clone(),
+            |prefs, scope, app| prefs.get_default_cli_agent_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
         Self::refresh_filterable_model_dropdown(
             &self.computer_use_model_dropdown,
             current_permissions.computer_use_model.clone(),
-            |prefs, _| prefs.get_computer_use_llm_choices().collect_vec(),
+            |prefs, scope, app| prefs.get_computer_use_llm_choices(scope, app).collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetComputerUseModel { id },
-            |prefs, app| prefs.get_default_computer_use_model(app).id.clone(),
+            |prefs, scope, app| prefs.get_default_computer_use_model(scope, app).id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -1166,9 +1209,9 @@ impl ExecutionProfileEditorView {
         upgrade_mouse_state: &MouseStateHandle,
         ctx: &mut ViewContext<Self>,
     ) where
-        G: for<'a> FnOnce(&'a LLMPreferences, &AppContext) -> Vec<&'a LLMInfo>,
+        G: for<'a> FnOnce(&'a LLMPreferences, &dyn TeamScope, &'a AppContext) -> Vec<&'a LLMInfo>,
         A: Fn(LLMId) -> ExecutionProfileEditorViewAction,
-        D: FnOnce(&LLMPreferences, &AppContext) -> LLMId,
+        D: FnOnce(&LLMPreferences, &dyn TeamScope, &AppContext) -> LLMId,
     {
         menu.update(ctx, |dropdown, ctx| {
             let disabled_by_ai_toggle = !AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
@@ -1179,9 +1222,12 @@ impl ExecutionProfileEditorView {
                 dropdown.set_enabled(ctx);
             }
 
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
-            let choices = get_choices(llm_prefs, ctx);
+            let choices = get_choices(llm_prefs, &scope, ctx);
 
             let has_upgrade_gated_models = choices
                 .iter()
@@ -1192,8 +1238,8 @@ impl ExecutionProfileEditorView {
                 |llm| DropdownAction::select_action_and_close(create_action(llm.id.clone())),
                 None,
                 None,
-                false,
-                false,
+                CollapsedModelVariants::default(),
+                &scope,
                 ctx,
             );
             dropdown.set_rich_items(items, ctx);
@@ -1210,7 +1256,8 @@ impl ExecutionProfileEditorView {
 
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
-            let model_to_select = profile_model.unwrap_or_else(|| get_default_id(llm_prefs, ctx));
+            let model_to_select =
+                profile_model.unwrap_or_else(|| get_default_id(llm_prefs, &scope, ctx));
             dropdown.set_selected_by_action(create_action(model_to_select), ctx);
             ctx.notify();
         });
@@ -1231,8 +1278,11 @@ impl ExecutionProfileEditorView {
                 dropdown.set_enabled(ctx);
             }
 
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
             let choices = LLMPreferences::as_ref(ctx)
-                .get_coding_llm_choices(ctx)
+                .get_coding_llm_choices(&scope, ctx)
                 .collect_vec();
 
             let items = available_model_menu_items(
@@ -1244,15 +1294,15 @@ impl ExecutionProfileEditorView {
                 },
                 None,
                 None,
-                false,
-                false,
+                CollapsedModelVariants::default(),
+                &scope,
                 ctx,
             );
             dropdown.set_rich_items(items, ctx);
 
             let model_to_select = profile_coding_model.unwrap_or_else(|| {
                 LLMPreferences::as_ref(ctx)
-                    .get_default_coding_model(ctx)
+                    .get_default_coding_model(&scope, ctx)
                     .id
                     .clone()
             });
@@ -1316,8 +1366,9 @@ impl ExecutionProfileEditorView {
             return;
         }
 
+        let scope = self.team_context(ctx);
         let current_name = BlocklistAIPermissions::as_ref(ctx)
-            .permissions_profile_for_id(ctx, &self.profile_id)
+            .permissions_profile_for_id(&self.profile_id, &scope, ctx)
             .name;
 
         if current_name != new_name {
@@ -1352,13 +1403,10 @@ impl ExecutionProfileEditorView {
         });
     }
 
-    fn update_all_editor_interaction_states(
-        view: &Self,
-        workspace: ModelHandle<UserWorkspaces>,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn update_all_editor_interaction_states(view: &Self, ctx: &mut ViewContext<Self>) {
         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-        let ai_autonomy_settings = workspace.as_ref(ctx).ai_autonomy_settings();
+        let scope = view.team_context(ctx);
+        let ai_autonomy_settings = UserWorkspaces::as_ref(ctx).ai_autonomy_settings(&scope);
 
         Self::update_editor_interaction_state(
             view.command_denylist_editor.as_ref(ctx).editor().clone(),
@@ -1395,14 +1443,22 @@ impl ExecutionProfileEditorView {
     }
 
     fn configurable_context_window(&self, app: &AppContext) -> Option<LLMContextWindow> {
-        let profile =
-            BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(app, &self.profile_id);
+        let scope = self.team_context(app);
+        let profile = BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(
+            &self.profile_id,
+            &scope,
+            app,
+        );
         profile.configurable_context_window(app)
     }
 
     fn current_context_window_display_value(&self, app: &AppContext) -> Option<u32> {
-        let profile =
-            BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(app, &self.profile_id);
+        let scope = self.team_context(app);
+        let profile = BlocklistAIPermissions::as_ref(app).permissions_profile_for_id(
+            &self.profile_id,
+            &scope,
+            app,
+        );
         profile.context_window_display_value(app)
     }
 
@@ -1486,8 +1542,9 @@ fn initial_context_window_display_value(
     profile_data
         .context_window_display_value(app)
         .unwrap_or_else(|| {
+            let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
             LLMPreferences::as_ref(app)
-                .get_default_base_model(app)
+                .get_default_base_model_for_team_uid(team_uid, app)
                 .context_window
                 .default_max
         })
@@ -1509,7 +1566,8 @@ impl View for ExecutionProfileEditorView {
         use ui_helpers::*;
 
         let permissions = BlocklistAIPermissions::as_ref(app);
-        let profile_data = permissions.permissions_profile_for_id(app, &self.profile_id);
+        let scope = self.team_context(app);
+        let profile_data = permissions.permissions_profile_for_id(&self.profile_id, &scope, app);
 
         let mut column = Flex::column()
             .with_child(render_header_section(

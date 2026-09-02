@@ -1,5 +1,6 @@
 use std::fs;
 use std::future::Future;
+use std::sync::Arc;
 
 use ignore::gitignore::Gitignore;
 
@@ -181,13 +182,13 @@ fn test_git_path_filtering_allowlist() {
     }
 }
 
-/// Writes a `.gitignore` with `content` at `root` and returns a [`Gitignore`]
-/// rooted there. Uses only the repo-root gitignore (not the machine's global
-/// gitignore) so tests are deterministic.
-fn gitignore_rooted(root: &std::path::Path, content: &str) -> Gitignore {
+/// Writes a `.gitignore` with `content` at `root` and returns an
+/// [`Arc<Gitignore>`] rooted there. Uses only the repo-root gitignore (not
+/// the machine's global gitignore) so tests are deterministic.
+fn gitignore_rooted(root: &std::path::Path, content: &str) -> Arc<Gitignore> {
     fs::write(root.join(".gitignore"), content).unwrap();
     let (gitignore, _) = Gitignore::new(root.join(".gitignore"));
-    gitignore
+    Arc::new(gitignore)
 }
 
 #[test]
@@ -842,7 +843,7 @@ fn build_tree_marks_descendants_of_ignored_directory_as_ignored() {
     fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
 
     let mut files = Vec::new();
-    let mut gitignores = Vec::<Gitignore>::new();
+    let mut gitignores = Vec::<Arc<Gitignore>>::new();
     let tree = run(Entry::build_tree(
         &root_path,
         &mut files,
@@ -885,7 +886,7 @@ fn lazy_loaded_ignored_directory_marks_loaded_children_as_ignored() {
     fs::write(root_path.join("ignored-dir").join("ignored-file.txt"), "").unwrap();
 
     let mut files = Vec::new();
-    let mut gitignores = Vec::<Gitignore>::new();
+    let mut gitignores = Vec::<Arc<Gitignore>>::new();
     let mut tree = run(Entry::build_tree(
         &root_path,
         &mut files,

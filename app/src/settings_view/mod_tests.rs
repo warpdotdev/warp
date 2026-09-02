@@ -1,6 +1,13 @@
-use settings_page::{FilteredPageType, MatchData, PageType, SettingsWidget, search_terms_match};
+use pathfinder_geometry::vector::vec2f;
+use settings_page::{
+    Category, CategoryHeader, FilteredPageType, MatchData, PageTitle, PageType, SettingsWidget,
+    categories_with_visible_content, search_terms_match,
+};
 use warpui::elements::Empty;
-use warpui::{App, AppContext, Element, Entity, View};
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, AppContext, Element, Entity, Presenter, TypedActionView, View, WindowInvalidation,
+};
 
 use super::*;
 use crate::appearance::Appearance;
@@ -59,148 +66,6 @@ fn signed_in_account_without_workspace_shows_free_badge_once() {
     assert!(presentation.show_personal_upgrade);
 }
 
-// ── SettingsSection classification ──────────────────────────────────────────
-
-#[test]
-fn ai_subpages_are_identified() {
-    assert!(SettingsSection::WarpAgent.is_ai_subpage());
-    assert!(SettingsSection::AgentProfiles.is_ai_subpage());
-    assert!(SettingsSection::AgentMCPServers.is_ai_subpage());
-    assert!(SettingsSection::Knowledge.is_ai_subpage());
-    assert!(SettingsSection::ThirdPartyCLIAgents.is_ai_subpage());
-
-    assert!(!SettingsSection::AI.is_ai_subpage());
-    assert!(!SettingsSection::Account.is_ai_subpage());
-    assert!(!SettingsSection::CodeIndexing.is_ai_subpage());
-}
-
-#[test]
-fn code_subpages_are_identified() {
-    assert!(SettingsSection::CodeIndexing.is_code_subpage());
-    assert!(SettingsSection::EditorAndCodeReview.is_code_subpage());
-
-    assert!(!SettingsSection::Code.is_code_subpage());
-    assert!(!SettingsSection::WarpAgent.is_code_subpage());
-}
-
-#[test]
-fn cloud_platform_subpages_are_identified() {
-    assert!(SettingsSection::CloudEnvironments.is_cloud_platform_subpage());
-    assert!(SettingsSection::OzCloudAPIKeys.is_cloud_platform_subpage());
-
-    assert!(!SettingsSection::Account.is_cloud_platform_subpage());
-    assert!(!SettingsSection::WarpAgent.is_cloud_platform_subpage());
-}
-
-#[test]
-fn is_subpage_covers_all_umbrella_types() {
-    // All subpages under any umbrella should return true.
-    for section in SettingsSection::ai_subpages() {
-        assert!(section.is_subpage(), "{section:?} should be a subpage");
-    }
-    assert!(SettingsSection::CodeIndexing.is_subpage());
-    assert!(SettingsSection::EditorAndCodeReview.is_subpage());
-    assert!(SettingsSection::CloudEnvironments.is_subpage());
-    assert!(SettingsSection::OzCloudAPIKeys.is_subpage());
-
-    // Top-level pages should not be subpages.
-    assert!(!SettingsSection::Account.is_subpage());
-    assert!(!SettingsSection::AI.is_subpage());
-    assert!(!SettingsSection::Code.is_subpage());
-    assert!(!SettingsSection::Privacy.is_subpage());
-}
-
-// ── parent_page_section mapping ─────────────────────────────────────────────
-
-#[test]
-fn ai_subpages_map_to_ai_backing_page() {
-    assert_eq!(
-        SettingsSection::WarpAgent.parent_page_section(),
-        SettingsSection::AI
-    );
-    assert_eq!(
-        SettingsSection::AgentProfiles.parent_page_section(),
-        SettingsSection::AI
-    );
-    assert_eq!(
-        SettingsSection::Knowledge.parent_page_section(),
-        SettingsSection::AI
-    );
-    assert_eq!(
-        SettingsSection::ThirdPartyCLIAgents.parent_page_section(),
-        SettingsSection::AI
-    );
-}
-
-#[test]
-fn agent_mcp_servers_maps_to_mcp_servers_page() {
-    // AgentMCPServers renders the standalone MCPServers page, not the AI page.
-    assert_eq!(
-        SettingsSection::AgentMCPServers.parent_page_section(),
-        SettingsSection::MCPServers
-    );
-}
-
-#[test]
-fn code_subpages_map_to_code_backing_page() {
-    assert_eq!(
-        SettingsSection::CodeIndexing.parent_page_section(),
-        SettingsSection::Code
-    );
-    assert_eq!(
-        SettingsSection::EditorAndCodeReview.parent_page_section(),
-        SettingsSection::Code
-    );
-}
-
-#[test]
-fn cloud_platform_subpages_map_to_their_backing_pages() {
-    assert_eq!(
-        SettingsSection::CloudEnvironments.parent_page_section(),
-        SettingsSection::CloudEnvironments
-    );
-    assert_eq!(
-        SettingsSection::OzCloudAPIKeys.parent_page_section(),
-        SettingsSection::OzCloudAPIKeys
-    );
-}
-
-#[test]
-fn non_subpage_sections_map_to_themselves() {
-    assert_eq!(
-        SettingsSection::Account.parent_page_section(),
-        SettingsSection::Account
-    );
-    assert_eq!(
-        SettingsSection::AI.parent_page_section(),
-        SettingsSection::AI
-    );
-    assert_eq!(
-        SettingsSection::Privacy.parent_page_section(),
-        SettingsSection::Privacy
-    );
-}
-
-// ── ai_subpages list ────────────────────────────────────────────────────────
-
-#[test]
-fn ai_subpages_list_contains_all_ai_subpage_variants() {
-    let subpages = SettingsSection::ai_subpages();
-    assert!(subpages.contains(&SettingsSection::WarpAgent));
-    assert!(subpages.contains(&SettingsSection::AgentProfiles));
-    assert!(subpages.contains(&SettingsSection::AgentMCPServers));
-    assert!(subpages.contains(&SettingsSection::Knowledge));
-    assert!(subpages.contains(&SettingsSection::ThirdPartyCLIAgents));
-}
-
-#[test]
-fn ai_subpages_list_does_not_contain_non_subpages() {
-    let subpages = SettingsSection::ai_subpages();
-    assert!(!subpages.contains(&SettingsSection::AI));
-    assert!(!subpages.contains(&SettingsSection::Account));
-    assert!(!subpages.contains(&SettingsSection::Code));
-}
-
 // ── MatchData behavior ──────────────────────────────────────────────────────
 
 #[test]
@@ -224,7 +89,7 @@ fn match_data_countable_zero_is_not_truthy() {
     assert!(!MatchData::Countable(0).is_truthy());
 }
 
-// ── Display / FromStr round-trip ────────────────────────────────────────────
+// ── Display labels ─────────────────────────────────────────────────
 
 #[test]
 fn subpage_display_names_are_correct() {
@@ -249,437 +114,208 @@ fn subpage_display_names_are_correct() {
         "Environments"
     );
     assert_eq!(
-        SettingsSection::OzCloudAPIKeys.to_string(),
+        SettingsSection::WarpCloudAgentAPIKeys.to_string(),
+        "API keys"
+    );
+}
+
+// ── slug / from_slug ───────────────────────────────────────────────
+
+/// Every `SettingsSection` variant.
+///
+/// `all_sections_list_is_exhaustive` keeps this honest: adding a variant
+/// breaks the exhaustive match there, which is the prompt to add it here.
+const ALL_SECTIONS: &[SettingsSection] = &[
+    SettingsSection::About,
+    SettingsSection::Account,
+    SettingsSection::BillingAndUsage,
+    SettingsSection::Appearance,
+    SettingsSection::Features,
+    SettingsSection::Keybindings,
+    SettingsSection::Privacy,
+    SettingsSection::Referrals,
+    SettingsSection::Scripting,
+    SettingsSection::SharedBlocks,
+    SettingsSection::Teams,
+    SettingsSection::WarpDrive,
+    SettingsSection::Warpify,
+    SettingsSection::WarpAgent,
+    SettingsSection::AgentProfiles,
+    SettingsSection::AgentMCPServers,
+    SettingsSection::Knowledge,
+    SettingsSection::ThirdPartyCLIAgents,
+    SettingsSection::CodeIndexing,
+    SettingsSection::EditorAndCodeReview,
+    SettingsSection::CloudEnvironments,
+    SettingsSection::WarpCloudAgentAPIKeys,
+];
+
+/// Sections whose user-facing Display label has deliberately diverged from the
+/// slug it was seeded from, because the slug is a stored contract that the
+/// rename must not follow.
+const SECTIONS_WITH_RENAMED_DISPLAY_LABELS: &[SettingsSection] =
+    &[SettingsSection::WarpCloudAgentAPIKeys];
+
+#[test]
+fn all_sections_list_is_exhaustive() {
+    fn is_listed(section: SettingsSection) -> bool {
+        let known = match section {
+            SettingsSection::About
+            | SettingsSection::Account
+            | SettingsSection::BillingAndUsage
+            | SettingsSection::Appearance
+            | SettingsSection::Features
+            | SettingsSection::Keybindings
+            | SettingsSection::Privacy
+            | SettingsSection::Referrals
+            | SettingsSection::Scripting
+            | SettingsSection::SharedBlocks
+            | SettingsSection::Teams
+            | SettingsSection::WarpDrive
+            | SettingsSection::Warpify
+            | SettingsSection::WarpAgent
+            | SettingsSection::AgentProfiles
+            | SettingsSection::AgentMCPServers
+            | SettingsSection::Knowledge
+            | SettingsSection::ThirdPartyCLIAgents
+            | SettingsSection::CodeIndexing
+            | SettingsSection::EditorAndCodeReview
+            | SettingsSection::CloudEnvironments
+            | SettingsSection::WarpCloudAgentAPIKeys => section,
+        };
+        ALL_SECTIONS.contains(&known)
+    }
+
+    for section in ALL_SECTIONS {
+        assert!(is_listed(*section), "{section:?} is missing from the list");
+    }
+}
+
+#[test]
+fn every_section_round_trips_through_its_slug() {
+    for section in ALL_SECTIONS {
+        assert_eq!(
+            SettingsSection::from_slug(section.slug()),
+            Some(*section),
+            "{section:?} should round-trip through its slug"
+        );
+    }
+}
+
+#[test]
+fn slugs_are_unique_across_sections() {
+    let mut slugs: Vec<&str> = ALL_SECTIONS.iter().map(|section| section.slug()).collect();
+    let total = slugs.len();
+    slugs.sort_unstable();
+    slugs.dedup();
+    assert_eq!(slugs.len(), total, "two sections share a slug");
+}
+
+#[test]
+fn slugs_were_seeded_from_the_display_labels_they_replaced() {
+    // Slugs were seeded from the Display strings that used to double as the
+    // persistence key, so no data migration was needed. Display is now free to
+    // diverge; when it does, list the section in
+    // SECTIONS_WITH_RENAMED_DISPLAY_LABELS rather than moving the slug, which
+    // is a stored contract.
+    for section in ALL_SECTIONS {
+        if SECTIONS_WITH_RENAMED_DISPLAY_LABELS.contains(section) {
+            continue;
+        }
+        assert_eq!(
+            section.slug(),
+            section.to_string(),
+            "{section:?} slug diverged from the Display label it was seeded from"
+        );
+    }
+}
+
+#[test]
+fn renamed_sections_keep_the_slug_they_were_seeded_with() {
+    // The section dropped "Oz" from what the user reads, but persisted sessions
+    // and `surface.settings.open --page` still speak the original slug.
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.to_string(),
+        "API keys"
+    );
+    assert_eq!(
+        SettingsSection::WarpCloudAgentAPIKeys.slug(),
         "Oz Cloud API Keys"
     );
 }
 
 #[test]
-fn subpage_from_str_parses_display_names() {
-    // Both the legacy "Oz" name and the new "Warp Agent" display name must
-    // resolve to SettingsSection::WarpAgent so existing deep links, persisted
-    // telemetry strings, and external callers continue to work after the
-    // user-facing rename (see specs/GH1063/product.md, Behavior #8).
+fn from_slug_accepts_legacy_spellings() {
+    // Both the legacy "Oz" name and the current "Warp Agent" slug must resolve
+    // to SettingsSection::WarpAgent so existing deep links, persisted sessions
+    // and external callers keep working after the user-facing rename (see
+    // specs/GH1063/product.md, Behavior #8).
     assert_eq!(
-        SettingsSection::from_str("Oz"),
-        Ok(SettingsSection::WarpAgent)
-    );
-    assert_eq!(
-        SettingsSection::from_str("Warp Agent"),
-        Ok(SettingsSection::WarpAgent)
+        SettingsSection::from_slug("Oz"),
+        Some(SettingsSection::WarpAgent)
     );
     assert_eq!(
-        SettingsSection::from_str("Profiles"),
-        Ok(SettingsSection::AgentProfiles)
+        SettingsSection::from_slug("WarpDrive"),
+        Some(SettingsSection::WarpDrive)
     );
     assert_eq!(
-        SettingsSection::from_str("Knowledge"),
-        Ok(SettingsSection::Knowledge)
+        SettingsSection::from_slug("AgentProfiles"),
+        Some(SettingsSection::AgentProfiles)
     );
     assert_eq!(
-        SettingsSection::from_str("Indexing and projects"),
-        Ok(SettingsSection::CodeIndexing)
+        SettingsSection::from_slug("AgentMCPServers"),
+        Some(SettingsSection::AgentMCPServers)
     );
     assert_eq!(
-        SettingsSection::from_str("Editor and Code Review"),
-        Ok(SettingsSection::EditorAndCodeReview)
+        SettingsSection::from_slug("ThirdPartyCLIAgents"),
+        Some(SettingsSection::ThirdPartyCLIAgents)
     );
     assert_eq!(
-        SettingsSection::from_str("Oz Cloud API Keys"),
-        Ok(SettingsSection::OzCloudAPIKeys)
+        SettingsSection::from_slug("CodeIndexing"),
+        Some(SettingsSection::CodeIndexing)
     );
-}
-
-// ── Subpage search filter simulation ────────────────────────────────────────
-// These tests simulate the per-subpage search filtering logic used in
-// handle_search_editor_event: each subpage should only be visible if its
-// own widgets' search terms match, not if a sibling subpage's terms match.
-
-/// Helper: given a map of subpage→MatchData, returns which subpages are visible.
-fn visible_subpages(
-    subpage_filter: &HashMap<SettingsSection, MatchData>,
-    subpages: &[SettingsSection],
-) -> Vec<SettingsSection> {
-    subpages
-        .iter()
-        .filter(|s| {
-            subpage_filter
-                .get(s)
-                .map(|md| md.is_truthy())
-                .unwrap_or(false)
-        })
-        .copied()
-        .collect()
-}
-
-#[test]
-fn search_knowledge_shows_only_knowledge_subpage() {
-    // Simulate: searching "knowledge" matched the Knowledge subpage but not others.
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(1));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    let visible = visible_subpages(&filter, SettingsSection::ai_subpages());
-
-    assert_eq!(visible, vec![SettingsSection::Knowledge]);
-}
-
-#[test]
-fn search_agent_shows_profiles_and_cli_agents() {
-    // "agent" appears in both AgentProfiles and ThirdPartyCLIAgents search terms.
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(2));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(0));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(1),
-    );
-
-    let visible = visible_subpages(&filter, SettingsSection::ai_subpages());
-
-    assert!(visible.contains(&SettingsSection::AgentProfiles));
-    assert!(visible.contains(&SettingsSection::ThirdPartyCLIAgents));
-    assert!(!visible.contains(&SettingsSection::WarpAgent));
-    assert!(!visible.contains(&SettingsSection::Knowledge));
-}
-
-#[test]
-fn empty_search_shows_no_subpages_in_filter() {
-    // When search is cleared, subpage_filter is empty — all subpages fall back
-    // to their backing page visibility (Uncounted(true) by default).
-    let filter: HashMap<SettingsSection, MatchData> = HashMap::new();
-
-    let visible = visible_subpages(&filter, SettingsSection::ai_subpages());
-
-    // No entries in filter means no subpage-specific filtering; all return false
-    // from the filter map. The actual rendering code falls back to the backing
-    // page's pages_filter which defaults to Uncounted(true).
-    assert!(visible.is_empty());
-}
-
-#[test]
-fn search_with_no_matches_hides_all_subpages() {
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(0));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    let visible = visible_subpages(&filter, SettingsSection::ai_subpages());
-
-    assert!(visible.is_empty());
-}
-
-/// Helper: check if an umbrella should be visible given a subpage filter.
-fn umbrella_visible(
-    subpage_filter: &HashMap<SettingsSection, MatchData>,
-    umbrella_subpages: &[SettingsSection],
-) -> bool {
-    umbrella_subpages.iter().any(|s| {
-        subpage_filter
-            .get(s)
-            .map(|md| md.is_truthy())
-            .unwrap_or(false)
-    })
-}
-
-#[test]
-fn umbrella_hidden_when_no_subpages_match() {
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(0));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    assert!(!umbrella_visible(&filter, SettingsSection::ai_subpages()));
-}
-
-// ── cycle_pages search filter ────────────────────────────────────────────────
-// These tests validate the logic added to cycle_pages() to ensure arrow key
-// navigation respects the active search filter.
-
-/// Mirrors the filter predicate used in cycle_pages() when search is active.
-fn section_passes_nav_filter(
-    section: SettingsSection,
-    subpage_filter: &HashMap<SettingsSection, MatchData>,
-    pages_filter: &[(SettingsSection, MatchData)],
-) -> bool {
-    if let Some(md) = subpage_filter.get(&section) {
-        md.is_truthy()
-    } else {
-        let backing = section.parent_page_section();
-        pages_filter
-            .iter()
-            .any(|(s, md)| *s == backing && md.is_truthy())
-    }
-}
-
-#[test]
-fn nav_filter_includes_matching_subpage_and_excludes_others() {
-    let mut subpage_filter = HashMap::new();
-    subpage_filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    subpage_filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    subpage_filter.insert(SettingsSection::Knowledge, MatchData::Countable(1));
-    subpage_filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    // No page-level filter entries needed since all AI subpages have subpage_filter entries.
-    let pages_filter: Vec<(SettingsSection, MatchData)> = vec![];
-
-    assert!(!section_passes_nav_filter(
-        SettingsSection::WarpAgent,
-        &subpage_filter,
-        &pages_filter
-    ));
-    assert!(!section_passes_nav_filter(
-        SettingsSection::AgentProfiles,
-        &subpage_filter,
-        &pages_filter
-    ));
-    assert!(section_passes_nav_filter(
-        SettingsSection::Knowledge,
-        &subpage_filter,
-        &pages_filter
-    ));
-    assert!(!section_passes_nav_filter(
-        SettingsSection::ThirdPartyCLIAgents,
-        &subpage_filter,
-        &pages_filter
-    ));
-}
-
-#[test]
-fn nav_filter_falls_back_to_pages_filter_for_top_level_pages() {
-    // Top-level pages (Account, Appearance, etc.) have no subpage_filter entry.
-    // They fall back to pages_filter using parent_page_section() == themselves.
-    let subpage_filter: HashMap<SettingsSection, MatchData> = HashMap::new();
-    let pages_filter = vec![
-        (SettingsSection::Account, MatchData::Uncounted(true)),
-        (SettingsSection::Appearance, MatchData::Countable(0)),
-        (SettingsSection::Features, MatchData::Uncounted(true)),
-    ];
-
-    assert!(section_passes_nav_filter(
-        SettingsSection::Account,
-        &subpage_filter,
-        &pages_filter
-    ));
-    assert!(!section_passes_nav_filter(
-        SettingsSection::Appearance,
-        &subpage_filter,
-        &pages_filter
-    ));
-    assert!(section_passes_nav_filter(
-        SettingsSection::Features,
-        &subpage_filter,
-        &pages_filter
-    ));
-}
-
-#[test]
-fn umbrella_visible_when_any_subpage_matches() {
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(1));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    assert!(umbrella_visible(&filter, SettingsSection::ai_subpages()));
-}
-
-// ── Search auto-select simulation ───────────────────────────────────────────
-// These tests simulate the auto-select logic in handle_search_editor_event:
-// when the current subpage is filtered out by search, the view should jump
-// to the first visible subpage or page.
-
-/// Simulates the "is current still visible" check from the search handler.
-/// Returns true if `current` is still visible given the subpage_filter and
-/// a list of (backing_section, is_truthy) pairs for pages_filter.
-fn is_current_visible(
-    current: SettingsSection,
-    subpage_filter: &HashMap<SettingsSection, MatchData>,
-    pages_visible: &[(SettingsSection, bool)],
-) -> bool {
-    if let Some(md) = subpage_filter.get(&current) {
-        return md.is_truthy();
-    }
-    let backing = current.parent_page_section();
-    pages_visible
-        .iter()
-        .any(|(section, visible)| *section == backing && *visible)
-}
-
-/// Simulates finding the first visible section from the nav_items order.
-fn first_visible_section(
-    nav_order: &[SettingsSection],
-    subpage_filter: &HashMap<SettingsSection, MatchData>,
-    pages_visible: &[(SettingsSection, bool)],
-) -> Option<SettingsSection> {
-    nav_order.iter().copied().find(|section| {
-        if let Some(md) = subpage_filter.get(section) {
-            md.is_truthy()
-        } else {
-            let backing = section.parent_page_section();
-            pages_visible
-                .iter()
-                .any(|(s, visible)| *s == backing && *visible)
-        }
-    })
-}
-
-#[test]
-fn auto_select_jumps_away_from_filtered_out_subpage() {
-    // User is on Knowledge, searches "agent" which matches Profiles but not Knowledge.
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(2));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(0));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(1),
-    );
-
-    let current = SettingsSection::Knowledge;
-    assert!(
-        !is_current_visible(current, &filter, &[]),
-        "Knowledge should not be visible when it has 0 matches"
-    );
-
-    // The nav order: Oz, Profiles, ..., Knowledge, ThirdPartyCLI
-    let nav_order = SettingsSection::ai_subpages();
-    let first = first_visible_section(nav_order, &filter, &[]);
     assert_eq!(
-        first,
-        Some(SettingsSection::AgentProfiles),
-        "Should auto-select Profiles as the first visible subpage"
+        SettingsSection::from_slug("EditorAndCodeReview"),
+        Some(SettingsSection::EditorAndCodeReview)
     );
-}
-
-#[test]
-fn auto_select_stays_on_current_when_it_matches() {
-    // User is on Knowledge, searches "knowledge" which matches Knowledge.
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(1));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    let current = SettingsSection::Knowledge;
-    assert!(
-        is_current_visible(current, &filter, &[]),
-        "Knowledge should remain visible when it has matches"
-    );
-}
-
-#[test]
-fn auto_select_falls_back_to_top_level_page_when_no_subpages_match() {
-    // All AI subpages filtered out, but Account (top-level) is still visible.
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-    filter.insert(SettingsSection::Knowledge, MatchData::Countable(0));
-    filter.insert(
-        SettingsSection::ThirdPartyCLIAgents,
-        MatchData::Countable(0),
-    );
-
-    let pages_visible = vec![
-        (SettingsSection::Account, true),
-        (SettingsSection::AI, false),
-    ];
-
-    // Nav order includes top-level Account before the AI subpages.
-    let nav_order = vec![
-        SettingsSection::Account,
-        SettingsSection::WarpAgent,
-        SettingsSection::AgentProfiles,
-        SettingsSection::Knowledge,
-        SettingsSection::ThirdPartyCLIAgents,
-    ];
-
-    let first = first_visible_section(&nav_order, &filter, &pages_visible);
     assert_eq!(
-        first,
-        Some(SettingsSection::Account),
-        "Should fall back to Account when no subpages match"
+        SettingsSection::from_slug("CloudEnvironments"),
+        Some(SettingsSection::CloudEnvironments)
     );
-}
-
-#[test]
-fn auto_select_handles_standalone_subpage_via_backing_page() {
-    // AgentMCPServers has its own backing page (MCPServers), not in subpage_filter.
-    // It should be visible if its backing page is visible.
-    let filter = HashMap::new(); // no per-subpage entries for AgentMCPServers
-
-    let pages_visible = vec![
-        (SettingsSection::MCPServers, true),
-        (SettingsSection::AI, false),
-    ];
-
-    let current = SettingsSection::AgentMCPServers;
-    assert!(
-        is_current_visible(current, &filter, &pages_visible),
-        "AgentMCPServers should be visible via its MCPServers backing page"
-    );
-}
-
-#[test]
-fn auto_select_with_no_matches_anywhere() {
-    let mut filter = HashMap::new();
-    filter.insert(SettingsSection::WarpAgent, MatchData::Countable(0));
-    filter.insert(SettingsSection::AgentProfiles, MatchData::Countable(0));
-
-    let pages_visible = vec![
-        (SettingsSection::Account, false),
-        (SettingsSection::AI, false),
-    ];
-
-    let nav_order = vec![
-        SettingsSection::Account,
-        SettingsSection::WarpAgent,
-        SettingsSection::AgentProfiles,
-    ];
-
-    let first = first_visible_section(&nav_order, &filter, &pages_visible);
     assert_eq!(
-        first, None,
-        "No section should be selected when nothing matches"
+        SettingsSection::from_slug("OzCloudAPIKeys"),
+        Some(SettingsSection::WarpCloudAgentAPIKeys)
+    );
+    assert_eq!(
+        SettingsSection::from_slug("Oz Cloud API Keys"),
+        Some(SettingsSection::WarpCloudAgentAPIKeys)
     );
 }
 
-// ── Backward compatibility ──────────────────────────────────────────────────
+#[test]
+fn from_slug_maps_superseded_page_names_to_the_page_that_replaced_them() {
+    // `AI`, `Code` and `MCP Servers` named pages that have since been split or
+    // moved. Persisted sessions and warpctrl callers still use them, so they
+    // resolve here, at the boundary, rather than existing as sections of their
+    // own that every caller would have to remember to normalize.
+    assert_eq!(
+        SettingsSection::from_slug("AI"),
+        Some(SettingsSection::WarpAgent)
+    );
+    assert_eq!(
+        SettingsSection::from_slug("Code"),
+        Some(SettingsSection::CodeIndexing)
+    );
+    assert_eq!(
+        SettingsSection::from_slug("MCP Servers"),
+        Some(SettingsSection::AgentMCPServers)
+    );
+}
 
 #[test]
-fn legacy_ai_section_maps_to_oz_default() {
-    // SettingsSection::AI should be treated as backward-compat and map to Oz
-    // via the code in set_and_refresh_current_page_internal.
-    // Here we just verify the parent_page_section is still AI (for page lookup).
-    assert_eq!(
-        SettingsSection::AI.parent_page_section(),
-        SettingsSection::AI
-    );
-    // And that AI is NOT itself a subpage.
-    assert!(!SettingsSection::AI.is_subpage());
+fn from_slug_rejects_unknown_input() {
+    assert_eq!(SettingsSection::from_slug("Not a page"), None);
+    assert_eq!(SettingsSection::from_slug(""), None);
 }
 
 // ── Collapsed umbrella nav-stop behavior ────────────────────────────────────
@@ -689,23 +325,37 @@ fn legacy_ai_section_maps_to_oz_default() {
 
 use nav::{SettingsNavItem, SettingsUmbrella};
 
+/// The Agents umbrella's subpages, mirroring the list `SettingsView::new`
+/// declares. Duplicated here rather than shared so these tests can assert
+/// fixed nav-stop indices against a deliberately trimmed sidebar.
+const AGENT_SUBPAGES: &[SettingsSection] = &[
+    SettingsSection::WarpAgent,
+    SettingsSection::AgentProfiles,
+    SettingsSection::AgentMCPServers,
+    SettingsSection::Knowledge,
+    SettingsSection::ThirdPartyCLIAgents,
+];
+
 /// Builds the nav-items layout used by `SettingsView::new`, matching the real
 /// sidebar ordering so tests exercise realistic nav orders.
 fn realistic_nav_items() -> Vec<SettingsNavItem> {
     vec![
         SettingsNavItem::Page(SettingsSection::Account),
-        SettingsNavItem::Umbrella(SettingsUmbrella::new(
-            "Agents",
-            SettingsSection::ai_subpages().to_vec(),
-        )),
+        SettingsNavItem::Umbrella(SettingsUmbrella::new("Agents", AGENT_SUBPAGES.to_vec())),
         SettingsNavItem::Page(SettingsSection::BillingAndUsage),
         SettingsNavItem::Umbrella(SettingsUmbrella::new(
             "Code",
-            SettingsSection::code_subpages().to_vec(),
+            vec![
+                SettingsSection::CodeIndexing,
+                SettingsSection::EditorAndCodeReview,
+            ],
         )),
         SettingsNavItem::Umbrella(SettingsUmbrella::new(
             "Cloud platform",
-            SettingsSection::cloud_platform_subpages().to_vec(),
+            vec![
+                SettingsSection::CloudEnvironments,
+                SettingsSection::WarpCloudAgentAPIKeys,
+            ],
         )),
         SettingsNavItem::Page(SettingsSection::Teams),
     ]
@@ -758,7 +408,7 @@ fn collapsed_umbrella_is_a_single_nav_stop() {
         NavStop::CollapsedUmbrella {
             nav_index: 4,
             first_subpage: SettingsSection::CloudEnvironments,
-            last_subpage: SettingsSection::OzCloudAPIKeys,
+            last_subpage: SettingsSection::WarpCloudAgentAPIKeys,
         }
     ));
     assert!(matches!(stops[5], NavStop::Section(SettingsSection::Teams)));
@@ -840,10 +490,10 @@ fn collapsed_umbrella_with_filtered_subpages_uses_first_visible_subpage() {
 fn umbrella_with_no_visible_subpages_is_skipped_entirely() {
     let nav_items = realistic_nav_items();
 
-    let stops = build_nav_stops(&nav_items, |section| !section.is_ai_subpage());
+    let stops = build_nav_stops(&nav_items, |section| !AGENT_SUBPAGES.contains(&section));
 
-    // The Agents umbrella's subpages are all AI subpages, so the entire
-    // umbrella should be absent from the nav order.
+    // The Agents umbrella's subpages are all hidden, so the entire umbrella
+    // should be absent from the nav order.
     assert!(
         stops
             .iter()
@@ -913,8 +563,8 @@ fn current_stop_index_maps_subpage_to_collapsed_umbrella() {
 #[test]
 fn current_stop_index_returns_none_when_section_is_not_present() {
     let nav_items = realistic_nav_items();
-    // Filter out all AI subpages (and therefore the Agents umbrella) entirely.
-    let stops = build_nav_stops(&nav_items, |section| !section.is_ai_subpage());
+    // Filter out all Agents subpages (and therefore the umbrella) entirely.
+    let stops = build_nav_stops(&nav_items, |section| !AGENT_SUBPAGES.contains(&section));
 
     // Knowledge isn't directly in stops, and no remaining collapsed umbrella
     // contains it, so current_stop_index should return None.
@@ -1099,17 +749,15 @@ fn arrow_down_collapsed_umbrella_respects_search_filter() {
     assert_eq!(next, SettingsSection::AgentMCPServers);
 }
 
-// ── Active subpage filter reapply after rebuild (APP-4922) ───────────────────
-// Searching on an AI/Code subpage rebuilds the subpage's PageType (via
-// set_active_subpage), which resets its widget filter to every widget; the
-// active query must be reapplied so only matching widgets render. These tests
-// exercise the real PageType::Uncategorized filter lifecycle and the real
-// search_terms_match predicate. The production reapply call sites in mod.rs
-// (handle_search_editor_event/cycle_pages/SelectAndRefresh) need a full
-// ViewContext<SettingsView>, so they are verified via computer-use screenshots.
+// ── PageType filter lifecycle across a rebuild (APP-4922) ────────────────────
+// Rebuilding a page's PageType resets its widget filter to every widget, so an
+// active query has to be reapplied for only matching widgets to render. No page
+// rebuilds itself on navigation any more (each subpage owns its own view), but
+// these tests still pin the underlying PageType::Uncategorized filter lifecycle
+// and the real search_terms_match predicate that the invariant rests on.
 
 /// Minimal View so PageType<V> can be instantiated in a unit test without the
-/// full SettingsView/ViewContext the production reapply call sites require.
+/// full SettingsView/ViewContext a real settings page requires.
 struct TestSettingsView;
 
 impl Entity for TestSettingsView {
@@ -1144,8 +792,8 @@ impl SettingsWidget for StubWidget {
     }
 }
 
-/// A fresh Uncategorized page mirroring set_active_subpage -> build_page ->
-/// new_uncategorized: every widget index visible by default.
+/// A fresh Uncategorized page mirroring build_page -> new_uncategorized: every
+/// widget index visible by default.
 fn stub_widgets_page() -> PageType<TestSettingsView> {
     let widgets: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> = vec![
         Box::new(StubWidget {
@@ -1206,9 +854,9 @@ fn search_terms_match_direct_unit_checks() {
 #[test]
 fn rebuild_resets_filter_to_all_widgets() {
     // Searching "file search" matches exactly one widget. A freshly built page
-    // (mirroring set_active_subpage -> build_page -> new_uncategorized) resets
-    // the filter to every widget, so without reapplying update_filter the
-    // subpage would show all widgets.
+    // (mirroring build_page -> new_uncategorized) resets the filter to every
+    // widget, so without reapplying update_filter the page would show all
+    // widgets.
     App::test((), |mut app| async move {
         app.update(|ctx| {
             let mut page = stub_widgets_page();
@@ -1279,6 +927,236 @@ fn empty_query_after_reapply_shows_all_widgets() {
                 5,
                 "an empty query restores every widget on the subpage"
             );
+        });
+    });
+}
+
+struct NeverRendersWidget {
+    terms: &'static str,
+}
+
+impl SettingsWidget for NeverRendersWidget {
+    type View = TestSettingsView;
+
+    fn search_terms(&self) -> &str {
+        self.terms
+    }
+
+    fn should_render(&self, _: &AppContext) -> bool {
+        false
+    }
+
+    fn render(&self, _: &Self::View, _: &Appearance, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+#[test]
+fn category_whose_sole_widget_cannot_render_has_no_visible_content_before_any_filter_pass() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+                vec![Box::new(NeverRendersWidget {
+                    terms: "cloud handoff",
+                })];
+            let page =
+                PageType::new_categorized(vec![Category::new("Cloud Handoff", children)], None);
+
+            let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+                panic!("expected Categorized page");
+            };
+            assert_eq!(
+                categories.len(),
+                1,
+                "the untouched filter includes every widget index, so the category is still present here"
+            );
+            assert!(
+                categories_with_visible_content(categories, ctx).is_empty(),
+                "the category's sole widget can't render right now, so it has nothing visible to show"
+            );
+        });
+    });
+}
+
+#[test]
+fn category_whose_sole_widget_cannot_render_has_no_visible_content_after_an_empty_query() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+                vec![Box::new(NeverRendersWidget {
+                    terms: "cloud handoff",
+                })];
+            let mut page =
+                PageType::new_categorized(vec![Category::new("Cloud Handoff", children)], None);
+            page.update_filter("", ctx);
+
+            let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+                panic!("expected Categorized page");
+            };
+            assert!(
+                categories.is_empty(),
+                "an empty-query filter pass already drops a category with no should_render widgets"
+            );
+        });
+    });
+}
+
+/// A no-observable-output trailing-element closure, for testing attachment and visibility only.
+fn stub_trailing_element(_: &TestSettingsView, _: &Appearance, _: &AppContext) -> Box<dyn Element> {
+    Empty::new().finish()
+}
+
+/// An Uncategorized page with one widget plus a title trailing element.
+fn uncategorized_page_with_title_trailing_element() -> PageType<TestSettingsView> {
+    let widgets: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> =
+        vec![Box::new(StubWidget {
+            terms: "unrelated child setting",
+        })];
+    PageType::new_uncategorized(
+        widgets,
+        Some(PageTitle::new("Page").with_trailing_element(stub_trailing_element)),
+    )
+}
+
+#[test]
+fn title_trailing_element_is_present_regardless_of_widget_filter() {
+    // The title trailing element takes no part in search: it must be present whether or not any
+    // body widget matches, and must never affect MatchData.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = uncategorized_page_with_title_trailing_element();
+            let match_data = page.update_filter("totally unrelated query", ctx);
+            assert!(!match_data.is_truthy());
+
+            let FilteredPageType::Uncategorized { widgets, title, .. } = page.get_filtered() else {
+                panic!("expected Uncategorized page");
+            };
+            assert!(widgets.is_empty());
+            assert!(title.is_some_and(|t| t.trailing_element.is_some()));
+        });
+    });
+}
+
+/// A Categorized page with one category holding two child widgets and a trailing element.
+fn categorized_page_with_trailing() -> PageType<TestSettingsView> {
+    let children: Vec<Box<dyn SettingsWidget<View = TestSettingsView>>> = vec![
+        Box::new(StubWidget {
+            terms: "child one settings",
+        }),
+        Box::new(StubWidget {
+            terms: "child two settings",
+        }),
+    ];
+    let category = Category::with_header(
+        CategoryHeader::new("Master").with_trailing_element(stub_trailing_element),
+        children,
+    );
+    PageType::new_categorized(vec![category], None)
+}
+
+/// The number of widgets and whether the trailing element is present for the sole category of a
+/// `categorized_page_with_trailing`-shaped page.
+fn categorized_widget_and_trailing_state<V: View>(page: &PageType<V>) -> Vec<(usize, bool)> {
+    let FilteredPageType::Categorized { categories, .. } = page.get_filtered() else {
+        panic!("expected Categorized page");
+    };
+    categories
+        .into_iter()
+        .map(|c| (c.widgets.len(), c.trailing_element.is_some()))
+        .collect()
+}
+
+#[test]
+fn category_trailing_element_renders_alongside_a_matching_child() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = categorized_page_with_trailing();
+            let match_data = page.update_filter("child one", ctx);
+            assert!(match_data.is_truthy());
+            assert_eq!(
+                categorized_widget_and_trailing_state(&page),
+                vec![(1, true)]
+            );
+        });
+    });
+}
+
+#[test]
+fn category_and_its_trailing_element_are_dropped_when_no_child_matches() {
+    // The trailing element takes no part in search, so visibility is decided purely by the
+    // children: a query can't resurface the category through the accessory.
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = categorized_page_with_trailing();
+            let match_data = page.update_filter("totally unrelated query", ctx);
+            assert!(!match_data.is_truthy());
+            assert_eq!(categorized_widget_and_trailing_state(&page), vec![]);
+        });
+    });
+}
+
+#[test]
+fn category_with_trailing_element_shows_everything_on_empty_query() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let mut page = categorized_page_with_trailing();
+            let match_data = page.update_filter("", ctx);
+            assert!(match_data.is_truthy());
+            assert_eq!(
+                categorized_widget_and_trailing_state(&page),
+                vec![(2, true)]
+            );
+        });
+    });
+}
+
+/// Renders a `categorized_page_with_trailing` page, whose category has no subtitle (a
+/// `render_sub_header` header, not `render_sub_header_with_description`).
+struct CategoryHeaderTrailingElementTestView;
+
+impl Entity for CategoryHeaderTrailingElementTestView {
+    type Event = ();
+}
+
+impl View for CategoryHeaderTrailingElementTestView {
+    fn ui_name() -> &'static str {
+        "CategoryHeaderTrailingElementTestView"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        categorized_page_with_trailing().render(&TestSettingsView, app)
+    }
+}
+
+impl TypedActionView for CategoryHeaderTrailingElementTestView {
+    type Action = ();
+}
+
+/// Regression test: a category header with a trailing element and no subtitle used to panic flex
+/// layout (see `render_header_with_trailing_element`'s `Shrinkable` fix).
+#[test]
+fn category_header_with_trailing_element_and_no_subtitle_does_not_panic_flex_layout() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.add_singleton_model(|_| Appearance::mock());
+
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, |_| {
+            CategoryHeaderTrailingElementTestView
+        });
+        let root_view_id = app
+            .root_view_id(window_id)
+            .expect("window should have a root view");
+
+        let mut presenter = Presenter::new(window_id);
+        let invalidation = WindowInvalidation {
+            updated: [root_view_id].into_iter().collect(),
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            // Panicked here before the fix.
+            presenter.build_scene(vec2f(800., 600.), 1., None, ctx);
         });
     });
 }

@@ -12,6 +12,7 @@ pub mod overlay;
 mod step;
 pub mod video_recorder;
 pub use action_log::ActionLog;
+use anyhow::Context;
 pub use artifacts::ARTIFACTS_DIR_ENV_VAR;
 pub use driver::{Builder, RERUN_EXIT_CODE, RUNTIME_TAG_FAILURE_REASON, SetupFn, TestDriver};
 pub use overlay::OverlayLog;
@@ -20,7 +21,7 @@ pub use step::{
     PersistedDataMap, StepData, StepDataMap, TestStep,
 };
 pub use video_recorder::{VideoRecorder, save_captured_frame_as_png};
-use warp_errors::report_error;
+use warp_errors::report_if_error;
 
 #[macro_export]
 macro_rules! async_assert {
@@ -221,9 +222,9 @@ impl TestSetupUtils {
     }
 
     pub fn cleanup_dir(&mut self) {
-        if let Err(err) = fs::remove_dir_all(self.root_dir.as_path()) {
-            report_error!("Could not cleanup directory", extra: { "error" => ?err });
-        }
+        report_if_error!(
+            fs::remove_dir_all(self.root_dir.as_path()).context("Could not cleanup directory")
+        );
     }
 }
 

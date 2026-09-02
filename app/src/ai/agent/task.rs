@@ -2,16 +2,14 @@ pub mod helper;
 pub mod transaction;
 
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
-use std::ops::Deref;
 
 use ai::skills::SkillPathOrigin;
+pub use ai_types::TaskId;
 use anyhow::Context as _;
 use field_mask::{FieldMaskError, FieldMaskOperation};
 use helper::{MessageExt, SubagentExt, ToolCallExt};
 use itertools::Itertools;
 use prost_types::FieldMask;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_errors::report_error;
 use warp_multi_agent_api::message::Message;
@@ -32,35 +30,6 @@ use super::{
 use crate::AIAgentTodoList;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::terminal::model::block::BlockId;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskId(String);
-
-impl TaskId {
-    pub fn new(id: String) -> Self {
-        TaskId(id)
-    }
-}
-
-impl From<TaskId> for String {
-    fn from(id: TaskId) -> Self {
-        id.0
-    }
-}
-
-impl Deref for TaskId {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Display for TaskId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateTaskError {
@@ -269,7 +238,7 @@ impl Task {
         restored_exchanges.sort_by_key(|exchange| exchange.start_time);
 
         Self {
-            id: TaskId(task.id.clone()),
+            id: TaskId::new(task.id.clone()),
             data: TaskImpl::Server(ServerTask {
                 source: task,
                 subagent_params: None,
@@ -326,7 +295,7 @@ impl Task {
         let messages_clone = subtask.messages.clone();
         let new_exchange_id = new_exchange.id;
         let mut me = Self {
-            id: TaskId(subtask.id.clone()),
+            id: TaskId::new(subtask.id.clone()),
             exchanges: vec![new_exchange],
             data: TaskImpl::Server(ServerTask {
                 source: subtask,
@@ -361,7 +330,7 @@ impl Task {
         });
 
         Self {
-            id: TaskId(subtask.id.clone()),
+            id: TaskId::new(subtask.id.clone()),
             exchanges: restored_exchanges,
             data: TaskImpl::Server(ServerTask {
                 source: subtask,
@@ -386,7 +355,7 @@ impl Task {
         });
 
         Self {
-            id: TaskId(subtask.id.clone()),
+            id: TaskId::new(subtask.id.clone()),
             exchanges: vec![],
             data: TaskImpl::Server(ServerTask {
                 source: subtask,
@@ -470,7 +439,7 @@ impl Task {
     pub fn parent_id(&self) -> Option<TaskId> {
         self.source()
             .and_then(|source| source.dependencies.as_ref())
-            .map(|dependencies| TaskId(dependencies.parent_task_id.clone()))
+            .map(|dependencies| TaskId::new(dependencies.parent_task_id.clone()))
     }
 
     pub fn is_root_task(&self) -> bool {

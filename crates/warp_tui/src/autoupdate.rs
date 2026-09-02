@@ -19,11 +19,12 @@
 //! lifetime, and cleanup only removes inactive versions whose lease can be
 //! locked exclusively.
 //!
-//! Background updates only run for managed installs (i.e. when the running
-//! executable resolves into a `versions/` directory), so `cargo run` builds
-//! and legacy flat installs are unaffected. Users can opt out with the
-//! file-backed `general.autoupdate_enabled` setting or the
-//! `WARP_TUI_DISABLE_AUTOUPDATE` environment variable; re-running the
+//! Native background updates only run for managed installs (i.e. when the
+//! running executable resolves into a `versions/` directory). Recognized
+//! Homebrew installs check for newer versions but leave installation to
+//! Homebrew, while `cargo run` builds and legacy flat installs are unaffected.
+//! Users can opt out with the file-backed `general.autoupdate_enabled` setting
+//! or the `WARP_TUI_DISABLE_AUTOUPDATE` environment variable; re-running the
 //! install script remains available as a manual escape hatch.
 
 use std::ffi::{OsStr, OsString};
@@ -47,6 +48,13 @@ use crate::telemetry::TuiAutoupdateTelemetryEvent;
 /// auto-updates for a single launch, regardless of the
 /// `general.autoupdate_enabled` setting.
 const DISABLE_ENV_VAR: &str = "WARP_TUI_DISABLE_AUTOUPDATE";
+/// The stable cask token shared by the Warp-managed tap and the planned
+/// official Homebrew package.
+const HOMEBREW_CASK_TOKEN: &str = "warp-agent-cli";
+
+/// User-facing status for Homebrew installations with a newer cask.
+pub(crate) const HOMEBREW_UPDATE_STATUS: &str =
+    "update available — run brew upgrade --cask warp-agent-cli";
 
 /// Name of the directory holding per-version installs under the install root.
 const VERSIONS_DIR_NAME: &str = "versions";
@@ -134,6 +142,56 @@ impl InstallLayout {
             binary_name,
         })
     }
+}
+
+/// The installation owner inferred from the canonical running executable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum InstallMethod {
+    /// Installed by Warp's native versioned installer.
+    Native(InstallLayout),
+    /// Installed from the `warp-agent-cli` Homebrew cask.
+    Homebrew,
+    /// A development build, legacy flat install, or unknown package manager.
+    Unmanaged,
+}
+
+impl InstallMethod {
+    fn detect() -> Self {
+        let Ok(exe) = std::env::current_exe() else {
+            return Self::Unmanaged;
+        };
+        let canonical_exe = exe.canonicalize().unwrap_or(exe);
+        Self::from_canonical_exe_path(&canonical_exe)
+    }
+
+    fn from_canonical_exe_path(exe: &Path) -> Self {
+        if let Some(layout) = InstallLayout::from_canonical_exe_path(exe) {
+            return Self::Native(layout);
+        }
+        if is_homebrew_cask_exe_path(exe) {
+            return Self::Homebrew;
+        }
+        Self::Unmanaged
+    }
+}
+
+fn is_homebrew_cask_exe_path(exe: &Path) -> bool {
+    if exe.file_name() != Some(OsStr::new("warp-tui-stable")) {
+        return false;
+    }
+    let components = exe
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(component) => Some(component),
+            std::path::Component::Prefix(_)
+            | std::path::Component::RootDir
+            | std::path::Component::CurDir
+            | std::path::Component::ParentDir => None,
+        })
+        .collect::<Vec<_>>();
+    components.windows(2).any(|components| {
+        components[0] == OsStr::new("Caskroom") && components[1] == OsStr::new(HOMEBREW_CASK_TOKEN)
+    })
 }
 
 fn download_url(version: &str) -> Result<String> {
@@ -273,6 +331,8 @@ enum UpdateOutcome {
     /// A newer version was staged and `current` now points at it. It takes
     /// effect on the next launch.
     Installed { version: String },
+    /// A newer Homebrew cask is available and must be installed by Homebrew.
+    UpdateAvailable { version: String },
 }
 
 impl UpdateOutcome {
@@ -285,6 +345,7 @@ impl UpdateOutcome {
             UpdateOutcome::UpToDate { .. } => "up_to_date",
             UpdateOutcome::PendingRestart { .. } => "pending_restart",
             UpdateOutcome::Installed { .. } => "installed",
+            UpdateOutcome::UpdateAvailable { .. } => "update_available",
         }
     }
 
@@ -295,7 +356,8 @@ impl UpdateOutcome {
             UpdateOutcome::Locked => None,
             UpdateOutcome::UpToDate { version }
             | UpdateOutcome::PendingRestart { version }
-            | UpdateOutcome::Installed { version } => Some(version),
+            | UpdateOutcome::Installed { version }
+            | UpdateOutcome::UpdateAvailable { version } => Some(version),
         }
     }
 }
@@ -317,6 +379,8 @@ pub(crate) enum TuiAutoupdateStatus {
     Failed,
     /// A newer version is staged and takes effect on the next launch.
     PendingRestart,
+    /// A newer Homebrew cask is available.
+    UpdateAvailable,
 }
 
 /// Events emitted by [`TuiAutoupdater`].
@@ -327,11 +391,15 @@ pub(crate) enum TuiAutoupdaterEvent {
 }
 
 /// Whether this process runs the background update loop.
+///
+/// Package-manager-owned installs use explicit variants because each manager
+/// can require different version checks, status copy, and update commands.
 #[derive(Clone, Debug)]
 enum AutoupdateEligibility {
-    /// Eligible: a release build running from the managed versioned install
-    /// layout, without the env opt-out.
-    Enabled(InstallLayout),
+    /// Eligible for native background installation.
+    Native(InstallLayout),
+    /// Eligible for update checks, with installation owned by Homebrew.
+    Homebrew,
     /// Background updates are disabled for this process.
     Disabled {
         /// Why updates are disabled, for logging/debugging.
@@ -365,9 +433,10 @@ impl AutoupdateEligibility {
                 reason: "no TUI release artifacts exist for this platform",
             };
         }
-        match InstallLayout::detect() {
-            Some(layout) => Self::Enabled(layout),
-            None => Self::Disabled {
+        match InstallMethod::detect() {
+            InstallMethod::Native(layout) => Self::Native(layout),
+            InstallMethod::Homebrew => Self::Homebrew,
+            InstallMethod::Unmanaged => Self::Disabled {
                 reason: "not running from a managed install",
             },
         }
@@ -379,7 +448,7 @@ impl AutoupdateEligibility {
 /// Always registered — even when this process isn't eligible for background
 /// updates — so other callsites can safely access the singleton. The polling
 /// loop only runs when [`Self::eligibility`] is
-/// [`AutoupdateEligibility::Enabled`].
+/// [`AutoupdateEligibility::Native`] or [`AutoupdateEligibility::Homebrew`].
 pub(crate) struct TuiAutoupdater {
     /// Whether (and where) this process runs background updates.
     eligibility: AutoupdateEligibility,
@@ -408,7 +477,8 @@ impl TuiAutoupdater {
             last_reported_outcome: None,
         });
         TuiAutoupdater::handle(ctx).update(ctx, |me, ctx| match me.eligibility.clone() {
-            AutoupdateEligibility::Enabled(layout) => me.check_now(layout, ctx),
+            AutoupdateEligibility::Native(layout) => me.check_native_now(layout, ctx),
+            AutoupdateEligibility::Homebrew => me.check_homebrew_now(ctx),
             AutoupdateEligibility::Disabled { reason } => {
                 log::info!("TUI autoupdate disabled: {reason}");
             }
@@ -434,7 +504,7 @@ impl TuiAutoupdater {
     /// [`CHECK_INTERVAL`]. The pass runs in two phases so the zero state can
     /// show progress: a lightweight version check, then — only when a newer
     /// version needs staging — the download/install phase.
-    fn check_now(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
+    fn check_native_now(&mut self, layout: InstallLayout, ctx: &mut ModelContext<Self>) {
         // Where the status settles when this pass is skipped because another
         // process is installing, and the status to preserve once an update is
         // pending restart.
@@ -462,6 +532,35 @@ impl TuiAutoupdater {
         );
     }
 
+    /// Checks for a newer Homebrew cask without invoking Homebrew or modifying
+    /// the Caskroom-managed installation.
+    fn check_homebrew_now(&mut self, ctx: &mut ModelContext<Self>) {
+        let fallback_status = self.status;
+        self.set_status(TuiAutoupdateStatus::Checking, ctx);
+        ctx.spawn(check_homebrew_update(), move |me, result, ctx| {
+            me.finish_homebrew_check(result, fallback_status, ctx)
+        });
+    }
+
+    fn finish_homebrew_check(
+        &mut self,
+        result: Result<UpdateOutcome>,
+        fallback_status: TuiAutoupdateStatus,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match &result {
+            Ok(outcome) => log::info!("TUI Homebrew update check finished: {outcome:?}"),
+            Err(error) => log::warn!("TUI Homebrew update check failed: {error:#}"),
+        }
+        self.report_outcome(&result, ctx);
+        let status = settled_status(&result, fallback_status);
+        self.set_status(status, ctx);
+        ctx.spawn(
+            async { Timer::after(CHECK_INTERVAL).await },
+            move |me, _, ctx| me.check_homebrew_now(ctx),
+        );
+    }
+
     /// Logs and reports the final result of an update pass, settles the
     /// user-visible status, and schedules the next check.
     fn finish_check(
@@ -482,7 +581,7 @@ impl TuiAutoupdater {
         self.set_status(status, ctx);
         ctx.spawn(
             async { Timer::after(CHECK_INTERVAL).await },
-            move |me, _, ctx| me.check_now(layout, ctx),
+            move |me, _, ctx| me.check_native_now(layout, ctx),
         );
     }
 
@@ -527,6 +626,7 @@ fn settled_status(
         Ok(UpdateOutcome::PendingRestart { .. } | UpdateOutcome::Installed { .. }) => {
             TuiAutoupdateStatus::PendingRestart
         }
+        Ok(UpdateOutcome::UpdateAvailable { .. }) => TuiAutoupdateStatus::UpdateAvailable,
         #[cfg(unix)]
         Ok(UpdateOutcome::Locked) => fallback_status,
         Err(_) => TuiAutoupdateStatus::Failed,
@@ -551,21 +651,7 @@ async fn check_for_update(layout: InstallLayout) -> Result<CheckDecision> {
 
     let client = http_client::Client::new();
     let latest_version = fetch_latest_version(&client).await?;
-
-    // Version strings become directory names below; reject anything that
-    // doesn't parse as a Warp version outright.
-    let latest_parsed = ParsedVersion::try_from(latest_version.as_str())
-        .with_context(|| format!("invalid latest version {latest_version:?}"))?;
-    if !is_safe_version_component(&latest_version) {
-        bail!("invalid latest version {latest_version:?}");
-    }
-
-    // Only ever move strictly forward. If the server reports an older (or
-    // equal) version — e.g. a rollback — keep the running build; users can
-    // reinstall a pinned version via the install script.
-    let current_parsed = ParsedVersion::try_from(current_version)
-        .with_context(|| format!("invalid current version {current_version:?}"))?;
-    if latest_parsed <= current_parsed {
+    if !is_newer_version(current_version, &latest_version)? {
         return Ok(CheckDecision::Settled(UpdateOutcome::UpToDate {
             version: current_version.to_owned(),
         }));
@@ -594,6 +680,36 @@ async fn check_for_update(layout: InstallLayout) -> Result<CheckDecision> {
     }
 
     Ok(CheckDecision::NeedsInstall { latest_version })
+}
+
+async fn check_homebrew_update() -> Result<UpdateOutcome> {
+    let current_version =
+        ChannelState::app_version().context("no release version tag baked into this build")?;
+    let latest_version = fetch_latest_version(&http_client::Client::new()).await?;
+    homebrew_update_outcome(current_version, latest_version)
+}
+
+fn homebrew_update_outcome(current_version: &str, latest_version: String) -> Result<UpdateOutcome> {
+    if is_newer_version(current_version, &latest_version)? {
+        Ok(UpdateOutcome::UpdateAvailable {
+            version: latest_version,
+        })
+    } else {
+        Ok(UpdateOutcome::UpToDate {
+            version: current_version.to_owned(),
+        })
+    }
+}
+
+fn is_newer_version(current_version: &str, latest_version: &str) -> Result<bool> {
+    let latest_parsed = ParsedVersion::try_from(latest_version)
+        .with_context(|| format!("invalid latest version {latest_version:?}"))?;
+    if !is_safe_version_component(latest_version) {
+        bail!("invalid latest version {latest_version:?}");
+    }
+    let current_parsed = ParsedVersion::try_from(current_version)
+        .with_context(|| format!("invalid current version {current_version:?}"))?;
+    Ok(latest_parsed > current_parsed)
 }
 
 fn is_safe_version_component(version: &str) -> bool {

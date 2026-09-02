@@ -49,6 +49,7 @@ use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
@@ -57,11 +58,11 @@ use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::notebooks::NotebookId;
+use crate::persistence::model::ChargedUsageTotals;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AmbientAgentTask;
-#[cfg(not(target_family = "wasm"))]
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
@@ -145,6 +146,7 @@ struct PanelMouseStates {
     copy_fetch_error: MouseStateHandle,
     copy_error: MouseStateHandle,
     copy_setup_commands: MouseStateHandle,
+    copy_initial_query: MouseStateHandle,
     skill_link: MouseStateHandle,
     skill_source_link: MouseStateHandle,
     executor_agent_link: MouseStateHandle,
@@ -162,6 +164,7 @@ enum CopyButtonKind {
     FetchError,
     Error,
     SetupCommands,
+    InitialQuery,
 }
 
 /// Information about a principal involved in a conversation.
@@ -239,6 +242,15 @@ pub struct ConversationDetailsData {
     created_at: Option<DateTime<Local>>,
     /// Total credits spent on the conversation/task.
     credits: Option<f32>,
+    /// Total token count used, when the source provides it.
+    total_tokens: Option<u32>,
+    /// Cumulative per-category charged-usage breakdown (input/output/
+    /// cache-read/cache-write cost + token counts), gated by
+    /// `FeatureFlag::PricingTransparency`. `None` when the source doesn't
+    /// yet provide it — e.g. cloud task/REST-backed sources, which don't
+    /// carry the wire protocol's per-category charges (documented gap,
+    /// tracked for the REST vertical).
+    charged_usage: Option<ChargedUsageTotals>,
     /// Total duration of the conversation.
     run_time: Option<Duration>,
     /// Artifacts created during the conversation (plans, PRs, branches).
@@ -345,6 +357,13 @@ impl ConversationDetailsData {
             .map(|m| Harness::from(m.harness))
             .or(Some(Harness::Oz));
 
+        let usage_totals = conversation.usage_totals();
+        let total_tokens: u32 = conversation
+            .token_usage()
+            .iter()
+            .map(|model| model.warp_tokens + model.byok_tokens + model.custom_endpoint_tokens)
+            .sum();
+
         ConversationDetailsData {
             mode: PanelMode::Conversation {
                 directory,
@@ -359,6 +378,8 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: Some(conversation.credits_spent()),
+            total_tokens: (total_tokens > 0).then_some(total_tokens),
+            charged_usage: usage_totals.charged_usage,
             run_time,
             artifacts: conversation.artifacts().to_vec(),
             open_action: None,
@@ -424,6 +445,11 @@ impl ConversationDetailsData {
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
             credits,
+            // GAP: cloud tasks are sourced from the REST `AmbientAgentTask`,
+            // which doesn't yet carry a per-category charges breakdown
+            // (tracked for the REST vertical).
+            total_tokens: None,
+            charged_usage: None,
             run_time: task.run_time(),
             open_action,
             creator: task
@@ -504,6 +530,9 @@ impl ConversationDetailsData {
                 executor,
                 created_at,
                 credits,
+                // GAP: see the `from_task` gap note above.
+                total_tokens: None,
+                charged_usage: None,
                 run_time: task.and_then(AmbientAgentTask::run_time),
                 artifacts: entry.display.artifacts.clone(),
                 open_action,
@@ -531,6 +560,11 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: entry.display.request_usage,
+            // GAP: this branch has no linked `AmbientAgentTask` and the
+            // entry's denormalized total is a bare credits figure with no
+            // token/breakdown counterpart.
+            total_tokens: None,
+            charged_usage: None,
             run_time: None,
             artifacts: entry.display.artifacts.clone(),
             open_action,
@@ -563,6 +597,8 @@ impl ConversationDetailsData {
             executor: None,
             created_at: None,
             credits: None,
+            total_tokens: None,
+            charged_usage: None,
             run_time: None,
             artifacts: vec![],
             open_action: None,
@@ -605,6 +641,11 @@ impl ConversationDetailsData {
             executor: None,
             created_at: Some(created_at),
             credits: credits_used,
+            // GAP: this legacy management-view constructor only accepts a
+            // bare credits total; no token/breakdown source is threaded
+            // through it.
+            total_tokens: None,
+            charged_usage: None,
             run_time: None,
             open_action,
             artifacts,
@@ -636,6 +677,7 @@ pub enum ConversationDetailsPanelAction {
     CopyFetchError,
     CopyError,
     CopySetupCommands(String),
+    CopyInitialQuery,
     Focus,
     CopySelectedText,
     #[cfg(not(target_family = "wasm"))]
@@ -690,6 +732,11 @@ pub struct ConversationDetailsPanel {
     runners_loading: bool,
 }
 
+fn trimmed_initial_query(source_prompt: &Option<String>) -> Option<&str> {
+    let trimmed = source_prompt.as_ref()?.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 impl ConversationDetailsPanel {
     /// Create a new panel.
     /// - `show_open_button`: whether to show the "Open" button (management view: true, transcript: false)
@@ -721,9 +768,12 @@ impl ConversationDetailsPanel {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
                 })
         });
-        #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if matches!(event, AISettingsChangedEvent::IsAnyAIEnabled { .. }) {
+            if matches!(
+                event,
+                AISettingsChangedEvent::IsAnyAIEnabled { .. }
+                    | AISettingsChangedEvent::UsageDisplayUnit { .. }
+            ) {
                 ctx.notify();
             }
         });
@@ -1613,13 +1663,48 @@ impl ConversationDetailsPanel {
         Some(row.finish())
     }
 
-    fn render_source_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
-        let source_prompt = self.data.source_prompt.as_ref()?;
-        let trimmed = source_prompt.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        Some(self.render_simple_field("Initial query", trimmed, appearance))
+    fn render_source_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let trimmed = trimmed_initial_query(&self.data.source_prompt)?;
+        let theme = appearance.theme();
+        let ui_font_size = appearance.ui_font_size();
+
+        let label_text = Text::new(
+            "Initial query".to_string(),
+            appearance.ui_font_family(),
+            ui_font_size,
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
+
+        let value_field = render_copyable_text_field(
+            CopyableTextFieldConfig::new(trimmed)
+                .with_font_size(ui_font_size)
+                .with_text_color(theme.foreground().into())
+                .with_wrap_text(true)
+                .with_icon_size(16.)
+                .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::InitialQuery))
+                .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::InitialQuery)),
+            |ctx| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyInitialQuery);
+            },
+            app,
+        );
+
+        Some(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(
+                    Container::new(label_text)
+                        .with_margin_bottom(LABEL_VALUE_GAP)
+                        .finish(),
+                )
+                .with_child(value_field)
+                .finish(),
+        )
     }
 
     fn render_artifacts_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
@@ -1949,6 +2034,7 @@ impl ConversationDetailsPanel {
             CopyButtonKind::FetchError => self.mouse_states.copy_fetch_error.clone(),
             CopyButtonKind::Error => self.mouse_states.copy_error.clone(),
             CopyButtonKind::SetupCommands => self.mouse_states.copy_setup_commands.clone(),
+            CopyButtonKind::InitialQuery => self.mouse_states.copy_initial_query.clone(),
         }
     }
 
@@ -2226,9 +2312,24 @@ impl View for ConversationDetailsPanel {
         }
 
         if let Some(credits) = self.data.credits {
-            let formatted = format!("{credits:.1}");
+            let cost_in_cents = self
+                .data
+                .charged_usage
+                .map(|charged_usage| charged_usage.total_cost_in_cents());
+            let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+            let formatted = format_usage(
+                credits,
+                self.data.total_tokens,
+                cost_in_cents,
+                usage_display_unit,
+            );
+            let label = usage_label(
+                UsageLabelKind::DetailsPanel,
+                cost_in_cents,
+                usage_display_unit,
+            );
             content.add_child(
-                Container::new(self.render_simple_field("Credits used", &formatted, appearance))
+                Container::new(self.render_simple_field(&label, &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
@@ -2279,7 +2380,7 @@ impl View for ConversationDetailsPanel {
             }
         }
 
-        if let Some(source_section) = self.render_source_section(appearance) {
+        if let Some(source_section) = self.render_source_section(appearance, app) {
             content.add_child(
                 Container::new(source_section)
                     .with_margin_bottom(FIELD_SPACING)
@@ -2444,6 +2545,13 @@ impl TypedActionView for ConversationDetailsPanel {
                     ctx.clipboard()
                         .write(ClipboardContent::plain_text(text.clone()));
                     self.record_copy(CopyButtonKind::SetupCommands, ctx);
+                }
+            }
+            ConversationDetailsPanelAction::CopyInitialQuery => {
+                if let Some(trimmed) = trimmed_initial_query(&self.data.source_prompt) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(trimmed.to_string()));
+                    self.record_copy(CopyButtonKind::InitialQuery, ctx);
                 }
             }
             ConversationDetailsPanelAction::Focus => {

@@ -34,12 +34,16 @@ use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryO
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
 #[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::{apply_child_agent_model_override, prepare_local_oz_child_launch};
+use crate::ai::blocklist::{
+    apply_child_agent_model_override, finish_local_oz_child_conversation,
+    prepare_local_oz_child_launch,
+};
 use crate::ai::conversation_utils;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::orchestration::{RemoteChildLaunchConfig, prepare_remote_child_launch};
 use crate::app_state::{AmbientAgentPaneSnapshot, LeafContents, TerminalPaneSnapshot};
 use crate::code::buffer_location::LocalOrRemotePath;
+use crate::features::FeatureFlag;
 #[cfg(feature = "local_fs")]
 use crate::pane_group::CodeSource;
 use crate::pane_group::Event::OpenConversationHistory;
@@ -63,6 +67,8 @@ use crate::terminal::{TerminalManager, TerminalView};
 use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -340,6 +346,7 @@ impl PaneContent for TerminalPane {
                 group.restore_missing_child_agent_panes_for_parent(
                     *conversation_id,
                     terminal_pane_id.into(),
+                    true,
                     ctx,
                 );
             }
@@ -934,13 +941,15 @@ fn handle_terminal_view_event(
                 }
             }
             Event::ShareModalOpened(block_id) => {
+                let Some(session) = group.terminal_view_from_pane_id(pane_id, ctx) else {
+                    return;
+                };
+                let model = session.read(ctx, |view, _| view.model.clone());
+
                 group.terminal_with_open_share_block_modal = Some(terminal_pane_id);
                 group.share_block_modal.update(ctx, |share_modal, ctx| {
-                    if let Some(session) = group.terminal_view_from_pane_id(pane_id, ctx) {
-                        let model = session.read(ctx, |view, _| view.model.clone());
-                        share_modal.open_with_model_update(model, *block_id, ctx);
-                        ctx.notify();
-                    }
+                    share_modal.open_with_model_update(model, *block_id, ctx);
+                    ctx.notify();
                 });
                 ctx.notify();
             }
@@ -1336,6 +1345,31 @@ fn handle_terminal_view_event(
                     );
                 }
             }
+            Event::EnsureUnifiedViewerChildPane {
+                conversation_id,
+                task,
+            } => {
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+                    group.materialize_viewer_child_pane_from_task(
+                        *conversation_id,
+                        task.as_ref().clone(),
+                        ctx,
+                    );
+                }
+            }
+            Event::OrchestrationChildSharedSessionJoinFailed {
+                conversation_id,
+                session_id,
+            } => {
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled() {
+                    group.recover_viewer_child_join_failure(
+                        pane_id,
+                        *conversation_id,
+                        *session_id,
+                        ctx,
+                    );
+                }
+            }
             Event::HideAIDocumentPanes => {
                 group.close_all_ai_document_panes(ctx);
             }
@@ -1424,7 +1458,9 @@ fn handle_terminal_view_event(
                 // joinable `session_id`. Materializes a dedicated hidden
                 // shared-session viewer pane for the child so subsequent pill
                 // clicks land on a populated agent view rather than an empty
-                // cloud-mode shell.
+                // cloud-mode shell. Only reached while
+                // `OrchestrationUnifiedStack` is disabled; the unified stack
+                // emits `EnsureUnifiedViewerChildPane` instead.
                 group.ensure_shared_session_viewer_child_pane(*conversation_id, *session_id, ctx);
             }
             Event::OpenChildAgentInNewTab { conversation_id } => {
@@ -1639,24 +1675,22 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    apply_child_agent_model_override(terminal_view_id, model_id.as_deref(), ctx);
-
-                    // Stamp the task id on the child conversation directly
-                    // so the share-reporter in
-                    // `local_tty/terminal_manager.rs` can resolve it from
-                    // the selected conversation when the share handshake
-                    // succeeds. Mirrors the pattern used by
-                    // `OrchestrationViewerModel::apply_children_fetch`.
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
-                        if let Some(conversation) = model.conversation_mut(&conversation_id) {
-                            conversation.set_task_id(child_task_id);
-                        }
-                        model.record_new_conversation_request_complete(
-                            request_id,
-                            conversation_id,
-                            ctx,
-                        );
-                    });
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    apply_child_agent_model_override(
+                        &scope,
+                        terminal_view_id,
+                        model_id.as_deref(),
+                        ctx,
+                    );
+                    finish_local_oz_child_conversation(
+                        conversation_id,
+                        terminal_view_id,
+                        child_task_id,
+                        request_id,
+                        ctx,
+                    );
 
                     new_terminal_view.update(ctx, |terminal_view, ctx| {
                         terminal_view
@@ -1771,6 +1805,7 @@ fn launch_local_harness_child(
                 } = launch;
                 let is_shared_session_creator =
                     inherit_share_for_local_child(host_source.as_ref(), task_id);
+
                 match create_hidden_child_agent_conversation(
                     group,
                     HiddenChildAgentConversationRequest {
@@ -1790,7 +1825,11 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
+                        let scope = ResolvedTeamScope::from_scope(
+                            &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                        );
                         apply_child_agent_model_override(
+                            &scope,
                             terminal_view_id,
                             model_id.as_deref(),
                             ctx,
@@ -1902,16 +1941,23 @@ fn launch_remote_child(
     };
 
     let terminal_view_id = new_terminal_view.id();
+    // Under the unified stack, remote children are not persisted to the local DB
+    // (they are re-seeded from the server on restore). Under the flag-off path,
+    // children must be persisted so they survive restarts.
+    let is_remote = crate::features::FeatureFlag::OrchestrationUnifiedStack.is_enabled();
     let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
         let id = history_model.start_new_child_conversation(
             terminal_view_id,
             request_name.clone(),
             request.parent_conversation_id,
             Some(orchestration_harness),
+            is_remote,
             ctx,
         );
-        // Mark as remote so the parent's LocalAgentTaskSyncModel skips status
-        // reporting — the remote worker handles it.
+        // `start_new_child_conversation` already marked this remote above
+        // (before its first persist); this call is now a no-op, kept so the
+        // parent's LocalAgentTaskSyncModel skipping status reporting for
+        // remote children stays obviously correct at a glance.
         history_model.mark_conversation_as_remote_child(id, ctx);
         id
     });
@@ -1925,11 +1971,8 @@ fn launch_remote_child(
         Err(error) => {
             let error_message = error.user_message();
             report_error!(
-                "Failed to prepare remote child launch",
-                extra: {
-                    "conversation_id" => ?conversation_id,
-                    "error" => %error_message
-                }
+                anyhow::Error::new(error).context("Failed to prepare remote child launch"),
+                extra: { "conversation_id" => ?conversation_id }
             );
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
                 history_model.update_conversation_status_with_error(

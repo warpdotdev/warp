@@ -3,10 +3,7 @@ use warp_core::send_telemetry_from_ctx;
 use warpui_core::{Entity, ModelContext};
 
 use crate::OnboardingIntention;
-use crate::slides::{
-    AgentAutonomy, AgentDevelopmentSettings, OfferVariant, OnboardingModelInfo,
-    ProjectOnboardingSettings,
-};
+use crate::slides::{AgentAutonomy, AgentDevelopmentSettings, OfferVariant, OnboardingModelInfo};
 use crate::telemetry::OnboardingEvent;
 
 /// UI customization settings chosen during the "Customize your UI" onboarding slide.
@@ -73,14 +70,12 @@ pub enum SelectedSettings {
     },
     AgentDrivenDevelopment {
         agent_settings: AgentDevelopmentSettings,
-        project_settings: ProjectOnboardingSettings,
         ui_customization: Option<UICustomizationSettings>,
     },
 }
 
 impl SelectedSettings {
     pub fn is_ai_enabled(&self) -> bool {
-        use warp_core::features::FeatureFlag;
         match self {
             // Agent-driven development always means "I want AI" (including the
             // bring-your-own-agents `disable_oz` path). This reflects intent and
@@ -88,12 +83,7 @@ impl SelectedSettings {
             // actually enabled is applied later based on whether the user has an
             // account (see `apply_onboarding_settings`).
             SelectedSettings::AgentDrivenDevelopment { .. } => true,
-            SelectedSettings::Terminal { .. } => {
-                // With old onboarding (no OpenWarpNewSettingsModes), Terminal
-                // intent still leaves AI enabled; with new onboarding,
-                // Terminal intent explicitly disables AI.
-                !FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-            }
+            SelectedSettings::Terminal { .. } => false,
         }
     }
 
@@ -124,7 +114,6 @@ pub(crate) enum OnboardingStep {
     Agent,
     AiAccess,
     ThirdParty,
-    Project,
     ThemePicker,
     PostAuthOffer,
 }
@@ -163,114 +152,6 @@ impl std::fmt::Display for AiAccessChoice {
     }
 }
 
-/// A one-time add-on credit pack offered on the "Choose how to start" slide.
-///
-/// Display-only data: the app crate builds these from the server's pricing
-/// info and the viewer's add-on credits purchase policy (which carries the
-/// free-plan premium), so the onboarding crate never hardcodes prices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CreditPackOption {
-    /// The number of AI credits the pack grants.
-    pub credits: i32,
-    /// The final purchase price in USD cents, with any plan premium already
-    /// applied — i.e. exactly what the user is charged.
-    pub price_usd_cents: i32,
-    /// Whole-percent savings on the per-credit rate versus the smallest pack.
-    /// Zero for the smallest pack (and whenever savings can't be computed).
-    pub savings_percent: u32,
-}
-
-impl CreditPackOption {
-    /// `"$12"` for a whole-dollar price, `"$12.50"` otherwise.
-    pub fn price_label(&self) -> String {
-        if self.price_usd_cents % 100 == 0 {
-            format!("${}", self.price_usd_cents / 100)
-        } else {
-            format!("${:.2}", self.price_usd_cents as f64 / 100.)
-        }
-    }
-
-    /// The credit count, thousands-separated so large packs stay readable
-    /// (`"6,500"`). The unit comes from the surrounding card, matching how the
-    /// Billing & Usage denominations are labelled.
-    pub fn credits_label(&self) -> String {
-        let digits = self.credits.abs().to_string();
-        let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
-        for (index, digit) in digits.chars().enumerate() {
-            if index > 0 && (digits.len() - index).is_multiple_of(3) {
-                grouped.push(',');
-            }
-            grouped.push(digit);
-        }
-        if self.credits < 0 {
-            grouped.insert(0, '-');
-        }
-        grouped
-    }
-}
-
-/// Progress of a one-time credit-pack purchase started from the offer slide.
-///
-/// A purchase without a saved payment method (the common case for a brand-new
-/// account) hands off to browser checkout; onboarding then waits for the
-/// credits to actually land rather than trusting the browser round-trip, so
-/// abandoning checkout leaves the user on this slide.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum CreditPurchaseState {
-    #[default]
-    Idle,
-    /// The purchase mutation is in flight.
-    Purchasing,
-    /// Checkout was opened in the browser; waiting for credits to be available.
-    AwaitingCheckout,
-    /// The purchase failed. The user stays on the slide and can retry.
-    Failed,
-}
-
-impl CreditPurchaseState {
-    /// Whether a purchase is underway, so the primary action should not start
-    /// another one.
-    pub fn is_in_flight(self) -> bool {
-        matches!(
-            self,
-            CreditPurchaseState::Purchasing | CreditPurchaseState::AwaitingCheckout
-        )
-    }
-}
-
-/// The user's arm in the server-assigned "Choose how to start" option-count
-/// experiment (REV-1939). The arm is snapshotted onto onboarding state just
-/// before the post-auth offer is shown and then frozen for that exposure.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ChooseHowToStartExperimentArm {
-    /// No arm assigned (ineligible user, no server state, or ambiguous state).
-    /// Renders the safe two-option layout.
-    #[default]
-    Unassigned,
-    /// The two-option control: no ad-hoc credit-pack purchase UI.
-    Control,
-    /// The experiment: the credit-pack purchase options are shown up front.
-    Experiment,
-}
-
-impl ChooseHowToStartExperimentArm {
-    /// The stable `experiment_arm` value reported on onboarding telemetry.
-    pub fn telemetry_value(self) -> &'static str {
-        match self {
-            ChooseHowToStartExperimentArm::Unassigned => "unassigned",
-            ChooseHowToStartExperimentArm::Control => "control",
-            ChooseHowToStartExperimentArm::Experiment => "experiment",
-        }
-    }
-
-    /// Whether this arm surfaces the ad-hoc credit-pack purchase UI. Only the
-    /// experiment arm does; control and unassigned users get the two-option
-    /// layout even when packs are loaded.
-    pub fn shows_credit_packs(self) -> bool {
-        matches!(self, ChooseHowToStartExperimentArm::Experiment)
-    }
-}
-
 /// Which opt-out entry point opened the "Are you sure you don't want AI?" modal.
 /// Determines where "Give me AI features" routes the user on cancel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -288,14 +169,8 @@ pub(crate) enum OnboardingStateEvent {
     UpgradeRequested,
     AuthStateChanged,
     NoAiConfirmationChanged,
-    /// The user asked to buy the selected credit pack. The app crate owns the
-    /// purchase mutation, so it listens for this and calls the server.
-    CreditPurchaseRequested {
-        credits: i32,
-    },
-    /// The purchased credits landed on the account, so onboarding may advance
-    /// past the offer slide.
-    CreditPurchaseCompleted,
+    /// The user can now use AI, so onboarding may advance past the offer slide.
+    AiSellOfferSatisfied,
 }
 
 #[derive(Clone, Debug)]
@@ -303,13 +178,10 @@ pub(crate) struct OnboardingStateModel {
     step: OnboardingStep,
     intention: OnboardingIntention,
     agent_settings: AgentDevelopmentSettings,
-    project_settings: ProjectOnboardingSettings,
     ui_customization: UICustomizationSettings,
     models: Vec<OnboardingModelInfo>,
     /// Whether the workspace enforces autonomy settings, hiding the user selection UI.
     workspace_enforces_autonomy: bool,
-    /// Whether the AgentView feature flag is enabled.
-    agent_modality_enabled: bool,
     /// The AI setup selected on the "Choose your AI setup" slide.
     ai_setup_choice: AiSetupChoice,
     /// The access method selected on the "Choose how to access AI" slide.
@@ -321,18 +193,7 @@ pub(crate) struct OnboardingStateModel {
     /// When set, the "Are you sure you don't want AI?" confirmation modal is
     /// shown; the value records which entry point triggered it.
     no_ai_confirmation: Option<NoAiConfirmationSource>,
-    /// The ad-hoc credit packs offered on the "Choose how to start" slide,
-    /// supplied by the app crate from server pricing. Empty until pricing has
-    /// been fetched, which hides the buy-credits option entirely.
-    credit_pack_options: Vec<CreditPackOption>,
     pricing_promotion_message: Option<String>,
-    /// Index into `credit_pack_options` of the pack the user has selected.
-    selected_credit_pack_index: usize,
-    /// Progress of a credit purchase started from the offer slide.
-    credit_purchase_state: CreditPurchaseState,
-    /// The server-assigned "Choose how to start" experiment arm, snapshotted
-    /// just before the post-auth offer is shown.
-    choose_how_to_start_experiment_arm: ChooseHowToStartExperimentArm,
 }
 
 impl OnboardingStateModel {
@@ -341,28 +202,21 @@ impl OnboardingStateModel {
         models: Vec<OnboardingModelInfo>,
         default_model_id: LLMId,
         workspace_enforces_autonomy: bool,
-        agent_modality_enabled: bool,
         auth_state: OnboardingAuthState,
     ) -> Self {
         Self {
             step: OnboardingStep::Intro,
             intention: OnboardingIntention::AgentDrivenDevelopment,
             agent_settings: AgentDevelopmentSettings::new(default_model_id),
-            project_settings: ProjectOnboardingSettings::default(),
             ui_customization: UICustomizationSettings::agent_defaults(),
             models,
             workspace_enforces_autonomy,
-            agent_modality_enabled,
             ai_setup_choice: AiSetupChoice::default(),
             ai_access_choice: AiAccessChoice::default(),
             auth_state,
             offer_variant: None,
             no_ai_confirmation: None,
-            credit_pack_options: Vec::new(),
             pricing_promotion_message: None,
-            selected_credit_pack_index: 0,
-            credit_purchase_state: CreditPurchaseState::default(),
-            choose_how_to_start_experiment_arm: ChooseHowToStartExperimentArm::default(),
         }
     }
 
@@ -372,38 +226,6 @@ impl OnboardingStateModel {
 
     pub(crate) fn offer_variant(&self) -> Option<OfferVariant> {
         self.offer_variant
-    }
-
-    pub(crate) fn choose_how_to_start_experiment_arm(&self) -> ChooseHowToStartExperimentArm {
-        self.choose_how_to_start_experiment_arm
-    }
-
-    /// Snapshots the server-assigned experiment arm onto onboarding state.
-    /// Idempotent: a repeat of the current arm is a no-op so a late server
-    /// refresh can't churn the view mid-exposure.
-    pub(crate) fn set_choose_how_to_start_experiment_arm(
-        &mut self,
-        arm: ChooseHowToStartExperimentArm,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.choose_how_to_start_experiment_arm == arm {
-            return;
-        }
-        self.choose_how_to_start_experiment_arm = arm;
-        ctx.notify();
-    }
-
-    /// The `experiment_arm` to report on this offer's telemetry, or `None` when
-    /// the current offer isn't the arm-experiment surface (so unrelated events
-    /// never gain a spurious `experiment_arm` key).
-    ///
-    /// `offer_variant` is sticky once set, so the step is checked too: backing
-    /// out of the offer (`PostAuthOffer` → `ThemePicker`) must not leak the arm
-    /// onto the non-offer slide views that follow (spec invariant #6).
-    pub(crate) fn offer_experiment_arm(&self) -> Option<&'static str> {
-        (self.step == OnboardingStep::PostAuthOffer
-            && matches!(self.offer_variant, Some(OfferVariant::ChooseHowToStart)))
-        .then(|| self.choose_how_to_start_experiment_arm.telemetry_value())
     }
 
     pub(crate) fn show_post_auth_offer(
@@ -431,14 +253,7 @@ impl OnboardingStateModel {
     }
 
     pub(crate) fn settings(&self) -> SelectedSettings {
-        use warp_core::features::FeatureFlag;
-        let ui_customization = if FeatureFlag::AccountFirstOnboarding.is_enabled()
-            || FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            Some(self.ui_customization.clone())
-        } else {
-            None
-        };
+        let ui_customization = Some(self.ui_customization.clone());
 
         match &self.intention {
             OnboardingIntention::Terminal => SelectedSettings::Terminal {
@@ -461,7 +276,6 @@ impl OnboardingStateModel {
                         // Agent intention always has notifications enabled (no toggle shown).
                         show_agent_notifications: true,
                     },
-                    project_settings: self.project_settings.clone(),
                     ui_customization,
                 }
             }
@@ -480,24 +294,8 @@ impl OnboardingStateModel {
         &self.agent_settings
     }
 
-    pub(crate) fn project_settings(&self) -> &ProjectOnboardingSettings {
-        &self.project_settings
-    }
-
     pub(crate) fn workspace_enforces_autonomy(&self) -> bool {
         self.workspace_enforces_autonomy
-    }
-
-    pub(crate) fn agent_modality_enabled(&self) -> bool {
-        self.agent_modality_enabled
-    }
-
-    /// Whether the DES-816 V3 onboarding flow (the "Choose your AI setup" fork on the
-    /// AI-first path) is active. True for all users when the new settings-modes flow
-    /// is enabled, since new users always enter a world where Warp-provided AI is not free.
-    pub(crate) fn ai_setup_flow_active(&self) -> bool {
-        use warp_core::features::FeatureFlag;
-        FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
     }
 
     pub(crate) fn ai_setup_choice(&self) -> AiSetupChoice {
@@ -547,12 +345,6 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    /// The ad-hoc credit packs to offer, in the order the server listed them
-    /// (smallest first). Empty until the app supplies server pricing.
-    pub(crate) fn credit_pack_options(&self) -> &[CreditPackOption] {
-        &self.credit_pack_options
-    }
-
     pub(crate) fn pricing_promotion_message(&self) -> Option<&str> {
         self.pricing_promotion_message.as_deref()
     }
@@ -569,93 +361,10 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    /// Replaces the offered credit packs. Keeps the user's selection when it
-    /// still points at a pack, otherwise falls back to the first one.
-    pub(crate) fn set_credit_pack_options(
-        &mut self,
-        options: Vec<CreditPackOption>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if self.credit_pack_options == options {
-            return;
-        }
-        self.credit_pack_options = options;
-        if self.selected_credit_pack_index >= self.credit_pack_options.len() {
-            self.selected_credit_pack_index = 0;
-        }
-        ctx.notify();
-    }
-
-    pub(crate) fn selected_credit_pack_index(&self) -> usize {
-        self.selected_credit_pack_index
-    }
-
-    pub(crate) fn selected_credit_pack(&self) -> Option<CreditPackOption> {
-        self.credit_pack_options
-            .get(self.selected_credit_pack_index)
-            .copied()
-    }
-
-    /// Selects the credit pack at `index`. Ignored while a purchase is in
-    /// flight so the pack being paid for can't change underneath it.
-    pub(crate) fn select_credit_pack(&mut self, index: usize, ctx: &mut ModelContext<Self>) {
-        if self.credit_purchase_state.is_in_flight()
-            || index >= self.credit_pack_options.len()
-            || self.selected_credit_pack_index == index
-        {
-            return;
-        }
-        let credits = self.credit_pack_options[index].credits;
-        send_telemetry_from_ctx!(
-            OnboardingEvent::SettingChanged {
-                setting: "credit_pack".to_string(),
-                value: credits.to_string(),
-            },
-            ctx
-        );
-        self.selected_credit_pack_index = index;
-        ctx.notify();
-    }
-
-    pub(crate) fn credit_purchase_state(&self) -> CreditPurchaseState {
-        self.credit_purchase_state
-    }
-
-    /// Starts buying the selected credit pack. The app crate owns the purchase
-    /// mutation, so this only moves to `Purchasing` and asks for the purchase;
-    /// the outcome comes back via [`Self::on_credit_checkout_opened`],
-    /// [`Self::on_credit_purchase_completed`], or
-    /// [`Self::on_credit_purchase_failed`].
-    pub(crate) fn request_credit_purchase(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.credit_purchase_state.is_in_flight() {
-            return;
-        }
-        let Some(pack) = self.selected_credit_pack() else {
-            return;
-        };
-        self.credit_purchase_state = CreditPurchaseState::Purchasing;
-        ctx.emit(OnboardingStateEvent::CreditPurchaseRequested {
-            credits: pack.credits,
-        });
-        ctx.notify();
-    }
-
-    /// The purchase needs browser checkout (no saved payment method).
-    /// Onboarding stays on this slide until credits are available.
-    pub(crate) fn on_credit_checkout_opened(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.credit_purchase_state != CreditPurchaseState::Purchasing {
-            return;
-        }
-        self.credit_purchase_state = CreditPurchaseState::AwaitingCheckout;
-        ctx.notify();
-    }
-
     /// Reports whether the user can make an AI request. The AI-sell offer
     /// exists to get the user AI usage, so observing that they now have it is
-    /// the whole completion condition — a plan or a one-time pack, bought in
-    /// the client or on the web. Onboarding deliberately does not track which
-    /// purchase landed, so a user who leaves through one call to action and
-    /// buys through another is still let through.
+    /// the whole completion condition — a plan or one-time credits, bought
+    /// through any call to action.
     pub(crate) fn on_credit_availability_observed(
         &mut self,
         available: bool,
@@ -685,48 +394,12 @@ impl OnboardingStateModel {
     /// user has made their choice yet.
     fn is_showing_ai_sell_offer(&self) -> bool {
         self.step == OnboardingStep::PostAuthOffer
-            && self
-                .offer_variant
-                .is_some_and(OfferVariant::supports_credit_packs)
+            && self.offer_variant.is_some_and(OfferVariant::sells_ai_usage)
     }
 
-    /// The credits landed — either charged synchronously or granted after the
-    /// user finished browser checkout. Advances past the offer slide.
-    pub(crate) fn on_credit_purchase_completed(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.credit_purchase_state.is_in_flight() {
-            return;
-        }
-        self.finish_ai_sell_offer(ctx);
-    }
-
-    /// Clears any in-flight purchase and reports that the user can now use AI,
-    /// so onboarding moves past the offer.
+    /// Reports that the user can now use AI, so onboarding moves past the offer.
     fn finish_ai_sell_offer(&mut self, ctx: &mut ModelContext<Self>) {
-        self.credit_purchase_state = CreditPurchaseState::Idle;
-        ctx.emit(OnboardingStateEvent::CreditPurchaseCompleted);
-        ctx.notify();
-    }
-
-    /// The purchase could not be started or was rejected. The user keeps their
-    /// place on the slide and can retry or choose another option.
-    pub(crate) fn on_credit_purchase_failed(&mut self, ctx: &mut ModelContext<Self>) {
-        if !self.credit_purchase_state.is_in_flight() {
-            return;
-        }
-        self.credit_purchase_state = CreditPurchaseState::Failed;
-        ctx.notify();
-    }
-
-    /// Drops a checkout that is only waiting for the browser round-trip back to
-    /// `Idle` so a changed selection can start a fresh purchase. Called when the
-    /// user changes their offer selection: an abandoned or backgrounded checkout
-    /// must not trap them on "Waiting for checkout\u{2026}". A mutation still in
-    /// flight (`Purchasing`) is deliberately left untouched.
-    pub(crate) fn reset_pending_checkout(&mut self, ctx: &mut ModelContext<Self>) {
-        if self.credit_purchase_state != CreditPurchaseState::AwaitingCheckout {
-            return;
-        }
-        self.credit_purchase_state = CreditPurchaseState::Idle;
+        ctx.emit(OnboardingStateEvent::AiSellOfferSatisfied);
         ctx.notify();
     }
 
@@ -1034,8 +707,7 @@ impl OnboardingStateModel {
         use warp_core::features::FeatureFlag;
 
         // If the user is past the agent slide, don't change the agent model from underneath them.
-        // When the new settings modes flag is on, ThemePicker comes after the agent slides
-        // so it must also be guarded.
+        // ThemePicker comes after the agent slides, so it must also be guarded.
         let is_past_agent_slide = if FeatureFlag::AccountFirstOnboarding.is_enabled() {
             matches!(
                 self.step,
@@ -1043,17 +715,12 @@ impl OnboardingStateModel {
                     | OnboardingStep::ThemePicker
                     | OnboardingStep::PostAuthOffer
             )
-        } else if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+        } else {
             matches!(
                 self.step,
                 OnboardingStep::ThirdParty
                     | OnboardingStep::ThemePicker
                     | OnboardingStep::PostAuthOffer
-            )
-        } else {
-            matches!(
-                self.step,
-                OnboardingStep::Project | OnboardingStep::PostAuthOffer
             )
         };
         if is_past_agent_slide {
@@ -1088,40 +755,6 @@ impl OnboardingStateModel {
         ctx.notify();
     }
 
-    pub(crate) fn set_project_selected_local_folder(
-        &mut self,
-        path: Option<String>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if path.is_some() {
-            send_telemetry_from_ctx!(OnboardingEvent::FolderSelected, ctx);
-        }
-        self.project_settings = ProjectOnboardingSettings::from_path(path);
-        ctx.notify();
-    }
-
-    pub(crate) fn toggle_project_initialize_projects_automatically(
-        &mut self,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if let ProjectOnboardingSettings::Project {
-            initialize_projects_automatically,
-            ..
-        } = &mut self.project_settings
-        {
-            let new_value = !*initialize_projects_automatically;
-            send_telemetry_from_ctx!(
-                OnboardingEvent::SettingChanged {
-                    setting: "initialize_project".to_string(),
-                    value: new_value.to_string(),
-                },
-                ctx
-            );
-            *initialize_projects_automatically = new_value;
-            ctx.notify();
-        }
-    }
-
     fn send_completion_telemetry(&self, ctx: &mut ModelContext<Self>) {
         if warp_core::features::FeatureFlag::AccountFirstOnboarding.is_enabled() {
             send_telemetry_from_ctx!(
@@ -1146,17 +779,12 @@ impl OnboardingStateModel {
             ),
         };
 
-        let has_project_path = matches!(
-            self.project_settings,
-            ProjectOnboardingSettings::Project { .. }
-        );
-
         send_telemetry_from_ctx!(
             OnboardingEvent::OnboardingSlidesCompleted {
                 intention,
                 model,
                 autonomy,
-                has_project_path,
+                has_project_path: false,
                 ai_access,
             },
             ctx
@@ -1175,8 +803,6 @@ impl OnboardingStateModel {
     pub(crate) fn back(&mut self, ctx: &mut ModelContext<Self>) {
         use warp_core::features::FeatureFlag;
         let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
-        let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-        let ai_setup_flow = self.ai_setup_flow_active();
         let agent_intention = matches!(self.intention, OnboardingIntention::AgentDrivenDevelopment);
 
         let prev = if account_first {
@@ -1189,16 +815,15 @@ impl OnboardingStateModel {
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
                 | OnboardingStep::AiAccess
-                | OnboardingStep::ThirdParty
-                | OnboardingStep::Project => Some(OnboardingStep::Intro),
+                | OnboardingStep::ThirdParty => Some(OnboardingStep::Intro),
             }
-        } else if theme_picker_last {
+        } else {
             match self.step {
                 OnboardingStep::Intro => None,
                 OnboardingStep::Intention => Some(OnboardingStep::Intro),
                 OnboardingStep::AiSetup => Some(OnboardingStep::Intention),
                 OnboardingStep::Customize => {
-                    if ai_setup_flow && agent_intention {
+                    if agent_intention {
                         match self.ai_setup_choice {
                             AiSetupChoice::WarpAgent => Some(OnboardingStep::AiAccess),
                             AiSetupChoice::ThirdParty => Some(OnboardingStep::ThirdParty),
@@ -1208,30 +833,9 @@ impl OnboardingStateModel {
                     }
                 }
                 OnboardingStep::AiAccess => Some(OnboardingStep::Agent),
-                OnboardingStep::Agent => {
-                    if ai_setup_flow {
-                        Some(OnboardingStep::AiSetup)
-                    } else {
-                        Some(OnboardingStep::Customize)
-                    }
-                }
+                OnboardingStep::Agent => Some(OnboardingStep::AiSetup),
                 OnboardingStep::ThirdParty => Some(OnboardingStep::AiSetup),
-                OnboardingStep::Project => Some(OnboardingStep::ThirdParty),
                 OnboardingStep::ThemePicker => Some(OnboardingStep::Customize),
-                OnboardingStep::PostAuthOffer => None,
-            }
-        } else {
-            match self.step {
-                OnboardingStep::Intro => None,
-                OnboardingStep::ThemePicker => Some(OnboardingStep::Intro),
-                OnboardingStep::Intention => Some(OnboardingStep::ThemePicker),
-                // Unreachable in the legacy flow.
-                OnboardingStep::AiSetup => None,
-                OnboardingStep::AiAccess => None,
-                OnboardingStep::Customize => None,
-                OnboardingStep::ThirdParty => None,
-                OnboardingStep::Agent => Some(OnboardingStep::Intention),
-                OnboardingStep::Project => Some(OnboardingStep::Agent),
                 OnboardingStep::PostAuthOffer => None,
             }
         };
@@ -1248,15 +852,10 @@ impl OnboardingStateModel {
     pub(crate) fn next(&mut self, ctx: &mut ModelContext<Self>) {
         use warp_core::features::FeatureFlag;
         let account_first = FeatureFlag::AccountFirstOnboarding.is_enabled();
-        let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
-        let is_last_step = if account_first || theme_picker_last {
-            matches!(
-                self.step,
-                OnboardingStep::ThemePicker | OnboardingStep::PostAuthOffer
-            )
-        } else {
-            matches!(self.step, OnboardingStep::Project)
-        };
+        let is_last_step = matches!(
+            self.step,
+            OnboardingStep::ThemePicker | OnboardingStep::PostAuthOffer
+        );
         if !is_last_step {
             send_telemetry_from_ctx!(OnboardingEvent::SlideNavigatedNext, ctx);
         }
@@ -1277,72 +876,32 @@ impl OnboardingStateModel {
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
                 | OnboardingStep::AiAccess
-                | OnboardingStep::ThirdParty
-                | OnboardingStep::Project => self.set_step(OnboardingStep::Intro, ctx),
+                | OnboardingStep::ThirdParty => self.set_step(OnboardingStep::Intro, ctx),
             }
-        } else if theme_picker_last {
-            let ai_setup_flow = self.ai_setup_flow_active();
+        } else {
             match self.step {
                 OnboardingStep::Intro => self.set_step(OnboardingStep::Intention, ctx),
                 OnboardingStep::Intention => match self.intention {
                     OnboardingIntention::Terminal => self.set_step(OnboardingStep::Customize, ctx),
                     OnboardingIntention::AgentDrivenDevelopment => {
-                        if ai_setup_flow {
-                            self.set_step(OnboardingStep::AiSetup, ctx)
-                        } else {
-                            self.set_step(OnboardingStep::Customize, ctx)
-                        }
+                        self.set_step(OnboardingStep::AiSetup, ctx)
                     }
                 },
                 OnboardingStep::AiSetup => match self.ai_setup_choice {
                     AiSetupChoice::WarpAgent => self.set_step(OnboardingStep::Agent, ctx),
                     AiSetupChoice::ThirdParty => self.set_step(OnboardingStep::ThirdParty, ctx),
                 },
-                OnboardingStep::Customize => match self.intention {
-                    OnboardingIntention::Terminal => {
-                        self.set_step(OnboardingStep::ThemePicker, ctx)
-                    }
-                    OnboardingIntention::AgentDrivenDevelopment => {
-                        if ai_setup_flow {
-                            self.set_step(OnboardingStep::ThemePicker, ctx)
-                        } else {
-                            self.set_step(OnboardingStep::Agent, ctx)
-                        }
-                    }
-                },
-                OnboardingStep::Agent => {
-                    if ai_setup_flow {
-                        self.set_step(OnboardingStep::AiAccess, ctx)
-                    } else {
-                        self.set_step(OnboardingStep::ThirdParty, ctx)
-                    }
-                }
+                OnboardingStep::Customize => self.set_step(OnboardingStep::ThemePicker, ctx),
+                OnboardingStep::Agent => self.set_step(OnboardingStep::AiAccess, ctx),
                 OnboardingStep::AiAccess => self.set_step(OnboardingStep::Customize, ctx),
                 OnboardingStep::ThirdParty => {
-                    if ai_setup_flow
-                        && matches!(self.intention, OnboardingIntention::AgentDrivenDevelopment)
-                    {
+                    if matches!(self.intention, OnboardingIntention::AgentDrivenDevelopment) {
                         self.set_step(OnboardingStep::Customize, ctx)
                     } else {
                         self.set_step(OnboardingStep::ThemePicker, ctx)
                     }
                 }
-                OnboardingStep::Project => self.set_step(OnboardingStep::ThemePicker, ctx),
                 OnboardingStep::ThemePicker => {}
-                OnboardingStep::PostAuthOffer => {}
-            }
-        } else {
-            match self.step {
-                OnboardingStep::Intro => self.set_step(OnboardingStep::ThemePicker, ctx),
-                OnboardingStep::ThemePicker => self.set_step(OnboardingStep::Intention, ctx),
-                OnboardingStep::Intention => self.set_step(OnboardingStep::Agent, ctx),
-                // Unreachable in the legacy flow.
-                OnboardingStep::AiSetup => {}
-                OnboardingStep::AiAccess => {}
-                OnboardingStep::Customize => {}
-                OnboardingStep::ThirdParty => {}
-                OnboardingStep::Agent => self.set_step(OnboardingStep::Project, ctx),
-                OnboardingStep::Project => {}
                 OnboardingStep::PostAuthOffer => {}
             }
         }
@@ -1375,12 +934,10 @@ impl OnboardingStateModel {
             OnboardingStep::Customize => "customize",
             OnboardingStep::Agent => "agent",
             OnboardingStep::ThirdParty => "third_party",
-            OnboardingStep::Project => "project",
         };
         send_telemetry_from_ctx!(
             OnboardingEvent::SlideViewed {
                 slide_name: slide_name.to_string(),
-                experiment_arm: self.offer_experiment_arm().map(str::to_string),
             },
             ctx
         );
@@ -1400,8 +957,7 @@ impl OnboardingStateModel {
                 | OnboardingStep::AiSetup
                 | OnboardingStep::Agent
                 | OnboardingStep::AiAccess
-                | OnboardingStep::ThirdParty
-                | OnboardingStep::Project => (0, 3),
+                | OnboardingStep::ThirdParty => (0, 3),
                 OnboardingStep::Customize => (0, 3),
                 OnboardingStep::ThemePicker => (1, 3),
                 OnboardingStep::PostAuthOffer => (0, 0),
@@ -1409,20 +965,6 @@ impl OnboardingStateModel {
         }
 
         let is_terminal = matches!(self.intention, OnboardingIntention::Terminal);
-        if !FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            // Legacy flow: ThemePicker → Intention → Agent → Project.
-            return match self.step {
-                OnboardingStep::Intro | OnboardingStep::ThemePicker => (0, 4),
-                OnboardingStep::Intention | OnboardingStep::AiSetup | OnboardingStep::Customize => {
-                    (1, 4)
-                }
-                OnboardingStep::Agent | OnboardingStep::ThirdParty | OnboardingStep::AiAccess => {
-                    (2, 4)
-                }
-                OnboardingStep::Project => (3, 4),
-                OnboardingStep::PostAuthOffer => (0, 0),
-            };
-        }
 
         // The Warp Agent path has the extra "Choose how to access AI" step, so it
         // is one longer than the third-party-agent path.
@@ -1450,8 +992,6 @@ impl OnboardingStateModel {
                 }
             }
             OnboardingStep::ThirdParty => 2,
-            // Unreachable in the new flow; keep the legacy position.
-            OnboardingStep::Project => 3,
             OnboardingStep::ThemePicker => step_count - 1,
             OnboardingStep::PostAuthOffer => 0,
         };
@@ -1468,7 +1008,6 @@ impl OnboardingStateModel {
             OnboardingStep::Agent => "agent",
             OnboardingStep::AiAccess => "ai_access",
             OnboardingStep::ThirdParty => "third_party",
-            OnboardingStep::Project => "project",
             OnboardingStep::PostAuthOffer => self
                 .offer_variant
                 .expect("offer variant is selected before entering the post-auth offer")
@@ -1479,7 +1018,6 @@ impl OnboardingStateModel {
                 slide_name: slide_name.to_string(),
                 action: action.to_string(),
                 account_class: None,
-                experiment_arm: self.offer_experiment_arm().map(str::to_string),
             },
             ctx
         );

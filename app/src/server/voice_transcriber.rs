@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use warpui::{Entity, SingletonEntity};
 
 use super::server_api::{ServerApi, TranscribeError};
+use super::team_scope::RequestTeamScope;
 use crate::ai::voice::transcribe::{Provider, TranscribeRequest};
 use crate::voice::transcriber::Transcriber;
 
@@ -24,6 +25,7 @@ impl Transcriber for ServerVoiceTranscriber {
         &self,
         wav_base64: String,
         language: Option<String>,
+        team_scope: RequestTeamScope,
     ) -> Result<String, TranscribeError> {
         let request = TranscribeRequest {
             provider: Provider::Wispr,
@@ -31,7 +33,7 @@ impl Transcriber for ServerVoiceTranscriber {
             language,
             ..Default::default()
         };
-        let response = self.server_api.transcribe(&request).await;
+        let response = self.server_api.transcribe(&request, team_scope).await;
         match response {
             Ok(response) => Ok(response.text),
             Err(e) => Err(e),

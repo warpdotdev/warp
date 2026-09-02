@@ -345,6 +345,11 @@ pub enum FeatureFlag {
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
 
+    /// Names the model doing the work in the warping indicator (e.g. "Warping with
+    /// Claude Sonnet 4.5.") once the server reports which model a response is
+    /// running on, rather than only naming it when the model is a fallback.
+    WarpingModelName,
+
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
 
@@ -718,6 +723,12 @@ pub enum FeatureFlag {
     /// fails gracefully instead of presenting a card in a hidden pane.
     MultiLevelOrchestration,
 
+    /// Gates the unified orchestration child-tracking stack: a single
+    /// `OrchestrationChildTracker` as the sole entry point for child state,
+    /// one `include_self` ancestor SSE per parent family, and a single
+    /// `is_remote_child` placeholder flavor for both owner and viewer.
+    OrchestrationUnifiedStack,
+
     /// Shows a pending user query indicator during summarization when a follow-up
     /// prompt is queued via `/fork-and-compact` or `/compact-and`.
     PendingUserQueryIndicator,
@@ -748,10 +759,6 @@ pub enum FeatureFlag {
     /// Enables associating a tab color with a directory so tabs automatically
     /// adopt the configured color when their working directory matches.
     DirectoryTabColors,
-
-    /// Enables the new settings to control visibility of Warp Drive, Code Review Panel,
-    /// and Project Explorer & Global Search features.
-    OpenWarpNewSettingsModes,
 
     /// Enables vertical tab layout as an alternative to the horizontal tab bar.
     VerticalTabs,
@@ -943,12 +950,43 @@ pub enum FeatureFlag {
     /// setup or API key required.
     FactoryMcp,
 
-    /// Gates the TUI cost footer's credits⇄dollars toggle. When enabled (dogfood
-    /// / staging and local/dev builds), the footer usage entry follows the
-    /// persisted `agents.usage_display_mode` setting and is click-to-toggleable
-    /// between credits and dollars. When disabled (prod/stable), the footer
-    /// falls back to a static, non-interactive credits total.
-    TuiCostTransparency,
+    /// Gates client-side display of the real dollar cost (from `RequestCost.cost_in_cents`)
+    /// alongside credits in the GUI footer and TUI. Mirrors the server-side
+    /// `PricingTransparencyEnabled` flag in warp-server, but is a fully independent
+    /// flag — the two do not sync automatically. Consolidated from the former
+    /// `TuiCostTransparency` flag: when enabled (dogfood/staging and local/dev
+    /// builds), the TUI footer usage entry follows the persisted
+    /// `agents.usage_display_mode` setting and is click-to-toggleable between
+    /// credits and dollars; when disabled (prod/stable), it falls back to a
+    /// static, non-interactive credits total. Will also gate the GUI footer's
+    /// dollar display once that's built.
+    PricingTransparency,
+
+    /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
+    /// rather than only uploading a workspace snapshot once at end-of-run.
+    /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
+    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    PeriodicHandoffCheckpoints,
+
+    /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
+    /// path to a terminal with a working, rich-status-capable CLI agent
+    /// session (e.g. Claude Code). Arms a short grace window; if no further
+    /// plugin activity is seen, the session (and its ambient task) resolves
+    /// to `Cancelled`. Purely client-side status synthesis: the keystroke is
+    /// always forwarded unchanged and the harness process/sandbox are never
+    /// signaled or torn down.
+    CtrlCCancelsThirdPartyHarness,
+
+    /// Attaches process-tree liveness signals to long-running command
+    /// snapshots, giving the agent evidence that a silent command is still
+    /// doing work before it decides to cancel.
+    LrcActivitySignal,
+
+    /// Gates Ctrl+R / Command Search history ranking on match quality and usage priors (recency,
+    /// session, exit status) plus whitespace space-AND tokenization, instead of Skim's raw
+    /// fuzzy-match score against the whole query as a single pattern. Disabling this is a full
+    /// return to the pre-APP-5650 history search behavior, not an approximation of it.
+    HistorySearchRankingV2,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1018,18 +1056,22 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::MultiLevelOrchestration,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::WellKnownMcpIds,
-    FeatureFlag::FactoryMcp,
-    FeatureFlag::TuiCostTransparency,
+    FeatureFlag::PricingTransparency,
+    FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::WarpingModelName,
+    FeatureFlag::LrcActivitySignal,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::NativeShellCompletions,
+    FeatureFlag::HistorySearchRankingV2,
+];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1039,8 +1081,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::VideoRecording,
-    // Marked text is currently only supported on MacOS.
-    #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]

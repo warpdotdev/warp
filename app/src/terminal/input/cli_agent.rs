@@ -21,6 +21,7 @@ use crate::context_chips::spacing;
 use crate::editor::{EnterAction, EnterSettings, TextColors};
 use crate::features::FeatureFlag;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::should_right_click_paste;
 use crate::terminal::view::TerminalAction;
 
 impl Input {
@@ -44,7 +45,11 @@ impl Input {
         let input_editor_save_position_id = self.editor_save_position_id();
         let editor_element = SavePosition::new(
             EventHandler::new(input_box)
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, app, position, modifiers| {
+                    if should_right_click_paste(modifiers.shift, app) {
+                        ctx.dispatch_typed_action(TerminalAction::Paste);
+                        return DispatchEventResult::StopPropagation;
+                    }
                     let input_rect = ctx
                         .element_position_by_id(input_editor_save_position_id.clone())
                         .expect("input editor position id should be saved");

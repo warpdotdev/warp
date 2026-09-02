@@ -568,10 +568,15 @@ impl TuiView for TuiCloudRunView {
                     .finish(),
                 )
                 .child(
-                    TuiContainer::new(self.link.render(url, ctx, move |event_ctx, _| {
-                        event_ctx
-                            .dispatch_typed_action(TuiCloudRunAction::OpenUrl(click_url.clone()));
-                    }))
+                    TuiContainer::new(self.link.render(
+                        url,
+                        builder.muted_text_style(),
+                        move |event_ctx, _| {
+                            event_ctx.dispatch_typed_action(TuiCloudRunAction::OpenUrl(
+                                click_url.clone(),
+                            ));
+                        },
+                    ))
                     .with_padding_top(1)
                     .finish(),
                 );

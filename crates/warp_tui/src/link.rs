@@ -1,8 +1,8 @@
 use warpui_core::AppContext;
 use warpui_core::elements::MouseStateHandle;
-use warpui_core::elements::tui::{Modifier, TuiElement, TuiEventContext, TuiHoverable, TuiText};
-
-use crate::tui_builder::TuiUiBuilder;
+use warpui_core::elements::tui::{
+    Modifier, TuiElement, TuiEventContext, TuiHoverable, TuiStyle, TuiText,
+};
 
 /// Reusable link presentation with persistent hover state.
 #[derive(Clone, Default)]
@@ -15,11 +15,9 @@ impl TuiLink {
     pub(crate) fn render(
         &self,
         label: impl Into<String>,
-        app: &AppContext,
+        style: TuiStyle,
         on_open: impl FnMut(&mut TuiEventContext, &AppContext) + 'static,
     ) -> Box<dyn TuiElement> {
-        let builder = TuiUiBuilder::from_app(app);
-        let style = builder.muted_text_style();
         let is_hovered = self
             .hover_state
             .lock()

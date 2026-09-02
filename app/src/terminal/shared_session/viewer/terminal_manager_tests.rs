@@ -98,6 +98,7 @@ fn build_manager_with_registered_ovm(app: &mut App) -> (TerminalManager, Ambient
         outbound_handlers_registered: false,
         orchestration_viewer_model: Arc::new(FairMutex::new(Some(ovm_handle))),
         enable_orchestration_polling: true,
+        orchestration_child_conversation_id: None,
     };
     (manager, parent)
 }
@@ -242,7 +243,7 @@ fn handle_viewer_session_end_ignores_stale_ambient_end() {
         let model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
         let (wakeups_tx, _wakeups_rx) = async_channel::unbounded();
-        let (events_tx, _events_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded::<crate::terminal::event::Event>();
         let (pty_reads_tx, pty_reads_rx) = broadcast(8);
         let _inactive_pty_reads_rx = pty_reads_rx.deactivate();
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);
@@ -304,7 +305,7 @@ fn ending_ambient_session_refreshes_shared_session_link_surfaces() {
             });
 
         let (wakeups_tx, _wakeups_rx) = async_channel::unbounded();
-        let (events_tx, _events_rx) = async_channel::unbounded();
+        let (events_tx, _events_rx) = async_channel::unbounded::<crate::terminal::event::Event>();
         let (pty_reads_tx, pty_reads_rx) = broadcast(8);
         let _inactive_pty_reads_rx = pty_reads_rx.deactivate();
         let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);

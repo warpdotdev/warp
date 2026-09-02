@@ -1,5 +1,6 @@
 pub(in crate::pane_group) mod hydration;
-mod restoration;
+pub(crate) mod materialization;
+pub(in crate::pane_group) mod restoration;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -20,6 +21,7 @@ use crate::ai::blocklist::{
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::TerminalView;
 use crate::terminal::shared_session::IsSharedSessionCreator;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 pub(crate) struct HiddenChildAgentConversation {
     pub terminal_view: ViewHandle<TerminalView>,
@@ -88,6 +90,7 @@ fn start_new_child_conversation(
             name,
             parent_conversation_id,
             orchestration_harness,
+            false,
             ctx,
         )
     })
@@ -122,7 +125,10 @@ pub(crate) fn create_hidden_child_agent_conversation(
     let terminal_view_id = new_terminal_view.id();
     match group.terminal_view_from_pane_id(parent_pane_id, ctx) {
         Some(parent_terminal_view) => {
-            inherit_child_agent_settings(parent_terminal_view.id(), terminal_view_id, ctx);
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+            );
+            inherit_child_agent_settings(&scope, parent_terminal_view.id(), terminal_view_id, ctx);
         }
         _ => {
             log::warn!(

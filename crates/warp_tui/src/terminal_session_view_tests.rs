@@ -7,6 +7,7 @@ use ai::LLMProvider;
 use ai::api_keys::ApiKeyManager;
 use chrono::NaiveDate;
 use instant::Instant;
+use string_offset::CharOffset;
 use tempfile::TempDir;
 use warp::appearance::Appearance;
 #[cfg(feature = "voice_input")]
@@ -24,12 +25,14 @@ use warp::tui_export::{
     AskUserQuestionType, BlockPadding, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
     ConversationStatus, ConversationUsageTotals, Harness, InputTypeAutoDetectionSource, LLMId,
     LLMPreferences, LinkedWorkflowData, LongRunningCommandControlState, MessageId,
-    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent, ServerOutputId,
-    Session, Shared, SizeInfo, SizeUpdate, SlashCommandDataSource as _, SlashCommandKind, TaskId,
-    TranscriptScope, TuiMcpAction, TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers,
-    TuiUpArrowHistoryItemKind, UserTakeOverReason, WarpConfig, WarpConfigUpdateEvent,
+    OutputStatusUpdateCallback, ParsedSlashCommandInput, PtyIntent, PtyIntentEvent,
+    ResolvedTeamScope, ServerOutputId, Session, Shared, SizeInfo, SizeUpdate,
+    SlashCommandDataSource as _, SlashCommandKind, TaskId, TranscriptScope, TuiMcpAction,
+    TuiMcpServerId, TuiOnboardingMarker, TuiOnboardingMarkers, TuiUpArrowHistoryItemKind,
+    UserTakeOverReason, UserWorkspaces, WarpConfig, WarpConfigUpdateEvent,
     export_conversation_markdown, forkable_tui_conversation_for_test, queue_tui_permission_action,
-    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test, slash_commands,
+    register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    set_tui_workspace_teams_for_test, slash_commands,
 };
 use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
@@ -84,7 +87,9 @@ use super::{
 };
 use crate::agent_block::{TuiAIBlock, upgrade_url};
 use crate::autoupdate::TuiAutoupdater;
+use crate::editor_element::TuiEditorAction;
 use crate::inline_menu::MAX_INLINE_MENU_ROWS;
+use crate::input::view::TuiInputAction;
 use crate::input_mode_policy::{AI_LOCKED_CONFIG, AI_UNLOCKED_CONFIG};
 use crate::input_suggestions_mode::TuiInputSuggestionsMode;
 use crate::keybindings::{
@@ -241,9 +246,50 @@ fn out_of_credits_ctrl_o_binding_opens_upgrade() {
             });
         });
         view.update(&mut app, |view, ctx| {
-            view.handle_action(&TuiTerminalSessionAction::OpenOutOfCreditsUrl, ctx);
+            view.handle_action(&TuiTerminalSessionAction::OpenUpgradeUrl, ctx);
         });
         assert_eq!(opened_urls.borrow().as_slice(), &[expected_upgrade_url]);
+    });
+}
+
+#[test]
+fn usage_slash_command_opens_panel_and_enables_upgrade_binding() {
+    App::test((), |mut app| async move {
+        app.update(crate::keybindings::init);
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                !ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should not be active before the /usage panel is opened"
+            );
+        });
+
+        view.update(&mut app, |view, ctx| {
+            view.execute_tui_slash_command(&slash_commands::USAGE, None, ctx);
+        });
+        view.read(&app, |view, ctx| {
+            assert_eq!(
+                view.suggestions_mode.as_ref(ctx).mode(),
+                TuiInputSuggestionsMode::ReadOnlyMenu(TuiReadOnlyMenuKind::Usage)
+            );
+        });
+
+        app.read(|ctx| {
+            let ctrl_o = Trigger::Keystrokes(vec![Keystroke::parse("ctrl-o").unwrap()]);
+            let input_view_id = view.as_ref(ctx).input_view.id();
+            assert!(
+                ctx.key_bindings_for_view(fixture.window_id, input_view_id)
+                    .iter()
+                    .any(|binding| *binding.trigger == ctrl_o),
+                "ctrl-o should open the upgrade page while the /usage panel is open"
+            );
+        });
     });
 }
 
@@ -1614,21 +1660,25 @@ fn accepted_model_only_changes_the_current_session() {
     App::test((), |mut app| async move {
         let fixture = focus_test_fixture(&mut app);
         LLMPreferences::handle(&app).update(&mut app, |preferences, ctx| {
-            let mut alternate = preferences.get_default_base_model(ctx).clone();
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_resolver_for_test()(ctx),
+            );
+            let mut alternate = preferences.get_default_base_model(&scope, ctx).clone();
             alternate.id = "tui-session-override".into();
             alternate.display_name = "TUI session override".to_owned();
-            preferences.add_agent_mode_model_for_test(alternate);
+            preferences.add_agent_mode_model_for_test(&scope, alternate, ctx);
         });
         let (first_view, _) = add_focus_test_session(&mut app, &fixture, true);
         let (second_view, _) = add_focus_test_session(&mut app, &fixture, false);
         let (profile_default_id, alternate_id) = app.read(|ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let preferences = LLMPreferences::as_ref(ctx);
             let profile_default_id = preferences
-                .get_active_profile_base_model(ctx, None)
+                .get_active_profile_base_model(&scope, ctx, None)
                 .id
                 .clone();
             let alternate_id = preferences
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode(&scope, ctx)
                 .find(|model| model.id != profile_default_id && model.disable_reason.is_none())
                 .expect("test model catalog should include an alternate model")
                 .id
@@ -1641,24 +1691,25 @@ fn accepted_model_only_changes_the_current_session() {
         });
 
         app.read(|ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let preferences = LLMPreferences::as_ref(ctx);
             let first_surface_id = first_view.as_ref(ctx).terminal_surface_id;
             let second_surface_id = second_view.as_ref(ctx).terminal_surface_id;
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(first_surface_id))
+                    .get_active_base_model(&scope, ctx, Some(first_surface_id))
                     .id,
                 alternate_id
             );
             assert_eq!(
                 preferences
-                    .get_active_base_model(ctx, Some(second_surface_id))
+                    .get_active_base_model(&scope, ctx, Some(second_surface_id))
                     .id,
                 profile_default_id
             );
             assert_eq!(
                 preferences
-                    .get_active_profile_base_model(ctx, Some(first_surface_id))
+                    .get_active_profile_base_model(&scope, ctx, Some(first_surface_id))
                     .id,
                 profile_default_id
             );
@@ -1676,8 +1727,9 @@ fn model_menu_labels_the_profile_default_model() {
         });
 
         view.read(&app, |view, ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             let default_name = LLMPreferences::as_ref(ctx)
-                .get_active_profile_base_model(ctx, Some(view.terminal_surface_id))
+                .get_active_profile_base_model(&scope, ctx, Some(view.terminal_surface_id))
                 .display_name
                 .clone();
             let snapshot = view
@@ -2446,6 +2498,7 @@ fn response_summary_visibility_is_independent_from_the_footer_usage_mode() {
             credits_spent: 2.5,
             cost_in_cents: Some(3.2),
             has_usage: true,
+            charged_usage: None,
         };
 
         assert_eq!(
@@ -2600,8 +2653,9 @@ fn footer_model_label_is_a_bounded_click_target() {
         });
 
         let model_name = view.read(&app, |view, ctx| {
+            let scope = UserWorkspaces::teamless_context_resolver_for_test()(ctx);
             LLMPreferences::as_ref(ctx)
-                .get_active_base_model(ctx, Some(view.terminal_surface_id))
+                .get_active_base_model(&scope, ctx, Some(view.terminal_surface_id))
                 .display_name
                 .clone()
         });
@@ -2691,7 +2745,7 @@ fn focus_test_fixture(app: &mut App) -> FocusTestFixture {
                 window_style: WindowStyle::NotStealFocus,
                 ..Default::default()
             },
-            |_| RootTuiView::new(),
+            RootTuiView::new,
         )
     });
     let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());
@@ -4812,6 +4866,7 @@ fn footer_renders_agent_sections_left_aligned() {
                     credits_spent: 2.5,
                     cost_in_cents: Some(0.0),
                     has_usage: true,
+                    charged_usage: None,
                 },
                 ctx,
                 |_, _| {},
@@ -4891,11 +4946,11 @@ fn footer_usage_entry_is_hidden_until_the_conversation_reports_usage() {
 /// still renders the usage entry — `Cost unavailable` in cost mode, never
 /// `$0.00` — even when credits happen to be zero. Cost mode is only reachable
 /// while the credits⇄dollars toggle is enabled, so this exercises the
-/// `TuiCostTransparency`-on path.
+/// `PricingTransparency`-on path.
 #[test]
 fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
     App::test((), |mut app| async move {
-        let _cost_transparency = FeatureFlag::TuiCostTransparency.override_enabled(true);
+        let _cost_transparency = FeatureFlag::PricingTransparency.override_enabled(true);
         app.update(|ctx| {
             ctx.add_singleton_model(|_| Appearance::mock());
             let builder = TuiUiBuilder::from_app(ctx);
@@ -4905,6 +4960,7 @@ fn footer_usage_entry_shows_unknown_cost_even_with_zero_credits() {
                     credits_spent: 0.0,
                     cost_in_cents: None,
                     has_usage: true,
+                    charged_usage: None,
                 },
                 ctx,
                 |_, _| {},
@@ -5631,6 +5687,37 @@ fn terminal_wakeup_redraws_only_the_focused_session() {
         assert!(!background.update(&mut app, |view, ctx| { view.handle_terminal_wakeup(ctx) }));
     });
 }
+
+#[test]
+fn terminal_wakeup_focuses_a_new_long_running_command() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        let input_id = view.read(&app, |view, _| view.input_view.id());
+
+        view.update(&mut app, |view, ctx| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+            assert!(view.input_target().pty_owns_input());
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(input_id),
+                "the composer remains focused until the delayed terminal wakeup"
+            );
+
+            assert!(view.handle_terminal_wakeup(ctx));
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(view.id()),
+                "the PTY-owning session must receive input after the wakeup"
+            );
+        });
+    });
+}
 #[test]
 fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     App::test((), |mut app| async move {
@@ -5653,6 +5740,81 @@ fn background_focus_reconciliation_does_not_steal_foreground_focus() {
     });
 }
 
+#[test]
+fn empty_background_attachment_update_does_not_steal_foreground_focus() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input_id = foreground.read(&app, |view, _| view.input_view.id());
+
+        background.update(&mut app, |view, ctx| {
+            assert!(!view.attachment_bar.as_ref(ctx).should_render(ctx));
+            view.attachment_bar
+                .update(ctx, |bar, ctx| bar.emit_model_updated_for_test(ctx));
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.focused_view_id(fixture.window_id),
+                Some(foreground_input_id),
+                "an empty background context update must not focus its hidden input"
+            );
+        });
+    });
+}
+
+#[test]
+fn foreground_input_pointer_action_recovers_focus_from_background_session() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input = foreground.read(&app, |view, _| view.input_view.clone());
+        let background_input = background.read(&app, |view, _| view.input_view.clone());
+
+        background_input.update(&mut app, |_, ctx| ctx.focus_self());
+        foreground_input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &TuiInputAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        assert!(app.read(|ctx| foreground_input.is_focused(ctx)));
+    });
+}
+
+#[test]
+fn stale_foreground_input_pointer_action_preserves_new_pty_owner() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (foreground, _) = add_focus_test_session(&mut app, &fixture, true);
+        let (background, _) = add_focus_test_session(&mut app, &fixture, false);
+        let foreground_input = foreground.read(&app, |view, _| view.input_view.clone());
+        let background_input = background.read(&app, |view, _| view.input_view.clone());
+
+        foreground.update(&mut app, |view, _| {
+            view.terminal_model
+                .lock()
+                .simulate_long_running_block("cat", "");
+            assert!(view.input_target().pty_owns_input());
+        });
+        background_input.update(&mut app, |_, ctx| ctx.focus_self());
+        foreground_input.update(&mut app, |input, ctx| {
+            input.handle_action(
+                &TuiInputAction::Editor(TuiEditorAction::SelectionStartAt {
+                    offset: CharOffset::from(1),
+                }),
+                ctx,
+            );
+        });
+
+        assert!(app.read(|ctx| foreground.is_focused(ctx)));
+    });
+}
 struct LateMaterializationBlockModel {
     conversation_id: AIConversationId,
     status: AIBlockOutputStatus,
@@ -5995,6 +6157,7 @@ fn add_orchestration_child(
                 name.to_owned(),
                 parent_conversation_id,
                 Some(Harness::Oz),
+                false,
                 ctx,
             );
             history.set_active_conversation_id(conversation_id, session_id.surface_id(), ctx);
@@ -7065,4 +7228,92 @@ fn resume_shell_commands_use_shared_tui_launcher() {
         super::tui_resume_shell_command(Channel::Preview, "conversation-token"),
         "warp-preview --resume conversation-token"
     );
+}
+
+fn set_teams_and_register_window(
+    app: &mut App,
+    names: &[&str],
+    window_id: warpui::WindowId,
+) -> Vec<warp::tui_export::ServerId> {
+    let team_uids: Vec<warp::tui_export::ServerId> = (1..=names.len() as i64)
+        .map(warp::tui_export::ServerId::from)
+        .collect();
+    let teams = team_uids
+        .iter()
+        .copied()
+        .zip(names.iter().map(|name| (*name).to_owned()))
+        .collect::<Vec<_>>();
+    app.update(|ctx| {
+        set_tui_workspace_teams_for_test(teams, ctx);
+        let starting_team = team_uids.first().copied();
+        UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+            workspaces.register_window(window_id, starting_team, ctx);
+        });
+    });
+    team_uids
+}
+
+#[test]
+fn active_team_is_rendered_for_a_single_team_user() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
+
+        let window_id = app.read(|ctx| view.window_id(ctx));
+
+        set_teams_and_register_window(&mut app, &["Solo"], window_id);
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Solo"),
+            "a single-team user's active team should be shown, got:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn active_team_is_rendered_and_follows_a_switch() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+        set_enabled_statusline_items(&mut app, vec![TuiStatuslineItem::Team]);
+
+        let window_id = app.read(|ctx| view.window_id(ctx));
+        let team_uids =
+            set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Platform"),
+            "a multi-team user's active team should be shown, got:\n{rendered}"
+        );
+
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_uids[1], ctx);
+            });
+        });
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            rendered.contains("Security") && !rendered.contains("Platform"),
+            "the statusline should follow the window's team, got:\n{rendered}"
+        );
+    });
+}
+
+#[test]
+fn active_team_is_hidden_when_disabled() {
+    App::test((), |mut app| async move {
+        let fixture = focus_test_fixture(&mut app);
+        let (view, _) = add_focus_test_session(&mut app, &fixture, true);
+
+        let window_id = app.read(|ctx| view.window_id(ctx));
+        set_teams_and_register_window(&mut app, &["Platform", "Security"], window_id);
+
+        let rendered = render_session(&mut app, &view, 100, 24).join("\n");
+        assert!(
+            !rendered.contains("Platform"),
+            "a disabled team item must stay hidden, got:\n{rendered}"
+        );
+    });
 }

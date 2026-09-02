@@ -19,6 +19,7 @@
     "@babel/core": "7.29.6",
     "brace-expansion": "^2.1.2",
     "js-yaml": "^4.3.1",
-    "shell-quote": "^1.9.0"
+    "shell-quote": "^1.9.0",
+    "ws": "8.21.0"
   }
 }

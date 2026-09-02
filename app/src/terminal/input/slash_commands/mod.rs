@@ -65,7 +65,7 @@ use crate::terminal::input::{
 };
 #[cfg(feature = "local_fs")]
 use crate::terminal::model::session::Session;
-use crate::terminal::view::TerminalAction;
+use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::ui_components::color_dot;
 use crate::view_components::DismissibleToast;
 use crate::workflows::command_parser::compute_workflow_display_data;
@@ -494,6 +494,49 @@ impl Input {
                 ctx.dispatch_typed_action(&TerminalAction::OpenAddRulePane);
             }
             SlashCommandKind::Agent | SlashCommandKind::New => {
+                // Without this, a fast `/agent` right after an ambient tombstone renders (before
+                // its async task fetch resolves) would fall through to `EnterAgentView` below and
+                // start a local conversation instead of the retained cloud one.
+                if self.block_submission_while_ambient_task_unresolved(
+                    self.ambient_agent_task_id(ctx),
+                    ctx,
+                ) {
+                    return true;
+                }
+
+                // REMOTE-2661: a retained setup-failure session has no local conversation to
+                // start into, so route it through the same authenticated follow-up path plain
+                // input already uses for this pane, rather than `EnterAgentView` below.
+                let retained_setup_failure_debug_task_id = {
+                    let model = self.model.lock();
+                    match resolve_ai_query_routing(
+                        self.terminal_view_id,
+                        self.ambient_agent_view_model(),
+                        &model,
+                        ctx,
+                    ) {
+                        AIQueryRouting::RetainedSetupFailureDebug { task_id } => Some(task_id),
+                        _ => None,
+                    }
+                };
+                if let Some(task_id) = retained_setup_failure_debug_task_id {
+                    let prompt = argument
+                        .map(|argument| argument.trim().to_owned())
+                        .filter(|prompt| !prompt.is_empty());
+                    let Some(prompt) = prompt else {
+                        show_error_toast(
+                            format!(
+                                "{} needs a message to debug this session, e.g. \"{} why did my setup fail\"",
+                                command.name, command.name
+                            ),
+                            ctx,
+                        );
+                        return true;
+                    };
+                    ctx.emit(Event::SubmitSetupFailureDebugFollowup { task_id, prompt });
+                    return true;
+                }
+
                 if !self
                     .ai_context_model
                     .as_ref(ctx)
@@ -1301,6 +1344,7 @@ impl Input {
             | SlashCommandKind::Exit
             | SlashCommandKind::Logout
             | SlashCommandKind::Clear
+            | SlashCommandKind::Team
             | SlashCommandKind::Status => {
                 debug_assert!(
                     false,
