@@ -35,6 +35,7 @@ pub(super) fn force_kill_harness_if_safe(shell: &ShellProcessInfo) {
 /// Returns `candidate_foreground_pgid` or `shell_pid` only when that value is a
 /// real process group in `tree_pgids` (the live shell and its descendants) and
 /// is not this process's own group.
+#[cfg(any(unix, test))]
 pub(super) fn proven_kill_pgid(
     candidate_foreground_pgid: Option<u32>,
     shell_pid: u32,
