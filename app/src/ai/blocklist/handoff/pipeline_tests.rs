@@ -45,6 +45,7 @@ fn exchange_with_working_directory(
             user_query_mode: UserQueryMode::Normal,
             running_command: None,
             intended_agent: None,
+            attribution_token: None,
         }],
         output_status,
         added_message_ids: HashSet::new(),

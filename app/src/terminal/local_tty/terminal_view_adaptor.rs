@@ -128,6 +128,10 @@ fn accept_agent_prompt(
         .session(terminal_view_id)
         .is_some();
     if has_active_cli_agent {
+        // attribution_token cannot be carried here (see warp-server
+        // specs/user-query-attribution PRODUCT.md B24): the prompt goes to the
+        // CLI's PTY as plain text, not through a `UserQuery`.
+        //
         // Reuse the rich input submit pipeline so agent-specific
         // strategies are applied. Bypasses the rich-input-UI side effects
         // (telemetry, draft clear, editor buffer clear, pending-image consumption).
@@ -151,6 +155,7 @@ fn accept_agent_prompt(
                 request.server_conversation_token,
                 request.attachments.clone(),
                 participant_id.clone(),
+                request.attribution_token.clone(),
                 ctx,
             );
         });

@@ -1606,6 +1606,7 @@ fn agent_view_user_query_input(query: &str) -> AIAgentInput {
         user_query_mode: UserQueryMode::Normal,
         running_command: None,
         intended_agent: None,
+        attribution_token: None,
     }
 }
 
@@ -2188,6 +2189,7 @@ fn agent_jump_user_query(query: &str) -> AIAgentInput {
         user_query_mode: UserQueryMode::Normal,
         running_command: None,
         intended_agent: None,
+        attribution_token: None,
     }
 }
 
@@ -2376,6 +2378,7 @@ fn restoring_conversation_to_new_pane_transfers_blocks_from_previous_terminal_su
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 }],
                 ctx,
             );
@@ -2490,6 +2493,7 @@ fn clicking_old_banner_for_open_conversation_focuses_current_terminal_surface_wi
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 }],
                 ctx,
             );
@@ -2630,6 +2634,7 @@ fn appended_exchange_renders_in_current_terminal_surface_after_conversation_tran
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 }],
                 ctx,
             );
@@ -2681,6 +2686,7 @@ fn appended_exchange_renders_in_current_terminal_surface_after_conversation_tran
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 }]);
                 let exchange_id = exchange.id;
                 conversation
@@ -3901,6 +3907,7 @@ fn pending_cloud_mode_query_waits_for_renderable_user_query_exchange() {
                     user_query_mode: UserQueryMode::default(),
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 },
                 ctx,
             );
@@ -3941,6 +3948,7 @@ fn pending_cloud_mode_query_clears_when_streaming_exchange_becomes_renderable() 
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 }],
                 ctx,
             );
@@ -9382,6 +9390,7 @@ fn close_find_bar_clears_ai_block_find_highlights() {
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 },
                 ctx,
             );
@@ -9517,6 +9526,7 @@ fn copy_selected_text_from_ai_block() {
                     user_query_mode: UserQueryMode::Normal,
                     running_command: None,
                     intended_agent: None,
+                    attribution_token: None,
                 },
                 ctx,
             );

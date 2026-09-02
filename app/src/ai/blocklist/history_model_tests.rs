@@ -303,6 +303,7 @@ fn create_exchange_with_query(
             user_query_mode: UserQueryMode::default(),
             running_command: None,
             intended_agent: None,
+            attribution_token: None,
         }],
         output_status: AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Success {

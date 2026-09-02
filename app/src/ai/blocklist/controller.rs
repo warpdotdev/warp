@@ -416,6 +416,9 @@ struct InputQuery {
     /// When `Some`, this submission is a fired queued-prompt row; the send path resolves the
     /// row's stored attachments by this id instead of the live input staging.
     queued_query_id: Option<QueuedQueryId>,
+    /// Opaque, server-issued attribution token for follow-ups injected into a shared
+    /// session; echoed verbatim on the outgoing `UserQuery`. `None` for local submissions.
+    attribution_token: Option<String>,
 }
 
 impl InputQuery {
@@ -712,6 +715,10 @@ impl BlocklistAIController {
         }
 
         if let Some(slash_command_request) = SlashCommandRequest::from_query(query.as_str()) {
+            // attribution_token cannot be carried here (see warp-server
+            // specs/user-query-attribution PRODUCT.md B24): slash commands build their own
+            // request and never produce a `UserQuery`.
+            //
             // Only fired queued rows carry `queued_query_id`. For those rows, keep slash commands
             // (e.g. queued `/compact`) on the conversation they were queued on; direct slash
             // submissions still re-derive their target from the current UI selection.
@@ -804,6 +811,7 @@ impl BlocklistAIController {
 
         let additional_attachments = input_query.additional_attachments;
         let queued_query_id = input_query.queued_query_id;
+        let attribution_token = input_query.attribution_token;
         let ai_input = match input_query.input_query {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
@@ -833,6 +841,7 @@ impl BlocklistAIController {
                     running_command,
                     additional_attachments,
                     prompt_attachments,
+                    attribution_token,
                     self.context_model.as_ref(ctx),
                     self.active_session.as_ref(ctx),
                     ctx,
@@ -1055,6 +1064,7 @@ impl BlocklistAIController {
                     },
                     additional_attachments: HashMap::new(),
                     queued_query_id,
+                    attribution_token: None,
                 },
                 entrypoint_type,
                 participant_id,
@@ -1072,6 +1082,7 @@ impl BlocklistAIController {
                     },
                     additional_attachments: HashMap::new(),
                     queued_query_id,
+                    attribution_token: None,
                 },
                 entrypoint_type,
                 participant_id,
@@ -1098,6 +1109,7 @@ impl BlocklistAIController {
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            /*attribution_token*/ None,
             ctx,
         );
     }
@@ -1120,6 +1132,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            /*attribution_token*/ None,
             ctx,
         )
     }
@@ -1145,17 +1158,20 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
+            /*attribution_token*/ None,
             ctx,
         );
     }
 
-    /// Sends the given user query to the AI model, with additional referenced attachments.
+    /// Sends the given user query to the AI model, with additional referenced attachments and
+    /// an optional opaque attribution token (set for follow-ups injected into a shared session).
     pub fn send_user_query_in_conversation_with_attachments(
         &mut self,
         query: String,
         conversation_id: AIConversationId,
         participant_id: Option<ParticipantId>,
         additional_attachments: HashMap<String, AIAgentAttachment>,
+        attribution_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1167,6 +1183,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            attribution_token,
             ctx,
         );
     }
@@ -1191,6 +1208,7 @@ impl BlocklistAIController {
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
+            /*attribution_token*/ None,
             ctx,
         );
     }
@@ -1206,6 +1224,7 @@ impl BlocklistAIController {
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
+        attribution_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let is_viewer = self
@@ -1320,6 +1339,7 @@ impl BlocklistAIController {
                 },
                 additional_attachments,
                 queued_query_id,
+                attribution_token,
             },
             entrypoint_type,
             participant_id,
@@ -1346,6 +1366,7 @@ impl BlocklistAIController {
                 },
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
+                attribution_token: None,
             },
             EntrypointType::ZeroStateAgentModePromptSuggestion,
             participant_id,
@@ -1383,6 +1404,7 @@ impl BlocklistAIController {
                 input_query: InputQueryType::AIInputType { ai_input },
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
+                attribution_token: None,
             },
             EntrypointType::UserInitiated,
             participant_id,
@@ -1565,6 +1587,7 @@ impl BlocklistAIController {
                 },
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
+                attribution_token: None,
             },
             EntrypointType::TriggerPassiveSuggestion {
                 trigger: trigger_type,
@@ -3534,6 +3557,7 @@ fn input_for_query(
     running_command: Option<RunningCommand>,
     additional_attachments: HashMap<String, AIAgentAttachment>,
     prompt_attachments: Vec<PendingAttachment>,
+    attribution_token: Option<String>,
     context_model: &BlocklistAIContextModel,
     active_session: &ActiveSession,
     app: &AppContext,
@@ -3580,6 +3604,7 @@ fn input_for_query(
         user_query_mode,
         running_command,
         intended_agent,
+        attribution_token,
     }
 }
 
