@@ -43,7 +43,7 @@ impl RenderableBlock for RenderableTextBlock {
         let text_block = block.text_block(paragraph_block);
 
         let paragraph_styles = &model.styles().base_text;
-        for paragraph in text_block.paragraphs() {
+        for paragraph in text_block.paragraphs_in(self.viewport_item.paragraph_range()) {
             ctx.draw_paragraph(&paragraph, paragraph_styles, model);
         }
     }

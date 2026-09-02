@@ -240,15 +240,13 @@ impl<'a> Positioned<'a, BlockItem> {
         y: Pixels,
         paragraph_block: Positioned<'a, ParagraphBlock>,
     ) -> Location {
-        for paragraph in paragraph_block.paragraphs() {
-            if paragraph.end_y_offset() > y {
-                let mut location = paragraph.coordinate_to_location(self.unpad_x(x), y);
-                // Adjust the paragraph-relative start offset to be the start of this block.
-                if let Location::Text { block_start, .. } = &mut location {
-                    *block_start = self.start_char_offset;
-                }
-                return location;
+        if let Some(paragraph) = paragraph_block.paragraph_at_y(y) {
+            let mut location = paragraph.coordinate_to_location(self.unpad_x(x), y);
+            // Adjust the paragraph-relative start offset to be the start of this block.
+            if let Location::Text { block_start, .. } = &mut location {
+                *block_start = self.start_char_offset;
             }
+            return location;
         }
 
         Location::Text {

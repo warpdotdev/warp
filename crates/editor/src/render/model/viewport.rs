@@ -461,6 +461,9 @@ impl ViewportItem {
             paragraph_end: self.paragraph_range.end,
         }
     }
+    pub(crate) fn paragraph_range(&self) -> Range<usize> {
+        self.paragraph_range.clone()
+    }
 
     pub fn source_block<'a>(&self, content: &'a RenderContentTreeRef<'a>) -> Option<&'a BlockItem> {
         content

@@ -71,8 +71,14 @@ impl RenderableBlock for RenderableTemporaryBlock {
 
         let start = paragraph_block.start_char_offset;
         let paragraph_styles = &model.styles().base_text;
-        let mut decoration_index = 0;
-        for paragraph in paragraph_block.paragraphs() {
+        let mut paragraphs = paragraph_block
+            .paragraphs_in(self.viewport_item.paragraph_range())
+            .peekable();
+        let mut decoration_index = paragraphs.peek().map_or(0, |paragraph| {
+            self.text_decoration
+                .partition_point(|decoration| decoration.end + start <= paragraph.start_char_offset)
+        });
+        for paragraph in paragraphs {
             // We could draw text directly since temporary paragraph should have its own decoration and selection state.
             ctx.draw_text(
                 paragraph.content_origin(),

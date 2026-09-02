@@ -29,7 +29,7 @@ use crate::content::text::{
     BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment, table_cell_offset_maps,
 };
 use crate::content::version::BufferVersion;
-use crate::render::layout::TextLayout;
+use crate::render::layout::{MAX_LAYOUT_LINE_CHARS, TextLayout};
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
     ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
@@ -371,6 +371,71 @@ fn test_multiline_materialization_shares_indexed_backing_and_keeps_sparse_overla
         });
     })
 }
+
+#[test]
+fn test_positioned_paragraph_range_starts_at_late_index_without_visiting_prefix() {
+    let paragraphs = Vec1::try_from_vec(
+        (0..10_000)
+            .map(|_| match mock_paragraph(24., 8., 3) {
+                BlockItem::Paragraph(paragraph) => paragraph,
+                _ => unreachable!("mock paragraph helper returned another block type"),
+            })
+            .collect(),
+    )
+    .expect("paragraph block has paragraphs");
+    let block = ParagraphBlock::new(paragraphs);
+    let positioned = super::Positioned {
+        start_char_offset: CharOffset::from(7),
+        start_line: LineCount(11),
+        start_y_offset: 13.0.into_pixels(),
+        style: TEXT_SPACING,
+        item: &block,
+    };
+    let mut visited = 0;
+    let paragraph = positioned
+        .paragraphs_in(9_999..10_000)
+        .inspect(|_| visited += 1)
+        .next()
+        .expect("late paragraph should be positioned");
+
+    assert_eq!(visited, 1);
+    assert_eq!(paragraph.start_char_offset, CharOffset::from(7 + 9_999 * 3));
+    assert_eq!(paragraph.start_line, LineCount(11 + 9_999));
+    assert_eq!(
+        paragraph.start_y_offset,
+        (13.0 + 9_999.0 * 24.0).into_pixels()
+    );
+}
+
+#[test]
+fn test_deferred_paragraph_caches_demand_at_layout_cap() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let text = "é".repeat(MAX_LAYOUT_LINE_CHARS + 1_024);
+            let paragraph = deferred_paragraph(&layout, &text, &BufferBlockStyle::PlainText);
+            let deferred = paragraph
+                .deferred_layout
+                .as_ref()
+                .expect("paragraph should retain deferred metadata");
+
+            assert_eq!(deferred.layout_chars, MAX_LAYOUT_LINE_CHARS);
+            for _ in 0..1_000 {
+                assert_eq!(
+                    paragraph.layout_chars_to_materialize(),
+                    MAX_LAYOUT_LINE_CHARS
+                );
+            }
+        });
+    })
+}
+
 #[test]
 fn test_table_viewport_snapshot_uses_model_backed_layout() {
     App::test((), |app| async move {

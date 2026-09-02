@@ -89,7 +89,7 @@ impl RenderableBlock for RenderableRunnableCommand {
             .with_border(border)
             .with_background(model.styles().code_background);
 
-        for paragraph in code_block.paragraphs() {
+        for paragraph in code_block.paragraphs_in(self.viewport_item.paragraph_range()) {
             ctx.draw_paragraph(&paragraph, code_style, model);
         }
 

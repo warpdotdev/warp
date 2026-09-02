@@ -31,8 +31,61 @@ use crate::render::layout::{
 };
 use crate::render::model::test_utils::TEST_STYLES;
 use crate::render::model::{
-    BlockItem, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, LineCount, RenderLayoutOptions,
+    BlockItem, CODE_EDITOR_HIDDEN_SECTION_EXPANSION_LINES, LineCount, Paragraph,
+    RenderLayoutOptions,
 };
+
+#[test]
+fn test_large_temporary_diff_uses_deferred_paragraphs() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let line_count = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 3;
+            let blocks = layout_temporary_blocks(
+                (0..line_count)
+                    .map(|_| TemporaryBlock {
+                        content: format!("{}\n", "removed diff line".repeat(8)),
+                        insert_before: LineCount::zero(),
+                        line_decoration: None,
+                        inline_text_decorations: Vec::new(),
+                    })
+                    .collect(),
+                &layout,
+            );
+            let blocks = blocks
+                .get(&LineCount::zero())
+                .expect("temporary diff blocks should be laid out");
+
+            assert_eq!(blocks.len(), line_count);
+            let mut retained_payload = (0, 0);
+            for block in blocks {
+                let BlockItem::TemporaryBlock {
+                    paragraph_block, ..
+                } = block
+                else {
+                    panic!("expected a temporary block");
+                };
+                assert!(paragraph_block.paragraphs().all(Paragraph::is_deferred));
+                retained_payload = paragraph_block.paragraphs().fold(
+                    retained_payload,
+                    |(glyphs, carets), paragraph| {
+                        let (paragraph_glyphs, paragraph_carets) =
+                            paragraph.retained_payload_counts();
+                        (glyphs + paragraph_glyphs, carets + paragraph_carets)
+                    },
+                );
+            }
+            assert_eq!(retained_payload.0, 0);
+            assert!(retained_payload.1 <= line_count * 2);
+        });
+    })
+}
 
 #[test]
 fn test_highlight_urls() {

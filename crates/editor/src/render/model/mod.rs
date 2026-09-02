@@ -1823,6 +1823,7 @@ impl BlockSpacing {
 pub struct ParagraphBlock {
     paragraphs: Arc<Vec1<Paragraph>>,
     paragraph_index: Arc<Vec<ParagraphGeometry>>,
+    width: Pixels,
     materialized_paragraphs: HashMap<usize, Paragraph>,
 }
 
@@ -1840,6 +1841,11 @@ impl ParagraphBlock {
         let mut height = Pixels::zero();
         let mut line = LineCount::zero();
         let mut offset = CharOffset::zero();
+        let width = paragraphs
+            .iter()
+            .map(Paragraph::width)
+            .max_by(|a, b| a.as_f32().total_cmp(&b.as_f32()))
+            .unwrap_or(Pixels::zero());
         let paragraph_index = paragraphs
             .iter()
             .map(|paragraph| {
@@ -1859,6 +1865,7 @@ impl ParagraphBlock {
         Self {
             paragraphs: Arc::new(paragraphs),
             paragraph_index: Arc::new(paragraph_index),
+            width,
             materialized_paragraphs: HashMap::new(),
         }
     }
@@ -1876,6 +1883,12 @@ impl ParagraphBlock {
 
     pub fn paragraphs(&self) -> impl ExactSizeIterator<Item = &Paragraph> {
         (0..self.paragraphs.len()).map(|index| self.paragraph(index))
+    }
+    fn paragraphs_in(
+        &self,
+        paragraph_range: Range<usize>,
+    ) -> impl ExactSizeIterator<Item = &Paragraph> {
+        paragraph_range.map(|index| self.paragraph(index))
     }
 
     fn paragraph(&self, index: usize) -> &Paragraph {
@@ -1907,6 +1920,7 @@ impl ParagraphBlock {
         (!materialized_paragraphs.is_empty()).then(|| Self {
             paragraphs: self.paragraphs.clone(),
             paragraph_index: self.paragraph_index.clone(),
+            width: self.width,
             materialized_paragraphs,
         })
     }
@@ -1963,11 +1977,7 @@ impl ParagraphBlock {
     }
 
     pub fn width(&self) -> Pixels {
-        self.paragraphs()
-            .map(|paragraph| paragraph.width().as_f32())
-            .max_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
-            .unwrap_or(0.)
-            .into_pixels()
+        self.width
     }
 
     pub fn height(&self) -> Pixels {
@@ -1978,12 +1988,7 @@ impl ParagraphBlock {
 
     /// The size of this paragraph block's content, as currently laid out.
     pub fn content_size(&self) -> Vector2F {
-        let width = self
-            .paragraphs()
-            .map(|paragraph| paragraph.frame.max_width())
-            .reduce(f32::max)
-            .unwrap_or(0.);
-        vec2f(width, self.height().as_f32())
+        vec2f(self.width.as_f32(), self.height().as_f32())
     }
 
     fn lines(&self) -> LineCount {
@@ -2027,6 +2032,7 @@ struct DeferredParagraphLayout {
     text: String,
     style_runs: Vec<(Range<usize>, StyleAndFont)>,
     paragraph_styles: ParagraphStyles,
+    layout_chars: usize,
 }
 
 impl Paragraph {
@@ -2080,6 +2086,7 @@ impl Paragraph {
             minimum_height,
         );
         paragraph.deferred_layout = Some(Arc::new(DeferredParagraphLayout {
+            layout_chars: text.chars().take(MAX_LAYOUT_LINE_CHARS).count(),
             text,
             style_runs,
             paragraph_styles,
@@ -2089,9 +2096,9 @@ impl Paragraph {
     }
 
     fn layout_chars_to_materialize(&self) -> usize {
-        self.deferred_layout.as_ref().map_or(0, |layout| {
-            layout.text.chars().count().min(MAX_LAYOUT_LINE_CHARS)
-        })
+        self.deferred_layout
+            .as_ref()
+            .map_or(0, |layout| layout.layout_chars)
     }
     #[cfg(test)]
     fn materialized_layout_chars(&self) -> usize {
@@ -2121,6 +2128,19 @@ impl Paragraph {
     #[cfg(any(test, feature = "test-util"))]
     pub fn is_deferred(&self) -> bool {
         self.deferred_layout.is_some() && self.materialized_layout_chars == 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_payload_counts(&self) -> (usize, usize) {
+        self.frame
+            .lines()
+            .iter()
+            .fold((0, 0), |(glyphs, carets), line| {
+                (
+                    glyphs + line.runs.iter().map(|run| run.glyphs.len()).sum::<usize>(),
+                    carets + line.caret_positions.len(),
+                )
+            })
     }
 
     pub fn first_line_height(&self) -> f32 {
@@ -5461,10 +5481,8 @@ impl Positioned<'_, BlockItem> {
             BlockItem::Paragraph(inner) => self.paragraph(inner).softwrap_point_to_offset(point),
             BlockItem::TextBlock { paragraph_block } => {
                 let text_block = self.text_block(paragraph_block);
-
-                let mut paragraphs = text_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_line().as_u32() > point.row())
+                text_block
+                    .paragraph_at_line(LineCount(point.row() as usize))
                     .map_or(self.end_char_offset(), |paragraph| {
                         paragraph.softwrap_point_to_offset(point)
                     })
@@ -5485,10 +5503,8 @@ impl Positioned<'_, BlockItem> {
                 paragraph_block, ..
             } => {
                 let code_block = self.code_block(paragraph_block);
-
-                let mut paragraphs = code_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_line().as_u32() > point.row())
+                code_block
+                    .paragraph_at_line(LineCount(point.row() as usize))
                     .map_or(self.end_char_offset(), |paragraph| {
                         paragraph.softwrap_point_to_offset(point)
                     })
@@ -5522,14 +5538,10 @@ impl Positioned<'_, BlockItem> {
             BlockItem::Paragraph(inner) => self.paragraph(inner).offset_to_softwrap_point(offset),
             BlockItem::TextBlock { paragraph_block } => {
                 let text_block = self.text_block(paragraph_block);
-
-                let mut paragraphs = text_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_char_offset() > offset)
-                    .map_or(
-                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
-                        |paragraph| paragraph.offset_to_softwrap_point(offset),
-                    )
+                text_block.paragraph_at_offset(offset).map_or(
+                    SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
+                    |paragraph| paragraph.offset_to_softwrap_point(offset),
+                )
             }
             BlockItem::UnorderedList { paragraph, .. } => self
                 .unordered_list(paragraph)
@@ -5547,14 +5559,10 @@ impl Positioned<'_, BlockItem> {
                 paragraph_block, ..
             } => {
                 let code_block = self.code_block(paragraph_block);
-
-                let mut paragraphs = code_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_char_offset() > offset)
-                    .map_or(
-                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
-                        |paragraph| paragraph.offset_to_softwrap_point(offset),
-                    )
+                code_block.paragraph_at_offset(offset).map_or(
+                    SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
+                    |paragraph| paragraph.offset_to_softwrap_point(offset),
+                )
             }
             BlockItem::MermaidDiagram { .. } => {
                 SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
@@ -5590,8 +5598,7 @@ impl Positioned<'_, BlockItem> {
             BlockItem::TextBlock { paragraph_block } => {
                 let text_block = self.text_block(paragraph_block);
                 text_block
-                    .paragraphs()
-                    .find_or_last(|paragraph| paragraph.end_char_offset() > offset)
+                    .paragraph_at_offset_or_last(offset)
                     .and_then(|paragraph| paragraph.character_bounds(offset))
             }
             BlockItem::UnorderedList { paragraph, .. } => {
@@ -5609,8 +5616,7 @@ impl Positioned<'_, BlockItem> {
             } => {
                 let code_block = self.code_block(paragraph_block);
                 code_block
-                    .paragraphs()
-                    .find_or_last(|paragraph| paragraph.end_char_offset() > offset)
+                    .paragraph_at_offset_or_last(offset)
                     .and_then(|paragraph| paragraph.character_bounds(offset))
             }
             BlockItem::MermaidDiagram { config, .. } => {
@@ -6246,13 +6252,29 @@ impl<'a> Positioned<'a, Paragraph> {
 }
 
 impl<'a> Positioned<'a, ParagraphBlock> {
-    pub(super) fn paragraphs(&self) -> impl Iterator<Item = Positioned<'a, Paragraph>> + '_ {
-        self.item.paragraphs().scan(
-            (
-                self.start_char_offset,
-                self.start_y_offset + self.style.top_offset(),
-                self.start_line,
-            ),
+    pub(super) fn paragraphs_in(
+        &self,
+        paragraph_range: Range<usize>,
+    ) -> impl Iterator<Item = Positioned<'a, Paragraph>> + '_ {
+        let start = paragraph_range.start;
+        let preceding_geometry = start
+            .checked_sub(1)
+            .and_then(|index| self.item.paragraph_index.get(index));
+        let start_geometry = self.item.paragraph_index.get(start);
+        let char_offset = preceding_geometry.map_or(self.start_char_offset, |geometry| {
+            self.start_char_offset + geometry.end_offset
+        });
+        let y_offset = start_geometry.map_or_else(
+            || self.start_y_offset + self.style.top_offset() + self.item.height(),
+            |geometry| self.start_y_offset + self.style.top_offset() + geometry.start_height,
+        );
+        let line = start_geometry.map_or_else(
+            || self.start_line + self.item.lines(),
+            |geometry| self.start_line + geometry.start_line,
+        );
+
+        self.item.paragraphs_in(paragraph_range).scan(
+            (char_offset, y_offset, line),
             |(char_offset_acc, y_offset_acc, line_acc), paragraph| {
                 let positioned = Some(Positioned {
                     start_y_offset: *y_offset_acc,
@@ -6271,9 +6293,43 @@ impl<'a> Positioned<'a, ParagraphBlock> {
         )
     }
 
+    fn paragraph_at_offset(&self, offset: CharOffset) -> Option<Positioned<'a, Paragraph>> {
+        let relative_offset = offset.saturating_sub(&self.start_char_offset);
+        if relative_offset >= self.item.content_length() {
+            return None;
+        }
+        self.paragraphs_in(self.item.paragraph_range_for_offset(relative_offset))
+            .next()
+    }
+    fn paragraph_at_offset_or_last(&self, offset: CharOffset) -> Option<Positioned<'a, Paragraph>> {
+        let relative_offset = offset.saturating_sub(&self.start_char_offset);
+        self.paragraphs_in(self.item.paragraph_range_for_offset(relative_offset))
+            .next()
+    }
+
+    fn paragraph_at_line(&self, line: LineCount) -> Option<Positioned<'a, Paragraph>> {
+        self.paragraphs_in(
+            self.item
+                .paragraph_range_for_lines(self.start_line, line..line + LineCount(1)),
+        )
+        .next()
+    }
+
+    fn paragraph_at_y(&self, y: Pixels) -> Option<Positioned<'a, Paragraph>> {
+        let content_start = self.start_y_offset + self.style.top_offset();
+        if y >= content_start + self.item.height() {
+            return None;
+        }
+        let index = self
+            .item
+            .paragraph_index
+            .partition_point(|paragraph| content_start + paragraph.end_height <= y)
+            .min(self.item.paragraphs.len() - 1);
+        self.paragraphs_in(index..index + 1).next()
+    }
     /// The bounds of the first line of the first paragraph. See [`Positioned::<Paragraph>::first_line_bounds`].
     fn first_line_bounds(&self) -> Option<RectF> {
-        self.paragraphs().next()?.first_line_bounds()
+        self.paragraphs_in(0..1).next()?.first_line_bounds()
     }
 }
 

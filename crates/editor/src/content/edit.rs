@@ -1550,14 +1550,29 @@ fn layout_temporary_block(content: String, layout: &TextLayout) -> ParagraphBloc
             &spacing,
             &active_line.style_runs,
         );
-        paragraphs.push(Paragraph::new(
-            frame,
-            offsets,
-            active_line.content_length,
-            active_line.active_line_url.clone(),
-            spacing,
-            rich_text_styles.minimum_paragraph_height,
-        ));
+        let paragraph = if layout.supports_deferred_paragraphs() {
+            Paragraph::new_deferred(
+                frame,
+                active_line.text.clone(),
+                active_line.style_runs.clone(),
+                styles,
+                offsets,
+                active_line.content_length,
+                active_line.active_line_url.clone(),
+                spacing,
+                rich_text_styles.minimum_paragraph_height,
+            )
+        } else {
+            Paragraph::new(
+                frame,
+                offsets,
+                active_line.content_length,
+                active_line.active_line_url.clone(),
+                spacing,
+                rich_text_styles.minimum_paragraph_height,
+            )
+        };
+        paragraphs.push(paragraph);
         active_line.reset_for_newline();
     }
 
