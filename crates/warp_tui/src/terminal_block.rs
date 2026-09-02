@@ -541,6 +541,12 @@ fn cell_to_style(cell: &Cell, colors: &TerminalColorList) -> TuiStyle {
         || cell.flags.contains(Flags::CURLY_UNDERLINE)
     {
         style = style.add_modifier(Modifier::UNDERLINED);
+        // The curly shape itself has no ratatui equivalent and degrades to a plain
+        // underline, but the SGR 58 color it carries is still representable and must
+        // not be discarded.
+        if let Some(color) = cell.underline_color() {
+            style = style.underline_color(cell_to_color(&color, colors));
+        }
     }
     if cell.flags.contains(Flags::INVERSE) {
         style = style.add_modifier(Modifier::REVERSED);

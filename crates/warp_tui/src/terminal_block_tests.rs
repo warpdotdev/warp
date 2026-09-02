@@ -6,9 +6,11 @@ use warp::tui_export::{
     AIAgentActionId, AIConversationId, AgentInteractionMetadata, Appearance, BlockId,
     TerminalColorList, TerminalColors, TerminalModel, TranscriptScope,
 };
+use warp_terminal::model::ansi::Color as AnsiColor;
 use warp_terminal::model::grid::cell::{Cell, Flags};
 use warpui::App;
 use warpui_core::r#async::Timer;
+use warpui_core::color::ColorU;
 use warpui_core::elements::tui::{
     Color, Modifier, TuiBufferExt, TuiClipped, TuiElement, TuiRect, TuiSize,
 };
@@ -374,4 +376,20 @@ fn curly_underline_maps_to_host_underlined() {
     cell.flags.insert(Flags::CURLY_UNDERLINE);
     let style = super::cell_to_style(&cell, &colors);
     assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+}
+
+#[test]
+fn curly_underline_color_is_preserved_as_host_underline_color() {
+    let colors = TerminalColorList::from(&TerminalColors::default());
+    let mut cell = Cell::default();
+    cell.c = 'x';
+    cell.flags.insert(Flags::CURLY_UNDERLINE);
+    let underline_color = AnsiColor::Spec(ColorU::new(240, 143, 104, 255));
+    cell.set_underline_color(Some(underline_color));
+    let style = super::cell_to_style(&cell, &colors);
+    assert!(style.add_modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(
+        style.underline_color,
+        Some(super::cell_to_color(&underline_color, &colors))
+    );
 }
