@@ -1,64 +1,146 @@
-//! Signal-based process control for forcibly terminating a third-party
-//! harness's CLI process when it doesn't exit gracefully within the exit
-//! escalation ladder in [`super::super::run_harness`].
-//!
-//! This mirrors two existing, independent implementations rather than
-//! reusing either directly, to avoid widening either module's visibility for
-//! this one new caller:
-//! - The process-group `SIGKILL` already used for local generator commands
-//!   (`crate::terminal::model::session::command_executor::local_command_executor`).
-//! - The foreground-process-group lookup already used for long-running
-//!   command activity sampling
-//!   (`crate::ai::blocklist::action_model::execute::lrc_activity::sampler`).
-//!
-//! Consolidating all three into one shared utility is a reasonable follow-up
-//! once this new caller is established.
+//! Best-effort SIGKILL of a third-party harness process group when graceful
+//! `/exit` does not complete within the bounded shutdown ladder.
 
 use crate::terminal::model::terminal_model::ShellProcessInfo;
 
-/// Returns the pty's current foreground process group, if any.
+/// SIGKILL the harness only if its process group can be proved to belong to
+/// `shell`'s live descendant tree and is not this process's own group.
 ///
-/// The shell's own pid is deliberately not what callers want here: an
-/// interactively-launched CLI harness (Claude Code, Codex) runs as its own
-/// foreground process group under the shell, and that's what needs to be
-/// signaled to actually stop the harness rather than just the shell that
-/// launched it.
+/// If that cannot be proved, skips the signal. The caller still returns on
+/// the bounded path; the sandbox is torn down afterward.
+pub(super) fn force_kill_harness_if_safe(shell: &ShellProcessInfo) {
+    #[cfg(unix)]
+    {
+        let target = proven_kill_pgid(
+            untrusted_foreground_pgid(shell),
+            shell.pid,
+            current_pgid(),
+            &live_tree_pgids(shell.pid),
+        );
+        match target {
+            Some(pgid) => kill_process_group(pgid),
+            None => log::warn!(
+                "Skipping harness force-kill: no process group could be proved \
+                 to belong to the tracked shell's tree"
+            ),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = shell;
+        log::warn!("Skipping harness force-kill: process-group SIGKILL is Unix-only");
+    }
+}
+
+/// Returns `candidate_foreground_pgid` or `shell_pid` only when that value is a
+/// real process group in `tree_pgids` (the live shell and its descendants) and
+/// is not this process's own group.
+pub(super) fn proven_kill_pgid(
+    candidate_foreground_pgid: Option<u32>,
+    shell_pid: u32,
+    self_pgid: u32,
+    tree_pgids: &[u32],
+) -> Option<u32> {
+    let is_safe = |pgid: u32| pgid >= 2 && pgid != self_pgid && tree_pgids.contains(&pgid);
+    if let Some(pgid) = candidate_foreground_pgid
+        && is_safe(pgid)
+    {
+        return Some(pgid);
+    }
+    is_safe(shell_pid).then_some(shell_pid)
+}
+
 #[cfg(unix)]
-pub(super) fn foreground_pgid(shell: &ShellProcessInfo) -> Option<u32> {
+fn untrusted_foreground_pgid(shell: &ShellProcessInfo) -> Option<u32> {
     let fd = shell.pty_leader_fd?;
-    // SAFETY: `tcgetpgrp` only reads terminal state for `fd`. A stale or
-    // reused descriptor makes it fail or answer about an unrelated
-    // terminal; both are handled by returning `None`.
+    // SAFETY: `tcgetpgrp` only reads terminal state for `fd`. A closed or
+    // reused descriptor can fail or name an unrelated terminal's group; that
+    // value is not signaled unless `proven_kill_pgid` accepts it.
     let pgid = unsafe { libc::tcgetpgrp(fd) };
     (pgid > 0).then_some(pgid as u32)
 }
 
-#[cfg(not(unix))]
-pub(super) fn foreground_pgid(_shell: &ShellProcessInfo) -> Option<u32> {
-    None
+#[cfg(unix)]
+fn current_pgid() -> u32 {
+    // SAFETY: `getpgrp` has no failure mode and only reads this process's group.
+    unsafe { libc::getpgrp() as u32 }
 }
 
-/// Sends `SIGKILL` to every process in the given process group.
-///
-/// Fire-and-forget: `SIGKILL` cannot be caught, blocked, or ignored, so the
-/// kernel guarantees the targeted processes will be torn down once this
-/// call succeeds. Callers do not need to wait for confirmation that the
-/// process actually exited before proceeding.
 #[cfg(unix)]
-pub(super) fn kill_process_group(pgid: u32) {
+fn live_tree_pgids(shell_pid: u32) -> Vec<u32> {
+    use std::collections::HashSet;
+
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true, /* remove_dead_processes */
+        ProcessRefreshKind::nothing(),
+    );
+    let shell = Pid::from_u32(shell_pid);
+    if system.process(shell).is_none() {
+        return Vec::new();
+    }
+
+    let mut pgids = HashSet::new();
+    if let Some(pgid) = process_group_of(shell) {
+        pgids.insert(pgid);
+    }
+    for pid in descendants_of(&system, shell) {
+        if let Some(pgid) = process_group_of(pid) {
+            pgids.insert(pgid);
+        }
+    }
+    pgids.into_iter().collect()
+}
+
+#[cfg(unix)]
+fn descendants_of(
+    system: &sysinfo::System,
+    pid: sysinfo::Pid,
+) -> std::collections::HashSet<sysinfo::Pid> {
+    let mut descendants = std::collections::HashSet::new();
+    loop {
+        let mut added = false;
+        for (candidate, process) in system.processes() {
+            if descendants.contains(candidate) {
+                continue;
+            }
+            let Some(parent) = process.parent() else {
+                continue;
+            };
+            if parent == pid || descendants.contains(&parent) {
+                descendants.insert(*candidate);
+                added = true;
+            }
+        }
+        if !added {
+            return descendants;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_group_of(pid: sysinfo::Pid) -> Option<u32> {
+    // SAFETY: `getpgid` only reads scheduling metadata for `pid`, and reports
+    // failure through its return value for pids that no longer exist.
+    let pgid = unsafe { libc::getpgid(pid.as_u32() as libc::pid_t) };
+    (pgid > 0).then_some(pgid as u32)
+}
+
+#[cfg(unix)]
+fn kill_process_group(pgid: u32) {
     use nix::sys::signal::{Signal, kill};
     use nix::unistd::Pid;
 
     // A pgid of 0 targets the caller's own process group, and 1 negates to
     // -1, which SIGKILLs every process this user is allowed to signal.
-    // Neither is ever a legitimate target, so refuse them rather than let a
-    // bad pgid reach `kill`.
     if pgid < 2 {
         log::warn!("Refusing to force-kill process group {pgid}: pid is below 2");
         return;
     }
 
-    // Killing a negative pid kills every process in that process group.
     match kill(Pid::from_raw(-(pgid as i32)), Signal::SIGKILL) {
         Ok(()) => log::info!("Force-killed harness process group {pgid}"),
         Err(nix::errno::Errno::ESRCH) => {
@@ -70,5 +152,6 @@ pub(super) fn kill_process_group(pgid: u32) {
     }
 }
 
-#[cfg(not(unix))]
-pub(super) fn kill_process_group(_pgid: u32) {}
+#[cfg(test)]
+#[path = "process_control_tests.rs"]
+mod tests;

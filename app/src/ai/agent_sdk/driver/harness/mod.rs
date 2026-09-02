@@ -42,6 +42,7 @@ pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
 mod codex;
 pub(crate) mod codex_transcript;
+pub(crate) mod exit_escalation;
 mod gemini;
 mod json_utils;
 mod process_control;
@@ -550,14 +551,10 @@ pub(crate) trait HarnessRunner: Send + Sync {
         Ok(())
     }
 
-    /// Forcibly terminates the harness's foreground process group, as the
-    /// last resort when [`Self::exit`] and [`Self::exit_followup`] didn't get
-    /// the CLI to exit within the allotted window.
-    ///
-    /// Fire-and-forget: `SIGKILL` cannot be caught or ignored, so the kernel
-    /// guarantees the process will terminate once the signal is delivered.
-    /// Callers do not need to wait for `command_handle` to resolve before
-    /// treating the harness as done.
+    /// Best-effort last resort when [`Self::exit`] and [`Self::exit_followup`]
+    /// did not get the CLI to exit. Signals only a process group proved to
+    /// belong to this terminal's shell tree; skips the kill if that cannot be
+    /// proved. Does not wait for the process to disappear.
     async fn force_kill(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         let terminal_driver = self.terminal_driver();
         let shell_process_info = foreground
@@ -569,20 +566,11 @@ pub(crate) trait HarnessRunner: Send + Sync {
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while force-killing harness"))?;
 
         let Some(shell_process_info) = shell_process_info else {
-            anyhow::bail!("No shell process info available; cannot force-kill harness process");
+            log::warn!("No shell process info available; skipping harness force-kill");
+            return Ok(());
         };
 
-        match process_control::foreground_pgid(&shell_process_info) {
-            Some(pgid) => process_control::kill_process_group(pgid),
-            None => {
-                log::warn!(
-                    "No foreground process group found for the harness terminal; \
-                     falling back to killing the shell's own process group {}",
-                    shell_process_info.pid
-                );
-                process_control::kill_process_group(shell_process_info.pid);
-            }
-        }
+        process_control::force_kill_harness_if_safe(&shell_process_info);
         Ok(())
     }
 
