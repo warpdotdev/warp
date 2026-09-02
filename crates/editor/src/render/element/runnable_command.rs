@@ -4,7 +4,6 @@ use warpui_core::{AppContext, Element, SizeConstraint};
 
 use super::{RenderContext, RenderableBlock};
 use crate::editor::RunnableCommandModel;
-use crate::extract_block;
 use crate::render::BLOCK_FOOTER_HEIGHT;
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState};
@@ -60,7 +59,17 @@ impl RenderableBlock for RenderableRunnableCommand {
 
     fn paint(&mut self, model: &RenderState, ctx: &mut RenderContext, app: &AppContext) {
         let content = model.content();
-        let code_block = extract_block!(self.viewport_item, content, (block, BlockItem::RunnableCodeBlock{paragraph_block, ..}) => block.code_block(paragraph_block));
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let BlockItem::RunnableCodeBlock {
+            paragraph_block, ..
+        } = block.item
+        else {
+            return;
+        };
+        let code_block = block.code_block(paragraph_block);
 
         let styles = model.styles();
         let code_style = &styles.code_text;

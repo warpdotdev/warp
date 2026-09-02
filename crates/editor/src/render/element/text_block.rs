@@ -1,6 +1,5 @@
 use super::RenderableBlock;
 use super::paint::RenderContext;
-use crate::extract_block;
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState};
 
@@ -34,11 +33,14 @@ impl RenderableBlock for RenderableTextBlock {
         _app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let text_block = extract_block!(
-            self.viewport_item,
-            content,
-            (block, BlockItem::TextBlock { paragraph_block }) => block.text_block(paragraph_block)
-        );
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let BlockItem::TextBlock { paragraph_block } = block.item else {
+            return;
+        };
+        let text_block = block.text_block(paragraph_block);
 
         let paragraph_styles = &model.styles().base_text;
         for paragraph in text_block.paragraphs() {

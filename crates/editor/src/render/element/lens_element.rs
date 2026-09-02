@@ -79,7 +79,7 @@ impl<V: EditorView> Element for RichTextElementLens<V> {
             .into_iter()
             .filter_map(|item| {
                 let content = model.content();
-                let block = item.positioned_block(&content)?.item.clone();
+                let block = item.resolved_block(&content)?.clone();
                 drop(content);
                 match block {
                     BlockItem::Paragraph(_) => Some(RenderableParagraph::new(item).finish()),

@@ -49,9 +49,10 @@ impl RenderableBlock for RenderableTemporaryBlock {
         _app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let Some(block) = self.viewport_item.positioned_block(&content) else {
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
             return;
         };
+        let block = self.viewport_item.positioned_block(&item);
         let paragraph_block = match (&block, block.item) {
             (
                 block,

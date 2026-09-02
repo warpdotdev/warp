@@ -169,17 +169,17 @@ fn test_viewport_materializes_only_visible_code_block_paragraphs() {
             );
             let code_block = items
                 .iter()
-                .find_map(|item| match item.block() {
-                    Some(BlockItem::RunnableCodeBlock {
-                        paragraph_block, ..
-                    }) => Some(paragraph_block),
-                    _ => None,
-                })
+                .find_map(|item| item.block())
                 .expect("visible code block should be materialized");
+            let BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } = code_block.as_ref()
+            else {
+                panic!("expected a materialized code block");
+            };
 
-            let materialized = code_block
+            let materialized = paragraph_block
                 .paragraphs()
-                .iter()
                 .enumerate()
                 .filter_map(|(index, paragraph)| (!paragraph.is_deferred()).then_some(index))
                 .collect::<Vec<_>>();
@@ -199,11 +199,77 @@ fn test_main_viewport_and_simultaneous_lenses_share_one_materialization_budget()
                 &TEST_STYLES,
                 f32::MAX,
             );
+            for main_first in [true, false] {
+                let mut content = SumTree::new();
+                for text in ["abcdefghij", "klmnopqrst", "uvwxyz1234"] {
+                    content.push(BlockItem::Paragraph(deferred_paragraph(
+                        &layout,
+                        text,
+                        &BufferBlockStyle::PlainText,
+                    )));
+                }
+                let mut model =
+                    RenderState::new_for_test(TEST_STYLES, 200.0.into_pixels(), 24.0.into_pixels());
+                model.set_content(content);
+
+                let materialize_main = || {
+                    model.materialize_viewport_with_max_chars(
+                        &layout,
+                        8.0.into_pixels(),
+                        200.0.into_pixels(),
+                        Pixels::zero(),
+                        12,
+                    )
+                };
+                let materialize_lens = |line| {
+                    let blocks = model.blocks_in_line_range(
+                        super::RenderLineLocation::Current(LineCount(line))
+                            ..super::RenderLineLocation::Current(LineCount(line + 1)),
+                        200.0.into_pixels(),
+                    );
+                    model.materialize_items(&layout, blocks, 12)
+                };
+                let (main, first_lens, second_lens) = if main_first {
+                    (materialize_main(), materialize_lens(1), materialize_lens(2))
+                } else {
+                    let second_lens = materialize_lens(2);
+                    let first_lens = materialize_lens(1);
+                    (materialize_main(), first_lens, second_lens)
+                };
+
+                let snapshots = [&main, &first_lens, &second_lens];
+                let retained = snapshots
+                    .iter()
+                    .flat_map(|items| items.iter())
+                    .filter_map(|item| item.block())
+                    .map(|block| block.materialized_layout_chars())
+                    .sum::<usize>();
+                assert_eq!(retained, 12);
+                for items in snapshots {
+                    let block = items[0].block().expect("each visible snapshot is admitted");
+                    assert_eq!(block.materialized_layout_chars(), 4);
+                }
+            }
+        });
+    })
+}
+
+#[test]
+fn test_materialized_layout_retention_prunes_dead_reusable_ranges() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
             let mut content = SumTree::new();
-            for text in ["abcdefghij", "klmnopqrst", "uvwxyz1234"] {
+            for index in 0..100 {
                 content.push(BlockItem::Paragraph(deferred_paragraph(
                     &layout,
-                    text,
+                    &format!("paragraph-{index}"),
                     &BufferBlockStyle::PlainText,
                 )));
             }
@@ -211,37 +277,100 @@ fn test_main_viewport_and_simultaneous_lenses_share_one_materialization_budget()
                 RenderState::new_for_test(TEST_STYLES, 200.0.into_pixels(), 24.0.into_pixels());
             model.set_content(content);
 
-            let main = model.materialize_viewport_with_max_chars(
-                &layout,
-                8.0.into_pixels(),
-                200.0.into_pixels(),
-                Pixels::zero(),
-                12,
-            );
-            let mut lenses = Vec::new();
-            for line in 1..3 {
+            for line in 0..100 {
                 let blocks = model.blocks_in_line_range(
                     super::RenderLineLocation::Current(LineCount(line))
                         ..super::RenderLineLocation::Current(LineCount(line + 1)),
                     200.0.into_pixels(),
                 );
-                lenses.push(model.materialize_items(&layout, blocks, 12));
+                drop(model.materialize_items(&layout, blocks, 10));
             }
 
-            let retained = main
-                .iter()
-                .chain(lenses.iter().flatten())
-                .filter_map(|item| item.block())
-                .map(BlockItem::materialized_layout_chars)
-                .sum::<usize>();
-            assert_eq!(retained, 12);
-            assert!(main[0].block().is_some());
-            assert!(lenses[0][0].block().is_some());
-            assert!(lenses[1][0].block().is_none());
+            assert_eq!(
+                model
+                    .materialized_layout_retention
+                    .borrow_mut()
+                    .reusable_len(),
+                0
+            );
         });
     })
 }
 
+#[test]
+fn test_multiline_materialization_shares_indexed_backing_and_keeps_sparse_overlays() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let block_style = BufferBlockStyle::CodeBlock {
+                code_block_type: CodeBlockType::Shell,
+            };
+            let paragraphs = Vec1::try_from_vec(
+                (0..1_000)
+                    .map(|index| {
+                        deferred_paragraph(&layout, &format!("paragraph-{index}"), &block_style)
+                    })
+                    .collect(),
+            )
+            .expect("code block has paragraphs");
+            let scroll_top = (paragraphs.first().height().as_f32() * 500.
+                + COMMAND_SPACING.top_offset().as_f32())
+            .into_pixels();
+            let mut content = SumTree::new();
+            content.push(BlockItem::RunnableCodeBlock {
+                paragraph_block: ParagraphBlock::new(paragraphs),
+                code_block_type: CodeBlockType::Shell,
+                pending_mermaid_asset: None,
+            });
+            let mut model =
+                RenderState::new_for_test(TEST_STYLES, 200.0.into_pixels(), 24.0.into_pixels());
+            model.set_content(content);
+
+            let items = model.materialize_viewport_with_max_chars(
+                &layout,
+                8.0.into_pixels(),
+                200.0.into_pixels(),
+                scroll_top,
+                100,
+            );
+            let materialized = items[0]
+                .block()
+                .expect("visible code block is materialized");
+            let BlockItem::RunnableCodeBlock {
+                paragraph_block: materialized,
+                ..
+            } = materialized.as_ref()
+            else {
+                panic!("expected materialized code block");
+            };
+            let persistent = model.content.borrow();
+            let BlockItem::RunnableCodeBlock {
+                paragraph_block: persistent,
+                ..
+            } = &persistent.items()[0]
+            else {
+                panic!("expected persistent code block");
+            };
+
+            assert!(Arc::ptr_eq(
+                &materialized.paragraphs,
+                &persistent.paragraphs
+            ));
+            assert!(Arc::ptr_eq(
+                &materialized.paragraph_index,
+                &persistent.paragraph_index
+            ));
+            assert_eq!(materialized.materialized_paragraphs.len(), 1);
+            assert_eq!(materialized.paragraphs().len(), 1_000);
+        });
+    })
+}
 #[test]
 fn test_table_viewport_snapshot_uses_model_backed_layout() {
     App::test((), |app| async move {
@@ -279,9 +408,10 @@ fn test_table_viewport_snapshot_uses_model_backed_layout() {
             let table_item = &items[0];
             assert!(table_item.block().is_none());
             let model_content = model.content();
-            let positioned = table_item
-                .positioned_block(&model_content)
+            let resolved = table_item
+                .resolved_block(&model_content)
                 .expect("table should remain model-backed");
+            let positioned = table_item.positioned_block(&resolved);
             let BlockItem::Table(table) = positioned.item else {
                 panic!("expected table");
             };
@@ -355,19 +485,26 @@ fn test_deferred_viewport_materialization_is_visible_first_fair_and_bounded() {
             let visible_paragraphs = items
                 .iter()
                 .filter_map(|item| match item.block() {
-                    Some(BlockItem::Paragraph(paragraph)) => Some(paragraph),
-                    None | Some(BlockItem::TrailingNewLine(_)) => None,
-                    item => panic!("expected paragraph or trailing newline, got {item:?}"),
+                    Some(block) if matches!(block.as_ref(), BlockItem::Paragraph(_)) => Some(block),
+                    None => None,
+                    Some(block) => {
+                        panic!("expected paragraph or trailing newline, got {block:?}")
+                    }
                 })
                 .collect::<Vec<_>>();
             assert_eq!(visible_paragraphs.len(), 3);
-            assert!(visible_paragraphs.iter().all(|paragraph| {
-                !paragraph.is_deferred() && paragraph.materialized_layout_chars() == 2
+            assert!(visible_paragraphs.iter().all(|block| {
+                matches!(
+                    block.as_ref(),
+                    BlockItem::Paragraph(paragraph)
+                        if !paragraph.is_deferred()
+                            && paragraph.materialized_layout_chars() == 2
+                )
             }));
             assert_eq!(
                 visible_paragraphs
                     .iter()
-                    .map(|paragraph| paragraph.materialized_layout_chars())
+                    .map(|block| block.materialized_layout_chars())
                     .sum::<usize>(),
                 6
             );
@@ -407,8 +544,11 @@ fn test_deferred_viewport_materialization_is_visible_first_fair_and_bounded() {
             drop(persistent);
 
             let first_frame = match items[0].block() {
-                Some(BlockItem::Paragraph(paragraph)) => Arc::as_ptr(&paragraph.frame),
-                item => panic!("expected materialized first paragraph, got {item:?}"),
+                Some(block) => match block.as_ref() {
+                    BlockItem::Paragraph(paragraph) => Arc::as_ptr(&paragraph.frame),
+                    item => panic!("expected materialized first paragraph, got {item:?}"),
+                },
+                None => panic!("expected materialized first paragraph"),
             };
             let reused = model.materialize_viewport_with_max_chars(
                 &layout,
@@ -418,8 +558,11 @@ fn test_deferred_viewport_materialization_is_visible_first_fair_and_bounded() {
                 6,
             );
             let reused_first_frame = match reused[0].block() {
-                Some(BlockItem::Paragraph(paragraph)) => Arc::as_ptr(&paragraph.frame),
-                item => panic!("expected materialized first paragraph, got {item:?}"),
+                Some(block) => match block.as_ref() {
+                    BlockItem::Paragraph(paragraph) => Arc::as_ptr(&paragraph.frame),
+                    item => panic!("expected materialized first paragraph, got {item:?}"),
+                },
+                None => panic!("expected materialized first paragraph"),
             };
             assert_eq!(reused_first_frame, first_frame);
 
@@ -527,15 +670,15 @@ fn assert_snapshot_is_materialized(items: &[super::viewport::ViewportItem]) {
     let paragraphs = items
         .iter()
         .filter_map(|item| match item.block() {
-            Some(BlockItem::Paragraph(paragraph)) => Some(paragraph),
-            _ => None,
+            Some(block) if matches!(block.as_ref(), BlockItem::Paragraph(_)) => Some(block),
+            None | Some(_) => None,
         })
         .collect::<Vec<_>>();
     assert!(!paragraphs.is_empty());
     assert!(
         paragraphs
             .iter()
-            .all(|paragraph| paragraph.materialized_layout_chars() > 0)
+            .all(|block| block.materialized_layout_chars() > 0)
     );
 }
 
@@ -587,19 +730,23 @@ fn test_post_edit_autoscroll_materializes_the_interior_selection_geometry() {
                 .with_width_setting(WidthSetting::InfiniteWidth)
         });
         let version = BufferVersion::new();
-        let text = format!("{}\n", "abcdef".repeat(20));
-        let interior_offset = CharOffset::from(60);
-        let delta = EditDelta {
-            old_offset: CharOffset::from(1)..CharOffset::from(1),
-            new_lines: Arc::new(vec![StyledBufferBlock::Text(StyledTextBlock {
+        let first_text = format!("{}\n", "abcdef".repeat(20));
+        let second_text = format!("{}\n", "uvwxyz".repeat(20));
+        let interior_offset = CharOffset::from(first_text.chars().count() + 60);
+        let styled_block = |text: &str| {
+            StyledBufferBlock::Text(StyledTextBlock {
                 block: vec![StyledBufferRun {
-                    run: text.clone(),
+                    run: text.to_string(),
                     text_styles: Default::default(),
                     block_style: BufferBlockStyle::PlainText,
                 }],
                 style: BufferBlockStyle::PlainText,
                 content_length: CharOffset::from(text.chars().count()),
-            })]),
+            })
+        };
+        let delta = EditDelta {
+            old_offset: CharOffset::from(1)..CharOffset::from(1),
+            new_lines: Arc::new(vec![styled_block(&first_text), styled_block(&second_text)]),
             ..EditDelta::default()
         };
         render.update(&mut app, |render, ctx| {
@@ -611,11 +758,46 @@ fn test_post_edit_autoscroll_materializes_the_interior_selection_geometry() {
                 ctx,
             );
             render.add_pending_edit(delta, version);
-            render.update_selection(
-                RenderedSelectionSet::new(RenderedSelection::new(interior_offset, interior_offset)),
-                version,
-            );
-            render.request_autoscroll();
+        });
+
+        let edit_complete = render.read(&app, |render, _| render.layout_complete());
+        edit_complete.await;
+
+        let layout_cache = LayoutCache::new();
+        let retained = render.read(&app, |render, ctx| {
+            let layout = render.layout_context(&layout_cache, ctx);
+            render.materialize_viewport_with_max_chars(
+                &layout,
+                8.0.into_pixels(),
+                40.0.into_pixels(),
+                Pixels::zero(),
+                12,
+            )
+        });
+        assert_eq!(
+            retained[0]
+                .block()
+                .expect("first paragraph remains retained")
+                .materialized_layout_chars(),
+            12
+        );
+        render.read(&app, |render, ctx| {
+            let layout = render.layout_context(&layout_cache, ctx);
+            render.materialize_geometry_offsets(&layout, &[interior_offset]);
+            let second_offset = CharOffset::from(first_text.chars().count());
+            let materialized = render.materialized_blocks.borrow();
+            let block = materialized
+                .get(&second_offset)
+                .expect("target geometry must materialize independently of retained admission");
+            assert!(block.materialized_layout_chars() > 60);
+            drop(materialized);
+            render.materialized_blocks.borrow_mut().clear();
+        });
+
+        render.update(&mut app, |render, _| {
+            render.request_autoscroll_to(super::AutoScrollMode::PositionOffsetInViewportCenter(
+                interior_offset,
+            ));
         });
 
         let complete = render.read(&app, |render, _| render.layout_complete());
@@ -628,20 +810,15 @@ fn test_post_edit_autoscroll_materializes_the_interior_selection_geometry() {
                 Some(BlockItem::Paragraph(paragraph)) if paragraph.is_deferred()
             ));
             drop(persistent);
-
-            let materialized = render.materialized_blocks.borrow();
-            let paragraph = match materialized
-                .get(&CharOffset::zero())
-                .map(|block| block.as_ref())
-            {
-                Some(BlockItem::Paragraph(paragraph)) => paragraph,
-                item => panic!("expected autoscroll geometry paragraph, got {item:?}"),
-            };
-            assert!(
-                paragraph.materialized_layout_chars() > interior_offset.as_usize(),
-                "the queued autoscroll must shape through the interior selection"
+            assert!(render.viewport().scroll_top() > Pixels::zero());
+            assert!(render.materialized_blocks.borrow().is_empty());
+            assert_eq!(
+                retained[0]
+                    .block()
+                    .expect("retained viewport survives transient geometry")
+                    .materialized_layout_chars(),
+                12
             );
-            assert!(render.character_bounds(interior_offset).is_some());
         });
     })
 }

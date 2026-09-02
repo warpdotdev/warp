@@ -865,14 +865,14 @@ impl<V: EditorView> RichTextElement<V> {
             .into_iter()
             .map(|item| {
                 let content = model.content();
-                let Some(positioned_block) = item.positioned_block(&content) else {
+                let Some(resolved_block) = item.resolved_block(&content) else {
                     return Empty::new(item).finish();
                 };
-                if matches!(positioned_block.item, BlockItem::Table(_)) {
+                if matches!(&*resolved_block, BlockItem::Table(_)) {
                     drop(content);
                     return RenderableTable::new(item).finish();
                 }
-                let block = positioned_block.item.clone();
+                let block = resolved_block.clone();
                 drop(content);
                 let is_ordered_list = matches!(block, BlockItem::OrderedList { .. });
                 let renderable_block = match block {

@@ -12,7 +12,7 @@ use warpui_core::units::{IntoPixels, Pixels};
 use super::positioned::{Positioned, PositionedCursor};
 use super::{
     AUTO_SCROLL_MARGIN, BlockItem, BlockSpacing, Height, HitTestOptions, LayoutSummary, LineCount,
-    Location, RenderContentTreeRef, RenderState, UNIT_MARGIN, bounds,
+    Location, MaterializedBlockSnapshot, RenderContentTreeRef, RenderState, UNIT_MARGIN, bounds,
 };
 use crate::render::element::RenderContext;
 
@@ -62,7 +62,8 @@ pub struct ViewportItem {
     pub block_offset: CharOffset,
     pub(super) start_line: LineCount,
     pub(super) paragraph_range: Range<usize>,
-    pub(super) materialized_block: Option<Rc<BlockItem>>,
+    pub(super) materialized_block: Option<Rc<MaterializedBlockSnapshot>>,
+    pub(super) materialized_override: Option<Rc<BlockItem>>,
 }
 
 /// A snapshot of the scroll position. This may only be used to scroll back to the original
@@ -104,6 +105,24 @@ impl ScrollPositionSnapshot {
     pub(super) fn first_character_offset(self) -> CharOffset {
         self.first_character_offset
     }
+}
+
+#[macro_export]
+macro_rules! extract_block {
+    ($viewport_item:expr, $content:expr, $match:pat => $value:expr) => {{
+        let offset = $viewport_item.block_offset();
+        let Some(item) = $viewport_item.source_block(&$content) else {
+            return;
+        };
+        let block = $viewport_item.positioned_block(item);
+        match (&block, block.item) {
+            $match => $value,
+            other => {
+                log::trace!("Unexpected block {other:?} at {}", offset);
+                return;
+            }
+        }
+    }};
 }
 
 pub struct ViewportIterator<'a> {
@@ -407,6 +426,7 @@ impl<'a> Iterator for ViewportIterator<'a> {
                 self.content_start..self.content_end,
             ),
             materialized_block: None,
+            materialized_override: None,
         };
         Some((viewport_item, item.item))
     }
@@ -419,12 +439,19 @@ impl ViewportItem {
     }
 
     #[cfg(test)]
-    pub(crate) fn block(&self) -> Option<&BlockItem> {
-        self.materialized_block.as_deref()
+    pub(crate) fn block(&self) -> Option<Rc<BlockItem>> {
+        self.materialized_block
+            .as_ref()
+            .and_then(|snapshot| snapshot.block())
+            .or_else(|| self.materialized_override.clone())
     }
 
-    pub(super) fn set_materialized_block(&mut self, block: Option<Rc<BlockItem>>) {
+    pub(super) fn set_materialized_block(&mut self, block: Option<Rc<MaterializedBlockSnapshot>>) {
         self.materialized_block = block;
+    }
+
+    pub(super) fn set_materialized_override(&mut self, block: Option<Rc<BlockItem>>) {
+        self.materialized_override = block;
     }
 
     pub(super) fn materialization_key(&self) -> super::MaterializationKey {
@@ -435,32 +462,37 @@ impl ViewportItem {
         }
     }
 
-    pub(super) fn source_block<'a>(
-        &self,
-        content: &'a RenderContentTreeRef<'a>,
-    ) -> Option<&'a BlockItem> {
+    pub fn source_block<'a>(&self, content: &'a RenderContentTreeRef<'a>) -> Option<&'a BlockItem> {
         content
             .base_block_at_height(self.height())
             .filter(|block| block.start_char_offset == self.block_offset)
             .map(|block| block.item)
     }
 
-    /// Returns a positioned view of this viewport item's materialized or model-backed block.
-    pub fn positioned_block<'a>(
+    pub fn resolved_block<'a>(
         &'a self,
         content: &'a RenderContentTreeRef<'a>,
-    ) -> Option<Positioned<'a, BlockItem>> {
-        let item = self
-            .materialized_block
-            .as_deref()
-            .or_else(|| self.source_block(content))?;
-        Some(Positioned {
+    ) -> Option<ResolvedBlock<'a>> {
+        self.materialized_block
+            .as_ref()
+            .and_then(|snapshot| snapshot.block())
+            .map(ResolvedBlock::Materialized)
+            .or_else(|| {
+                self.materialized_override
+                    .clone()
+                    .map(ResolvedBlock::Materialized)
+            })
+            .or_else(|| self.source_block(content).map(ResolvedBlock::ModelBacked))
+    }
+
+    pub fn positioned_block<'a>(&self, item: &'a BlockItem) -> Positioned<'a, BlockItem> {
+        Positioned {
             start_char_offset: self.block_offset,
             start_line: self.start_line,
             start_y_offset: self.content_offset,
             style: self.spacing,
             item,
-        })
+        }
     }
 
     pub(crate) fn start_line(&self) -> LineCount {
@@ -501,19 +533,18 @@ impl ViewportItem {
     }
 }
 
-#[macro_export]
-macro_rules! extract_block {
-    ($viewport_item:expr, $content:expr, $match:pat => $value:expr) => {{
-        let offset = $viewport_item.block_offset();
-        let Some(block) = $viewport_item.positioned_block(&$content) else {
-            return;
-        };
-        match (&block, block.item) {
-            $match => $value,
-            other => {
-                log::trace!("Unexpected block {other:?} at {}", offset);
-                return;
-            }
+pub enum ResolvedBlock<'a> {
+    Materialized(Rc<BlockItem>),
+    ModelBacked(&'a BlockItem),
+}
+
+impl std::ops::Deref for ResolvedBlock<'_> {
+    type Target = BlockItem;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Materialized(block) => block,
+            Self::ModelBacked(block) => block,
         }
-    }};
+    }
 }
