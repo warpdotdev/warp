@@ -4804,6 +4804,78 @@ fn test_new_tab_in_group_expands_collapsed_group_member_active() {
 }
 
 #[test]
+fn test_unparked_tab_cycle_target_skips_and_wraps() {
+    let parked = [false, true, false, true];
+
+    assert_eq!(
+        unparked_tab_cycle_target(0, 0..parked.len(), &SessionCycleDirection::Next, |index| {
+            parked[index]
+        },),
+        2
+    );
+    assert_eq!(
+        unparked_tab_cycle_target(
+            0,
+            0..parked.len(),
+            &SessionCycleDirection::Previous,
+            |index| parked[index],
+        ),
+        2
+    );
+    assert_eq!(
+        unparked_tab_cycle_target(
+            2,
+            [0, 2, 3].into_iter(),
+            &SessionCycleDirection::Next,
+            |index| parked[index],
+        ),
+        0
+    );
+
+    let all_other_tabs_parked = [false, true, true, true];
+    assert_eq!(
+        unparked_tab_cycle_target(
+            0,
+            0..all_other_tabs_parked.len(),
+            &SessionCycleDirection::Next,
+            |index| all_other_tabs_parked[index],
+        ),
+        0
+    );
+}
+
+#[test]
+fn test_parked_tabs_are_skipped_by_tab_navigation() {
+    let _parked_tabs_guard = FeatureFlag::ParkedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            workspace.handle_action(&WorkspaceAction::ToggleTabParked(1), ctx);
+            workspace.activate_tab(3, ctx);
+            workspace.handle_action(&WorkspaceAction::ToggleActiveTabParked, ctx);
+            assert!(workspace.tabs[1].parked);
+            assert!(workspace.tabs[3].parked);
+
+            workspace.handle_action(&WorkspaceAction::ActivateNextTab, ctx);
+            assert_eq!(workspace.active_tab_index(), 0);
+            workspace.handle_action(&WorkspaceAction::ActivateNextTab, ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+            workspace.handle_action(&WorkspaceAction::ActivateNextTab, ctx);
+            assert_eq!(workspace.active_tab_index(), 0);
+            workspace.handle_action(&WorkspaceAction::ActivatePrevTab, ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+        });
+    });
+}
+
+#[test]
 fn test_pin_unpin_ungrouped_tab_moves_to_and_from_boundary() {
     let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
 

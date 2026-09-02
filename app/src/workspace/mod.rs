@@ -624,6 +624,14 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("shift-cmd-}")
         .with_linux_or_windows_key_binding("ctrl-pagedown"),
         EditableBinding::new(
+            "workspace:toggle_active_tab_parked",
+            "Toggle current tab parking",
+            WorkspaceAction::ToggleActiveTabParked,
+        )
+        .with_enabled(|| FeatureFlag::ParkedTabs.is_enabled())
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
+        .with_group(bindings::BindingGroup::Navigation.as_str()),
+        EditableBinding::new(
             "pane_group:navigate_prev",
             "Activate previous pane",
             WorkspaceAction::NavigatePrevPaneOrPanel,

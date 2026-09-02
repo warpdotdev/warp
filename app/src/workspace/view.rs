@@ -773,6 +773,31 @@ enum SessionCycleDirection {
     Previous,
 }
 
+fn unparked_tab_cycle_target<I, F>(
+    active_tab_index: usize,
+    mut candidate_indices: I,
+    direction: &SessionCycleDirection,
+    is_parked: F,
+) -> usize
+where
+    I: DoubleEndedIterator<Item = usize> + Clone,
+    F: Fn(usize) -> bool,
+{
+    let is_eligible = |index| index != active_tab_index && !is_parked(index);
+    match direction {
+        SessionCycleDirection::Next => candidate_indices
+            .clone()
+            .find(|&index| index > active_tab_index && is_eligible(index))
+            .or_else(|| candidate_indices.find(|&index| is_eligible(index))),
+        SessionCycleDirection::Previous => candidate_indices
+            .clone()
+            .rev()
+            .find(|&index| index < active_tab_index && is_eligible(index))
+            .or_else(|| candidate_indices.rev().find(|&index| is_eligible(index))),
+    }
+    .unwrap_or(active_tab_index)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanePanelDirection {
     Prev,
@@ -11974,50 +11999,48 @@ impl Workspace {
         }
     }
 
-    pub fn activate_prev_tab(&mut self, ctx: &mut ViewContext<Self>) {
-        let index = if self.vertical_tabs_panel.search_query.is_empty() {
-            if self.active_tab_index > 0 {
-                self.active_tab_index - 1
-            } else {
-                self.tabs.len() - 1
-            }
+    fn tab_cycle_target(&self, direction: &SessionCycleDirection, ctx: &AppContext) -> usize {
+        let is_parked =
+            |index: usize| FeatureFlag::ParkedTabs.is_enabled() && self.tabs[index].parked;
+        if self.vertical_tabs_panel.search_query.is_empty() {
+            unparked_tab_cycle_target(
+                self.active_tab_index,
+                0..self.tabs.len(),
+                direction,
+                is_parked,
+            )
         } else {
             let matching = self.vertical_tabs_panel.matching_tab_indices(
                 &self.tabs,
                 self.active_tab_index,
                 ctx,
             );
-            matching
-                .iter()
-                .rev()
-                .find(|&&i| i < self.active_tab_index)
-                .or_else(|| matching.last())
-                .copied()
-                .unwrap_or(self.active_tab_index)
-        };
+            unparked_tab_cycle_target(
+                self.active_tab_index,
+                matching.into_iter(),
+                direction,
+                is_parked,
+            )
+        }
+    }
+
+    fn toggle_tab_parked(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::ParkedTabs.is_enabled() {
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(index) {
+            tab.parked = !tab.parked;
+            ctx.notify();
+        }
+    }
+
+    pub fn activate_prev_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        let index = self.tab_cycle_target(&SessionCycleDirection::Previous, ctx);
         self.activate_tab(index, ctx);
     }
 
     pub fn activate_next_tab(&mut self, ctx: &mut ViewContext<Self>) {
-        let index = if self.vertical_tabs_panel.search_query.is_empty() {
-            if self.active_tab_index + 1 < self.tabs.len() {
-                self.active_tab_index + 1
-            } else {
-                0
-            }
-        } else {
-            let matching = self.vertical_tabs_panel.matching_tab_indices(
-                &self.tabs,
-                self.active_tab_index,
-                ctx,
-            );
-            matching
-                .iter()
-                .find(|&&i| i > self.active_tab_index)
-                .or_else(|| matching.first())
-                .copied()
-                .unwrap_or(self.active_tab_index)
-        };
+        let index = self.tab_cycle_target(&SessionCycleDirection::Next, ctx);
         self.activate_tab(index, ctx);
     }
 
@@ -23834,6 +23857,8 @@ impl TypedActionView for Workspace {
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),
             ActivateNextTab => self.activate_next_tab(ctx),
             ActivateLastTab => self.activate_last_tab(ctx),
+            ToggleActiveTabParked => self.toggle_tab_parked(self.active_tab_index, ctx),
+            ToggleTabParked(index) => self.toggle_tab_parked(*index, ctx),
             CyclePrevSession => self.cycle_prev_session(ctx),
             CycleNextSession => self.cycle_next_session(ctx),
             MoveActiveTabLeft => self.move_tab(self.active_tab_index, TabMovement::Left, ctx),
