@@ -534,18 +534,18 @@ impl HarnessRunner for ClaudeHarnessRunner {
         //     2. Move to background and exit
         //     3. Stay
         //
-        // We write the literal digit `1` (not a bare Enter) to explicitly
-        // select "Exit anyway", regardless of which option the dialog
-        // highlights by default. This is sent unconditionally, shortly after
-        // `/exit`, without waiting to see whether the dialog actually
-        // appeared: if there's no dialog this just submits an empty/no-op
-        // line to the CLI.
-        log::info!("Sending exit confirmation follow-up ('1') to Claude Code CLI");
+        // "Exit anyway" is the default-highlighted option, so a bare Enter
+        // selects it without needing to write the digit. This is sent
+        // unconditionally, shortly after `/exit`, without waiting to see
+        // whether the dialog actually appeared: if there's no dialog this is
+        // a no-op Enter. If a future Claude Code version changes the default
+        // selection, this would need to send the digit explicitly instead.
+        log::info!("Sending exit confirmation follow-up (Enter) to Claude Code CLI");
         let terminal_driver = self.terminal_driver.clone();
         foreground
             .spawn(move |_, ctx| {
                 terminal_driver.update(ctx, |driver, ctx| {
-                    driver.send_text_to_cli("1".to_string(), ctx);
+                    driver.send_bare_enter_to_cli(ctx);
                 });
             })
             .await
