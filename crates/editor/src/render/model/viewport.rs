@@ -6,10 +6,10 @@ use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::units::{IntoPixels, Pixels};
 
-use super::positioned::PositionedCursor;
+use super::positioned::{Positioned, PositionedCursor};
 use super::{
-    AUTO_SCROLL_MARGIN, BlockItem, BlockSpacing, Height, HitTestOptions, LayoutSummary, Location,
-    RenderState, UNIT_MARGIN, bounds,
+    AUTO_SCROLL_MARGIN, BlockItem, BlockSpacing, Height, HitTestOptions, LayoutSummary, LineCount,
+    Location, RenderState, UNIT_MARGIN, bounds,
 };
 use crate::render::element::RenderContext;
 
@@ -42,9 +42,8 @@ pub struct ViewportState {
 /// A visible, viewported item. This stores all the information needed to lay out and display a
 /// block and any associated UI controls in the current viewport.
 ///
-/// Because the viewport item is needed throughout the `Element` lifecycle, it does not directly
-/// reference the rendering model. Instead, it holds offsets that refer back to the model, relying
-/// on the UI framework to guarantee that the model does not change without a re-render.
+/// Because the viewport item is needed throughout the `Element` lifecycle, it owns the block
+/// snapshot selected during layout while retaining offsets that identify the model-layer block.
 #[derive(Debug)]
 pub struct ViewportItem {
     /// The y-offset to display this item at, relative to the viewport origin.
@@ -58,6 +57,8 @@ pub struct ViewportItem {
     pub spacing: BlockSpacing,
     /// Offset of the start of the block backing this item.
     pub block_offset: CharOffset,
+    pub(super) start_line: LineCount,
+    pub(super) block: BlockItem,
 }
 
 /// A snapshot of the scroll position. This may only be used to scroll back to the original
@@ -96,8 +97,7 @@ impl ScrollPositionSnapshot {
         }
     }
 
-    #[cfg(test)]
-    pub fn first_character_offset(self) -> CharOffset {
+    pub(super) fn first_character_offset(self) -> CharOffset {
         self.first_character_offset
     }
 }
@@ -397,6 +397,8 @@ impl<'a> Iterator for ViewportIterator<'a> {
             content_size: vec2f(content_width.as_f32(), item.item.content_height().as_f32()),
             spacing,
             block_offset: item.start_char_offset,
+            start_line: item.start_line,
+            block: item.item.clone(),
         };
         Some((viewport_item, item.item))
     }
@@ -406,6 +408,29 @@ impl ViewportItem {
     /// The block backing this viewport item.
     pub fn block_offset(&self) -> CharOffset {
         self.block_offset
+    }
+
+    pub(crate) fn block(&self) -> &BlockItem {
+        &self.block
+    }
+
+    pub(super) fn set_block(&mut self, block: BlockItem) {
+        self.block = block;
+    }
+
+    /// Returns a positioned view of the block snapshot captured for this viewport item.
+    pub fn positioned_block(&self) -> Positioned<'_, BlockItem> {
+        Positioned {
+            start_char_offset: self.block_offset,
+            start_line: self.start_line,
+            start_y_offset: self.content_offset,
+            style: self.spacing,
+            item: &self.block,
+        }
+    }
+
+    pub(crate) fn start_line(&self) -> LineCount {
+        self.start_line
     }
 
     pub fn height(&self) -> f64 {
@@ -446,15 +471,14 @@ impl ViewportItem {
 macro_rules! extract_block {
     ($viewport_item:expr, $content:expr, $match:pat => $value:expr) => {{
         let offset = $viewport_item.block_offset();
-        match $content.block_at_offset(offset) {
-            Some(block) => match (&block, block.item) {
-                $match => $value,
-                other => {
-                    log::trace!("Unexpected block {other:?} at {}", offset);
-                    return;
-                }
-            },
-            None => return,
+        let _ = &$content;
+        let block = $viewport_item.positioned_block();
+        match (&block, block.item) {
+            $match => $value,
+            other => {
+                log::trace!("Unexpected block {other:?} at {}", offset);
+                return;
+            }
         }
     }};
 }

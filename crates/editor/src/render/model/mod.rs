@@ -94,6 +94,23 @@ const DEFAULT_CHAR_CELL_TAB_SIZE: NonZeroU8 = NonZeroU8::new(4).unwrap();
 pub const PARAGRAPH_MIN_HEIGHT: Pixels = Pixels::new(24.);
 const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
 
+fn fair_layout_allocations(demands: &[usize], max_chars: usize) -> Vec<usize> {
+    let mut remaining_chars = max_chars;
+    let mut remaining_items = demands.iter().filter(|demand| **demand > 0).count();
+    demands
+        .iter()
+        .map(|demand| {
+            if *demand == 0 || remaining_chars == 0 {
+                return 0;
+            }
+            let allocation = (*demand).min(remaining_chars / remaining_items);
+            remaining_chars -= allocation;
+            remaining_items -= 1;
+            allocation
+        })
+        .collect()
+}
+
 pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
 
 pub const TEXT_SPACING: BlockSpacing = BlockSpacing {
@@ -269,8 +286,9 @@ impl<'a> RenderContentTreeRef<'a> {
         scroll_top: Pixels,
     ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
         ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width).map(
-            |(item, block)| {
+            |(mut item, block)| {
                 let block = self.1.get(&item.block_offset()).unwrap_or(block);
+                item.set_block(block.clone());
                 (item, block)
             },
         )
@@ -1688,11 +1706,25 @@ impl ParagraphBlock {
         &self.paragraphs
     }
 
-    fn materialized(&self, layout: &TextLayout, remaining_chars: &mut usize) -> Option<Self> {
+    fn layout_chars_to_materialize(&self) -> usize {
+        self.paragraphs
+            .iter()
+            .map(Paragraph::layout_chars_to_materialize)
+            .fold(0usize, usize::saturating_add)
+            .min(MAX_LAYOUT_LINE_CHARS)
+    }
+
+    fn materialized(&self, layout: &TextLayout, max_chars: usize) -> Option<Self> {
+        let demands = self
+            .paragraphs
+            .iter()
+            .map(Paragraph::layout_chars_to_materialize)
+            .collect_vec();
+        let mut allocations = fair_layout_allocations(&demands, max_chars).into_iter();
         let mut changed = false;
         let paragraphs = self.paragraphs.mapped_ref(|paragraph| {
             paragraph
-                .materialized(layout, remaining_chars)
+                .materialized(layout, allocations.next().unwrap_or(0))
                 .inspect(|_| changed = true)
                 .unwrap_or_else(|| paragraph.clone())
         });
@@ -1766,7 +1798,7 @@ pub struct Paragraph {
     /// Compact or fully laid-out text content of this paragraph.
     frame: Arc<TextFrame>,
     deferred_layout: Option<Arc<DeferredParagraphLayout>>,
-    materialized: bool,
+    materialized_layout_chars: usize,
     /// Mapping between [`TextFrame`] characters and content characters.
     offsets: OffsetMap,
     /// Cached height of this paragraph's text frame.
@@ -1804,7 +1836,7 @@ impl Paragraph {
         Self {
             frame,
             deferred_layout: None,
-            materialized: true,
+            materialized_layout_chars: 0,
             offsets,
             height,
             width,
@@ -1840,43 +1872,43 @@ impl Paragraph {
             style_runs,
             paragraph_styles,
         }));
-        paragraph.materialized = false;
+        paragraph.materialized_layout_chars = 0;
         paragraph
     }
 
-    fn materialized_layout_chars(&self) -> usize {
-        if self.materialized {
-            self.deferred_layout.as_ref().map_or(0, |layout| {
-                layout.text.chars().count().min(MAX_LAYOUT_LINE_CHARS)
-            })
-        } else {
-            0
-        }
+    fn layout_chars_to_materialize(&self) -> usize {
+        self.deferred_layout.as_ref().map_or(0, |layout| {
+            layout.text.chars().count().min(MAX_LAYOUT_LINE_CHARS)
+        })
     }
 
-    fn materialized(&self, layout: &TextLayout, remaining_chars: &mut usize) -> Option<Self> {
+    fn materialized_layout_chars(&self) -> usize {
+        self.materialized_layout_chars
+    }
+
+    fn materialized(&self, layout: &TextLayout, max_chars: usize) -> Option<Self> {
         let Some(deferred) = &self.deferred_layout else {
             return None;
         };
-        let layout_chars = deferred.text.chars().count().min(MAX_LAYOUT_LINE_CHARS);
-        if layout_chars > *remaining_chars {
+        let layout_chars = self.layout_chars_to_materialize().min(max_chars);
+        if layout_chars == 0 {
             return None;
         }
-        *remaining_chars -= layout_chars;
         let mut paragraph = self.clone();
-        paragraph.frame = layout.layout_text(
+        paragraph.frame = layout.layout_text_prefix(
             &deferred.text,
             &deferred.paragraph_styles,
             &self.spacing,
             &deferred.style_runs,
+            layout_chars,
         );
-        paragraph.materialized = true;
+        paragraph.materialized_layout_chars = layout_chars;
         Some(paragraph)
     }
 
     #[cfg(any(test, feature = "test-util"))]
     pub fn is_deferred(&self) -> bool {
-        !self.materialized
+        self.deferred_layout.is_some() && self.materialized_layout_chars == 0
     }
 
     pub fn first_line_height(&self) -> f32 {
@@ -2813,14 +2845,14 @@ impl RenderState {
         viewport_height: Pixels,
         viewport_width: Pixels,
         scroll_top: Pixels,
-    ) {
+    ) -> Vec<ViewportItem> {
         self.materialize_viewport_with_max_chars(
             layout,
             viewport_height,
             viewport_width,
             scroll_top,
             MAX_LAYOUT_LINE_CHARS,
-        );
+        )
     }
 
     fn materialize_viewport_with_max_chars(
@@ -2830,37 +2862,20 @@ impl RenderState {
         viewport_width: Pixels,
         scroll_top: Pixels,
         max_chars: usize,
-    ) {
-        let mut materialized = HashMap::new();
-        let mut remaining_chars = max_chars;
-        {
+    ) -> Vec<ViewportItem> {
+        let blocks = {
             let content = self.content.borrow();
-
-            for selection in self.selections().iter() {
-                for offset in [selection.head, selection.tail] {
-                    let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
-                    cursor.seek(&offset, SeekBias::Right);
-                    if let Some(block) = cursor.positioned_item()
-                        && !materialized.contains_key(&block.start_char_offset)
-                        && let Some(materialized_block) =
-                            block.item.materialized(layout, &mut remaining_chars)
-                    {
-                        materialized.insert(block.start_char_offset, materialized_block);
-                    }
-                }
-            }
-
-            for (item, block) in
-                ViewportIterator::new(&content, scroll_top, viewport_height, viewport_width)
-            {
-                if !materialized.contains_key(&item.block_offset())
-                    && let Some(block) = block.materialized(layout, &mut remaining_chars)
-                {
-                    materialized.insert(item.block_offset(), block);
-                }
-            }
-        }
-        *self.materialized_blocks.borrow_mut() = materialized;
+            ViewportIterator::new(&content, scroll_top, viewport_height, viewport_width)
+                .map(|(item, block)| (item, block.clone()))
+                .collect()
+        };
+        let items = Self::materialize_items(layout, blocks, max_chars);
+        *self.materialized_blocks.borrow_mut() = items
+            .iter()
+            .filter(|item| item.block().materialized_layout_chars() > 0)
+            .map(|item| (item.block_offset(), item.block().clone()))
+            .collect();
+        items
     }
 
     pub(crate) fn materialize_line_range(
@@ -2868,22 +2883,62 @@ impl RenderState {
         layout: &TextLayout,
         line_range: Range<RenderLineLocation>,
         max_width: Pixels,
-    ) {
+    ) -> Vec<ViewportItem> {
         let blocks = self.blocks_in_line_range(line_range, max_width);
-        let mut materialized = self.materialized_blocks.borrow_mut();
-        let mut remaining_chars = MAX_LAYOUT_LINE_CHARS.saturating_sub(
-            materialized
-                .values()
-                .map(BlockItem::materialized_layout_chars)
-                .sum(),
-        );
-        for (item, block) in blocks {
-            if !materialized.contains_key(&item.block_offset())
-                && let Some(block) = block.materialized(layout, &mut remaining_chars)
-            {
-                materialized.insert(item.block_offset(), block);
-            }
-        }
+        Self::materialize_items(layout, blocks, MAX_LAYOUT_LINE_CHARS)
+    }
+
+    fn materialize_items(
+        layout: &TextLayout,
+        blocks: Vec<(ViewportItem, BlockItem)>,
+        max_chars: usize,
+    ) -> Vec<ViewportItem> {
+        let demands = blocks
+            .iter()
+            .map(|(_, block)| block.layout_chars_to_materialize())
+            .collect_vec();
+        let allocations = fair_layout_allocations(&demands, max_chars);
+        blocks
+            .into_iter()
+            .zip(allocations)
+            .map(|((mut item, block), allocation)| {
+                if let Some(block) = block.materialized(layout, allocation) {
+                    item.set_block(block);
+                }
+                item
+            })
+            .collect()
+    }
+
+    fn materialize_geometry_offsets(&self, layout: &TextLayout, offsets: &[CharOffset]) {
+        let blocks = {
+            let content = self.content.borrow();
+            let mut seen = HashSet::new();
+            offsets
+                .iter()
+                .filter_map(|offset| {
+                    let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
+                    cursor.seek(offset, SeekBias::Right);
+                    let block = cursor.positioned_item()?;
+                    seen.insert(block.start_char_offset)
+                        .then(|| (block.start_char_offset, block.item.clone()))
+                })
+                .collect_vec()
+        };
+        let demands = blocks
+            .iter()
+            .map(|(_, block)| block.layout_chars_to_materialize())
+            .collect_vec();
+        let allocations = fair_layout_allocations(&demands, MAX_LAYOUT_LINE_CHARS);
+        *self.materialized_blocks.borrow_mut() = blocks
+            .into_iter()
+            .zip(allocations)
+            .filter_map(|((offset, block), allocation)| {
+                block
+                    .materialized(layout, allocation)
+                    .map(|block| (offset, block))
+            })
+            .collect();
     }
 
     pub fn with_width_setting(mut self, setting: WidthSetting) -> Self {
@@ -3067,6 +3122,8 @@ impl RenderState {
                 content_size: vec2f(content_width.as_f32(), item.item.content_height().as_f32()),
                 spacing,
                 block_offset: item.start_char_offset,
+                start_line: item.start_line,
+                block: item.item.clone(),
             };
             blocks.push((viewport_item, item.item.clone()));
 
@@ -3458,9 +3515,15 @@ impl RenderState {
                 }
             },
             LayoutAction::Autoscroll { mode } => {
+                let layout_cache = LayoutCache::new();
+                let layout = self.layout_context(&layout_cache, ctx);
+                self.materialize_geometry_offsets(&layout, &mode.offsets(self));
                 self.autoscroll(mode, ctx);
             }
             LayoutAction::ScrollTo(position) => {
+                let layout_cache = LayoutCache::new();
+                let layout = self.layout_context(&layout_cache, ctx);
+                self.materialize_geometry_offsets(&layout, &[position.first_character_offset()]);
                 if self
                     .viewport
                     .scroll_to(position.to_scroll_top(self), self.height())
@@ -4384,17 +4447,13 @@ impl RenderState {
 
     /// Line number of the first line in the block.
     pub fn start_line_index(&self, block: &dyn RenderableBlock) -> Option<LineCount> {
-        let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(content.block_at_offset(offset)?.start_line)
+        Some(block.viewport_item().start_line())
     }
 
     /// The line height of the first line. Different from `first_line_bounds`, this does not
     /// return the viewport origin.
     pub fn first_line_height(&self, block: &dyn RenderableBlock) -> Option<f32> {
-        let content = self.content();
-        let block = content.block_at_height(block.viewport_item().height())?;
-        Some(block.item.first_line_height())
+        Some(block.viewport_item().block().first_line_height())
     }
 
     /// The bounding box of the first line of this block, based on its viewport location.
@@ -4403,17 +4462,13 @@ impl RenderState {
         block: &dyn RenderableBlock,
         ctx: &RenderContext,
     ) -> Option<RectF> {
-        let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        let block = content.block_at_offset(offset)?;
+        let block = block.viewport_item().positioned_block();
         Some(ctx.content_rect_to_screen(block.first_line_bounds()?))
     }
 
     pub fn line_range(&self, block: &dyn RenderableBlock) -> Option<Range<LineCount>> {
         let start = self.start_line_index(block)?;
-        let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(start..start + content.block_at_offset(offset)?.item.lines())
+        Some(start..start + block.viewport_item().block().lines())
     }
 
     /// The full line range of the block starting at `offset`, resolved without a
@@ -4457,6 +4512,23 @@ pub enum AutoScrollMode {
     /// The bounding box is computed as the character position ± half the viewport dimensions,
     /// clamped to the content bounds.
     PositionOffsetInViewportCenter(CharOffset),
+}
+
+impl AutoScrollMode {
+    fn offsets(&self, state: &RenderState) -> Vec<CharOffset> {
+        match self {
+            Self::ScrollOffsetsIntoViewport(offsets) => vec![offsets.start, offsets.end],
+            Self::ScrollToExactVertical {
+                character_offset, ..
+            }
+            | Self::PositionOffsetInViewportCenter(character_offset) => vec![*character_offset],
+            Self::ScrollToActiveSelections { .. } => state
+                .selections()
+                .iter()
+                .map(|selection| selection.head)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4624,20 +4696,44 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
 }
 
 impl BlockItem {
-    fn materialized(&self, layout: &TextLayout, remaining_chars: &mut usize) -> Option<Self> {
+    fn layout_chars_to_materialize(&self) -> usize {
+        match self {
+            Self::Paragraph(paragraph)
+            | Self::TaskList { paragraph, .. }
+            | Self::UnorderedList { paragraph, .. }
+            | Self::OrderedList { paragraph, .. }
+            | Self::Header { paragraph, .. } => paragraph.layout_chars_to_materialize(),
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.layout_chars_to_materialize(),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => 0,
+        }
+    }
+
+    fn materialized(&self, layout: &TextLayout, max_chars: usize) -> Option<Self> {
         match self {
             Self::Paragraph(paragraph) => paragraph
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(Self::Paragraph),
             Self::TextBlock { paragraph_block } => paragraph_block
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph_block| Self::TextBlock { paragraph_block }),
             Self::TemporaryBlock {
                 paragraph_block,
                 text_decoration,
                 decoration,
             } => paragraph_block
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph_block| Self::TemporaryBlock {
                     paragraph_block,
                     text_decoration: text_decoration.clone(),
@@ -4648,7 +4744,7 @@ impl BlockItem {
                 code_block_type,
                 pending_mermaid_asset,
             } => paragraph_block
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph_block| Self::RunnableCodeBlock {
                     paragraph_block,
                     code_block_type: code_block_type.clone(),
@@ -4660,7 +4756,7 @@ impl BlockItem {
                 paragraph,
                 mouse_state,
             } => paragraph
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph| Self::TaskList {
                     indent_level: *indent_level,
                     complete: *complete,
@@ -4671,7 +4767,7 @@ impl BlockItem {
                 indent_level,
                 paragraph,
             } => paragraph
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph| Self::UnorderedList {
                     indent_level: *indent_level,
                     paragraph,
@@ -4681,7 +4777,7 @@ impl BlockItem {
                 number,
                 paragraph,
             } => paragraph
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph| Self::OrderedList {
                     indent_level: *indent_level,
                     number: *number,
@@ -4691,7 +4787,7 @@ impl BlockItem {
                 header_size,
                 paragraph,
             } => paragraph
-                .materialized(layout, remaining_chars)
+                .materialized(layout, max_chars)
                 .map(|paragraph| Self::Header {
                     header_size: *header_size,
                     paragraph,

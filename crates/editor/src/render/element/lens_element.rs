@@ -67,18 +67,16 @@ impl<V: EditorView> Element for RichTextElementLens<V> {
         let model = self.model.as_ref(app);
         let mut total_height = 0.;
         let text_layout = TextLayout::for_materialization(app, model);
-        model.materialize_line_range(
+        let blocks = model.materialize_line_range(
             &text_layout,
             self.line_range.clone(),
             constraint.max.x().into_pixels(),
         );
-        let blocks =
-            model.blocks_in_line_range(self.line_range.clone(), constraint.max.x().into_pixels());
 
         // Only support paragraphs and temporary blocks for now. This should be extensible to more block types in the future.
         let mut renderable_blocks: Vec<Box<dyn RenderableBlock>> = blocks
             .into_iter()
-            .filter_map(|(item, block)| match block {
+            .filter_map(|item| match item.block().clone() {
                 BlockItem::Paragraph(_) => Some(RenderableParagraph::new(item).finish()),
                 BlockItem::TemporaryBlock {
                     decoration,

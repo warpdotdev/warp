@@ -48,26 +48,21 @@ impl RenderableBlock for RenderableTemporaryBlock {
         ctx: &mut RenderContext,
         _app: &warpui_core::AppContext,
     ) {
-        // We cannot use `extract_block` macro here since we need to locate the viewport item by content height instead of charoffset
-        // (temporary block has an offset of zero).
-        let content = model.content();
-        let paragraph_block = match content.block_at_height(self.viewport_item.height()) {
-            Some(block) => match (&block, block.item) {
-                (
-                    block,
-                    BlockItem::TemporaryBlock {
-                        paragraph_block, ..
-                    },
-                ) => block.temporary_block(paragraph_block),
-                other => {
-                    log::warn!(
-                        "Unexpected block {other:?} at {}",
-                        self.viewport_item.block_offset
-                    );
-                    return;
-                }
-            },
-            None => return,
+        let block = self.viewport_item.positioned_block();
+        let paragraph_block = match (&block, block.item) {
+            (
+                block,
+                BlockItem::TemporaryBlock {
+                    paragraph_block, ..
+                },
+            ) => block.temporary_block(paragraph_block),
+            other => {
+                log::warn!(
+                    "Unexpected block {other:?} at {}",
+                    self.viewport_item.block_offset
+                );
+                return;
+            }
         };
 
         let start = paragraph_block.start_char_offset;

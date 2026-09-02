@@ -34,15 +34,19 @@ pub(crate) const MAX_LAYOUT_LINE_CHARS: usize = 2 * 1024 * 1024;
 /// Shortens `text` to at most [`MAX_LAYOUT_LINE_CHARS`], returning it unchanged when it already
 /// fits.
 fn truncate_text_for_layout(text: &str) -> &str {
+    truncate_text_for_layout_with_max_chars(text, MAX_LAYOUT_LINE_CHARS)
+}
+
+fn truncate_text_for_layout_with_max_chars(text: &str, max_chars: usize) -> &str {
     // Every `char` occupies at least one byte, so a byte length within the cap puts the char count
     // within it too. This keeps the common case off the linear `char_indices` walk below.
-    if text.len() <= MAX_LAYOUT_LINE_CHARS {
+    if text.len() <= max_chars {
         return text;
     }
 
-    // `nth` yields the byte offset at which the first `MAX_LAYOUT_LINE_CHARS` chars end, and `None`
-    // when the text holds no more chars than that. Slicing there is always on a char boundary.
-    match text.char_indices().nth(MAX_LAYOUT_LINE_CHARS) {
+    // `nth` yields the byte offset at which the admitted chars end, and `None` when the text holds
+    // no more chars than that. Slicing there is always on a char boundary.
+    match text.char_indices().nth(max_chars) {
         Some((truncate_at, _)) => &text[..truncate_at],
         None => text,
     }
@@ -50,13 +54,21 @@ fn truncate_text_for_layout(text: &str) -> &str {
 
 /// Drops style runs starting past [`MAX_LAYOUT_LINE_CHARS`] and clamps the tail of a run straddling
 /// it, keeping char-indexed runs consistent with text shortened by [`truncate_text_for_layout`].
+#[cfg(test)]
 fn clamp_style_runs_for_layout(
     style_runs: &[(Range<usize>, StyleAndFont)],
 ) -> Vec<(Range<usize>, StyleAndFont)> {
+    clamp_style_runs_for_layout_with_max_chars(style_runs, MAX_LAYOUT_LINE_CHARS)
+}
+
+fn clamp_style_runs_for_layout_with_max_chars(
+    style_runs: &[(Range<usize>, StyleAndFont)],
+    max_chars: usize,
+) -> Vec<(Range<usize>, StyleAndFont)> {
     style_runs
         .iter()
-        .filter(|(range, _)| range.start < MAX_LAYOUT_LINE_CHARS)
-        .map(|(range, style)| (range.start..range.end.min(MAX_LAYOUT_LINE_CHARS), *style))
+        .filter(|(range, _)| range.start < max_chars)
+        .map(|(range, style)| (range.start..range.end.min(max_chars), *style))
         .collect()
 }
 
@@ -138,15 +150,32 @@ impl<'a> TextLayout<'a> {
         spacing: &BlockSpacing,
         style_runs: &[(Range<usize>, StyleAndFont)],
     ) -> Arc<TextFrame> {
-        self.layout_text_with_options(
+        self.layout_text_prefix(
+            text,
+            paragraph_style,
+            spacing,
+            style_runs,
+            MAX_LAYOUT_LINE_CHARS,
+        )
+    }
+
+    pub(crate) fn layout_text_prefix(
+        &self,
+        text: &str,
+        paragraph_style: &ParagraphStyles,
+        spacing: &BlockSpacing,
+        style_runs: &[(Range<usize>, StyleAndFont)],
+        max_chars: usize,
+    ) -> Arc<TextFrame> {
+        self.layout_text_with_options_and_max_chars(
             text,
             paragraph_style,
             style_runs,
             self.content_width(spacing),
             Default::default(),
+            max_chars.min(MAX_LAYOUT_LINE_CHARS),
         )
     }
-
     pub fn layout_text_with_options(
         &self,
         text: &str,
@@ -155,6 +184,25 @@ impl<'a> TextLayout<'a> {
         max_width: f32,
         alignment: TextAlignment,
     ) -> Arc<TextFrame> {
+        self.layout_text_with_options_and_max_chars(
+            text,
+            paragraph_style,
+            style_runs,
+            max_width,
+            alignment,
+            MAX_LAYOUT_LINE_CHARS,
+        )
+    }
+
+    fn layout_text_with_options_and_max_chars(
+        &self,
+        text: &str,
+        paragraph_style: &ParagraphStyles,
+        style_runs: &[(Range<usize>, StyleAndFont)],
+        max_width: f32,
+        alignment: TextAlignment,
+        max_chars: usize,
+    ) -> Arc<TextFrame> {
         if text.is_empty() {
             return Arc::new(TextFrame::empty(
                 paragraph_style.font_size,
@@ -162,10 +210,10 @@ impl<'a> TextLayout<'a> {
             ));
         }
 
-        let shaped_text = truncate_text_for_layout(text);
+        let shaped_text = truncate_text_for_layout_with_max_chars(text, max_chars);
         let clamped_style_runs = (shaped_text.len() < text.len()).then(|| {
             // Only pay for a new run list when the text actually lost characters.
-            clamp_style_runs_for_layout(style_runs)
+            clamp_style_runs_for_layout_with_max_chars(style_runs, max_chars)
         });
 
         Arc::new(self.font_cache.layout_text_uncached(
