@@ -121,6 +121,13 @@ impl DrivePanel {
         }
     }
 
+    /// The destination `Space` captured by the "create object" naming dialog, if it's currently
+    /// open. See [`DriveIndex::pending_create_object_space`].
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn pending_create_object_space(&self, ctx: &AppContext) -> Option<Space> {
+        self.index_view.as_ref(ctx).pending_create_object_space()
+    }
+
     /// Helper to get the [`Owner`] for a new object created from the index.
     fn new_object_owner(
         space: Space,

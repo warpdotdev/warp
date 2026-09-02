@@ -23547,6 +23547,17 @@ impl Workspace {
             .map(|team| team.uid)
     }
 
+    /// Captures the window's current team via `TeamContext` at the moment a new-object action
+    /// (creation, import) fires, then resolves it to that team's UID for the explicit
+    /// destination the action needs. Unlike [`Self::team_uid`], the caller carries the
+    /// resulting UID by value into the modal, editor, or pane the action opens rather than
+    /// resolving the window's team again later.
+    fn team_uid_for_new_team_destination(&self, ctx: &ViewContext<Self>) -> Option<ServerId> {
+        let workspaces = UserWorkspaces::as_ref(ctx);
+        let context = workspaces.team_context_for_view(ctx)?;
+        workspaces.team_for_context(&context).map(|team| team.uid)
+    }
+
     fn initiate_user_signup(
         &mut self,
         entrypoint: AnonymousUserSignupEntrypoint,
@@ -24417,8 +24428,7 @@ impl TypedActionView for Workspace {
                 }
             }
             ImportToTeamDrive => {
-                let team_uid = self.team_uid(ctx);
-                if let Some(team_uid) = team_uid {
+                if let Some(team_uid) = self.team_uid_for_new_team_destination(ctx) {
                     self.open_import_modal(Owner::Team { team_uid }, &None, ctx);
                 }
             }
@@ -24437,8 +24447,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamNotebook => {
-                let team_uid = self.team_uid(ctx);
-                if let Some(team_uid) = team_uid {
+                if let Some(team_uid) = self.team_uid_for_new_team_destination(ctx) {
                     self.update_warp_drive_view(ctx, |drive_panel, ctx| {
                         drive_panel.open_cloud_object_dialog(
                             DriveObjectType::Notebook {
@@ -24467,8 +24476,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamEnvVarCollection => {
-                let team_uid = self.team_uid(ctx);
-                if let Some(team_uid) = team_uid {
+                if let Some(team_uid) = self.team_uid_for_new_team_destination(ctx) {
                     self.update_warp_drive_view(ctx, |drive_panel, ctx| {
                         drive_panel.open_cloud_object_dialog(
                             DriveObjectType::EnvVarCollection,
@@ -24499,8 +24507,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamWorkflow => {
-                let team_uid = self.team_uid(ctx);
-                if let Some(team_uid) = team_uid {
+                if let Some(team_uid) = self.team_uid_for_new_team_destination(ctx) {
                     let source = WorkflowOpenSource::New {
                         title: None,
                         content: None,
@@ -24529,8 +24536,7 @@ impl TypedActionView for Workspace {
                 ctx.notify();
             }
             CreateTeamFolder => {
-                let team_uid = self.team_uid(ctx);
-                if let Some(team_uid) = team_uid {
+                if let Some(team_uid) = self.team_uid_for_new_team_destination(ctx) {
                     self.update_warp_drive_view(ctx, |drive_panel, ctx| {
                         drive_panel.open_cloud_object_dialog(
                             DriveObjectType::Folder,
@@ -25654,8 +25660,7 @@ impl TypedActionView for Workspace {
                 }
             }
             CreateTeamAIPrompt => {
-                let team_uid = self.team_uid(ctx);
-                if let Some(team_uid) = team_uid {
+                if let Some(team_uid) = self.team_uid_for_new_team_destination(ctx) {
                     let source = WorkflowOpenSource::New {
                         title: None,
                         content: None,
