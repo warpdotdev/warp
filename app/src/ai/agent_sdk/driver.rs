@@ -15,7 +15,7 @@ use ai::skills::{
     resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::{self, Either, join_all};
@@ -41,7 +41,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
 
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentExchange, AIAgentInput, AIAgentOutput, AIAgentOutputStatus,
     CancellationReason, FinishedAIAgentOutput, RenderableAIError, RequestFileEditsResult,
@@ -68,8 +68,8 @@ use crate::ai::blocklist::orchestration_event_streamer::{
 };
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::{
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions, FinalizeReason,
-    finalize_recording_for_conversation,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
+    ConversationStatusUpdate, FinalizeReason, finalize_recording_for_conversation,
 };
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, GithubRepo, SourceRepo,
@@ -170,6 +170,23 @@ where
         _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
     }
+}
+
+/// Warn that an MCP server's `{{secret_name}}` references resolved to nothing.
+/// Logs secret names only; resolved values must never reach a log line.
+fn log_unresolved_secret_refs(
+    installation: &TemplatableMCPServerInstallation,
+    unresolved_secret_names: &[String],
+) {
+    if unresolved_secret_names.is_empty() {
+        return;
+    }
+    log::warn!(
+        "MCP server '{}' references secret(s) that are not available to this run: {}. \
+         Check that each secret exists and is attached to this agent or run.",
+        installation.templatable_mcp_server().name,
+        unresolved_secret_names.join(", ")
+    );
 }
 
 const MCP_SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -424,6 +441,91 @@ impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
     }
 }
 
+/// Owns the post-failure debug window's idle deadline and the set of debug-turn conversations
+/// pinning it open, for the retained setup-failure lingering path (REMOTE-2661). The idle timer
+/// is free to expire only when no turn is pinning it. Idempotent by turn ID.
+struct DebugWindowController<T: Clone + Send + 'static> {
+    idle_timeout: IdleTimeoutSender<T>,
+    active_turns: Arc<Mutex<HashSet<AIConversationId>>>,
+}
+
+// Hand-written for the same reason as `IdleTimeoutSender`: every field is a shared handle, so
+// clones drive the same underlying state.
+impl<T: Clone + Send + 'static> Clone for DebugWindowController<T> {
+    fn clone(&self) -> Self {
+        Self {
+            idle_timeout: self.idle_timeout.clone(),
+            active_turns: Arc::clone(&self.active_turns),
+        }
+    }
+}
+
+impl<T: Clone + Send + 'static> DebugWindowController<T> {
+    fn new(idle_timeout: IdleTimeoutSender<T>) -> Self {
+        Self {
+            idle_timeout,
+            active_turns: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    fn is_pinned(&self) -> bool {
+        self.active_turns
+            .lock()
+            .is_ok_and(|turns| !turns.is_empty())
+    }
+
+    /// Arms or moves the idle deadline. No-op while pinned, since the deadline must not slide
+    /// out from under a turn about to finish and re-arm it anyway. Returns whether it armed.
+    fn refresh_idle(&self, value: T, window: Duration) -> bool {
+        if self.is_pinned() {
+            return false;
+        }
+        self.idle_timeout.arm_refreshable(window, value);
+        true
+    }
+
+    /// Pushes a previously armed deadline out by its original window, unless pinned. Used for
+    /// keystroke-level viewer-input refreshes.
+    fn refresh_from_last_armed(&self) -> Option<Duration> {
+        if self.is_pinned() {
+            return None;
+        }
+        self.idle_timeout.refresh()
+    }
+
+    /// Cancels the idle expiry while at least one debug turn is active. Returns `true` only when
+    /// this call added a new active turn.
+    fn pin_for_turn(&self, turn_id: AIConversationId) -> bool {
+        let Ok(mut turns) = self.active_turns.lock() else {
+            return false;
+        };
+        let was_empty = turns.is_empty();
+        let inserted = turns.insert(turn_id);
+        drop(turns);
+        if was_empty && inserted {
+            self.idle_timeout.cancel_idle_timeout();
+        }
+        inserted
+    }
+
+    /// Removes the pin for `turn_id`, re-arming a full idle window once the last active turn
+    /// ends. Returns `false` for a duplicate or unknown turn ID.
+    fn finish_turn(&self, turn_id: AIConversationId, value: T, window: Duration) -> bool {
+        let Ok(mut turns) = self.active_turns.lock() else {
+            return false;
+        };
+        if !turns.remove(&turn_id) {
+            return false;
+        }
+        let now_empty = turns.is_empty();
+        drop(turns);
+        if now_empty {
+            self.idle_timeout.arm_refreshable(window, value);
+        }
+        true
+    }
+}
+
 /// The status update reported for a run that failed during environment preparation.
 ///
 /// The code must stay `EnvironmentSetupFailed`: `TaskStatusMessage::is_environment_setup_failure`
@@ -431,6 +533,23 @@ impl<T: Clone + Send + 'static> IdleTimeoutSender<T> {
 /// that check.
 fn setup_failure_status_update(message: String) -> TaskStatusUpdate {
     TaskStatusUpdate::with_error_code(message, PlatformErrorCode::EnvironmentSetupFailed)
+}
+
+/// The post-failure debug window's deadline, `window` from now. Shared by
+/// `report_failure_before_lingering` and `publish_debug_window_deadline` so both agree.
+fn debug_window_deadline(window: Duration) -> DateTime<Utc> {
+    Utc::now() + chrono::Duration::from_std(window).unwrap_or_default()
+}
+
+fn debug_turn_task_state(status: &ConversationStatus) -> Option<AgentTaskState> {
+    match status {
+        ConversationStatus::InProgress => Some(AgentTaskState::InProgress),
+        ConversationStatus::Success => Some(AgentTaskState::Succeeded),
+        ConversationStatus::Error => Some(AgentTaskState::Error),
+        ConversationStatus::Cancelled => Some(AgentTaskState::Cancelled),
+        ConversationStatus::Blocked { .. } => Some(AgentTaskState::Blocked),
+        ConversationStatus::TransientError | ConversationStatus::WaitingForEvents => None,
+    }
 }
 
 /// How long the driver should stay alive after the conversation reaches `status`. `None` exits
@@ -743,6 +862,14 @@ pub enum AgentDriverError {
     MCPJsonParseError(String),
     #[error("MCP server configuration is missing required variables")]
     MCPMissingVariables,
+    #[error(
+        "MCP server '{server_name}' references secret(s) that are not available to this run: {}",
+        .secret_names.join(", ")
+    )]
+    MCPUnresolvedSecrets {
+        server_name: String,
+        secret_names: Vec<String>,
+    },
     #[error("Agent profile \"{0}\" not found")]
     ProfileError(String),
     #[error(
@@ -1242,6 +1369,7 @@ impl AgentDriver {
                             None,
                             None,
                             None,
+                            None,
                         )
                         .await
                         .context("Failed to update agent task state to InProgress")
@@ -1589,6 +1717,7 @@ impl AgentDriver {
                 None,
                 None,
                 None,
+                None,
             )
             .await
         {
@@ -1673,7 +1802,13 @@ impl AgentDriver {
         let mut result = HashMap::new();
 
         for installation in installations.iter_mut() {
-            installation.apply_secrets(secrets);
+            let unresolved_secret_names = installation.apply_secrets(secrets);
+            if !unresolved_secret_names.is_empty() {
+                return Err(AgentDriverError::MCPUnresolvedSecrets {
+                    server_name: installation.templatable_mcp_server().name.clone(),
+                    secret_names: unresolved_secret_names,
+                });
+            }
             let resolved = resolve_json(installation);
             let servers: HashMap<String, JSONMCPServer> = serde_json::from_str(&resolved)
                 .map_err(|e| AgentDriverError::MCPJsonParseError(e.to_string()))?;
@@ -1681,6 +1816,31 @@ impl AgentDriver {
         }
 
         Ok(result)
+    }
+
+    fn apply_secrets_to_ephemeral_mcp_installations(
+        installations: Vec<TemplatableMCPServerInstallation>,
+        secrets: &HashMap<String, ManagedSecretValue>,
+    ) -> (Vec<TemplatableMCPServerInstallation>, Vec<String>) {
+        let mut ready = Vec::with_capacity(installations.len());
+        let mut failures = Vec::new();
+
+        for mut installation in installations {
+            let unresolved_secret_names = installation.apply_secrets(secrets);
+            if unresolved_secret_names.is_empty() {
+                ready.push(installation);
+                continue;
+            }
+
+            log_unresolved_secret_refs(&installation, &unresolved_secret_names);
+            failures.push(format!(
+                "'{}' was not started: unresolved secret reference(s): {}",
+                installation.templatable_mcp_server().name,
+                unresolved_secret_names.join(", ")
+            ));
+        }
+
+        (ready, failures)
     }
 
     /// Resolve MCP specs into local UUIDs and ephemeral installations. UUIDs
@@ -2158,6 +2318,7 @@ impl AgentDriver {
                     None,
                     Some(TaskStatusUpdate::message(message)),
                     None,
+                    None,
                 )
                 .await
             {
@@ -2223,19 +2384,18 @@ impl AgentDriver {
     /// These servers are not persisted and exist only for the duration of the agent run.
     fn start_ephemeral_mcp_servers(
         &self,
-        mut installations: Vec<TemplatableMCPServerInstallation>,
+        installations: Vec<TemplatableMCPServerInstallation>,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = Result<(), AgentDriverError>> + use<> {
         if installations.is_empty() {
             return Either::Right(future::ready(Ok(())));
         }
+        let (installations, mut unresolved_failures) =
+            Self::apply_secrets_to_ephemeral_mcp_installations(installations, &self.secrets);
 
-        // Inject secrets into the ephemeral MCP server installations.
-        for installation in installations.iter_mut() {
-            installation.apply_secrets(&self.secrets);
+        if !installations.is_empty() {
+            log::info!("Starting {} ephemeral MCP servers...", installations.len());
         }
-
-        log::info!("Starting {} ephemeral MCP servers...", installations.len());
 
         let named_servers: HashMap<Uuid, String> = installations
             .iter()
@@ -2256,7 +2416,20 @@ impl AgentDriver {
             }
         });
 
-        Either::Left(wait)
+        Either::Left(async move {
+            let mut failures = match wait.await {
+                Ok(()) => Vec::new(),
+                Err(AgentDriverError::MCPStartupFailed { details }) => details,
+                Err(other) => return Err(other),
+            };
+            failures.append(&mut unresolved_failures);
+            if failures.is_empty() {
+                Ok(())
+            } else {
+                failures.sort();
+                Err(AgentDriverError::MCPStartupFailed { details: failures })
+            }
+        })
     }
 
     /// Subscribe to [`FileBasedMCPManagerEvent::CloudEnvMcpScanComplete`]
@@ -3310,11 +3483,12 @@ impl AgentDriver {
             return;
         };
 
-        Self::report_failure_before_lingering(foreground, stage, error).await;
+        Self::report_failure_before_lingering(foreground, stage, error, window).await;
 
         let (tx, rx) = oneshot::channel::<()>();
+        let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
         let armed = foreground.spawn(move |me, ctx| {
-            me.arm_debug_window(IdleTimeoutSender::new(tx), (), window, ctx);
+            me.arm_setup_failure_debug_window(controller, window, ctx);
         });
         if let Err(error) = armed.await {
             log::warn!("Could not arm the post-failure debug window: {error}");
@@ -3349,52 +3523,152 @@ impl AgentDriver {
         // refreshes; letting it suppress this would leave the previous window's deadline on the
         // run, which reads as already-expired and hides that the session is reachable.
         self.last_published_debug_deadline = None;
-        self.publish_debug_window_deadline(window, ctx);
+        self.publish_debug_window_deadline(window, None, None, ctx);
 
         if self.debug_window_refresh_installed {
             return;
         }
         self.debug_window_refresh_installed = true;
 
+        self.subscribe_to_viewer_input_refresh(ctx, move || idle_timeout.refresh());
+    }
+
+    /// Subscribes the terminal driver's viewer-input events to `refresh`, publishing the
+    /// resulting deadline on each keystroke. Callers supply the refresh function so a pin-aware
+    /// one and a plain one can share this wiring.
+    fn subscribe_to_viewer_input_refresh(
+        &self,
+        ctx: &mut ModelContext<Self>,
+        refresh: impl Fn() -> Option<Duration> + Send + 'static,
+    ) {
         let terminal_driver = self.terminal_driver.clone();
         ctx.subscribe_to_model(&terminal_driver, move |me, _, event, ctx| {
             if matches!(event, TerminalDriverEvent::SharedSessionViewerInput)
-                && let Some(window) = idle_timeout.refresh()
+                && let Some(window) = refresh()
             {
                 log::debug!(
                     "Ambient agent idle lifecycle: event=idle_timeout_refreshed trigger=viewer_input"
                 );
-                me.publish_debug_window_deadline(window, ctx);
+                me.publish_debug_window_deadline(window, None, None, ctx);
             }
         });
     }
 
-    /// Publishes the debug window's current deadline for display on run surfaces.
+    /// Arms the post-failure debug window for a retained environment-setup failure and installs
+    /// the subscriptions that keep it alive across a debug turn (REMOTE-2661).
     ///
-    /// Throttled, since the window refreshes on keystroke-level events. The published value is
-    /// advisory and lags the real deadline conservatively; the agent process owns the timer.
-    fn publish_debug_window_deadline(&mut self, window: Duration, ctx: &mut ModelContext<Self>) {
+    /// Unlike [`Self::arm_debug_window`], no conversation exists yet: a turn pins the window for
+    /// its duration (accepted → terminal) since there's no viewer input to refresh it otherwise.
+    fn arm_setup_failure_debug_window(
+        &mut self,
+        controller: DebugWindowController<()>,
+        window: Duration,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        controller.refresh_idle((), window);
+        // The first deadline already went out with the setup-failure state; record it so the
+        // throttle counts it as published.
+        self.last_published_debug_deadline = Some(SystemTime::now());
+
+        let terminal_surface_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
+
+        let viewer_input_controller = controller.clone();
+        self.subscribe_to_viewer_input_refresh(ctx, move || {
+            viewer_input_controller.refresh_from_last_armed()
+        });
+
+        let history_model = BlocklistAIHistoryModel::handle(ctx);
+        ctx.subscribe_to_model(&history_model, move |me, _, event, ctx| {
+            let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_surface_id: event_terminal_surface_id,
+                update: ConversationStatusUpdate::Changed { .. },
+                new_status,
+            } = event
+            else {
+                return;
+            };
+            if *event_terminal_surface_id != terminal_surface_id {
+                return;
+            }
+
+            if new_status.is_in_progress() {
+                let refreshed = controller.refresh_idle((), window);
+                let newly_pinned = controller.pin_for_turn(*conversation_id);
+                if refreshed || newly_pinned {
+                    log::info!(
+                        "Ambient agent idle lifecycle: event=debug_turn_accepted conversation_id={conversation_id:?}"
+                    );
+                    me.last_published_debug_deadline = None;
+                    me.publish_debug_window_deadline(
+                        window,
+                        Some(true),
+                        Some(AgentTaskState::InProgress),
+                        ctx,
+                    );
+                }
+            } else if (new_status.is_done() || new_status.is_blocked())
+                && controller.finish_turn(*conversation_id, (), window)
+            {
+                log::info!(
+                    "Ambient agent idle lifecycle: event=debug_turn_finished conversation_id={conversation_id:?}"
+                );
+                me.last_published_debug_deadline = None;
+                me.publish_debug_window_deadline(
+                    window,
+                    Some(controller.is_pinned()),
+                    debug_turn_task_state(new_status),
+                    ctx,
+                );
+            }
+            // WaitingForEvents / TransientError are quiescent-but-not-terminal: the turn stays
+            // pinned without a fresh accept or finish transition.
+        });
+    }
+
+    /// Publishes the debug window's current deadline for display, and optionally the
+    /// REMOTE-2661 `debug_agent_active` pin flag alongside it.
+    ///
+    /// The deadline is throttled and advisory, since the agent process owns the real timer.
+    /// `debug_agent_active`, when `Some`, is never throttled: a pin/unpin is a discrete change.
+    fn publish_debug_window_deadline(
+        &mut self,
+        window: Duration,
+        debug_agent_active: Option<bool>,
+        task_state: Option<AgentTaskState>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         const MIN_PUBLISH_INTERVAL: Duration = Duration::from_secs(30);
 
         let Some(task_id) = self.task_id else {
             return;
         };
         let now = SystemTime::now();
-        if let Some(last) = self.last_published_debug_deadline
-            && now
-                .duration_since(last)
+        let deadline_throttled = self.last_published_debug_deadline.is_some_and(|last| {
+            now.duration_since(last)
                 .is_ok_and(|elapsed| elapsed < MIN_PUBLISH_INTERVAL)
-        {
+        });
+        if deadline_throttled && debug_agent_active.is_none() && task_state.is_none() {
             return;
         }
         self.last_published_debug_deadline = Some(now);
 
-        let deadline = Utc::now() + chrono::Duration::from_std(window).unwrap_or_default();
+        // A throttled republish still needs a deadline value, so a debug_agent_active-only
+        // update doesn't omit `session_debug_until` entirely.
+        let deadline = debug_window_deadline(window);
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         ctx.spawn(
             async move {
                 ai_client
-                    .update_agent_task(task_id, None, None, None, None, Some(deadline))
+                    .update_agent_task(
+                        task_id,
+                        task_state,
+                        None,
+                        None,
+                        None,
+                        Some(deadline),
+                        debug_agent_active,
+                    )
                     .await
             },
             move |_me, result, _ctx| {
@@ -3407,15 +3681,17 @@ impl AgentDriver {
         );
     }
 
-    /// Reports the run's terminal failure state before the debug window starts.
+    /// Reports the run's terminal failure state, its status message, and the debug window's
+    /// first deadline in one update, so the server never sees a terminal setup failure without
+    /// also knowing a debug window is opening.
     ///
-    /// A setup failure never creates a conversation, so `LocalAgentTaskSyncModel` — which derives
-    /// task state from conversation status — never fires for it, and the run would otherwise read
-    /// as in-progress for the whole window.
+    /// A setup failure never creates a conversation, so `LocalAgentTaskSyncModel` never derives
+    /// task state for it, and the run would otherwise read as in-progress for the whole window.
     async fn report_failure_before_lingering(
         foreground: &ModelSpawner<Self>,
         stage: &str,
         error: &AgentDriverError,
+        window: Duration,
     ) {
         let message = error.to_string();
         let resolved = foreground
@@ -3429,6 +3705,7 @@ impl AgentDriver {
         };
 
         let status = setup_failure_status_update(message);
+        let deadline = debug_window_deadline(window);
         if let Err(error) = ai_client
             .update_agent_task(
                 task_id,
@@ -3436,6 +3713,7 @@ impl AgentDriver {
                 None,
                 None,
                 Some(status),
+                Some(deadline),
                 None,
             )
             .await
@@ -4696,7 +4974,8 @@ impl AgentDriver {
                                         Some(session_id),
                                         None,
                                         None,
-                                        None
+                                        None,
+                                        None,
                                     )
                                     .await
                                     .context("Error setting ambient agent shared session ID")
@@ -5013,7 +5292,15 @@ pub(super) async fn report_driver_error(
 ) {
     let (state, status_update) = error_classification::classify_driver_error(err);
     if let Err(e) = server_api
-        .update_agent_task(task_id, Some(state), None, None, Some(status_update), None)
+        .update_agent_task(
+            task_id,
+            Some(state),
+            None,
+            None,
+            Some(status_update),
+            None,
+            None,
+        )
         .await
     {
         report_error!(

@@ -12,7 +12,8 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIAgentHarness, ServerAIConversationMetadata};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::task::{
-    AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo, TaskStatusErrorCode, TaskStatusMessage,
+    AgentConfigSnapshot, HarnessConfig, TaskPrincipalInfo, TaskScope, TaskStatusErrorCode,
+    TaskStatusMessage,
 };
 use crate::ai::ambient_agents::{
     AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
@@ -46,6 +47,10 @@ fn routing_allows_live_input_only_for_executable_shared_session_role() {
         let task_id = ambient_task_id(1);
         let reader = ambient_pane_model(task_id, SharedSessionStatus::reader());
         let executor = ambient_pane_model(task_id, SharedSessionStatus::executor());
+        // `resolve_ai_query_routing` checks retained-debug eligibility before the live-viewer
+        // branch, and that check reads `AgentConversationsModel`. Leaving it empty is the point:
+        // with no task row, an ordinary live viewer must still route to `LiveRemoteVm`.
+        app.add_singleton_model(AgentConversationsModel::new);
         app.update(|ctx| {
             assert_eq!(
                 resolve_ai_query_routing(EntityId::new(), None, &reader, ctx),
@@ -219,6 +224,8 @@ fn ambient_agent_task(
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -418,6 +425,31 @@ fn routing_is_live_remote_vm_for_retained_failed_execution() {
 }
 
 #[test]
+fn routing_starts_new_cloud_vm_for_editable_third_party_disconnected_pane() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::ClaudeCode,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+
+        app.update(|ctx| {
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::NewCloudVm { task_id });
+            assert_eq!(
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::NewCloudVm)
+            );
+        });
+    });
+}
+
+#[test]
 fn routing_starts_new_cloud_vm_for_ended_failed_execution() {
     App::test((), |mut app| async move {
         let TestHandles {
@@ -572,6 +604,8 @@ fn environment_setup_failure_without_conversation_shows_tombstone_without_cta() 
             task.status_message = Some(TaskStatusMessage {
                 message: "Environment setup failed: Failed to run setup command: hi".to_string(),
                 error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: None,
+                debug_agent_active: false,
             });
             model.insert_task_for_test(task);
         });
@@ -606,6 +640,8 @@ fn environment_setup_failure_with_conversation_shows_continue_cta() {
             task.status_message = Some(TaskStatusMessage {
                 message: "Environment setup failed: Failed to run setup command: hi".to_string(),
                 error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: None,
+                debug_agent_active: false,
             });
             model.insert_task_for_test(task);
         });
@@ -619,6 +655,276 @@ fn environment_setup_failure_with_conversation_shows_continue_cta() {
                 Ok(CloudConversationContinuationUiState::Tombstone {
                     cta: Some(TombstoneCta::ContinueInCloud { task_id }),
                 })
+            );
+        });
+    });
+}
+
+/// Debug routing trusts the server-computed `debug_agent_available` capability
+/// (REMOTE-2661/warp-server#14231) entirely — it is not re-derived from `session_debug_until`
+/// or `debug_agent_active` client-side. An older/ineligible server response defaults
+/// `debug_agent_available` to `false`, so a task that otherwise looks eligible (failure-like
+/// state, `ENVIRONMENT_SETUP_FAILED`, an open `session_debug_until` window) must still fail
+/// closed. A setup-failure tombstone never carries a CTA either way.
+#[test]
+fn retained_setup_failure_without_debug_agent_available_is_not_debug_routable() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::ClaudeCode,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+            task.conversation_id = None;
+            task.debug_agent_available = false;
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: Some(Utc::now() + chrono::Duration::minutes(5)),
+                debug_agent_active: false,
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let state =
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx);
+            assert_eq!(
+                state,
+                Ok(CloudConversationContinuationUiState::Tombstone { cta: None })
+            );
+
+            let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+            assert_ne!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::RetainedSetupFailureDebug { task_id }
+            );
+        });
+    });
+}
+
+/// Once `debug_agent_available` is true (server-eligible) and the other conditions hold, the
+/// pane's follow-up routing must switch to the REMOTE-2661 debug path. The tombstone itself
+/// stays plain: the debug entry point is the pane's own input, not a CTA button.
+#[test]
+fn retained_setup_failure_with_debug_agent_available_enables_debug_routing() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::ClaudeCode,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+            task.conversation_id = None;
+            task.debug_agent_available = true;
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: Some(Utc::now() + chrono::Duration::minutes(5)),
+                debug_agent_active: false,
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let state =
+                resolve_cloud_conversation_continuation_ui_state(terminal_view_id, task_id, ctx);
+            assert_eq!(
+                state,
+                Ok(CloudConversationContinuationUiState::Tombstone { cta: None })
+            );
+
+            let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+            assert_eq!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::RetainedSetupFailureDebug { task_id }
+            );
+        });
+    });
+}
+
+/// PRODUCT.md §7: once the first bootstrap persists a conversation ID, every later prompt must
+/// still go through the authenticated run follow-up service. An attached viewer must therefore
+/// keep resolving to the retained-debug route rather than falling back to the direct
+/// `LiveRemoteVm` viewer path the moment a conversation exists.
+#[test]
+fn retained_setup_failure_with_a_conversation_still_routes_to_the_debug_followup() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+            task.debug_agent_available = true;
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: Some(Utc::now() + chrono::Duration::minutes(5)),
+                debug_agent_active: false,
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let attached_viewer = ambient_pane_model(task_id, SharedSessionStatus::executor());
+            assert_eq!(
+                resolve_ai_query_routing(terminal_view_id, None, &attached_viewer, ctx),
+                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                "a later prompt on a retained failure that already has a conversation must not fall back to the direct viewer path"
+            );
+        });
+    });
+}
+
+/// PRODUCT.md §1 and §24: an active debug turn pins the idle timer, so the published deadline
+/// (and thus `session_debug_until`) stops sliding and can fall behind. The client must not
+/// re-derive eligibility from that stale deadline itself — it trusts `debug_agent_available`
+/// as computed by the server, which already accounts for the pin — or a long autonomous turn
+/// loses the input it is running in.
+#[test]
+fn retained_setup_failure_stays_eligible_while_a_debug_turn_pins_the_window() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed);
+            task.conversation_id = None;
+            task.debug_agent_available = true;
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: Some(Utc::now() - chrono::Duration::minutes(5)),
+                debug_agent_active: true,
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+            assert_eq!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                "a pinned debug turn must keep the entry point open past the published deadline"
+            );
+        });
+    });
+}
+
+/// A team-owned retained setup-failure run must be debug-routable for a team member who is not
+/// the literal creator, mirroring the pre-existing team-ownership recognition
+/// `third_party_conversation_owned_by_current_team_shows_continue_in_cloud_tombstone` already
+/// proves for the post-conversation-exists case. `creator` is only ever a natural person (see
+/// `RunCreatorInfoType`), so before `AmbientAgentTask::scope` existed, this predicate could
+/// only ever recognize the exact original creator — denying every other team member access the
+/// server would have genuinely authorized them for.
+#[test]
+fn retained_setup_failure_owned_by_current_team_is_debug_routable_for_non_creator() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentTeamOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed)
+                    .with_creator("someone-else-on-the-team");
+            task.conversation_id = None;
+            task.debug_agent_available = true;
+            task.scope = Some(TaskScope {
+                scope_type: "TEAM".to_string(),
+                uid: test_team_uid().to_string(),
+            });
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: Some(Utc::now() + chrono::Duration::minutes(5)),
+                debug_agent_active: false,
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+            assert_eq!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                "a fellow team member must be able to debug the run even though they are not its literal creator"
+            );
+        });
+    });
+}
+
+/// The team-membership recognition above must not grant access to a stranger: a team-owned
+/// run stays un-debuggable for a viewer who does not belong to that team.
+#[test]
+fn retained_setup_failure_owned_by_a_different_team_is_not_debug_routable() {
+    App::test((), |mut app| async move {
+        let TestHandles {
+            terminal_view_id,
+            task_id,
+        } = setup_app(
+            &mut app,
+            AuthFixture::LoggedIn,
+            AIAgentHarness::Oz,
+            ConversationPermissionFixture::CurrentUserOwner,
+        );
+        AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
+            let mut task =
+                ambient_agent_task(task_id, CONVERSATION_TOKEN, AmbientAgentTaskState::Failed)
+                    .with_creator("someone-on-another-team");
+            task.conversation_id = None;
+            task.debug_agent_available = true;
+            task.scope = Some(TaskScope {
+                scope_type: "TEAM".to_string(),
+                uid: ServerId::from(999).to_string(),
+            });
+            task.status_message = Some(TaskStatusMessage {
+                message: "Environment setup failed: Failed to run setup command: hi".to_string(),
+                error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+                session_debug_until: Some(Utc::now() + chrono::Duration::minutes(5)),
+                debug_agent_active: false,
+            });
+            model.insert_task_for_test(task);
+        });
+
+        app.update(|ctx| {
+            let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
+            assert_ne!(
+                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                AIQueryRouting::RetainedSetupFailureDebug { task_id },
+                "a viewer on an unrelated team must not be able to debug the run"
             );
         });
     });
@@ -973,10 +1279,9 @@ fn routing_is_local_for_non_cloud_pane() {
     App::test((), |mut app| async move {
         let model = TerminalModel::mock(None, None);
         app.update(|ctx| {
-            assert_eq!(
-                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
-                AIQueryRouting::Local
-            );
+            let routing = resolve_ai_query_routing(EntityId::new(), None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::Local);
+            assert_eq!(routing.cloud_routing_indicator(), None);
         });
     });
 }
@@ -984,14 +1289,26 @@ fn routing_is_local_for_non_cloud_pane() {
 #[test]
 fn routing_is_live_remote_vm_for_active_viewer() {
     App::test((), |mut app| async move {
+        // Registered because `resolve_ai_query_routing` now checks setup-failure debug
+        // eligibility (which reads `AgentConversationsModel`) before the live-viewer branch,
+        // even though this task's absence from the model makes it ineligible either way. Disable
+        // AgentManagementView so the model doesn't try to wire up polling/subscriptions this
+        // minimal test doesn't otherwise set up.
+        let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(false);
+        app.add_singleton_model(AgentConversationsModel::new);
         let model = ambient_pane_model(ambient_task_id(1), SharedSessionStatus::reader());
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(EntityId::new(), None, &model, ctx);
             assert_eq!(
-                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                routing,
                 AIQueryRouting::LiveRemoteVm {
                     is_executor: false,
                     ambient_agent_task_id: Some(ambient_task_id(1)),
                 }
+            );
+            assert_eq!(
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::LiveSession)
             );
         });
     });
@@ -1005,13 +1322,15 @@ fn routing_omits_task_id_for_non_ambient_shared_session_viewer() {
         let mut model = TerminalModel::mock(None, None);
         model.set_shared_session_status(SharedSessionStatus::executor());
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(EntityId::new(), None, &model, ctx);
             assert_eq!(
-                resolve_ai_query_routing(EntityId::new(), None, &model, ctx),
+                routing,
                 AIQueryRouting::LiveRemoteVm {
                     is_executor: true,
                     ambient_agent_task_id: None,
                 }
             );
+            assert_eq!(routing.cloud_routing_indicator(), None);
         });
     });
 }
@@ -1019,6 +1338,9 @@ fn routing_omits_task_id_for_non_ambient_shared_session_viewer() {
 #[test]
 fn routing_is_local_for_active_sharer_local_orchestration_child() {
     App::test((), |mut app| async move {
+        // See the comment in `routing_is_live_remote_vm_for_active_viewer`.
+        let _agent_management_guard = FeatureFlag::AgentManagementView.override_enabled(false);
+        app.add_singleton_model(AgentConversationsModel::new);
         let model = ambient_pane_model(ambient_task_id(1), SharedSessionStatus::ActiveSharer);
         app.update(|ctx| {
             assert_eq!(
@@ -1043,9 +1365,11 @@ fn routing_is_new_cloud_vm_for_owned_oz_disconnected_pane() {
         );
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::NewCloudVm { task_id });
             assert_eq!(
-                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::NewCloudVm { task_id }
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::NewCloudVm)
             );
         });
     });
@@ -1065,10 +1389,9 @@ fn routing_is_read_only_for_non_owner_disconnected_pane() {
         );
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
-            assert_eq!(
-                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
-                AIQueryRouting::UnconnectedReadOnly
-            );
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
+            assert_eq!(routing, AIQueryRouting::UnconnectedReadOnly);
+            assert_eq!(routing.cloud_routing_indicator(), None);
         });
     });
 }
@@ -1090,13 +1413,52 @@ fn routing_is_live_remote_vm_for_active_execution_without_attached_viewer() {
         });
         let model = ambient_pane_model(task_id, SharedSessionStatus::NotShared);
         app.update(|ctx| {
+            let routing = resolve_ai_query_routing(terminal_view_id, None, &model, ctx);
             assert_eq!(
-                resolve_ai_query_routing(terminal_view_id, None, &model, ctx),
+                routing,
                 AIQueryRouting::LiveRemoteVm {
                     is_executor: false,
                     ambient_agent_task_id: Some(task_id),
                 }
             );
+            assert_eq!(
+                routing.cloud_routing_indicator(),
+                Some(CloudRoutingIndicator::LiveSession)
+            );
         });
     });
+}
+
+#[test]
+fn cloud_routing_indicator_matches_footer_chip_policy() {
+    let task_id = ambient_task_id(1);
+    assert_eq!(
+        AIQueryRouting::LiveRemoteVm {
+            is_executor: true,
+            ambient_agent_task_id: Some(task_id),
+        }
+        .cloud_routing_indicator(),
+        Some(CloudRoutingIndicator::LiveSession)
+    );
+    assert_eq!(
+        AIQueryRouting::LiveRemoteVm {
+            is_executor: true,
+            ambient_agent_task_id: None,
+        }
+        .cloud_routing_indicator(),
+        None
+    );
+    assert_eq!(
+        AIQueryRouting::NewCloudVm { task_id }.cloud_routing_indicator(),
+        Some(CloudRoutingIndicator::NewCloudVm)
+    );
+    assert_eq!(
+        AIQueryRouting::RetainedSetupFailureDebug { task_id }.cloud_routing_indicator(),
+        Some(CloudRoutingIndicator::LiveSession)
+    );
+    assert_eq!(
+        AIQueryRouting::UnconnectedReadOnly.cloud_routing_indicator(),
+        None
+    );
+    assert_eq!(AIQueryRouting::Local.cloud_routing_indicator(), None);
 }

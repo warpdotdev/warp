@@ -137,6 +137,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::MCPUnresolvedSecrets {
+            server_name,
+            secret_names,
+        } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "MCP server '{server_name}' references secret(s) that are not available to this run: {}. Check that each secret exists and is attached to this agent or run.",
+                    secret_names.join(", ")
+                ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::ProfileError(name) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(

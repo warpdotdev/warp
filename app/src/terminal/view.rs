@@ -122,8 +122,10 @@ use session_sharing_protocol::sharer::{
 use settings::{Setting, ToggleableSetting};
 use shared_session::cloud_conversation_continuation::CloudConversationContinuationUiState;
 pub(crate) use shared_session::cloud_conversation_continuation::{
-    AIQueryRouting, CompletedChildPresentation, ConversationAccess,
-    completed_child_conversation_access, completed_child_presentation, resolve_ai_query_routing,
+    AIQueryRouting, CloudRoutingIndicator, CompletedChildPresentation, ConversationAccess,
+    completed_child_conversation_access, completed_child_presentation,
+    is_retained_setup_failure_debug_editable_for_task, resolve_ai_query_routing,
+    resolve_ambient_agent_task_id,
 };
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
@@ -8135,10 +8137,7 @@ impl TerminalView {
         model: &TerminalModel,
         app: &AppContext,
     ) -> Option<AmbientAgentTaskId> {
-        self.ambient_agent_view_model
-            .as_ref()
-            .and_then(|model| model.as_ref(app).task_id())
-            .or_else(|| model.ambient_agent_task_id())
+        resolve_ambient_agent_task_id(self.ambient_agent_view_model.as_ref(), model, app)
     }
     pub fn ambient_agent_task_id_for_details_panel(
         &self,
@@ -21872,6 +21871,50 @@ impl TerminalView {
         true
     }
 
+    /// Submits a follow-up through the run follow-up service for the REMOTE-2661 retained
+    /// setup-failure debug route. Unlike [`Self::try_submit_pending_cloud_followup`], not gated
+    /// by `HandoffCloudCloud`: the server alone decides whether it bootstraps a debug
+    /// conversation or starts a new VM.
+    ///
+    /// Returns `false` when the follow-up couldn't be routed (no bound ambient view model, or
+    /// one bound to a different task); the caller then shows an error toast.
+    fn try_submit_setup_failure_debug_followup(
+        &mut self,
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+        prompt: String,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if prompt.trim().is_empty() {
+            self.input.update(ctx, |input, ctx| {
+                input.reset_after_cloud_followup_submission(ctx);
+                input.set_input_mode_agent(true, ctx);
+            });
+            self.update_pane_configuration(ctx);
+            self.focus_input_box(ctx);
+            ctx.notify();
+            return true;
+        }
+
+        let Some(ambient_agent_view_model) = self.ambient_agent_view_model.clone() else {
+            return false;
+        };
+        if ambient_agent_view_model.as_ref(ctx).task_id() != Some(task_id) {
+            return false;
+        }
+
+        ambient_agent_view_model.update(ctx, |model, ctx| {
+            model.submit_setup_failure_debug_followup(prompt, ctx);
+        });
+
+        self.input.update(ctx, |input, ctx| {
+            input.reset_after_cloud_followup_submission(ctx);
+            input.set_input_mode_agent(true, ctx);
+        });
+        self.update_pane_configuration(ctx);
+        ctx.notify();
+        true
+    }
+
     fn handle_input_event(&mut self, event: &InputEvent, ctx: &mut ViewContext<Self>) {
         match event {
             InputEvent::Enter => self.clear_prompt_suggestions(ctx),
@@ -21938,6 +21981,14 @@ impl TerminalView {
                     return;
                 }
                 self.show_error_toast("Couldn't continue this cloud task.".to_string(), ctx);
+            }
+            InputEvent::SubmitSetupFailureDebugFollowup { task_id, prompt } => {
+                if !self.try_submit_setup_failure_debug_followup(*task_id, prompt.clone(), ctx) {
+                    self.show_error_toast(
+                        "Couldn't reach the retained session to debug it.".to_string(),
+                        ctx,
+                    );
+                }
             }
             InputEvent::CancelSharedSessionConversation {
                 server_conversation_token,

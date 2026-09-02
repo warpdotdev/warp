@@ -527,6 +527,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CtrlCCancelsThirdPartyHarness,
         #[cfg(feature = "shell_widget_handoff")]
         FeatureFlag::ShellWidgetHandoff,
+        #[cfg(feature = "history_search_ranking_v2")]
+        FeatureFlag::HistorySearchRankingV2,
     ]);
 
     flags

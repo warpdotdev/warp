@@ -3260,6 +3260,13 @@ type RootQuery {
 
   """Retrieve execution history for a scheduled agent."""
   scheduledAgentHistory(input: ScheduledAgentHistoryInput!, requestContext: RequestContext!): ScheduledAgentHistoryResult!
+
+  """
+  Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+  session. Requires a workload token scoped to the run, so only the sandbox itself (not an
+  arbitrary caller) can invoke it.
+  """
+  setupFailureDebugAuthorization(input: SetupFailureDebugAuthorizationInput!, requestContext: RequestContext!): SetupFailureDebugAuthorizationResult!
   simpleIntegrations(input: SimpleIntegrationsInput!, requestContext: RequestContext!): SimpleIntegrationsResult!
   suggestCloudEnvironmentImage(input: SuggestCloudEnvironmentImageInput!, requestContext: RequestContext!): SuggestCloudEnvironmentImageResult!
 
@@ -3489,6 +3496,25 @@ type SetTeamMemberRoleOutput implements Response {
 }
 
 union SetTeamMemberRoleResult = SetTeamMemberRoleOutput | UserFacingError
+
+"""
+Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+session. Called by the sharer (the retained agent process) with its own workload token to
+verify a no-token prompt's originating participant before honoring it, since the sharer's
+local task-eligibility view cannot authenticate who is actually asking.
+"""
+input SetupFailureDebugAuthorizationInput {
+  participantFirebaseUid: String!
+  taskId: ID!
+  workloadToken: String!
+}
+
+type SetupFailureDebugAuthorizationOutput implements Response {
+  authorized: Boolean!
+  responseContext: ResponseContext!
+}
+
+union SetupFailureDebugAuthorizationResult = SetupFailureDebugAuthorizationOutput | UserFacingError
 
 type SetUserIsOnboardedOutput implements Response {
   responseContext: ResponseContext!
@@ -4216,6 +4242,14 @@ input UpdateAgentTaskInput {
   If set, the task is associated with this AI conversation UUID for follow-up messages.
   """
   conversationId: ID
+
+  """
+  True while a REMOTE-2661 debug turn is actively pinning the post-failure debug window's idle
+  timer; false once the turn ends and the timer re-arms. Display-only, and deliberately separate
+  from statusMessage and sessionDebugUntil for the same reason: a pin/unpin update must not
+  overwrite the failure text or move the deadline.
+  """
+  debugAgentActive: Boolean
 
   """
   When a failed run's shared session stops being held open for debugging.

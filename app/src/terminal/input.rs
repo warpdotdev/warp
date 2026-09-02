@@ -158,6 +158,7 @@ use crate::ai::agent::{
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::attachment_utils::MAX_ATTACHMENT_SIZE_BYTES;
 use crate::ai::block_context::BlockContext;
@@ -324,7 +325,9 @@ use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
-use crate::terminal::view::{AIQueryRouting, CodeDiffAction, resolve_ai_query_routing};
+use crate::terminal::view::{
+    AIQueryRouting, CodeDiffAction, resolve_ai_query_routing, resolve_ambient_agent_task_id,
+};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::user_config::WarpConfig;
@@ -1070,6 +1073,13 @@ pub enum Event {
     },
     /// A disconnected Cloud Mode pane is requesting to submit a cloud follow-up.
     SubmitCloudFollowup {
+        prompt: String,
+    },
+    /// A retained environment-setup-failure pane, or an already attached live viewer of one,
+    /// is requesting a debug follow-up through the authenticated run follow-up service
+    /// (REMOTE-2661).
+    SubmitSetupFailureDebugFollowup {
+        task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
         prompt: String,
     },
     /// A viewer in a shared session is requesting to cancel the active agent conversation.
@@ -4353,6 +4363,38 @@ impl Input {
             .map(AmbientAgentViewState::view_model)
     }
 
+    /// The ambient agent run this pane belongs to, if any.
+    fn ambient_agent_task_id(&self, ctx: &AppContext) -> Option<AmbientAgentTaskId> {
+        resolve_ambient_agent_task_id(self.ambient_agent_view_model(), &self.model.lock(), ctx)
+    }
+
+    /// Blocks a submission for `task_id` while that task is not in [`AgentConversationsModel`]
+    /// yet, starting (or deduping) its fetch and telling the user to retry (REMOTE-2661).
+    /// `resolve_ai_query_routing` can't distinguish an absent task from an ineligible one, and
+    /// treating unknown as ineligible would wrongly fall back to a local conversation. Returns
+    /// `true` when the caller must stop.
+    fn block_submission_while_ambient_task_unresolved(
+        &self,
+        task_id: Option<AmbientAgentTaskId>,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(task_id) = task_id.filter(|task_id| {
+            AgentConversationsModel::as_ref(ctx)
+                .get_task_data(task_id)
+                .is_none()
+        }) else {
+            return false;
+        };
+        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+            model.get_or_async_fetch_task_data(&task_id, ctx);
+        });
+        self.show_ephemeral_error_toast(
+            "Still checking this session's status — please try sending your message again in a moment.",
+            ctx,
+        );
+        true
+    }
+
     /// Shows a transient error toast for a follow-up submission that was blocked or redirected.
     fn show_ephemeral_error_toast(&self, message: &str, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
@@ -4380,6 +4422,25 @@ impl Input {
         // Nothing to route for an empty buffer; let the caller's normal (no-op) handling run.
         if self.editor.as_ref(ctx).buffer_text(ctx).trim().is_empty() {
             return false;
+        }
+
+        // Scoped to an attached ambient live viewer, the case where unresolved eligibility
+        // would otherwise fall through to the ordinary `LiveRemoteVm` path.
+        let is_attached_ambient_viewer = {
+            let model = self.model.lock();
+            model.shared_session_status().is_active_viewer()
+                && (model.is_shared_ambient_agent_session()
+                    || self
+                        .ambient_agent_view_model()
+                        .is_some_and(|m| m.as_ref(ctx).is_ambient_agent()))
+        };
+        if self.block_submission_while_ambient_task_unresolved(
+            is_attached_ambient_viewer
+                .then(|| self.ambient_agent_task_id(ctx))
+                .flatten(),
+            ctx,
+        ) {
+            return true;
         }
 
         // Route by the shared source of truth. A live shared-session viewer forwards to the sharer
@@ -4464,6 +4525,13 @@ impl Input {
                     "This cloud conversation can't continue on your local machine.",
                     ctx,
                 );
+                true
+            }
+            AIQueryRouting::RetainedSetupFailureDebug { task_id } => {
+                // Every authenticated origin converges on the same follow-up service call,
+                // never the direct viewer prompt path or the local agent (REMOTE-2661).
+                let prompt = self.editor.as_ref(ctx).buffer_text(ctx).trim().to_owned();
+                ctx.emit(Event::SubmitSetupFailureDebugFollowup { task_id, prompt });
                 true
             }
         }

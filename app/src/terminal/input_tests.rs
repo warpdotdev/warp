@@ -104,6 +104,7 @@ use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBar
 use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -1498,6 +1499,32 @@ fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
         assert!(
             sent.borrow().is_empty(),
             "a read-only viewer must not forward a prompt to the sharer"
+        );
+    });
+}
+
+#[test]
+fn unresolved_ambient_task_blocks_submission() {
+    // REMOTE-2661: eligibility that is merely unresolved (the ambient task is not in
+    // `AgentConversationsModel` yet) must fail closed for every submission path, rather than
+    // fall back to the direct viewer path or a new local conversation.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-000000000099".parse().unwrap();
+
+        let blocked = input.update(&mut app, |input, ctx| {
+            input.block_submission_while_ambient_task_unresolved(Some(task_id), ctx)
+        });
+        assert!(
+            blocked,
+            "an uncached ambient task must block the submission instead of resolving eligibility"
         );
     });
 }
@@ -3366,22 +3393,6 @@ fn native_completions_after_empty_specs_bails_when_stale() {
     });
 }
 
-/// Yields until `condition` holds, then returns; panics if it never holds. The bound is an attempt
-/// count rather than a wall-clock deadline, so the wait cannot hang and does not depend on the test
-/// clock advancing with `Instant::now()`.
-async fn poll_until(app: &mut App, awaited: &str, mut condition: impl FnMut(&mut App) -> bool) {
-    const POLL_ATTEMPTS: usize = 600;
-    const POLL_INTERVAL: Duration = Duration::from_millis(5);
-
-    for _ in 0..POLL_ATTEMPTS {
-        if condition(app) {
-            return;
-        }
-        warpui::r#async::Timer::after(POLL_INTERVAL).await;
-    }
-    panic!("gave up after {POLL_ATTEMPTS} attempts waiting for {awaited}");
-}
-
 fn count_native_shell_completions_dispatches(
     app: &mut App,
     terminal: &ViewHandle<TerminalView>,
@@ -3422,16 +3433,12 @@ fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
             input.input_tab(ctx);
         });
 
-        poll_until(
-            &mut app,
-            "the bundled-spec completions menu to open",
-            |app| {
-                input.read(app, |input, ctx| {
-                    input.suggestions_mode_model.as_ref(ctx).is_visible()
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            600 => input.read(&app, |input, ctx| {
+                input.suggestions_mode_model.as_ref(ctx).is_visible()
+            }),
+            "gave up after 600 attempts waiting for the bundled-spec completions menu to open"
+        );
 
         assert_eq!(
             *dispatch_count.borrow(),
@@ -3465,11 +3472,10 @@ fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
             input.input_tab(ctx);
         });
 
-        let dispatched = dispatch_count.clone();
-        poll_until(&mut app, "the shell to be asked", move |_| {
-            *dispatched.borrow() == 1
-        })
-        .await;
+        assert_eventually!(
+            600 => *dispatch_count.borrow() == 1,
+            "gave up after 600 attempts waiting for the shell to be asked"
+        );
 
         assert_eq!(
             *dispatch_count.borrow(),

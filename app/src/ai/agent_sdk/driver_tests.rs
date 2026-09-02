@@ -22,6 +22,7 @@ use warp_cli::{
 };
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_graphql::ai::AgentTaskState;
 use warp_graphql::mutations::create_managed_mcp_client_config::{
     CreateManagedMcpClientConfigOutput, ManagedMcpTransportKind,
 };
@@ -33,15 +34,15 @@ use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity as _};
 
 use super::{
-    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, IdleTimeoutSender,
-    LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV, LEGACY_OZ_PARENT_STATE_ROOT_ENV,
-    MANAGED_MCP_RESOLVE_MAX_ATTEMPTS, OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
-    OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, PlatformErrorCode, SDKConversationOutputStatus,
-    WARP_MESSAGE_LISTENER_STATE_ROOT_ENV, build_secret_env_vars,
-    idle_window_for_cli_session_status, idle_window_for_terminal_status,
-    setup_failure_status_update, terminal_status_log_outcome,
+    AgentDriver, AgentDriverError, AgentRunPrompt, CLIAgentSessionStatus, DebugWindowController,
+    IdleTimeoutSender, LEGACY_OZ_PARENT_LISTENER_MANAGED_EXTERNALLY_ENV,
+    LEGACY_OZ_PARENT_STATE_ROOT_ENV, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS,
+    OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
+    build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
+    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
 };
-use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentInput, AIAgentOutput,
@@ -65,6 +66,7 @@ use crate::ai::skills::SkillManager;
 use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
+use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 #[test]
@@ -461,21 +463,44 @@ fn managed_command_config_preserves_literal_env_despite_colliding_local_secret()
 }
 
 #[test]
-fn managed_command_config_missing_secret_leaves_placeholder() {
+fn managed_command_config_missing_secret_is_rejected_before_serialization() {
     let installations = AgentDriver::installations_from_managed_client_config_json(
         r#"{"mcpServers":{"GitHub MCP":{"command":"npx","args":["--token={{API_TOKEN}}"]}}}"#,
         None,
         "github",
     )
-    .unwrap();
-    let rendered = render_installations(installations, HashMap::new());
+    .expect("managed MCP config should parse");
+    let error = AgentDriver::mcp_installations_to_json(installations, &HashMap::new())
+        .expect_err("an unresolved secret must not reach the harness config");
 
-    match &rendered["GitHub MCP"].transport_type {
-        JSONTransportType::CLIServer { args, .. } => {
-            assert_eq!(args, &vec!["--token={{API_TOKEN}}".to_string()]);
+    match error {
+        AgentDriverError::MCPUnresolvedSecrets {
+            server_name,
+            secret_names,
+        } => {
+            assert_eq!(server_name, "GitHub MCP");
+            assert_eq!(secret_names, vec!["API_TOKEN".to_string()]);
         }
-        other => panic!("expected CLI server, got {other:?}"),
+        other => panic!("expected unresolved MCP secrets, got {other:?}"),
     }
+}
+
+#[test]
+fn ephemeral_mcp_missing_secret_is_filtered_before_spawn() {
+    let installations = AgentDriver::installations_from_managed_client_config_json(
+        r#"{"mcpServers":{"GitHub MCP":{"url":"https://example.com/mcp","headers":{"Authorization":"Bearer {{API_TOKEN}}"}}}}"#,
+        None,
+        "github",
+    )
+    .expect("managed MCP config should parse");
+    let (ready, failures) =
+        AgentDriver::apply_secrets_to_ephemeral_mcp_installations(installations, &HashMap::new());
+
+    assert!(ready.is_empty());
+    assert_eq!(
+        failures,
+        vec!["'GitHub MCP' was not started: unresolved secret reference(s): API_TOKEN".to_string()]
+    );
 }
 
 // ── Ephemeral MCP installation ids: stable across rebuilds ─────────────────
@@ -910,6 +935,157 @@ fn idle_timeout_sender_complete_with_optional_idle_some_then_cancel_invalidates_
     assert_eq!(rx.try_recv().unwrap(), None);
 }
 
+// ── DebugWindowController tests ───────────────────────────────────────────────────
+
+#[test]
+fn debug_window_controller_pin_blocks_refresh_and_finish_rearms() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    // A short window so an unpinned controller would fire almost immediately.
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin must be accepted"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        None,
+        "a pinned debug turn must not let the idle window expire, however long it runs"
+    );
+
+    assert!(
+        controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "finishing a tracked turn must report a real transition"
+    );
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "finishing the last active turn must re-arm the full idle window"
+    );
+}
+
+#[test]
+fn debug_window_controller_duplicate_pin_is_idempotent() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    assert!(
+        controller.pin_for_turn(turn_id),
+        "first pin is a real transition"
+    );
+    assert!(
+        !controller.pin_for_turn(turn_id),
+        "a duplicate pin for the same turn id must be a no-op"
+    );
+}
+
+#[test]
+fn debug_window_controller_overlapping_turns_stay_pinned_until_the_last_turn_finishes() {
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let first_turn = AIConversationId::new();
+    let second_turn = AIConversationId::new();
+
+    assert!(controller.pin_for_turn(first_turn));
+    assert!(controller.pin_for_turn(second_turn));
+    assert!(controller.finish_turn(first_turn, (), Duration::from_secs(60)));
+    assert!(controller.is_pinned());
+    assert!(controller.finish_turn(second_turn, (), Duration::from_secs(60)));
+    assert!(!controller.is_pinned());
+}
+
+#[test]
+fn debug_turn_task_state_maps_timeline_states() {
+    let blocked = ConversationStatus::Blocked {
+        blocked_action: "approval".to_string(),
+    };
+    let cases = [
+        (
+            ConversationStatus::InProgress,
+            Some(AgentTaskState::InProgress),
+        ),
+        (ConversationStatus::Success, Some(AgentTaskState::Succeeded)),
+        (ConversationStatus::Error, Some(AgentTaskState::Error)),
+        (
+            ConversationStatus::Cancelled,
+            Some(AgentTaskState::Cancelled),
+        ),
+        (blocked, Some(AgentTaskState::Blocked)),
+        (ConversationStatus::TransientError, None),
+        (ConversationStatus::WaitingForEvents, None),
+    ];
+
+    for (status, expected) in cases {
+        assert_eq!(debug_turn_task_state(&status), expected);
+    }
+}
+#[test]
+fn debug_window_controller_duplicate_finish_is_idempotent() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+    let turn_id = AIConversationId::new();
+
+    controller.pin_for_turn(turn_id);
+    assert!(controller.finish_turn(turn_id, (), Duration::from_millis(30)));
+    assert!(
+        !controller.finish_turn(turn_id, (), Duration::from_millis(30)),
+        "a duplicate terminal event for the same turn id must be a no-op"
+    );
+
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        Some(()),
+        "the single real finish must still re-arm exactly one full window"
+    );
+}
+
+#[test]
+fn debug_window_controller_finish_of_unknown_turn_is_a_no_op() {
+    let (tx, mut rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_millis(30));
+    assert!(
+        !controller.finish_turn(AIConversationId::new(), (), Duration::from_millis(30)),
+        "finishing a turn id that was never pinned must be a no-op"
+    );
+
+    // The unrelated finish_turn call must not have disturbed the already-armed window.
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(rx.try_recv().unwrap(), Some(()));
+}
+
+#[test]
+fn debug_window_controller_refresh_is_inert_while_pinned() {
+    // Both refresh entry points — the viewer-input keystroke path and the general re-arm path —
+    // must be no-ops while a debug turn is pinning the window, for the same reason: neither may
+    // move a deadline that finish_turn is about to race by re-arming the full interval anyway.
+    let (tx, _rx) = oneshot::channel::<()>();
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(tx));
+
+    controller.refresh_idle((), Duration::from_secs(60));
+    controller.pin_for_turn(AIConversationId::new());
+    assert_eq!(
+        controller.refresh_from_last_armed(),
+        None,
+        "a viewer-input refresh must not move the deadline while a debug turn is pinning it"
+    );
+
+    let controller = DebugWindowController::new(IdleTimeoutSender::new(oneshot::channel::<()>().0));
+    controller.pin_for_turn(AIConversationId::new());
+    assert!(
+        !controller.refresh_idle((), Duration::from_millis(30)),
+        "refreshing while pinned must not arm a deadline that finish_turn would then race"
+    );
+}
+
 #[test]
 fn idle_timeout_sender_on_commit_runs_before_value_is_delivered() {
     // `on_commit` must run synchronously, on whichever thread performs the completion send,
@@ -947,7 +1123,7 @@ fn idle_timeout_sender_on_commit_runs_before_value_is_delivered() {
     );
 }
 
-// ── Terminal-status idle window routing ──────────────────────────────────────────
+// ── Terminal-status idle window routing ────────────────────────────────────────────
 
 fn error_status() -> SDKConversationOutputStatus {
     SDKConversationOutputStatus::Error {
@@ -2049,29 +2225,6 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
 
 // ── QUALITY-1801: buffered child event vs. ambient-run teardown ─────────────
 
-/// Polls `condition` on a short interval until it returns true, or panics with an
-/// actionable message after `timeout` elapses. Used to deterministically await
-/// scheduled async work (e.g. a `ctx.spawn`ed eligibility check) without guessing a
-/// fixed sleep duration that a loaded test runner could exceed.
-async fn poll_until(
-    app: &App,
-    timeout: Duration,
-    description: &str,
-    mut condition: impl FnMut(&App) -> bool,
-) {
-    let deadline = instant::Instant::now() + timeout;
-    loop {
-        if condition(app) {
-            return;
-        }
-        assert!(
-            instant::Instant::now() < deadline,
-            "timed out after {timeout:?} waiting for: {description}"
-        );
-        Timer::after(Duration::from_millis(5)).await;
-    }
-}
-
 /// Creates a conversation on `terminal_id` and attaches an in-flight mock response
 /// stream to it (mirroring an in-progress parent turn), registered through
 /// `ai_controller`. Returns the conversation and stream so the caller can drive the
@@ -2286,17 +2439,13 @@ fn ambient_driver_immediate_exit_blocks_buffered_child_event_from_restarting_maa
         // events lives in `execute_run`'s forwarder, which only runs once the async round trip
         // back from `run_exit`'s internal signal completes — so this is polled rather than
         // checked immediately.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the buffered event to be dropped by the forwarder's model-side cleanup",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    !service.has_pending_events(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                !service.has_pending_events(conversation_id)
+            }),
+            "timed out after 2s waiting for: the buffered event to be dropped by the forwarder's \
+             model-side cleanup"
+        );
     });
 }
 
@@ -2340,20 +2489,16 @@ fn ambient_driver_with_idle_window_still_injects_buffered_child_event() {
         // non-child conversation like this one and falls back to direct injection.
         // Poll for that scheduled work to land instead of guessing a fixed sleep
         // duration a loaded test runner could exceed.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the buffered event to be injected as an InProgress follow-up",
-            |app| {
-                BlocklistAIHistoryModel::handle(app).read(app, |history, _| {
-                    matches!(
-                        history.conversation(&conversation_id).map(|c| c.status()),
-                        Some(ConversationStatus::InProgress)
-                    )
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                matches!(
+                    history.conversation(&conversation_id).map(|c| c.status()),
+                    Some(ConversationStatus::InProgress)
+                )
+            }),
+            "timed out after 2s waiting for: the buffered event to be injected as an InProgress \
+             follow-up"
+        );
 
         // The buffered event should have been injected as a real follow-up: the
         // conversation is back `InProgress` and the queue has been drained.
@@ -2515,17 +2660,13 @@ fn ambient_driver_elapsed_idle_window_blocks_buffered_child_event_from_restartin
             .send(())
             .expect("background timer thread should still be waiting on the manual release");
 
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the conversation to be marked exiting once the idle window elapses",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    service.is_conversation_exiting(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the conversation to be marked exiting once the idle \
+             window elapses"
+        );
 
         // Deterministically inside the interleaving window now: exiting is committed, and
         // the forwarder cannot have run yet. Give the in-flight eligibility check
@@ -2697,18 +2838,14 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
         // post-commit gate, strictly before sending the completion value. The async
         // forwarder therefore cannot have run yet, so this check is a direct, uncontaminated
         // proof of `on_commit`'s own write, not of the forwarder's fallback.
-        poll_until(
-            &app,
-            Duration::from_secs(2),
-            "the resumed conversation to be marked exiting once its idle window elapses, \
-             via on_commit's seeded conversation id (not the async forwarder)",
-            |app| {
-                OrchestrationEventService::handle(app).read(app, |service, _| {
-                    service.is_conversation_exiting(conversation_id)
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            400 => OrchestrationEventService::handle(&app).read(&app, |service, _| {
+                service.is_conversation_exiting(conversation_id)
+            }),
+            "timed out after 2s waiting for: the resumed conversation to be marked exiting once \
+             its idle window elapses, via on_commit's seeded conversation id (not the async \
+             forwarder)"
+        );
 
         // Release the post-commit gate so the run can finish tearing down normally.
         post_commit_release_tx

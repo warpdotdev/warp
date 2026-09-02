@@ -18124,14 +18124,6 @@ impl Workspace {
                             ctx.notify();
                         });
                     }
-                    AcceptNotebook(sync_id) => {
-                        self.open_notebook(
-                            &NotebookSource::Existing(*sync_id),
-                            &OpenWarpDriveObjectSettings::default(),
-                            ctx,
-                            true,
-                        );
-                    }
                     AcceptEnvVarCollection(env_var_collection) => {
                         self.invoke_environment_variables(
                             (**env_var_collection).clone(),
