@@ -113,7 +113,7 @@
       "source": "warpdotdev/common-skills",
       "sourceType": "github",
       "skillPath": ".agents/skills/skill-doctor/SKILL.md",
-      "computedHash": "cca7c347d58cbdd5122f4e2c7a3555eb3ed59431997a6ce9105d6efad0da7c48"
+      "computedHash": "cc6638936adfb396b248cf422422b419f90da91cf3ee781f9c360b9f6c2975dd"
     },
     "spec-driven-implementation": {
       "source": "warpdotdev/common-skills",
