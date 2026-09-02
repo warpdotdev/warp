@@ -124,6 +124,7 @@ impl TeamUpdateManager {
                     workspaces: vec![],
                     joinable_teams: vec![],
                     experiments: None,
+                    factories_launch_modal_cta_url: None,
                     ai_credit_availability: None,
                     user_purchase_policy: None,
                 },
@@ -477,6 +478,8 @@ impl TeamUpdateManager {
                 let workspaces = user_workspaces_access.workspaces;
                 let joinable_teams = user_workspaces_access.joinable_teams;
                 let experiments = user_workspaces_access.experiments;
+                let factories_launch_modal_cta_url =
+                    user_workspaces_access.factories_launch_modal_cta_url;
                 let user_purchase_policy = user_workspaces_access.user_purchase_policy;
 
                 if let Some(availability) = user_workspaces_access.ai_credit_availability {
@@ -487,6 +490,8 @@ impl TeamUpdateManager {
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces
+                        .set_factories_launch_modal_cta_url(factories_launch_modal_cta_url);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams.clone(), ctx);
                 });

@@ -15,6 +15,10 @@ use thiserror::Error;
 pub use user_uid::{TEST_USER_EMAIL, TEST_USER_UID, UserUid};
 use warp_errors::{AnyhowErrorExt, ErrorExt, register_error};
 use warp_graphql::client::Operation;
+use warp_graphql::mutations::claim_feature_intro_impression::{
+    ClaimFeatureIntroImpression, ClaimFeatureIntroImpressionInput,
+    ClaimFeatureIntroImpressionResult, ClaimFeatureIntroImpressionVariables,
+};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult, CreateAnonymousUserVariables,
 };
@@ -138,6 +142,12 @@ pub trait AuthClient: Send + Sync {
     async fn update_user_settings(&self, input: UpdateUserSettingsInput) -> Result<()>;
 
     async fn set_user_is_onboarded(&self) -> Result<bool>;
+
+    /// Atomically claims (or confirms an existing claim of) a one-time,
+    /// cross-device feature-intro impression identified by `intro_key`.
+    /// Returns `true` only for the call that performs the claim, so a
+    /// concurrent claim from another device for the same user cannot both win.
+    async fn claim_feature_intro_impression(&self, intro_key: &str) -> Result<bool>;
 
     /// Requests a device authorization code from the server for headless CLI or SDK authentication.
     async fn request_device_code(
@@ -396,6 +406,29 @@ impl AuthClient for AuthClientImpl {
                 warp_graphql::client::get_user_facing_error_message(error)
             )),
             SetUserIsOnboardedResult::Unknown => Err(anyhow!("failed to set user is onboarded")),
+        }
+    }
+
+    async fn claim_feature_intro_impression(&self, intro_key: &str) -> Result<bool> {
+        let operation = ClaimFeatureIntroImpression::build(ClaimFeatureIntroImpressionVariables {
+            input: ClaimFeatureIntroImpressionInput {
+                intro_key: intro_key.to_string(),
+            },
+            request_context: warp_graphql::client::get_request_context(),
+        });
+        let result = send_graphql_request(self.base_client.as_ref(), operation, None)
+            .await?
+            .claim_feature_intro_impression;
+        match result {
+            ClaimFeatureIntroImpressionResult::ClaimFeatureIntroImpressionOutput(output) => {
+                Ok(output.claimed)
+            }
+            ClaimFeatureIntroImpressionResult::UserFacingError(error) => Err(anyhow!(
+                warp_graphql::client::get_user_facing_error_message(error)
+            )),
+            ClaimFeatureIntroImpressionResult::Unknown => {
+                Err(anyhow!("failed to claim feature intro impression"))
+            }
         }
     }
 

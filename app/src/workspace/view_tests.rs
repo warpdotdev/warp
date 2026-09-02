@@ -270,6 +270,64 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+/// Covers `factories_launch_modal_cta_click_target`'s re-validation: valid at
+/// "show" time (i.e. whenever it's called with a currently-valid URL) returns
+/// the navigation target, and a URL that becomes invalid before "click" time
+/// (a later call, simulating a metadata refresh in between) returns `None`
+/// rather than the stale value.
+#[test]
+fn factories_launch_modal_cta_click_target_revalidates_at_click_time() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, _ctx| {
+                workspaces
+                    .set_factories_launch_modal_cta_url(Some("https://cal.com/warp".to_string()));
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                factories_launch_modal_cta_click_target(ctx, Some("user@example.com")),
+                Some("https://cal.com/warp?id=user%40example.com".to_string()),
+                "a valid URL at click time should be returned as the navigation target"
+            );
+        });
+
+        // Simulate a metadata refresh landing between show and click that clears
+        // the CTA URL back to the unconfigured (fail-closed) state.
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, _ctx| {
+                workspaces.set_factories_launch_modal_cta_url(None);
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                factories_launch_modal_cta_click_target(ctx, Some("user@example.com")),
+                None,
+                "a URL that became invalid before click time must not be navigated to"
+            );
+        });
+
+        // Same, but the refresh replaces it with the Contact Sales fallback the
+        // eligibility gate exists to reject rather than clearing it outright.
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, _ctx| {
+                workspaces.set_factories_launch_modal_cta_url(Some(
+                    "https://www.warp.dev/contact-sales".to_string(),
+                ));
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                factories_launch_modal_cta_click_target(ctx, Some("user@example.com")),
+                None,
+                "a URL replaced with the Contact Sales fallback must not be navigated to"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_open_new_window_for_team_reuses_existing_team_window() {
     App::test((), |mut app| async move {

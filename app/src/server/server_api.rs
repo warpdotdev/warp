@@ -1425,6 +1425,13 @@ impl ServerApiProvider {
         self.auth_client.clone()
     }
 
+    /// Overrides the auth client used by `get_auth_client`, e.g. to inject a
+    /// `MockAuthClient` that expects a specific server call.
+    #[cfg(test)]
+    pub fn set_auth_client_for_test(&mut self, auth_client: Arc<dyn AuthClient>) {
+        self.auth_client = auth_client;
+    }
+
     pub fn get_referrals_client(&self) -> Arc<dyn ReferralsClient> {
         self.server_api.clone()
     }

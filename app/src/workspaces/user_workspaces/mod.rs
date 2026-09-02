@@ -37,6 +37,7 @@ use crate::server::server_api::{team::MockTeamClient, workspace::MockWorkspaceCl
 use crate::settings::{
     AISettings, AISettingsChangedEvent, CodeSettings, CodeSettingsChangedEvent, PrivacySettings,
 };
+use crate::util::links;
 #[cfg(test)]
 use crate::workspaces::workspace::{
     AIAutonomyPolicy, AiAutonomySettings, BillingMetadata, CustomerType, SplitListSetting,
@@ -126,6 +127,10 @@ pub struct UserWorkspaces {
     /// filtered out of `workspaces` — this is the only place their purchase
     /// policy survives.
     user_purchase_policy: Option<PurchaseAddOnCreditsPolicy>,
+    /// The Factories launch modal's CTA destination, captured from the latest
+    /// workspaces-metadata response. See `factories_launch_modal_cta_url` for
+    /// the fallback used before the first successful fetch.
+    factories_launch_modal_cta_url: Option<String>,
     /// The model catalog to fall back to when no current workspace exists: before login, or
     /// for a logged-in user whose only workspace is the server's placeholder, which is
     /// filtered out of `workspaces`.
@@ -143,6 +148,10 @@ pub struct WorkspacesMetadataResponse {
     pub joinable_teams: Vec<DiscoverableTeam>,
     /// The list of experiments applicable to the user.
     pub experiments: Option<Vec<ServerExperiment>>,
+    /// The Factories launch modal's CTA destination. `None` when the server
+    /// value hasn't been fetched yet; see `UserWorkspaces::factories_launch_modal_cta_url`
+    /// for the fallback used in that case.
+    pub factories_launch_modal_cta_url: Option<String>,
     /// The server-authoritative AI credit availability decision, piggybacked
     /// on the metadata query so every refresh keeps the shared state fresh.
     pub ai_credit_availability: Option<AICreditAvailability>,
@@ -189,6 +198,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            factories_launch_modal_cta_url: None,
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
@@ -240,6 +250,7 @@ impl UserWorkspaces {
             window_team_uids: Default::default(),
             joinable_teams: Default::default(),
             user_purchase_policy: None,
+            factories_launch_modal_cta_url: None,
             workspaceless_models_by_feature: None,
             team_client,
             workspace_client,
@@ -621,6 +632,34 @@ impl UserWorkspaces {
     /// applies such a response so the teamless fallback can't go stale.
     pub fn set_user_purchase_policy(&mut self, policy: Option<PurchaseAddOnCreditsPolicy>) {
         self.user_purchase_policy = policy;
+    }
+
+    /// Updates the Factories launch modal's CTA destination, captured from a
+    /// workspaces-metadata response.
+    pub fn set_factories_launch_modal_cta_url(&mut self, url: Option<String>) {
+        self.factories_launch_modal_cta_url = url;
+    }
+
+    /// The destination for the Factories launch modal's call-to-action
+    /// button. Falls back to Warp's Contact Sales page until the
+    /// server-configured value has been fetched.
+    pub fn factories_launch_modal_cta_url(&self) -> String {
+        self.factories_launch_modal_cta_url
+            .clone()
+            .unwrap_or_else(|| links::FACTORIES_CONTACT_SALES_URL.to_string())
+    }
+
+    /// Whether a real, server-configured Factories launch modal CTA URL has
+    /// been fetched. Fails closed: until the server delivers a well-formed,
+    /// absolute `https` URL that isn't (a normalized variant of) the generic
+    /// Contact Sales fallback, the Factories launch modal must not show,
+    /// since its whole purpose is directing qualified users to a specific
+    /// booking destination. See `is_valid_non_fallback_cta_url` for exactly
+    /// what counts as "real".
+    pub fn has_validated_factories_launch_modal_cta_url(&self) -> bool {
+        self.factories_launch_modal_cta_url
+            .as_deref()
+            .is_some_and(is_valid_non_fallback_cta_url)
     }
 
     pub fn current_workspace_mut(&mut self) -> Option<&mut Workspace> {
@@ -1738,6 +1777,32 @@ impl UserWorkspaces {
             ctx,
         );
     }
+}
+
+/// Path components (normalized: trailing slash trimmed, ASCII-lowercased)
+/// the Factories launch modal's CTA must never resolve to, regardless of
+/// host, query string, or fragment: `/contact-sales` is this validation's
+/// own fallback, and `/request-access` is the PLG waitlist the modal exists
+/// specifically to route a qualified cohort away from.
+const RESERVED_CTA_PATHS: &[&str] = &["/contact-sales", "/request-access"];
+
+/// Whether `raw` is a real, usable Factories launch modal CTA destination: a
+/// well-formed absolute `https` URL with a non-empty host, whose path isn't
+/// one of `RESERVED_CTA_PATHS`.
+fn is_valid_non_fallback_cta_url(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Ok(parsed) = url::Url::parse(trimmed) else {
+        return false;
+    };
+    if parsed.scheme() != "https" || parsed.host_str().is_none_or(str::is_empty) {
+        return false;
+    }
+
+    let normalized_path = parsed.path().trim_end_matches('/').to_ascii_lowercase();
+    !RESERVED_CTA_PATHS.contains(&normalized_path.as_str())
 }
 
 /// Reads the legacy, pre-team-keyed model catalog cache (`MODELS_BY_FEATURE_CACHE_KEY`), for

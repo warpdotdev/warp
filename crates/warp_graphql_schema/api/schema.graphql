@@ -1357,6 +1357,8 @@ enum Experiment {
   CODEBASE_CONTEXT_EXPERIMENT
   DISABLE_AGENT_MODE_EXPERIMENT
   ENV_VARS_EARLY_ACCESS_EXPERIMENT
+  FACTORIES_LAUNCH_MODAL_CONTROL
+  FACTORIES_LAUNCH_MODAL_EXPERIMENT
   FREE_TIER_TO_BUILD_CONVERSION_CONTROL
   FREE_TIER_TO_BUILD_CONVERSION_DRIP_COUPON
   FREE_TIER_TO_BUILD_CONVERSION_IMMEDIATE_COUPON
@@ -3117,10 +3119,29 @@ type DeleteRunnerOutput implements Response {
 
 union DeleteRunnerResult = DeleteRunnerOutput | UserFacingError
 
+"""
+Atomically claims (or confirms an existing claim of) a one-time,
+cross-device feature-intro impression identified by introKey (e.g.
+"factories_launch"). Returns claimed=true only for the call that performs
+the claim, so a concurrent claim from another device for the same user
+cannot both win.
+"""
+input ClaimFeatureIntroImpressionInput {
+  introKey: String!
+}
+
+type ClaimFeatureIntroImpressionOutput implements Response {
+  claimed: Boolean!
+  responseContext: ResponseContext!
+}
+
+union ClaimFeatureIntroImpressionResult = ClaimFeatureIntroImpressionOutput | UserFacingError
+
 type RootMutation {
   addInviteLinkDomainRestriction(input: AddInviteLinkDomainRestrictionInput!, requestContext: RequestContext!): AddInviteLinkDomainRestrictionResult!
   addObjectGuests(input: AddObjectGuestsInput!, requestContext: RequestContext!): AddObjectGuestsResult!
   bulkCreateObjects(input: BulkCreateObjectsInput!, requestContext: RequestContext!): BulkCreateObjectsResult!
+  claimFeatureIntroImpression(input: ClaimFeatureIntroImpressionInput!, requestContext: RequestContext!): ClaimFeatureIntroImpressionResult!
   confirmFileArtifactUpload(input: ConfirmFileArtifactUploadInput!, requestContext: RequestContext!): ConfirmFileArtifactUploadResult!
 
   """
@@ -4620,6 +4641,13 @@ type User {
   - `[]` means that the user is not part of any server-side enabled experiments.
   """
   experiments: [Experiment!]
+
+  """
+  The destination for the Factories launch modal's call-to-action button.
+  Server-configurable (features.factories_launch_modal_cta_url) so the real
+  booking link can be set without a client release.
+  """
+  factoriesLaunchModalCtaUrl: String!
   githubInstallations: UserGithubInstallationsOutput!
 
   """

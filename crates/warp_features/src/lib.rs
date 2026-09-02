@@ -680,6 +680,11 @@ pub enum FeatureFlag {
     /// Enables the launch modal announcing the Warp Agent CLI.
     AgentCliLaunchModal,
 
+    /// Enables the bottom-right feature-intro popover announcing Warp
+    /// Factories to a server-managed allowlist of qualified existing users
+    /// (see `ServerExperiment::FactoriesLaunchModalExperiment`).
+    FactoriesLaunchModal,
+
     /// Updated tab styling (background colors, border, close button positioning, margins).
     NewTabStyling,
 

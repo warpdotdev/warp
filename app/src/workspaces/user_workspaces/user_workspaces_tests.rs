@@ -232,6 +232,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -250,6 +251,7 @@ fn test_loading_all_spaces_after_switching_from_offline() {
                         workspaces: vec![workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -410,6 +412,7 @@ fn test_aws_bedrock_credentials_respect_user_setting() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
+                factories_launch_modal_cta_url: None,
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -461,6 +464,7 @@ fn test_aws_bedrock_credentials_enforced_by_admin() {
                 workspaces: vec![workspace_for_poll.clone()],
                 joinable_teams: vec![],
                 experiments: None,
+                factories_launch_modal_cta_url: None,
                 ai_credit_availability: None,
                 user_purchase_policy: None,
             },
@@ -3591,6 +3595,7 @@ fn test_remove_user_from_team_success_emits_success_event_and_refreshes_members(
                         workspaces: vec![updated_workspace.clone()],
                         joinable_teams: vec![],
                         experiments: None,
+                        factories_launch_modal_cta_url: None,
                         ai_credit_availability: None,
                         user_purchase_policy: None,
                     },
@@ -4069,6 +4074,7 @@ fn gql_user(
         }),
         workspaces,
         experiments: None,
+        factories_launch_modal_cta_url: "https://example.com/book-a-call".to_string(),
         discoverable_teams: vec![],
     }
 }
@@ -4318,4 +4324,55 @@ fn legacy_cache_migration_yields_a_usable_teamless_catalog() {
             );
         });
     });
+}
+
+#[test]
+fn factories_launch_cta_url_accepts_a_real_booking_destination() {
+    assert!(is_valid_non_fallback_cta_url(
+        "https://cal.com/warp/factories"
+    ));
+}
+
+#[test]
+fn factories_launch_cta_url_rejects_contact_sales_regardless_of_query_or_fragment() {
+    for url in [
+        links::FACTORIES_CONTACT_SALES_URL,
+        "https://www.warp.dev/contact-sales/",
+        "https://www.warp.dev/contact-sales//",
+        "https://www.warp.dev/contact-sales?campaign=x",
+        "https://www.warp.dev/contact-sales#pricing",
+        "https://www.warp.dev/Contact-Sales",
+    ] {
+        assert!(
+            !is_valid_non_fallback_cta_url(url),
+            "{url} should be rejected as the reserved Contact Sales destination"
+        );
+    }
+}
+
+#[test]
+fn factories_launch_cta_url_rejects_request_access_regardless_of_query_or_fragment() {
+    for url in [
+        "https://www.warp.dev/request-access",
+        "https://www.warp.dev/request-access/",
+        "https://www.warp.dev/request-access//",
+        "https://www.warp.dev/request-access?campaign=x",
+        "https://www.warp.dev/request-access#top",
+        "https://www.warp.dev/Request-Access",
+    ] {
+        assert!(
+            !is_valid_non_fallback_cta_url(url),
+            "{url} should be rejected as the reserved /request-access waitlist destination"
+        );
+    }
+}
+
+#[test]
+fn factories_launch_cta_url_rejects_malformed_or_non_https_urls() {
+    for url in ["", "not a url", "http://cal.com/warp", "ftp://cal.com/warp"] {
+        assert!(
+            !is_valid_non_fallback_cta_url(url),
+            "{url:?} should be rejected"
+        );
+    }
 }

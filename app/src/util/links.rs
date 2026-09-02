@@ -5,6 +5,9 @@ pub const USER_DOCS_URL: &str = "https://docs.warp.dev/";
 pub const GITHUB_ISSUES_URL: &str = "https://github.com/warpdotdev/Warp/issues";
 pub const SLACK_URL: &str = "http://go.warp.dev/join-preview";
 pub const PRIVACY_POLICY_URL: &str = "https://www.warp.dev/privacy";
+/// Fallback destination for the Factories launch modal's CTA before the
+/// server-configured `factoriesLaunchModalCtaUrl` value has been fetched.
+pub const FACTORIES_CONTACT_SALES_URL: &str = "https://www.warp.dev/contact-sales";
 
 pub fn feedback_form_url() -> String {
     let mut url = url::Url::parse("https://github.com/warpdotdev/Warp/issues/new/choose")

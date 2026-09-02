@@ -22,6 +22,14 @@ use crate::view_components::action_button::{
 const MODAL_WIDTH: f32 = 340.;
 const HERO_HEIGHT: f32 = 110.;
 
+/// Spacing between grouped elements (badge+title, or all of badge, title, and
+/// description) — matches the badge/title/description group spacing used by
+/// every other launch modal in this crate (`openwarp_launch_modal`,
+/// `orchestration_launch_modal`, `auto_handoff_sleep_modal`).
+const COMPACT_SPACING: f32 = 8.;
+const BODY_PADDING: f32 = 16.;
+const FOOTER_PADDING: f32 = 12.;
+
 /// Identifies a single feature announced through the reusable feature-intro
 /// popover. The string form ([`FeatureIntroId::as_key`]) is the persisted
 /// "seen" key, so it must remain stable across releases.
@@ -46,6 +54,7 @@ pub enum FeatureIntroCtaTarget {
         widget_id: fn() -> &'static str,
     },
 }
+
 /// A data-driven description of a single feature-intro popover. New feature
 /// announcements are added by appending an entry to [`FEATURE_INTROS`]; no new
 /// view, model, settings, or workspace wiring is required.
@@ -57,6 +66,8 @@ pub struct FeatureIntro {
     /// Optional metadata label rendered above the title (e.g. "NEW").
     pub badge: Option<&'static str>,
     pub title: &'static str,
+    /// `\n` breaks onto a new line without a full paragraph-sized gap; see
+    /// [`FeatureIntroModal::render_description`].
     pub description: &'static str,
     /// Optional icon rendered to the left of the description.
     pub description_icon: Option<Icon>,
@@ -65,10 +76,15 @@ pub struct FeatureIntro {
     /// Destination opened when the user clicks the call-to-action. `None`
     /// simply dismisses the popover.
     pub cta_target: Option<FeatureIntroCtaTarget>,
+    /// Additional runtime gate checked immediately before marking this intro
+    /// seen, beyond "not yet shown" (e.g. server-driven targeting). An
+    /// ineligible intro is skipped without consuming its one-time slot, so it
+    /// can still show later once the user becomes eligible.
+    pub eligible: fn(&AppContext) -> bool,
 }
 
 /// The registry of feature-intro popovers, in priority order. On startup the
-/// first entry whose id has not yet been seen is shown.
+/// first eligible entry whose id has not yet been seen is shown.
 pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
     id: FeatureIntroId::CustomModelRouter,
     hero_image_path: "async/png/onboarding/custom_model_router_intro_banner.png",
@@ -81,6 +97,7 @@ pub const FEATURE_INTROS: &[FeatureIntro] = &[FeatureIntro {
         page: SettingsSection::WarpAgent,
         widget_id: custom_model_routers_widget_id,
     }),
+    eligible: |app| crate::settings::AISettings::as_ref(app).is_any_ai_enabled(app),
 }];
 
 /// Looks up a feature-intro descriptor by its id.
@@ -244,10 +261,20 @@ impl FeatureIntroModal {
             .finish()
     }
 
+    /// Splits `intro.description` on `\n`, rendering each line as its own
+    /// `Text` element in a tightly-spaced column. This gives explicit control
+    /// over where a multi-line description breaks, without the larger
+    /// vertical gap of a full paragraph break.
     fn render_description(intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
-        let description = Text::new(intro.description, appearance.ui_font_family(), 14.)
-            .with_color(modal_text_sub(appearance))
-            .finish();
+        let mut lines = Flex::column().with_spacing(4.);
+        for line in intro.description.split('\n') {
+            lines.add_child(
+                Text::new(line, appearance.ui_font_family(), 14.)
+                    .with_color(modal_text_sub(appearance))
+                    .finish(),
+            );
+        }
+        let description = lines.finish();
 
         if let Some(icon) = intro.description_icon {
             Flex::row()
@@ -273,21 +300,31 @@ impl FeatureIntroModal {
         }
     }
 
-    fn render_body(&self, intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
-        let mut header = Flex::column()
+    fn render_header(intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
+        let mut heading = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_spacing(8.);
+            .with_spacing(COMPACT_SPACING);
         if let Some(badge) = intro.badge {
-            header.add_child(Self::render_badge(badge, appearance));
+            heading.add_child(Self::render_badge(badge, appearance));
         }
-        header.add_child(Self::render_title(intro.title, appearance));
-        header.add_child(Self::render_description(intro, appearance));
+        heading.add_child(Self::render_title(intro.title, appearance));
 
-        let body = Container::new(header.finish())
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            .with_spacing(COMPACT_SPACING)
+            .with_child(heading.finish())
+            .with_child(Self::render_description(intro, appearance))
+            .finish()
+    }
+
+    fn render_body(&self, intro: &FeatureIntro, appearance: &Appearance) -> Box<dyn Element> {
+        let body = Container::new(Self::render_header(intro, appearance))
             .with_horizontal_padding(16.)
-            .with_vertical_padding(16.)
+            .with_padding_top(BODY_PADDING)
+            .with_padding_bottom(BODY_PADDING)
             .with_background(modal_background(appearance))
             .finish();
+
         let footer = Container::new(
             Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
@@ -297,7 +334,7 @@ impl FeatureIntroModal {
                 .finish(),
         )
         .with_horizontal_padding(16.)
-        .with_vertical_padding(12.)
+        .with_vertical_padding(FOOTER_PADDING)
         .with_background(modal_background(appearance))
         .with_border(Border::top(1.).with_border_fill(appearance.theme().outline()))
         .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
