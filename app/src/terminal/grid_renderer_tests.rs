@@ -268,46 +268,6 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(80.into_lines()); // With scroll clipping
 }
 
-#[test]
-fn curly_underline_has_one_peak_per_cell_and_joins_at_edges() {
-    let cell_width = 10.;
-    let cell_height = 16.;
-    let thickness = 1.5;
-    let (peak_y, trough_y) =
-        super::curly_underline_peak_and_trough(cell_width, cell_height, thickness);
-
-    assert!((trough_y - (cell_height - thickness * 0.5)).abs() < f32::EPSILON);
-    assert!(peak_y < trough_y);
-    assert!(peak_y >= thickness * 0.5);
-
-    let left = super::curly_underline_centerline_y(0., cell_width, peak_y, trough_y);
-    let mid = super::curly_underline_centerline_y(cell_width / 2., cell_width, peak_y, trough_y);
-    let right = super::curly_underline_centerline_y(cell_width, cell_width, peak_y, trough_y);
-    assert!((left - trough_y).abs() < 0.01);
-    assert!((right - trough_y).abs() < 0.01);
-    assert!((mid - peak_y).abs() < 0.01);
-
-    let next_left = super::curly_underline_centerline_y(cell_width, cell_width, peak_y, trough_y);
-    assert!((right - next_left).abs() < f32::EPSILON);
-}
-
-#[test]
-fn wide_cell_curly_underline_has_two_peaks() {
-    let cell_width = 10.;
-    let cell_height = 16.;
-    let thickness = 1.5;
-    let (peak_y, trough_y) =
-        super::curly_underline_peak_and_trough(cell_width, cell_height, thickness);
-    let first_peak =
-        super::curly_underline_centerline_y(cell_width * 0.5, cell_width, peak_y, trough_y);
-    let joint = super::curly_underline_centerline_y(cell_width, cell_width, peak_y, trough_y);
-    let second_peak =
-        super::curly_underline_centerline_y(cell_width * 1.5, cell_width, peak_y, trough_y);
-    assert!((first_peak - peak_y).abs() < 0.01);
-    assert!((second_peak - peak_y).abs() < 0.01);
-    assert!((joint - trough_y).abs() < 0.01);
-}
-
 fn decorations_for(
     cell: &Cell,
     cell_type: super::cell_type::CellType,
@@ -331,15 +291,16 @@ fn decorations_for(
 }
 
 #[test]
-fn curly_underline_is_a_wave_not_a_solid_bar() {
+fn curly_underline_is_a_single_mask_decoration() {
     let mut cell = Cell::default();
     cell.c = 'a';
     cell.flags = Flags::CURLY_UNDERLINE;
     let decorations = decorations_for(&cell, super::cell_type::CellType::default());
-    assert_eq!(decorations.len(), super::CURLY_SEGMENTS_PER_CELL);
-    let first_y = decorations[0].origin.y();
-    let mid_y = decorations[decorations.len() / 2].origin.y();
-    assert!((first_y - mid_y).abs() > 1.);
+    assert_eq!(decorations.len(), 1);
+    assert!(matches!(
+        decorations[0],
+        super::DecorationData::Undercurl { .. }
+    ));
 }
 
 #[test]
@@ -351,7 +312,7 @@ fn underline_color_does_not_recolor_strikeout() {
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, super::cell_type::CellType::default());
     assert_eq!(decorations.len(), 1);
-    assert_eq!(decorations[0].color, ColorU::new(255, 255, 255, 255));
+    assert_eq!(decorations[0].color(), ColorU::new(255, 255, 255, 255));
 }
 
 #[test]
@@ -366,7 +327,7 @@ fn underline_color_does_not_recolor_url_decoration() {
     };
     let decorations = decorations_for(&cell, cell_type);
     assert_eq!(decorations.len(), 1);
-    assert_eq!(decorations[0].color, *URL_COLOR);
+    assert_eq!(decorations[0].color(), *URL_COLOR);
 }
 
 #[test]
@@ -377,8 +338,8 @@ fn curly_underline_uses_sgr_58_color() {
     cell.flags = Flags::CURLY_UNDERLINE;
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, super::cell_type::CellType::default());
-    assert_eq!(decorations.len(), super::CURLY_SEGMENTS_PER_CELL);
-    assert_eq!(decorations[0].color, peach);
+    assert_eq!(decorations.len(), 1);
+    assert_eq!(decorations[0].color(), peach);
 }
 
 fn hovered_url_cell_type() -> super::cell_type::CellType {
@@ -397,7 +358,7 @@ fn hovered_url_single_underline_keeps_sgr_58_color() {
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, hovered_url_cell_type());
     assert_eq!(decorations.len(), 1);
-    assert_eq!(decorations[0].color, peach);
+    assert_eq!(decorations[0].color(), peach);
 }
 
 #[test]
@@ -409,7 +370,7 @@ fn hovered_url_double_underline_keeps_sgr_58_color() {
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, hovered_url_cell_type());
     assert_eq!(decorations.len(), 1);
-    assert_eq!(decorations[0].color, peach);
+    assert_eq!(decorations[0].color(), peach);
 }
 
 #[test]
@@ -420,6 +381,10 @@ fn hovered_url_curly_underline_keeps_sgr_58_color() {
     cell.flags = Flags::CURLY_UNDERLINE;
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, hovered_url_cell_type());
-    assert_eq!(decorations.len(), super::CURLY_SEGMENTS_PER_CELL);
-    assert!(decorations.iter().all(|d| d.color == peach));
+    assert_eq!(decorations.len(), 1);
+    assert_eq!(decorations[0].color(), peach);
+    assert!(matches!(
+        decorations[0],
+        super::DecorationData::Undercurl { .. }
+    ));
 }

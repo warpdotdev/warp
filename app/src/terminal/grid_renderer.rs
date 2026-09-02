@@ -1,6 +1,7 @@
 mod box_drawing;
 mod cell_glyph_cache;
 mod cell_type;
+mod undercurl;
 
 use core::mem;
 use std::cmp::Ordering;
@@ -142,10 +143,30 @@ impl FontStyle {
 }
 
 /// Holds the data for drawing a cell decoration, which can be an underline or strikethrough.
-struct DecorationData {
-    origin: Vector2F,
-    size: Vector2F,
-    color: ColorU,
+#[derive(Clone, Copy)]
+enum DecorationData {
+    Rect {
+        origin: Vector2F,
+        size: Vector2F,
+        color: ColorU,
+    },
+    Undercurl {
+        origin: Vector2F,
+        cell_width: f32,
+        cell_height: f32,
+        column_span: f32,
+        thickness: f32,
+        color: ColorU,
+    },
+}
+
+impl DecorationData {
+    #[cfg(test)]
+    fn color(&self) -> ColorU {
+        match self {
+            Self::Rect { color, .. } | Self::Undercurl { color, .. } => *color,
+        }
+    }
 }
 
 /// Holds data necessary to draw a "native" glyph - a character that we render
@@ -881,11 +902,7 @@ fn render_grid_without_ligatures<'a>(
     for native_glyph in native_glyphs_to_render {
         render_native_glyph(native_glyph, ctx, app);
     }
-    for data in cell_decorations {
-        ctx.scene
-            .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
-            .with_background(Fill::Solid(data.color));
-    }
+    paint_cell_decorations(cell_decorations, ctx);
 }
 
 #[inline]
@@ -1521,10 +1538,47 @@ fn render_grid_with_ligatures<'a>(
     for native_glyph in native_glyphs_to_render {
         render_native_glyph(native_glyph, ctx, app);
     }
+    paint_cell_decorations(cell_decorations, ctx);
+}
+
+fn paint_cell_decorations(cell_decorations: Vec<DecorationData>, ctx: &mut PaintContext) {
     for data in cell_decorations {
-        ctx.scene
-            .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
-            .with_background(Fill::Solid(data.color));
+        match data {
+            DecorationData::Rect {
+                origin,
+                size,
+                color,
+            } => {
+                ctx.scene
+                    .draw_rect_without_hit_recording(RectF::new(origin, size))
+                    .with_background(Fill::Solid(color));
+            }
+            DecorationData::Undercurl {
+                origin,
+                cell_width,
+                cell_height,
+                column_span,
+                thickness,
+                color,
+            } => {
+                if let Some(draw) = undercurl::mask_draw(
+                    origin,
+                    cell_width,
+                    cell_height,
+                    column_span,
+                    thickness,
+                    color,
+                    ctx.scene.scale_factor(),
+                ) {
+                    ctx.scene.draw_icon(
+                        RectF::new(draw.origin, draw.logical_size),
+                        draw.image,
+                        1.,
+                        draw.color,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -2336,9 +2390,6 @@ fn render_native_glyph(native_glyph: NativeGlyph, ctx: &mut PaintContext, app: &
     }
 }
 
-/// Four segments describe trough–peak–trough without a per-pixel scene record.
-const CURLY_SEGMENTS_PER_CELL: usize = 4;
-
 fn underline_decoration_color(
     cell: &Cell,
     foreground_color: ColorU,
@@ -2393,15 +2444,14 @@ fn calculate_cell_decorations(
     let cell_origin = grid_origin + glyph_offset;
 
     if cell.flags.intersects(Flags::CURLY_UNDERLINE) {
-        append_curly_underline_rects(
-            cell_origin,
-            cell_size.x(),
-            cell_size.y(),
+        cell_decorations.push(DecorationData::Undercurl {
+            origin: cell_origin,
+            cell_width: cell_size.x(),
+            cell_height: cell_size.y(),
             column_span,
-            thickness,
-            underline_decoration_color(cell, foreground_color, colors, override_colors),
-            cell_decorations,
-        );
+            thickness: thickness.max(1.),
+            color: underline_decoration_color(cell, foreground_color, colors, override_colors),
+        });
         return;
     }
 
@@ -2426,59 +2476,11 @@ fn calculate_cell_decorations(
     };
 
     if let Some((thickness, y, color)) = decoration_rect_data {
-        cell_decorations.push(DecorationData {
+        cell_decorations.push(DecorationData::Rect {
             origin: cell_origin + vec2f(0., y - thickness),
             size: vec2f(cell_size.x() * column_span, thickness),
             color,
         });
-    }
-}
-
-/// One period per cell, troughs at the edges so adjacent cells join, peak near center.
-fn curly_underline_peak_and_trough(
-    cell_width: f32,
-    cell_height: f32,
-    thickness: f32,
-) -> (f32, f32) {
-    let amplitude = cell_width / std::f32::consts::PI;
-    let trough_y = cell_height - thickness * 0.5;
-    let peak_y = (trough_y - amplitude).max(thickness * 0.5);
-    (peak_y, trough_y)
-}
-
-fn curly_underline_centerline_y(x: f32, period: f32, peak_y: f32, trough_y: f32) -> f32 {
-    let t = (x / period) * 2.0 * std::f32::consts::PI;
-    trough_y + (peak_y - trough_y) * 0.5 * (1.0 - t.cos())
-}
-
-fn append_curly_underline_rects(
-    cell_origin: Vector2F,
-    cell_width: f32,
-    cell_height: f32,
-    column_span: f32,
-    thickness: f32,
-    color: ColorU,
-    cell_decorations: &mut Vec<DecorationData>,
-) {
-    let width = cell_width * column_span;
-    let thickness = thickness.max(1.);
-    let (peak_y, trough_y) = curly_underline_peak_and_trough(cell_width, cell_height, thickness);
-    let segment_count = CURLY_SEGMENTS_PER_CELL * column_span.max(1.) as usize;
-    cell_decorations.reserve(segment_count);
-    let mut prev_x = 0.;
-    let mut prev_y = curly_underline_centerline_y(0., cell_width, peak_y, trough_y);
-    for i in 1..=segment_count {
-        let x = width * (i as f32) / segment_count as f32;
-        let y = curly_underline_centerline_y(x, cell_width, peak_y, trough_y);
-        let min_y = prev_y.min(y) - thickness * 0.5;
-        let max_y = prev_y.max(y) + thickness * 0.5;
-        cell_decorations.push(DecorationData {
-            origin: cell_origin + vec2f(prev_x, min_y),
-            size: vec2f((x - prev_x).max(1.), (max_y - min_y).max(thickness)),
-            color,
-        });
-        prev_x = x;
-        prev_y = y;
     }
 }
 

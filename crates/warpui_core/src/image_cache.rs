@@ -396,6 +396,10 @@ pub struct StaticImage {
 }
 
 impl StaticImage {
+    pub fn from_rgba(img: image::RgbaImage) -> Self {
+        Self { img }
+    }
+
     pub fn size(&self) -> Vector2I {
         Vector2I::new(self.width() as i32, self.height() as i32)
     }
