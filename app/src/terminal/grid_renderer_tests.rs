@@ -389,7 +389,7 @@ fn hovered_url_cell_type() -> super::cell_type::CellType {
 }
 
 #[test]
-fn hovered_url_underline_keeps_url_color_over_sgr_58_single_underline() {
+fn hovered_url_single_underline_keeps_sgr_58_color() {
     let peach = ColorU::new(240, 143, 104, 255);
     let mut cell = Cell::default();
     cell.c = 'a';
@@ -397,11 +397,11 @@ fn hovered_url_underline_keeps_url_color_over_sgr_58_single_underline() {
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, hovered_url_cell_type());
     assert_eq!(decorations.len(), 1);
-    assert_eq!(decorations[0].color, *URL_COLOR);
+    assert_eq!(decorations[0].color, peach);
 }
 
 #[test]
-fn hovered_url_underline_keeps_url_color_over_sgr_58_double_underline() {
+fn hovered_url_double_underline_keeps_sgr_58_color() {
     let peach = ColorU::new(240, 143, 104, 255);
     let mut cell = Cell::default();
     cell.c = 'a';
@@ -409,11 +409,11 @@ fn hovered_url_underline_keeps_url_color_over_sgr_58_double_underline() {
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, hovered_url_cell_type());
     assert_eq!(decorations.len(), 1);
-    assert_eq!(decorations[0].color, *URL_COLOR);
+    assert_eq!(decorations[0].color, peach);
 }
 
 #[test]
-fn hovered_url_underline_keeps_url_color_over_sgr_58_curly_underline() {
+fn hovered_url_curly_underline_keeps_sgr_58_color() {
     let peach = ColorU::new(240, 143, 104, 255);
     let mut cell = Cell::default();
     cell.c = 'a';
@@ -421,5 +421,5 @@ fn hovered_url_underline_keeps_url_color_over_sgr_58_curly_underline() {
     cell.set_underline_color(Some(Color::Spec(peach)));
     let decorations = decorations_for(&cell, hovered_url_cell_type());
     assert_eq!(decorations.len(), super::CURLY_SEGMENTS_PER_CELL);
-    assert!(decorations.iter().all(|d| d.color == *URL_COLOR));
+    assert!(decorations.iter().all(|d| d.color == peach));
 }

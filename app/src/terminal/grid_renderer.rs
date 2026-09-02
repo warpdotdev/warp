@@ -2341,15 +2341,10 @@ const CURLY_SEGMENTS_PER_CELL: usize = 4;
 
 fn underline_decoration_color(
     cell: &Cell,
-    cell_type: &CellType,
     foreground_color: ColorU,
     colors: &color::List,
     override_colors: &color::OverrideList,
 ) -> ColorU {
-    // Hovered URLs always render with `URL_COLOR`; an SGR 58 underline color must not override it.
-    if cell_type.is_url() {
-        return *URL_COLOR;
-    }
     cell.underline_color()
         .map(|color| cell_type::compute_bg_rgb(colors, override_colors, color))
         .unwrap_or(foreground_color)
@@ -2404,7 +2399,7 @@ fn calculate_cell_decorations(
             cell_size.y(),
             column_span,
             thickness,
-            underline_decoration_color(cell, cell_type, foreground_color, colors, override_colors),
+            underline_decoration_color(cell, foreground_color, colors, override_colors),
             cell_decorations,
         );
         return;
@@ -2414,13 +2409,13 @@ fn calculate_cell_decorations(
         Some((
             thickness * 2.,
             cell_size.y(),
-            underline_decoration_color(cell, cell_type, foreground_color, colors, override_colors),
+            underline_decoration_color(cell, foreground_color, colors, override_colors),
         ))
     } else if cell.flags.intersects(Flags::UNDERLINE) {
         Some((
             thickness,
             cell_size.y(),
-            underline_decoration_color(cell, cell_type, foreground_color, colors, override_colors),
+            underline_decoration_color(cell, foreground_color, colors, override_colors),
         ))
     } else if cell.flags.intersects(Flags::STRIKEOUT) || should_strikethrough_secret {
         Some((thickness, cell_size.y() / 2., foreground_color))
