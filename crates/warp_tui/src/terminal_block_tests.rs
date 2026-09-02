@@ -4,8 +4,9 @@ use std::time::Duration;
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIAgentActionId, AIConversationId, AgentInteractionMetadata, Appearance, BlockId,
-    TerminalModel, TranscriptScope,
+    TerminalColorList, TerminalColors, TerminalModel, TranscriptScope,
 };
+use warp_terminal::model::grid::cell::{Cell, Flags};
 use warpui::App;
 use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{
@@ -363,4 +364,14 @@ fn finished_command_does_not_submit_a_cursor() {
         terminal_block_cursor(block, owns_cursor, &(0..8), TuiSize::new(40, 8)),
         None
     );
+}
+
+#[test]
+fn curly_underline_maps_to_host_underlined() {
+    let colors = TerminalColorList::from(&TerminalColors::default());
+    let mut cell = Cell::default();
+    cell.c = 'x';
+    cell.flags.insert(Flags::CURLY_UNDERLINE);
+    let style = super::cell_to_style(&cell, &colors);
+    assert!(style.add_modifier.contains(Modifier::UNDERLINED));
 }

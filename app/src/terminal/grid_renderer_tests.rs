@@ -1,13 +1,18 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
+use warpui::color::ColorU;
 use warpui::fonts::Cache as FontCache;
 use warpui::units::{IntoLines, Lines, Pixels};
 
-use super::{CachedBackgroundColor, active_or_next_match};
+use super::{CachedBackgroundColor, URL_COLOR, active_or_next_match};
+use crate::terminal::color::{Colors, OverrideList};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::ansi::Color;
+use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
-use crate::terminal::{SizeInfo, grid_renderer};
+use crate::terminal::{SizeInfo, color, grid_renderer};
 
 fn rect_from_points(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> RectF {
     RectF::from_points(vec2f(min_x, min_y), vec2f(max_x, max_y))
@@ -303,22 +308,75 @@ fn wide_cell_curly_underline_has_two_peaks() {
     assert!((joint - trough_y).abs() < 0.01);
 }
 
-#[test]
-fn curly_underline_is_a_wave_not_a_solid_bar() {
-    let mut cell = crate::terminal::model::cell::Cell::default();
-    cell.c = 'a';
-    cell.flags = crate::terminal::model::cell::Flags::CURLY_UNDERLINE;
-    let decorations = super::calculate_cell_decorations(
-        &cell,
-        &super::cell_type::CellType::default(),
+fn decorations_for(
+    cell: &Cell,
+    cell_type: super::cell_type::CellType,
+) -> Vec<super::DecorationData> {
+    let colors = color::List::from(&Colors::default());
+    let override_colors = OverrideList::empty();
+    let mut decorations = Vec::new();
+    super::calculate_cell_decorations(
+        cell,
+        &cell_type,
         vec2f(10., 16.),
         vec2f(0., 0.),
         vec2f(0., 0.),
-        warpui::color::ColorU::new(255, 255, 255, 255),
-        crate::terminal::model::ObfuscateSecrets::No,
+        ColorU::new(255, 255, 255, 255),
+        &colors,
+        &override_colors,
+        ObfuscateSecrets::No,
+        &mut decorations,
     );
-    assert!(decorations.len() > 1);
+    decorations
+}
+
+#[test]
+fn curly_underline_is_a_wave_not_a_solid_bar() {
+    let mut cell = Cell::default();
+    cell.c = 'a';
+    cell.flags = Flags::CURLY_UNDERLINE;
+    let decorations = decorations_for(&cell, super::cell_type::CellType::default());
+    assert_eq!(decorations.len(), super::CURLY_SEGMENTS_PER_CELL);
     let first_y = decorations[0].origin.y();
     let mid_y = decorations[decorations.len() / 2].origin.y();
     assert!((first_y - mid_y).abs() > 1.);
+}
+
+#[test]
+fn underline_color_does_not_recolor_strikeout() {
+    let peach = ColorU::new(240, 143, 104, 255);
+    let mut cell = Cell::default();
+    cell.c = 'a';
+    cell.flags = Flags::STRIKEOUT;
+    cell.set_underline_color(Some(Color::Spec(peach)));
+    let decorations = decorations_for(&cell, super::cell_type::CellType::default());
+    assert_eq!(decorations.len(), 1);
+    assert_eq!(decorations[0].color, ColorU::new(255, 255, 255, 255));
+}
+
+#[test]
+fn underline_color_does_not_recolor_url_decoration() {
+    let peach = ColorU::new(240, 143, 104, 255);
+    let mut cell = Cell::default();
+    cell.c = 'a';
+    cell.set_underline_color(Some(Color::Spec(peach)));
+    let cell_type = super::cell_type::CellType {
+        is_url: true,
+        ..Default::default()
+    };
+    let decorations = decorations_for(&cell, cell_type);
+    assert_eq!(decorations.len(), 1);
+    assert_eq!(decorations[0].color, *URL_COLOR);
+}
+
+#[test]
+fn curly_underline_uses_sgr_58_color() {
+    let peach = ColorU::new(240, 143, 104, 255);
+    let mut cell = Cell::default();
+    cell.c = 'a';
+    cell.flags = Flags::CURLY_UNDERLINE;
+    cell.set_underline_color(Some(Color::Spec(peach)));
+    let decorations = decorations_for(&cell, super::cell_type::CellType::default());
+    assert_eq!(decorations.len(), super::CURLY_SEGMENTS_PER_CELL);
+    assert_eq!(decorations[0].color, peach);
 }
