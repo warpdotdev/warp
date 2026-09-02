@@ -134,8 +134,14 @@ fn fair_layout_allocations(demands: &[usize], max_chars: usize) -> Vec<usize> {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-struct MaterializationKey {
+struct BlockIdentity {
     block_offset: CharOffset,
+    block_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct MaterializationKey {
+    block: BlockIdentity,
     paragraph_start: usize,
     paragraph_end: usize,
 }
@@ -377,7 +383,7 @@ impl RenderDecoration {
 /// reference with interior mutability.
 pub struct RenderContentTreeRef<'a>(
     Ref<'a, SumTree<BlockItem>>,
-    Ref<'a, HashMap<CharOffset, Rc<BlockItem>>>,
+    Ref<'a, HashMap<BlockIdentity, Rc<BlockItem>>>,
 );
 
 impl<'a> RenderContentTreeRef<'a> {
@@ -403,7 +409,7 @@ impl<'a> RenderContentTreeRef<'a> {
     ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
         ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width).map(
             |(mut item, block)| {
-                let materialized = self.1.get(&item.block_offset()).cloned();
+                let materialized = self.1.get(&item.block_identity()).cloned();
                 item.set_materialized_override(materialized);
                 (item, block)
             },
@@ -417,10 +423,17 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 
     pub fn block_at_height(&self, height: f64) -> Option<Positioned<'_, BlockItem>> {
-        let block = self.base_block_at_height(height)?;
+        let height = Height(OrderedFloat(height));
+        let mut cursor = self.0.cursor::<Height, LayoutSummary>();
+        cursor.seek(&height, SeekBias::Right);
+        let block_index = cursor.start().item_count;
+        let block = cursor.positioned_item()?;
         let item = self
             .1
-            .get(&block.start_char_offset)
+            .get(&BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
             .map(Rc::as_ref)
             .unwrap_or(block.item);
         Some(Positioned { item, ..block })
@@ -482,10 +495,14 @@ impl<'a> RenderContentTreeRef<'a> {
     pub fn block_at_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
         let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
         if cursor.seek(&offset, SeekBias::Right) {
+            let block_index = cursor.start().item_count;
             let block = cursor.positioned_item()?;
             let item = self
                 .1
-                .get(&block.start_char_offset)
+                .get(&BlockIdentity {
+                    block_offset: block.start_char_offset,
+                    block_index,
+                })
                 .map(Rc::as_ref)
                 .unwrap_or(block.item);
             Some(Positioned { item, ..block })
@@ -500,10 +517,14 @@ impl<'a> RenderContentTreeRef<'a> {
     fn block_containing_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
         let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
         cursor.seek(&offset, SeekBias::Right);
+        let block_index = cursor.start().item_count;
         let block = cursor.positioned_item()?;
         let item = self
             .1
-            .get(&block.start_char_offset)
+            .get(&BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
             .map(Rc::as_ref)
             .unwrap_or(block.item);
         Some(Positioned { item, ..block })
@@ -512,10 +533,14 @@ impl<'a> RenderContentTreeRef<'a> {
     fn block_at_line(&self, line: LineCount) -> Option<Positioned<'_, BlockItem>> {
         let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
         cursor.seek(&line, SeekBias::Right);
+        let block_index = cursor.start().item_count;
         let block = cursor.positioned_item()?;
         let item = self
             .1
-            .get(&block.start_char_offset)
+            .get(&BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
             .map(Rc::as_ref)
             .unwrap_or(block.item);
         Some(Positioned { item, ..block })
@@ -1255,8 +1280,8 @@ pub struct RenderState {
     /// Content is wrapped in a RefCell so we could mutate it when we are laying out the editor element.
     /// We know this is safe because there is a one-to-one relationship between element and model.
     content: RefCell<SumTree<BlockItem>>,
-    materialized_blocks: RefCell<HashMap<CharOffset, Rc<BlockItem>>>,
-    materialized_block_keys: RefCell<HashMap<CharOffset, MaterializationKey>>,
+    materialized_blocks: RefCell<HashMap<BlockIdentity, Rc<BlockItem>>>,
+    materialized_block_keys: RefCell<HashMap<BlockIdentity, MaterializationKey>>,
     materialized_layout_retention: RefCell<MaterializedLayoutRetention>,
 
     selections: RefCell<RenderedSelectionSet>,
@@ -3113,7 +3138,7 @@ impl RenderState {
             .filter_map(|item| {
                 item.materialized_block
                     .as_ref()
-                    .map(|_| (item.block_offset(), item.materialization_key()))
+                    .map(|_| (item.block_identity(), item.materialization_key()))
             })
             .collect();
         self.sync_materialized_blocks();
@@ -3124,14 +3149,14 @@ impl RenderState {
         let keys = self.materialized_block_keys.borrow();
         let mut blocks = self.materialized_blocks.borrow_mut();
         let mut retention = self.materialized_layout_retention.borrow_mut();
-        for (offset, key) in keys.iter() {
+        for (identity, key) in keys.iter() {
             if let Some(block) = retention
                 .reusable(*key)
                 .and_then(|snapshot| snapshot.block())
             {
-                blocks.insert(*offset, block);
+                blocks.insert(*identity, block);
             } else {
-                blocks.remove(offset);
+                blocks.remove(identity);
             }
         }
     }
@@ -3183,37 +3208,37 @@ impl RenderState {
         self.materialized_blocks.borrow_mut().clear();
         let blocks = {
             let content = self.content.borrow();
-            let mut blocks: Vec<(CharOffset, Range<usize>, Option<BlockItem>)> = Vec::new();
+            let mut blocks: Vec<(BlockIdentity, Range<usize>, Option<BlockItem>)> = Vec::new();
             for offset in offsets {
                 let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
                 cursor.seek(offset, SeekBias::Right);
+                let block_index = cursor.start().item_count;
                 let Some(block) = cursor.positioned_item() else {
                     continue;
+                };
+                let identity = BlockIdentity {
+                    block_offset: block.start_char_offset,
+                    block_index,
                 };
                 let offset_in_block = *offset - block.start_char_offset;
                 let paragraph_range = block
                     .item
                     .materialization_paragraph_range_for_offset(offset_in_block);
-                if let Some((_, existing_range, _)) = blocks
-                    .iter_mut()
-                    .find(|(block_offset, _, _)| *block_offset == block.start_char_offset)
+                if let Some((_, existing_range, _)) =
+                    blocks.iter_mut().find(|(block, _, _)| *block == identity)
                 {
                     existing_range.start = existing_range.start.min(paragraph_range.start);
                     existing_range.end = existing_range.end.max(paragraph_range.end);
                 } else {
-                    blocks.push((
-                        block.start_char_offset,
-                        paragraph_range,
-                        block.item.materializable_clone(),
-                    ));
+                    blocks.push((identity, paragraph_range, block.item.materializable_clone()));
                 }
             }
             blocks
                 .into_iter()
-                .map(|(block_offset, paragraph_range, source)| {
+                .map(|(block, paragraph_range, source)| {
                     (
                         MaterializationKey {
-                            block_offset,
+                            block,
                             paragraph_start: paragraph_range.start,
                             paragraph_end: paragraph_range.end,
                         },
@@ -3229,7 +3254,7 @@ impl RenderState {
                 let demands = source.materialization_demands(paragraph_range.clone());
                 if let Some(block) = source.materialized(layout, paragraph_range, &demands) {
                     let block = Rc::new(block);
-                    materialized.insert(key.block_offset, block);
+                    materialized.insert(key.block, block);
                 }
             }
         }
@@ -3423,6 +3448,7 @@ impl RenderState {
                 content_size: vec2f(content_width.as_f32(), item.item.content_height().as_f32()),
                 spacing,
                 block_offset: item.start_char_offset,
+                block_index: cursor.start().item_count,
                 start_line: item.start_line,
                 paragraph_range: item
                     .item

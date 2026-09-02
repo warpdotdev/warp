@@ -122,8 +122,12 @@ impl RenderState {
         };
 
         let materialized = self.materialized_blocks.borrow();
+        let block_index = block_cursor.start().item_count;
         let item = materialized
-            .get(&block.start_char_offset)
+            .get(&super::BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
             .map(Rc::as_ref)
             .unwrap_or(block.item);
         Positioned { item, ..block }.coordinates_to_location(x, y, options)

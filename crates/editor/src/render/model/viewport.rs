@@ -60,6 +60,7 @@ pub struct ViewportItem {
     pub spacing: BlockSpacing,
     /// Offset of the start of the block backing this item.
     pub block_offset: CharOffset,
+    pub(super) block_index: usize,
     pub(super) start_line: LineCount,
     pub(super) paragraph_range: Range<usize>,
     pub(super) materialized_block: Option<Rc<MaterializedBlockSnapshot>>,
@@ -405,6 +406,7 @@ impl<'a> Iterator for ViewportIterator<'a> {
     type Item = (ViewportItem, &'a BlockItem);
 
     fn next(&mut self) -> Option<Self::Item> {
+        let block_index = self.cursor.start().item_count;
         let item = self.cursor.positioned_item()?;
         // Stop rendering once the current item is completely outside the viewport.
         if item.start_y_offset > self.content_end {
@@ -420,6 +422,7 @@ impl<'a> Iterator for ViewportIterator<'a> {
             content_size: vec2f(content_width.as_f32(), item.item.content_height().as_f32()),
             spacing,
             block_offset: item.start_char_offset,
+            block_index,
             start_line: item.start_line,
             paragraph_range: item.item.materialization_paragraph_range_for_height(
                 item.start_y_offset,
@@ -436,6 +439,12 @@ impl ViewportItem {
     /// The block backing this viewport item.
     pub fn block_offset(&self) -> CharOffset {
         self.block_offset
+    }
+    pub(super) fn block_identity(&self) -> super::BlockIdentity {
+        super::BlockIdentity {
+            block_offset: self.block_offset,
+            block_index: self.block_index,
+        }
     }
 
     #[cfg(test)]
@@ -456,7 +465,7 @@ impl ViewportItem {
 
     pub(super) fn materialization_key(&self) -> super::MaterializationKey {
         super::MaterializationKey {
-            block_offset: self.block_offset,
+            block: self.block_identity(),
             paragraph_start: self.paragraph_range.start,
             paragraph_end: self.paragraph_range.end,
         }
