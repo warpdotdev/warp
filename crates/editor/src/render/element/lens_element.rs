@@ -14,6 +14,7 @@ use crate::editor::EditorView;
 use crate::render::element::paragraph::RenderableParagraph;
 use crate::render::element::temporary_block::RenderableTemporaryBlock;
 use crate::render::element::{DisplayOptions, RenderContext, RenderableBlock};
+use crate::render::layout::TextLayout;
 use crate::render::model::{BlockItem, RenderLineLocation, RenderState};
 
 pub struct RichTextElementLens<V: EditorView> {
@@ -65,6 +66,12 @@ impl<V: EditorView> Element for RichTextElementLens<V> {
     ) -> Vector2F {
         let model = self.model.as_ref(app);
         let mut total_height = 0.;
+        let text_layout = TextLayout::for_materialization(app, model);
+        model.materialize_line_range(
+            &text_layout,
+            self.line_range.clone(),
+            constraint.max.x().into_pixels(),
+        );
         let blocks =
             model.blocks_in_line_range(self.line_range.clone(), constraint.max.x().into_pixels());
 

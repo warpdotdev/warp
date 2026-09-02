@@ -6,29 +6,33 @@ use rangemap::RangeSet;
 use string_offset::CharOffset;
 use sum_tree::SumTree;
 use vec1::{Vec1, vec1};
+use warpui_core::App;
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::color::ColorU;
 use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::FamilyId;
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::vec2f;
-use warpui_core::text_layout::TextFrame;
+use warpui_core::text_layout::{LayoutCache, TextFrame};
 use warpui_core::units::{IntoPixels, Pixels};
 
 use super::debug::Describe;
 use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
-    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
-    TableBlockConfig, TableStyle, table_offset_map,
+    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, OffsetMap, Paragraph, ParagraphBlock,
+    RenderState, RenderedSelectionSet, TableBlockConfig, TableStyle, table_offset_map,
 };
-use crate::content::edit::ParsedUrl;
+use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
+use crate::content::edit::{EditDelta, ParsedUrl};
 use crate::content::text::{
     BufferBlockStyle, CodeBlockType, FormattedTable, FormattedTextFragment, table_cell_offset_maps,
 };
+use crate::render::layout::TextLayout;
 use crate::render::model::test_utils::{TEST_STYLES, laid_out_paragraph, mock_paragraph};
 use crate::render::model::{
     ColumnUnit, Height, LayoutSummary, LineCount, RenderedSelection, SoftWrapPoint, TEXT_SPACING,
+    WidthSetting,
 };
 
 #[test]
@@ -74,6 +78,240 @@ fn test_height() {
     );
 }
 
+#[test]
+fn test_deferred_viewport_materialization_is_budgeted_and_replaces_previous_frames() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let make_paragraph = |text: &str| {
+                let paragraph_styles = TEST_STYLES.base_text;
+                let spacing = TEST_STYLES
+                    .block_spacings
+                    .from_block_style(&BufferBlockStyle::PlainText);
+                let style_runs = vec![(
+                    0..text.chars().count(),
+                    layout.style_and_font(&paragraph_styles, &Default::default()),
+                )];
+                let frame = layout.layout_text(text, &paragraph_styles, &spacing, &style_runs);
+                Paragraph::new_deferred(
+                    frame,
+                    text.to_string(),
+                    style_runs,
+                    paragraph_styles,
+                    OffsetMap::direct(text.chars().count() + 1),
+                    CharOffset::from(text.chars().count() + 1),
+                    Vec::new(),
+                    spacing,
+                    None,
+                )
+            };
+            let first = make_paragraph("first");
+            let first_geometry = (
+                first.content_length,
+                first.height(),
+                first.width(),
+                first.lines(),
+            );
+            let second = make_paragraph("other");
+            let second_offset = first.content_length;
+            let third = make_paragraph("larger");
+            let third_offset = second_offset + second.content_length;
+            let mut content = SumTree::new();
+            content.push(BlockItem::Paragraph(first));
+            content.push(BlockItem::Paragraph(second));
+            content.push(BlockItem::Paragraph(third));
+            let mut model =
+                RenderState::new_for_test(TEST_STYLES, 200.0.into_pixels(), 100.0.into_pixels());
+            model.set_content(content);
+
+            model.materialize_viewport_with_max_chars(
+                &layout,
+                100.0.into_pixels(),
+                200.0.into_pixels(),
+                Pixels::zero(),
+                5,
+            );
+
+            {
+                let persistent = model.content.borrow();
+                let paragraphs: Vec<_> = persistent
+                    .items()
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        BlockItem::Paragraph(paragraph) => Some(paragraph),
+                        BlockItem::TrailingNewLine(_) => None,
+                        item => panic!("expected paragraph or trailing newline, got {item:?}"),
+                    })
+                    .collect();
+                assert_eq!(paragraphs.len(), 3);
+                assert!(paragraphs.iter().all(|paragraph| paragraph.is_deferred()));
+                assert_eq!(
+                    (
+                        paragraphs[0].content_length,
+                        paragraphs[0].height(),
+                        paragraphs[0].width(),
+                        paragraphs[0].lines(),
+                    ),
+                    first_geometry
+                );
+                assert!(paragraphs.iter().all(|paragraph| {
+                    paragraph
+                        .frame
+                        .lines()
+                        .iter()
+                        .all(|line| line.runs.is_empty() && line.caret_positions.len() <= 2)
+                }));
+            }
+            {
+                let content = model.content();
+                let first = content
+                    .block_at_offset(CharOffset::zero())
+                    .expect("first block should exist");
+                let second = content
+                    .block_at_offset(second_offset)
+                    .expect("second block should exist");
+                assert!(matches!(
+                    first.item,
+                    BlockItem::Paragraph(paragraph) if !paragraph.is_deferred()
+                ));
+                assert!(matches!(
+                    second.item,
+                    BlockItem::Paragraph(paragraph) if paragraph.is_deferred()
+                ));
+            }
+            let first_frame = match model.materialized_blocks.borrow().get(&CharOffset::zero()) {
+                Some(BlockItem::Paragraph(paragraph)) => Arc::as_ptr(&paragraph.frame),
+                item => panic!("expected materialized first paragraph, got {item:?}"),
+            };
+            model.materialize_viewport_with_max_chars(
+                &layout,
+                100.0.into_pixels(),
+                200.0.into_pixels(),
+                Pixels::zero(),
+                5,
+            );
+            let reused_first_frame =
+                match model.materialized_blocks.borrow().get(&CharOffset::zero()) {
+                    Some(BlockItem::Paragraph(paragraph)) => Arc::as_ptr(&paragraph.frame),
+                    item => panic!("expected materialized first paragraph, got {item:?}"),
+                };
+            assert_eq!(reused_first_frame, first_frame);
+
+            *model.selections.borrow_mut() =
+                RenderedSelectionSet::new(RenderedSelection::new(second_offset, second_offset));
+            model.materialize_viewport_with_max_chars(
+                &layout,
+                100.0.into_pixels(),
+                200.0.into_pixels(),
+                Pixels::zero(),
+                5,
+            );
+
+            let content = model.content();
+            let first = content
+                .block_at_offset(CharOffset::zero())
+                .expect("first block should exist");
+            let second = content
+                .block_at_offset(second_offset)
+                .expect("second block should exist");
+            assert!(matches!(
+                first.item,
+                BlockItem::Paragraph(paragraph) if paragraph.is_deferred()
+            ));
+            assert!(matches!(
+                second.item,
+                BlockItem::Paragraph(paragraph) if !paragraph.is_deferred()
+            ));
+            drop(content);
+
+            *model.selections.borrow_mut() =
+                RenderedSelectionSet::new(RenderedSelection::new(third_offset, third_offset));
+            model.materialize_viewport_with_max_chars(
+                &layout,
+                100.0.into_pixels(),
+                200.0.into_pixels(),
+                Pixels::zero(),
+                5,
+            );
+            assert!(
+                !model
+                    .materialized_blocks
+                    .borrow()
+                    .contains_key(&third_offset)
+            );
+            assert!(matches!(
+                model
+                    .content()
+                    .block_at_offset(third_offset)
+                    .expect("third block should exist")
+                    .item,
+                BlockItem::Paragraph(paragraph) if paragraph.is_deferred()
+            ));
+
+            model.materialize_viewport_with_max_chars(
+                &layout,
+                100.0.into_pixels(),
+                200.0.into_pixels(),
+                Pixels::zero(),
+                6,
+            );
+            assert!(matches!(
+                model
+                    .content()
+                    .block_at_offset(third_offset)
+                    .expect("third block should exist")
+                    .item,
+                BlockItem::Paragraph(paragraph) if !paragraph.is_deferred()
+            ));
+        });
+    })
+}
+
+#[test]
+fn test_layout_edit_delta_uses_deferred_paragraphs_in_render_state() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let model =
+                RenderState::new_for_test(TEST_STYLES, 200.0.into_pixels(), 100.0.into_pixels())
+                    .with_width_setting(WidthSetting::InfiniteWidth);
+            let text = "active render path\n";
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..CharOffset::from(1),
+                new_lines: Arc::new(vec![StyledBufferBlock::Text(StyledTextBlock {
+                    block: vec![StyledBufferRun {
+                        run: text.to_string(),
+                        text_styles: Default::default(),
+                        block_style: BufferBlockStyle::PlainText,
+                    }],
+                    style: BufferBlockStyle::PlainText,
+                    content_length: CharOffset::from(text.chars().count()),
+                })]),
+                ..EditDelta::default()
+            };
+
+            model.layout_edit_delta(delta, None, ctx);
+
+            let content = model.content();
+            let block = content
+                .block_at_offset(CharOffset::zero())
+                .expect("edited paragraph should exist");
+            assert!(matches!(
+                block.item,
+                BlockItem::Paragraph(paragraph) if paragraph.is_deferred()
+            ));
+            assert_eq!(
+                block.item.content_length(),
+                CharOffset::from(text.chars().count())
+            );
+        });
+    })
+}
 #[test]
 fn test_is_entire_range_of_type_matches_exact_block_ranges() {
     let mut model = RenderState::new_for_test(

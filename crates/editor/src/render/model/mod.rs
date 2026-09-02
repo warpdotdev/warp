@@ -35,7 +35,7 @@ use warpui_core::fonts::{FamilyId, Properties, Weight};
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::platform::LineStyle;
-use warpui_core::text_layout::{CaretPosition, Line, TextFrame};
+use warpui_core::text_layout::{CaretPosition, Line, StyleAndFont, TextFrame};
 use warpui_core::text_selection_utils::{
     NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
     selection_crosses_newline_offset_based,
@@ -56,7 +56,7 @@ use self::viewport::{
 use super::BLOCK_FOOTER_HEIGHT;
 use super::element::broken_embedding::RenderableBrokenEmbedding;
 use super::element::{CursorData, RenderContext, RenderableBlock};
-use super::layout::{TextLayout, line_height};
+use super::layout::{MAX_LAYOUT_LINE_CHARS, TextLayout, line_height};
 use crate::content::edit::{
     EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks,
 };
@@ -242,7 +242,10 @@ impl RenderDecoration {
 /// Wrapper around a reference to the underlying render state sumtree.
 /// This is so we could define an interface that returns objects with the same lifetime as the inner
 /// reference with interior mutability.
-pub struct RenderContentTreeRef<'a>(Ref<'a, SumTree<BlockItem>>);
+pub struct RenderContentTreeRef<'a>(
+    Ref<'a, SumTree<BlockItem>>,
+    Ref<'a, HashMap<CharOffset, BlockItem>>,
+);
 
 impl<'a> RenderContentTreeRef<'a> {
     pub fn block_items(&self) -> impl Iterator<Item = &BlockItem> {
@@ -265,7 +268,12 @@ impl<'a> RenderContentTreeRef<'a> {
         viewport_width: Pixels,
         scroll_top: Pixels,
     ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
-        ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width)
+        ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width).map(
+            |(item, block)| {
+                let block = self.1.get(&item.block_offset()).unwrap_or(block);
+                (item, block)
+            },
+        )
     }
 
     /// Describe only the content of the rendering model.
@@ -280,7 +288,9 @@ impl<'a> RenderContentTreeRef<'a> {
         let mut cursor = self.0.cursor::<Height, LayoutSummary>();
         // For height, we don't need to seek to exactly the starting height of the block.
         cursor.seek(&height, SeekBias::Right);
-        cursor.positioned_item()
+        let block = cursor.positioned_item()?;
+        let item = self.1.get(&block.start_char_offset).unwrap_or(block.item);
+        Some(Positioned { item, ..block })
     }
 
     /// Returns the 0-based index of the temporary block at the given content-
@@ -330,13 +340,31 @@ impl<'a> RenderContentTreeRef<'a> {
     pub fn block_at_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
         let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
         if cursor.seek(&offset, SeekBias::Right) {
-            cursor.positioned_item()
+            let block = cursor.positioned_item()?;
+            let item = self.1.get(&block.start_char_offset).unwrap_or(block.item);
+            Some(Positioned { item, ..block })
         } else {
             // If we can't seek exactly to the starting CharOffset of the block, the render model
             // has probably changed since this item was created. To be safe, fail the lookup.
             log::trace!("ViewportItem invalidated: no block starting at {offset}");
             None
         }
+    }
+
+    fn block_containing_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        cursor.seek(&offset, SeekBias::Right);
+        let block = cursor.positioned_item()?;
+        let item = self.1.get(&block.start_char_offset).unwrap_or(block.item);
+        Some(Positioned { item, ..block })
+    }
+
+    fn block_at_line(&self, line: LineCount) -> Option<Positioned<'_, BlockItem>> {
+        let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
+        cursor.seek(&line, SeekBias::Right);
+        let block = cursor.positioned_item()?;
+        let item = self.1.get(&block.start_char_offset).unwrap_or(block.item);
+        Some(Positioned { item, ..block })
     }
 
     /// The full line range of the first collapsed hidden section, or `None` if
@@ -1073,6 +1101,7 @@ pub struct RenderState {
     /// Content is wrapped in a RefCell so we could mutate it when we are laying out the editor element.
     /// We know this is safe because there is a one-to-one relationship between element and model.
     content: RefCell<SumTree<BlockItem>>,
+    materialized_blocks: RefCell<HashMap<CharOffset, BlockItem>>,
 
     selections: RefCell<RenderedSelectionSet>,
     decorations: RenderDecoration,
@@ -1659,6 +1688,24 @@ impl ParagraphBlock {
         &self.paragraphs
     }
 
+    fn materialized(&self, layout: &TextLayout, remaining_chars: &mut usize) -> Option<Self> {
+        let mut changed = false;
+        let paragraphs = self.paragraphs.mapped_ref(|paragraph| {
+            paragraph
+                .materialized(layout, remaining_chars)
+                .inspect(|_| changed = true)
+                .unwrap_or_else(|| paragraph.clone())
+        });
+        changed.then_some(Self { paragraphs })
+    }
+
+    fn materialized_layout_chars(&self) -> usize {
+        self.paragraphs
+            .iter()
+            .map(Paragraph::materialized_layout_chars)
+            .sum()
+    }
+
     fn content_length(&self) -> CharOffset {
         self.paragraphs
             .iter()
@@ -1716,8 +1763,10 @@ impl ParagraphBlock {
 
 #[derive(Clone)]
 pub struct Paragraph {
-    /// Laid-out text content of this paragraph.
+    /// Compact or fully laid-out text content of this paragraph.
     frame: Arc<TextFrame>,
+    deferred_layout: Option<Arc<DeferredParagraphLayout>>,
+    materialized: bool,
     /// Mapping between [`TextFrame`] characters and content characters.
     offsets: OffsetMap,
     /// Cached height of this paragraph's text frame.
@@ -1728,6 +1777,12 @@ pub struct Paragraph {
     detected_url: Vec<ParsedUrl>,
     spacing: BlockSpacing,
     minimum_height: Option<Pixels>,
+}
+#[derive(Debug)]
+struct DeferredParagraphLayout {
+    text: String,
+    style_runs: Vec<(Range<usize>, StyleAndFont)>,
+    paragraph_styles: ParagraphStyles,
 }
 
 impl Paragraph {
@@ -1748,6 +1803,8 @@ impl Paragraph {
         let width = frame.max_width().into_pixels();
         Self {
             frame,
+            deferred_layout: None,
+            materialized: true,
             offsets,
             height,
             width,
@@ -1756,6 +1813,70 @@ impl Paragraph {
             spacing,
             minimum_height,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_deferred(
+        frame: Arc<TextFrame>,
+        text: String,
+        style_runs: Vec<(Range<usize>, StyleAndFont)>,
+        paragraph_styles: ParagraphStyles,
+        offsets: OffsetMap,
+        content_length: CharOffset,
+        active_url: Vec<ParsedUrl>,
+        spacing: BlockSpacing,
+        minimum_height: Option<Pixels>,
+    ) -> Self {
+        let mut paragraph = Self::new(
+            Arc::new(frame.compact_for_deferred_layout()),
+            offsets,
+            content_length,
+            active_url,
+            spacing,
+            minimum_height,
+        );
+        paragraph.deferred_layout = Some(Arc::new(DeferredParagraphLayout {
+            text,
+            style_runs,
+            paragraph_styles,
+        }));
+        paragraph.materialized = false;
+        paragraph
+    }
+
+    fn materialized_layout_chars(&self) -> usize {
+        if self.materialized {
+            self.deferred_layout.as_ref().map_or(0, |layout| {
+                layout.text.chars().count().min(MAX_LAYOUT_LINE_CHARS)
+            })
+        } else {
+            0
+        }
+    }
+
+    fn materialized(&self, layout: &TextLayout, remaining_chars: &mut usize) -> Option<Self> {
+        let Some(deferred) = &self.deferred_layout else {
+            return None;
+        };
+        let layout_chars = deferred.text.chars().count().min(MAX_LAYOUT_LINE_CHARS);
+        if layout_chars > *remaining_chars {
+            return None;
+        }
+        *remaining_chars -= layout_chars;
+        let mut paragraph = self.clone();
+        paragraph.frame = layout.layout_text(
+            &deferred.text,
+            &deferred.paragraph_styles,
+            &self.spacing,
+            &deferred.style_runs,
+        );
+        paragraph.materialized = true;
+        Some(paragraph)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn is_deferred(&self) -> bool {
+        !self.materialized
     }
 
     pub fn first_line_height(&self) -> f32 {
@@ -1776,6 +1897,9 @@ impl Paragraph {
 
     /// Whether or not this paragraph is effectively empty.
     pub(super) fn is_empty(&self) -> bool {
+        if let Some(deferred) = &self.deferred_layout {
+            return deferred.text.is_empty();
+        }
         let lines = self.frame.lines();
         lines.is_empty() || lines.iter().all(|line| line.runs.is_empty())
     }
@@ -2521,6 +2645,7 @@ impl RenderState {
             selections: Default::default(),
             decorations: Default::default(),
             content: RefCell::new(SumTree::new()),
+            materialized_blocks: RefCell::new(HashMap::new()),
             element_tx,
             layout_tx,
             width_setting: Default::default(),
@@ -2585,6 +2710,7 @@ impl RenderState {
             selections: Default::default(),
             decorations: Default::default(),
             content: RefCell::new(content),
+            materialized_blocks: RefCell::new(HashMap::new()),
             element_tx,
             layout_tx,
             width_setting: Default::default(),
@@ -2678,12 +2804,94 @@ impl RenderState {
 
     /// Returns reference to the underlying content tree.
     pub fn content(&self) -> RenderContentTreeRef<'_> {
-        RenderContentTreeRef(self.content.borrow())
+        RenderContentTreeRef(self.content.borrow(), self.materialized_blocks.borrow())
+    }
+
+    pub(crate) fn materialize_viewport(
+        &self,
+        layout: &TextLayout,
+        viewport_height: Pixels,
+        viewport_width: Pixels,
+        scroll_top: Pixels,
+    ) {
+        self.materialize_viewport_with_max_chars(
+            layout,
+            viewport_height,
+            viewport_width,
+            scroll_top,
+            MAX_LAYOUT_LINE_CHARS,
+        );
+    }
+
+    fn materialize_viewport_with_max_chars(
+        &self,
+        layout: &TextLayout,
+        viewport_height: Pixels,
+        viewport_width: Pixels,
+        scroll_top: Pixels,
+        max_chars: usize,
+    ) {
+        let mut materialized = HashMap::new();
+        let mut remaining_chars = max_chars;
+        {
+            let content = self.content.borrow();
+
+            for selection in self.selections().iter() {
+                for offset in [selection.head, selection.tail] {
+                    let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
+                    cursor.seek(&offset, SeekBias::Right);
+                    if let Some(block) = cursor.positioned_item()
+                        && !materialized.contains_key(&block.start_char_offset)
+                        && let Some(materialized_block) =
+                            block.item.materialized(layout, &mut remaining_chars)
+                    {
+                        materialized.insert(block.start_char_offset, materialized_block);
+                    }
+                }
+            }
+
+            for (item, block) in
+                ViewportIterator::new(&content, scroll_top, viewport_height, viewport_width)
+            {
+                if !materialized.contains_key(&item.block_offset())
+                    && let Some(block) = block.materialized(layout, &mut remaining_chars)
+                {
+                    materialized.insert(item.block_offset(), block);
+                }
+            }
+        }
+        *self.materialized_blocks.borrow_mut() = materialized;
+    }
+
+    pub(crate) fn materialize_line_range(
+        &self,
+        layout: &TextLayout,
+        line_range: Range<RenderLineLocation>,
+        max_width: Pixels,
+    ) {
+        let blocks = self.blocks_in_line_range(line_range, max_width);
+        let mut materialized = self.materialized_blocks.borrow_mut();
+        let mut remaining_chars = MAX_LAYOUT_LINE_CHARS.saturating_sub(
+            materialized
+                .values()
+                .map(BlockItem::materialized_layout_chars)
+                .sum(),
+        );
+        for (item, block) in blocks {
+            if !materialized.contains_key(&item.block_offset())
+                && let Some(block) = block.materialized(layout, &mut remaining_chars)
+            {
+                materialized.insert(item.block_offset(), block);
+            }
+        }
     }
 
     pub fn with_width_setting(mut self, setting: WidthSetting) -> Self {
         self.width_setting = setting;
         self
+    }
+    pub(crate) fn width_setting(&self) -> &WidthSetting {
+        &self.width_setting
     }
 
     /// Whether the surrounding container for this render state already provides horizontal
@@ -3533,6 +3741,7 @@ impl RenderState {
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
+        self.materialized_blocks.borrow_mut().clear();
         *self.content.borrow_mut() = new_tree;
     }
 
@@ -3676,6 +3885,7 @@ impl RenderState {
         log::trace!("Resulting blocks:\n{}", new_tree.describe());
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
+        self.materialized_blocks.borrow_mut().clear();
         let mut content_mut = self.content.borrow_mut();
         *content_mut = new_tree;
     }
@@ -3998,11 +4208,7 @@ impl RenderState {
         }
 
         // Pixels path: use the font-laid-out SumTree<BlockItem>.
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
-
-        cursor.seek(&offset, SeekBias::Right);
-        match cursor.positioned_item() {
+        match self.content().block_containing_offset(offset) {
             Some(item) => item.offset_to_softwrap_point(offset),
             None => SoftWrapPoint::new(self.max_line().as_u32(), ColumnUnit::pixels_zero()),
         }
@@ -4015,12 +4221,9 @@ impl RenderState {
         }
 
         // Pixels path.
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
 
         let line = LineCount(point.row() as usize);
-        cursor.seek(&line, SeekBias::Right);
-        match cursor.positioned_item() {
+        match self.content().block_at_line(line) {
             Some(item) => item.softwrap_point_to_offset(point),
             None => self.max_offset(),
         }
@@ -4043,11 +4246,8 @@ impl RenderState {
 
     /// The bounding box of the character at `offset`.
     fn character_bounds(&self, offset: CharOffset) -> Option<RectF> {
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
-        cursor.seek(&offset, SeekBias::Right);
-        cursor
-            .positioned_item()
+        self.content()
+            .block_containing_offset(offset)
             .and_then(|item| item.character_bounds(offset))
     }
 
@@ -4168,6 +4368,7 @@ impl RenderState {
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&content));
+        self.materialized_blocks.get_mut().clear();
         self.content = content.into();
     }
 
@@ -4423,6 +4624,111 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
 }
 
 impl BlockItem {
+    fn materialized(&self, layout: &TextLayout, remaining_chars: &mut usize) -> Option<Self> {
+        match self {
+            Self::Paragraph(paragraph) => paragraph
+                .materialized(layout, remaining_chars)
+                .map(Self::Paragraph),
+            Self::TextBlock { paragraph_block } => paragraph_block
+                .materialized(layout, remaining_chars)
+                .map(|paragraph_block| Self::TextBlock { paragraph_block }),
+            Self::TemporaryBlock {
+                paragraph_block,
+                text_decoration,
+                decoration,
+            } => paragraph_block
+                .materialized(layout, remaining_chars)
+                .map(|paragraph_block| Self::TemporaryBlock {
+                    paragraph_block,
+                    text_decoration: text_decoration.clone(),
+                    decoration: *decoration,
+                }),
+            Self::RunnableCodeBlock {
+                paragraph_block,
+                code_block_type,
+                pending_mermaid_asset,
+            } => paragraph_block
+                .materialized(layout, remaining_chars)
+                .map(|paragraph_block| Self::RunnableCodeBlock {
+                    paragraph_block,
+                    code_block_type: code_block_type.clone(),
+                    pending_mermaid_asset: pending_mermaid_asset.clone(),
+                }),
+            Self::TaskList {
+                indent_level,
+                complete,
+                paragraph,
+                mouse_state,
+            } => paragraph
+                .materialized(layout, remaining_chars)
+                .map(|paragraph| Self::TaskList {
+                    indent_level: *indent_level,
+                    complete: *complete,
+                    paragraph,
+                    mouse_state: mouse_state.clone(),
+                }),
+            Self::UnorderedList {
+                indent_level,
+                paragraph,
+            } => paragraph
+                .materialized(layout, remaining_chars)
+                .map(|paragraph| Self::UnorderedList {
+                    indent_level: *indent_level,
+                    paragraph,
+                }),
+            Self::OrderedList {
+                indent_level,
+                number,
+                paragraph,
+            } => paragraph
+                .materialized(layout, remaining_chars)
+                .map(|paragraph| Self::OrderedList {
+                    indent_level: *indent_level,
+                    number: *number,
+                    paragraph,
+                }),
+            Self::Header {
+                header_size,
+                paragraph,
+            } => paragraph
+                .materialized(layout, remaining_chars)
+                .map(|paragraph| Self::Header {
+                    header_size: *header_size,
+                    paragraph,
+                }),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => None,
+        }
+    }
+
+    fn materialized_layout_chars(&self) -> usize {
+        match self {
+            Self::Paragraph(paragraph)
+            | Self::TaskList { paragraph, .. }
+            | Self::UnorderedList { paragraph, .. }
+            | Self::OrderedList { paragraph, .. }
+            | Self::Header { paragraph, .. } => paragraph.materialized_layout_chars(),
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.materialized_layout_chars(),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => 0,
+        }
+    }
     pub fn paragraph(
         frame: Arc<TextFrame>,
         offsets: OffsetMap,

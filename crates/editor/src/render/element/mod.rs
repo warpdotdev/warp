@@ -41,6 +41,7 @@ use self::table::RenderableTable;
 use self::task_list::RenderableTaskList;
 use self::text_block::RenderableTextBlock;
 use self::unordered_list::RenderableBulletList;
+use super::layout::TextLayout;
 use super::model::viewport::{SizeInfo, ViewportItem};
 use super::model::{
     BlockItem, ElementUpdate, HitTestOptions, LineCount, Location, RenderState, RichTextStyles,
@@ -836,18 +837,29 @@ impl<V: EditorView> RichTextElement<V> {
 
     /// Builds a [`RenderableBlock`] for each block in the current viewport. This is done lazily,
     /// during layout.
-    fn renderable_blocks(&mut self, styles: &RichTextStyles, ctx: &AppContext) {
-        let parent = match self.parent_view.upgrade(ctx) {
-            Some(handle) => handle.as_ref(ctx),
+    fn renderable_blocks(
+        &mut self,
+        styles: &RichTextStyles,
+        layout_ctx: &LayoutContext,
+        app: &AppContext,
+    ) {
+        let parent = match self.parent_view.upgrade(app) {
+            Some(handle) => handle.as_ref(app),
             None => {
                 report_error!("Parent rich-text editor view dropped before layout");
                 return;
             }
         };
-
-        let model = self.model.as_ref(ctx);
+        let model = self.model.as_ref(app);
         let mut ordered_list_numbering = model.viewport_list_numbering();
-        let scroll_data = self.vertical_scroll_data(ctx);
+        let scroll_data = self.vertical_scroll_data(app);
+        let text_layout = TextLayout::for_materialization(app, model);
+        model.materialize_viewport(
+            &text_layout,
+            scroll_data.visible_px,
+            model.viewport().width(),
+            scroll_data.scroll_start,
+        );
 
         let content = model.content();
         let viewport_items = content.viewport_items(
@@ -890,23 +902,23 @@ impl<V: EditorView> RichTextElement<V> {
                         // For layout purposes, the start marker for the command block is considered
                         // the ending newline of the _previous_ block.
                         let start_offset = item.block_offset;
-                        let runnable_command = parent.runnable_command_at(start_offset, ctx);
+                        let runnable_command = parent.runnable_command_at(start_offset, app);
                         RenderableRunnableCommand::new(
                             item,
                             runnable_command,
                             self.display_options.focused,
-                            ctx,
+                            app,
                         )
                         .finish()
                     }
                     BlockItem::MermaidDiagram { .. } => {
                         let start_offset = item.block_offset;
-                        let runnable_command = parent.runnable_command_at(start_offset, ctx);
+                        let runnable_command = parent.runnable_command_at(start_offset, app);
                         RenderableMermaidDiagram::new(
                             item,
                             runnable_command,
                             self.display_options.focused,
-                            ctx,
+                            app,
                         )
                         .finish()
                     }
@@ -929,14 +941,14 @@ impl<V: EditorView> RichTextElement<V> {
                             full_line_range,
                             styles,
                             self.parent_view.clone(),
-                            ctx,
+                            app,
                         )
                         .finish()
                     }
                     BlockItem::Embedded(embed) => {
                         let start_offset = item.block_offset;
-                        let child_model = parent.embedded_item_at(start_offset, ctx);
-                        embed.element(model, item, child_model, ctx)
+                        let child_model = parent.embedded_item_at(start_offset, app);
+                        embed.element(model, item, child_model, app)
                     }
                 };
 
@@ -1042,7 +1054,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
         let size = constraint.max;
         self.element_size = Some(size);
 
-        self.renderable_blocks(model.styles(), app);
+        self.renderable_blocks(model.styles(), ctx, app);
         match self.blocks.as_mut() {
             Some(blocks) => {
                 for block in blocks.iter_mut() {

@@ -15,7 +15,7 @@ use warpui_core::text_layout::{
 };
 use warpui_core::units::{IntoPixels, Pixels};
 
-use super::model::{BlockSpacing, ParagraphStyles, RenderState, RichTextStyles};
+use super::model::{BlockSpacing, ParagraphStyles, RenderState, RichTextStyles, WidthSetting};
 use crate::content::text::{BufferBlockStyle, TextStylesWithMetadata};
 
 const HYPERLINK_UNDERLINE_COLOR: u32 = 0x7aa6daff;
@@ -29,7 +29,7 @@ const HYPERLINK_UNDERLINE_COLOR: u32 = 0x7aa6daff;
 /// content length rather than from the shaped frame, and consumers that map an offset or coordinate
 /// into a frame already clamp to its end. The cap sits far past what can be read on screen, so a
 /// cursor pinning at the truncation point is only reachable in lines nobody edits visually.
-const MAX_LAYOUT_LINE_CHARS: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_LAYOUT_LINE_CHARS: usize = 2 * 1024 * 1024;
 
 /// Shortens `text` to at most [`MAX_LAYOUT_LINE_CHARS`], returning it unchanged when it already
 /// fits.
@@ -103,6 +103,9 @@ impl<'a> TextLayout<'a> {
         self.container_scrolls_horizontally
     }
 
+    pub(crate) fn supports_deferred_paragraphs(&self) -> bool {
+        self.max_width == f32::MAX
+    }
     /// Builds a [`TextLayout`] for an editor render state.
     pub fn for_render_state(app: &'a AppContext, model: &'a RenderState) -> Self {
         Self::new(
@@ -111,6 +114,17 @@ impl<'a> TextLayout<'a> {
             model.viewport().width().as_f32(),
         )
         .with_container_scrolls_horizontally(model.container_scrolls_horizontally())
+    }
+
+    pub fn for_materialization(
+        app: &'a AppContext,
+        model: &'a RenderState,
+    ) -> Self {
+        let mut layout = Self::for_render_state(app, model);
+        if matches!(model.width_setting(), WidthSetting::InfiniteWidth) {
+            layout.max_width = f32::MAX;
+        }
+        layout
     }
 
     /// Lay out a single frame of text. The caller is responsible for mapping rich text into

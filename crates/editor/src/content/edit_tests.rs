@@ -305,6 +305,80 @@ fn test_layout_delta_never_takes_ownership_of_new_lines_with_multiple_owners() {
 }
 
 #[test]
+fn test_layout_delta_defers_unwrapped_paragraph_payloads_without_changing_geometry() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let unwrapped_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let wrapped_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                80.0,
+            );
+            let new_lines = vec![
+                identifiable_text_block(6),
+                identifiable_text_block(9),
+                identifiable_text_block(4),
+            ];
+            let total_len = new_lines
+                .iter()
+                .map(StyledBufferBlock::content_length)
+                .fold(CharOffset::zero(), |sum, len| sum + len);
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..CharOffset::from(1) + total_len,
+                new_lines: Arc::new(new_lines),
+                ..EditDelta::default()
+            };
+
+            let deferred = delta.layout_delta(
+                &unwrapped_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+            let fully_laid_out = delta.layout_delta(
+                &wrapped_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+
+            assert_eq!(
+                deferred.laid_out_line.len(),
+                fully_laid_out.laid_out_line.len()
+            );
+            for (deferred, full) in deferred
+                .laid_out_line
+                .iter()
+                .zip(&fully_laid_out.laid_out_line)
+            {
+                assert_eq!(deferred.content_length(), full.content_length());
+                assert_eq!(deferred.height(), full.height());
+                assert_eq!(deferred.width(), full.width());
+                assert_eq!(deferred.lines(), full.lines());
+                let (BlockItem::Paragraph(deferred), BlockItem::Paragraph(full)) = (deferred, full)
+                else {
+                    panic!("expected paragraph blocks");
+                };
+                assert!(deferred.is_deferred());
+                assert!(!full.is_deferred());
+            }
+            assert_eq!(
+                deferred.trailing_newline.is_some(),
+                fully_laid_out.trailing_newline.is_some()
+            );
+        });
+    })
+}
+#[test]
 fn test_layout_partial_url() {
     // Regression test for laying out a partially-styled autodetected URL (CLD-871).
     App::test((), |app| async move {

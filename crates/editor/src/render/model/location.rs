@@ -120,7 +120,11 @@ impl RenderState {
             };
         };
 
-        block.coordinates_to_location(x, y, options)
+        let materialized = self.materialized_blocks.borrow();
+        let item = materialized
+            .get(&block.start_char_offset)
+            .unwrap_or(block.item);
+        Positioned { item, ..block }.coordinates_to_location(x, y, options)
     }
 
     /// Performs hit-testing on coordinates relative to the viewport origin.
