@@ -54,7 +54,10 @@ impl BlockPlaceholder {
         );
         self.state = State::NotShown;
 
-        let block = item.positioned_block();
+        let content = model.content();
+        let Some(block) = item.positioned_block(&content) else {
+            return;
+        };
         if !block.item.is_empty() {
             return;
         }

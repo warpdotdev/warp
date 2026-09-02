@@ -1,3 +1,6 @@
+use std::ops::Range;
+use std::rc::Rc;
+
 use float_cmp::ApproxEq;
 use string_offset::CharOffset;
 use sum_tree::{SeekBias, SumTree};
@@ -9,7 +12,7 @@ use warpui_core::units::{IntoPixels, Pixels};
 use super::positioned::{Positioned, PositionedCursor};
 use super::{
     AUTO_SCROLL_MARGIN, BlockItem, BlockSpacing, Height, HitTestOptions, LayoutSummary, LineCount,
-    Location, RenderState, UNIT_MARGIN, bounds,
+    Location, RenderContentTreeRef, RenderState, UNIT_MARGIN, bounds,
 };
 use crate::render::element::RenderContext;
 
@@ -42,8 +45,8 @@ pub struct ViewportState {
 /// A visible, viewported item. This stores all the information needed to lay out and display a
 /// block and any associated UI controls in the current viewport.
 ///
-/// Because the viewport item is needed throughout the `Element` lifecycle, it owns the block
-/// snapshot selected during layout while retaining offsets that identify the model-layer block.
+/// Materialized paragraph payloads are owned through the `Element` lifecycle. Eager blocks remain
+/// model-backed so viewport snapshots do not duplicate their layout data.
 #[derive(Debug)]
 pub struct ViewportItem {
     /// The y-offset to display this item at, relative to the viewport origin.
@@ -58,7 +61,8 @@ pub struct ViewportItem {
     /// Offset of the start of the block backing this item.
     pub block_offset: CharOffset,
     pub(super) start_line: LineCount,
-    pub(super) block: BlockItem,
+    pub(super) paragraph_range: Range<usize>,
+    pub(super) materialized_block: Option<Rc<BlockItem>>,
 }
 
 /// A snapshot of the scroll position. This may only be used to scroll back to the original
@@ -398,7 +402,11 @@ impl<'a> Iterator for ViewportIterator<'a> {
             spacing,
             block_offset: item.start_char_offset,
             start_line: item.start_line,
-            block: item.item.clone(),
+            paragraph_range: item.item.materialization_paragraph_range_for_height(
+                item.start_y_offset,
+                self.content_start..self.content_end,
+            ),
+            materialized_block: None,
         };
         Some((viewport_item, item.item))
     }
@@ -410,23 +418,49 @@ impl ViewportItem {
         self.block_offset
     }
 
-    pub(crate) fn block(&self) -> &BlockItem {
-        &self.block
+    #[cfg(test)]
+    pub(crate) fn block(&self) -> Option<&BlockItem> {
+        self.materialized_block.as_deref()
     }
 
-    pub(super) fn set_block(&mut self, block: BlockItem) {
-        self.block = block;
+    pub(super) fn set_materialized_block(&mut self, block: Option<Rc<BlockItem>>) {
+        self.materialized_block = block;
     }
 
-    /// Returns a positioned view of the block snapshot captured for this viewport item.
-    pub fn positioned_block(&self) -> Positioned<'_, BlockItem> {
-        Positioned {
+    pub(super) fn materialization_key(&self) -> super::MaterializationKey {
+        super::MaterializationKey {
+            block_offset: self.block_offset,
+            paragraph_start: self.paragraph_range.start,
+            paragraph_end: self.paragraph_range.end,
+        }
+    }
+
+    pub(super) fn source_block<'a>(
+        &self,
+        content: &'a RenderContentTreeRef<'a>,
+    ) -> Option<&'a BlockItem> {
+        content
+            .base_block_at_height(self.height())
+            .filter(|block| block.start_char_offset == self.block_offset)
+            .map(|block| block.item)
+    }
+
+    /// Returns a positioned view of this viewport item's materialized or model-backed block.
+    pub fn positioned_block<'a>(
+        &'a self,
+        content: &'a RenderContentTreeRef<'a>,
+    ) -> Option<Positioned<'a, BlockItem>> {
+        let item = self
+            .materialized_block
+            .as_deref()
+            .or_else(|| self.source_block(content))?;
+        Some(Positioned {
             start_char_offset: self.block_offset,
             start_line: self.start_line,
             start_y_offset: self.content_offset,
             style: self.spacing,
-            item: &self.block,
-        }
+            item,
+        })
     }
 
     pub(crate) fn start_line(&self) -> LineCount {
@@ -471,8 +505,9 @@ impl ViewportItem {
 macro_rules! extract_block {
     ($viewport_item:expr, $content:expr, $match:pat => $value:expr) => {{
         let offset = $viewport_item.block_offset();
-        let _ = &$content;
-        let block = $viewport_item.positioned_block();
+        let Some(block) = $viewport_item.positioned_block(&$content) else {
+            return;
+        };
         match (&block, block.item) {
             $match => $value,
             other => {

@@ -1,4 +1,5 @@
 //! Hit-testing implementation for the rendering model.
+use std::rc::Rc;
 
 use num_traits::SaturatingSub;
 use string_offset::CharOffset;
@@ -123,6 +124,7 @@ impl RenderState {
         let materialized = self.materialized_blocks.borrow();
         let item = materialized
             .get(&block.start_char_offset)
+            .map(Rc::as_ref)
             .unwrap_or(block.item);
         Positioned { item, ..block }.coordinates_to_location(x, y, options)
     }

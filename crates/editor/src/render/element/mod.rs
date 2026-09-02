@@ -853,6 +853,7 @@ impl<V: EditorView> RichTextElement<V> {
         let mut ordered_list_numbering = model.viewport_list_numbering();
         let scroll_data = self.vertical_scroll_data(app);
         let text_layout = TextLayout::for_materialization(app, model);
+        self.blocks = None;
         let viewport_items = model.materialize_viewport(
             &text_layout,
             scroll_data.visible_px,
@@ -863,7 +864,16 @@ impl<V: EditorView> RichTextElement<V> {
         let blocks = viewport_items
             .into_iter()
             .map(|item| {
-                let block = item.block().clone();
+                let content = model.content();
+                let Some(positioned_block) = item.positioned_block(&content) else {
+                    return Empty::new(item).finish();
+                };
+                if matches!(positioned_block.item, BlockItem::Table(_)) {
+                    drop(content);
+                    return RenderableTable::new(item).finish();
+                }
+                let block = positioned_block.item.clone();
+                drop(content);
                 let is_ordered_list = matches!(block, BlockItem::OrderedList { .. });
                 let renderable_block = match block {
                     BlockItem::Paragraph(_) => RenderableParagraph::new(item).finish(),
@@ -924,7 +934,7 @@ impl<V: EditorView> RichTextElement<V> {
                     } => RenderableTemporaryBlock::new(item, decoration, text_decoration).finish(),
                     BlockItem::HorizontalRule(_) => HorizontalRule::new(item).finish(),
                     BlockItem::Image { .. } => RenderableImage::new(item).finish(),
-                    BlockItem::Table { .. } => RenderableTable::new(item).finish(),
+                    BlockItem::Table { .. } => unreachable!("tables are handled without cloning"),
                     BlockItem::TrailingNewLine(_) => Empty::new(item).finish(),
                     BlockItem::Hidden(config) => {
                         let full_line_range = model.line_range_at_offset(item.block_offset);
