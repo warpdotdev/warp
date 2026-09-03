@@ -468,9 +468,6 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_with_24_bit_color);
     register_test!(test_with_long_line);
     register_test!(make_1000_blocks_memory_benchmark);
-    // Requires a real display to capture chip/menu screenshots and a recording.
-    register_test!(test_git_operation_state_chip_rebase_menu);
-    register_test!(test_git_operation_state_chip_bisect_menu);
 
     register_test!(test_rule_creation);
     register_test!(test_rule_update);

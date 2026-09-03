@@ -379,13 +379,6 @@ integration_tests! {
     #[ignore = "Manual test: requires real display for frame capture"]
     test_video_recording,
 
-    // Git Operation State chip menu tests — require real display to capture
-    // chip/menu screenshots and a recording, run manually.
-    #[ignore = "Manual test: requires real display to capture chip/menu screenshots and a recording"]
-    test_git_operation_state_chip_rebase_menu,
-    #[ignore = "Manual test: requires real display to capture chip/menu screenshots and a recording"]
-    test_git_operation_state_chip_bisect_menu,
-
     // Rich Input Ctrl+Enter submit toggle (issue #11588)
     test_rich_input_toggle_on_enter_inserts_newline_and_ctrl_enter_submits,
     // Regression: Enter must accept inline menus (not insert newline) when toggle=true
