@@ -3028,6 +3028,17 @@ enum BlockMetadataUpdateSource {
     Osc7,
 }
 
+pub(crate) fn file_attach_allowed_for_shared_session(
+    shared_session_status: &SharedSessionStatus,
+    ambient_agent_view_model: Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>>,
+    ctx: &AppContext,
+) -> bool {
+    let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
+        && ambient_agent_view_model.is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
+    AgentToolbarItemKind::FileAttach
+        .available_to_session_viewer(shared_session_status, is_cloud_mode)
+}
+
 impl TerminalView {
     /// Returns the path to the current repository, if any.
     pub fn current_repo_path(&self) -> Option<&LocalOrRemotePath> {
@@ -8062,19 +8073,13 @@ impl TerminalView {
                 .is_some()
     }
 
-    fn file_attach_allowed_for_shared_session(&self, app: &AppContext) -> bool {
-        let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|model| model.as_ref(app).is_ambient_agent());
-        let status = self.model.lock().shared_session_status().clone();
-        AgentToolbarItemKind::FileAttach.available_to_session_viewer(&status, is_cloud_mode)
-    }
-
     fn can_attach_file(&self, app: &AppContext) -> bool {
         self.is_in_agent_or_cli_attach_context(app)
-            && self.file_attach_allowed_for_shared_session(app)
+            && file_attach_allowed_for_shared_session(
+                self.model.lock().shared_session_status(),
+                self.ambient_agent_view_model.as_ref(),
+                app,
+            )
     }
 
     /// Ensures this pane has an [`ambient_agent::AmbientAgentViewModel`], creating and wiring
@@ -28957,14 +28962,10 @@ impl View for TerminalView {
             }
         }
 
-        let is_cloud_mode_for_file_attach = FeatureFlag::CloudModeImageContext.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|model| model.as_ref(app).is_ambient_agent());
-        if AgentToolbarItemKind::FileAttach.available_to_session_viewer(
+        if file_attach_allowed_for_shared_session(
             model_lock.shared_session_status(),
-            is_cloud_mode_for_file_attach,
+            self.ambient_agent_view_model.as_ref(),
+            app,
         ) {
             context.set.insert(init::CAN_ATTACH_FILE_KEY);
         }
