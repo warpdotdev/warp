@@ -60,6 +60,7 @@ impl ThirdPartyHarness for GeminiHarness {
         system_prompt: Option<&str>,
         _resumption_prompt: Option<&str>,
         context: Option<&str>,
+        _workspace_root: &Path,
         harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,

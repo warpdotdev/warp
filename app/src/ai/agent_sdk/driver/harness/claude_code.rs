@@ -134,6 +134,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        workspace_root: &Path,
         harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
@@ -145,12 +146,11 @@ impl ThirdPartyHarness for ClaudeHarness {
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_claude_environment_config(harness_working_dir, resolved_env_vars).map_err(
-            |error| AgentDriverError::HarnessConfigSetupFailed {
-                harness: self.cli_agent().command_prefix().to_owned(),
-                error,
-            },
-        )?;
+        prepare_claude_environment_config(workspace_root, harness_working_dir, resolved_env_vars)
+            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
+        })?;
 
         // The ResumePayload shouldn't contain non-Claude information, error if it does.
         let claude_resume = resume.map(ClaudeResumeInfo::try_from).transpose()?;
@@ -647,6 +647,7 @@ async fn upload_transcript(
     upload_to_target(client.http_client(), &target, body).await
 }
 pub(crate) fn prepare_claude_environment_config(
+    workspace_root: &Path,
     harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Result<()> {
@@ -660,37 +661,41 @@ pub(crate) fn prepare_claude_environment_config(
         api_key_suffix.as_deref(),
     )?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_warp_skill_dirs_for_claude(harness_working_dir);
+    publish_warp_skill_dirs_for_claude(workspace_root, harness_working_dir);
     Ok(())
 }
 
 /// Publish the skills listed in `WARP_SKILL_DIRS`, under their own names, as
-/// symlinks under `<working_dir>/.claude/skills`, so an agent running on
+/// symlinks under `<harness_working_dir>/.claude/skills`, so an agent running on
 /// Claude Code sees the same skills the Oz harness loads from
 /// `WARP_SKILL_DIRS`.
 ///
-/// Published into the task's own working directory rather than the Claude
-/// home skill root: Claude Code discovers `.claude/skills` by walking up from
-/// its starting directory to the repository root (or, absent a repository,
-/// just the starting directory itself), so a task's own working directory is
-/// a skill root Claude Code already searches on its own. This keeps
-/// concurrent tasks (e.g. on a self-hosted direct-backend worker sharing one
-/// host) from publishing into the same shared home directory. A published
-/// skill overrides any existing entry with the same name (see
-/// `skill_dirs_publish::publish_skill`), with the conflict-resolution
-/// behavior depending on whether this run is sandboxed (see
+/// Relative source directories are resolved from the workspace root, matching
+/// Oz. The links are published into the harness working directory because
+/// Claude Code discovers `.claude/skills` by walking up from its starting
+/// directory to the repository root (or, absent a repository, just the
+/// starting directory itself). This also keeps concurrent tasks from
+/// publishing into a shared home directory. A published skill overrides any
+/// existing entry with the same name (see
+/// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
+/// depending on whether this run is sandboxed (see
 /// `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS` is not
 /// configured for this run.
-fn publish_warp_skill_dirs_for_claude(working_dir: &Path) {
-    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(working_dir);
+fn publish_warp_skill_dirs_for_claude(workspace_root: &Path, harness_working_dir: &Path) {
+    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(workspace_root);
     if source_dirs.is_empty() {
         return;
     }
-    let skill_root = working_dir.join(".claude").join("skills");
+    let skill_root = harness_working_dir.join(".claude").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
     let published =
         super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
-    if published > 0 {
+    super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+        harness_working_dir,
+        &published,
+    );
+    if !published.is_empty() {
+        let published = published.len();
         safe_info!(
             safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Claude Code skill root"),
             full: (

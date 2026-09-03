@@ -122,6 +122,7 @@ impl ThirdPartyHarness for CodexHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
+        workspace_root: &Path,
         harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
@@ -134,6 +135,7 @@ impl ThirdPartyHarness for CodexHarness {
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_codex_environment_config(
+            workspace_root,
             harness_working_dir,
             system_prompt,
             resolved_env_vars,
@@ -536,7 +538,8 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
 fn prepare_codex_environment_config(
-    working_dir: &Path,
+    workspace_root: &Path,
+    harness_working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
@@ -561,41 +564,45 @@ fn prepare_codex_environment_config(
 
     prepare_codex_config_toml(
         &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
-        working_dir,
+        harness_working_dir,
         resolved_mcp_servers,
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
-    publish_warp_skill_dirs_for_codex(working_dir);
+    publish_warp_skill_dirs_for_codex(workspace_root, harness_working_dir);
     Ok(())
 }
 
 /// Publish the skills listed in `WARP_SKILL_DIRS`, under their own names, as
-/// symlinks under `<working_dir>/.agents/skills`, so an agent running on
+/// symlinks under `<harness_working_dir>/.agents/skills`, so an agent running on
 /// Codex sees the same skills the Oz harness loads from `WARP_SKILL_DIRS`.
 ///
-/// Published into the task's own working directory rather than `$HOME` or
-/// `CODEX_HOME`: Codex discovers `.agents/skills` as a REPO-scoped root by
-/// walking up from its starting directory to the repository root (falling
-/// back to just the starting directory itself when no repository is found),
-/// so a task's own working directory is a skill root Codex already searches
-/// on its own. This keeps concurrent tasks (e.g. on a self-hosted
-/// direct-backend worker sharing one host) from publishing into the same
-/// shared home directory. A published skill overrides any existing entry
-/// with the same name (see `skill_dirs_publish::publish_skill`), with the
-/// conflict-resolution behavior depending on whether this run is sandboxed
-/// (see `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS`
-/// is not configured for this run.
-fn publish_warp_skill_dirs_for_codex(working_dir: &Path) {
-    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(working_dir);
+/// Relative source directories are resolved from the workspace root, matching
+/// Oz. The links are published into the harness working directory because
+/// Codex discovers `.agents/skills` by walking up from its starting directory
+/// to the repository root (falling back to just the starting directory itself
+/// when no repository is found). This also keeps concurrent tasks from
+/// publishing into a shared home directory. A published skill overrides any
+/// existing entry with the same name (see
+/// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
+/// depending on whether this run is sandboxed (see
+/// `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS` is not
+/// configured for this run.
+fn publish_warp_skill_dirs_for_codex(workspace_root: &Path, harness_working_dir: &Path) {
+    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(workspace_root);
     if source_dirs.is_empty() {
         return;
     }
-    let skill_root = working_dir.join(".agents").join("skills");
+    let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
     let published =
         super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
-    if published > 0 {
+    super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+        harness_working_dir,
+        &published,
+    );
+    if !published.is_empty() {
+        let published = published.len();
         safe_info!(
             safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Codex skill root"),
             full: (

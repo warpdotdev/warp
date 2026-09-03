@@ -4012,9 +4012,15 @@ impl AgentDriver {
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
     ) -> Result<Arc<dyn harness::HarnessRunner>, AgentDriverError> {
-        let (harness_working_dir, task_id, server_api, managed_mcp_client, terminal_driver) =
-            foreground
-                .spawn(|me, ctx| {
+        let (
+            workspace_root,
+            harness_working_dir,
+            task_id,
+            server_api,
+            managed_mcp_client,
+            terminal_driver,
+        ) = foreground
+            .spawn(|me, ctx| {
                 if me.harness.is_some() {
                     log::error!(
                         "Attempted to prepare a third-party harness, but one was already configured"
@@ -4023,6 +4029,7 @@ impl AgentDriver {
                 }
 
                 Ok((
+                    me.working_dir.clone(),
                     me.harness_working_dir.clone(),
                     me.task_id,
                     ServerApiProvider::as_ref(ctx).get(),
@@ -4110,6 +4117,7 @@ impl AgentDriver {
                 system_prompt.as_deref(),
                 resumption_prompt.as_deref(),
                 server_context.as_deref(),
+                &workspace_root,
                 &harness_working_dir,
                 task_id,
                 server_api,

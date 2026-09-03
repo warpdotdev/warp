@@ -325,8 +325,7 @@ fn publish_skill_dirs_prefers_most_specific_directory_on_name_collision() {
     let skill_root = TempDir::new().unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[specific_dir, general_dir], false);
-
-    assert_eq!(published, 2);
+    assert_eq!(published.len(), 2);
     assert_eq!(
         fs::read_link(skill_root.path().join("github")).unwrap(),
         specific_github
@@ -351,8 +350,7 @@ fn publish_skill_dirs_in_a_sandbox_overrides_an_existing_environment_skill_and_p
     fs::write(existing_target.join("SKILL.md"), "pre-existing skill").unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[source_dir], true);
-
-    assert_eq!(published, 1);
+    assert_eq!(published.len(), 1);
     // The published skill wins under the real name...
     assert_eq!(
         fs::read_link(skill_root.path().join("github")).unwrap(),
@@ -375,8 +373,7 @@ fn publish_skill_dirs_skips_entries_without_skill_md() {
     let skill_root = TempDir::new().unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[source_dir], false);
-
-    assert_eq!(published, 1);
+    assert_eq!(published.len(), 1);
     assert!(skill_root.path().join("github").exists());
     assert!(!skill_root.path().join("not-a-skill").exists());
 }
@@ -386,7 +383,7 @@ fn publish_skill_dirs_is_a_noop_for_empty_source_dirs() {
     let outer = TempDir::new().unwrap();
     let skill_root = outer.path().join("skills");
 
-    assert_eq!(publish_skill_dirs(&skill_root, &[], false), 0);
+    assert!(publish_skill_dirs(&skill_root, &[], false).is_empty());
     // Doesn't even create the skill root when there's nothing to publish.
     assert!(!skill_root.exists());
 }
@@ -401,7 +398,6 @@ fn publish_skill_dirs_recovers_from_missing_source_directory() {
     let skill_root = TempDir::new().unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[missing_dir, present_dir], false);
-
-    assert_eq!(published, 1);
+    assert_eq!(published.len(), 1);
     assert!(skill_root.path().join("github").exists());
 }
