@@ -49,7 +49,7 @@ impl CompactibleActionButton {
         A: Action + Clone + 'static,
     {
         let action_for_compact = action.clone();
-        let compact_button = ctx.add_typed_action_view(|_| {
+        let compact_button = ctx.add_typed_action_view(|ctx| {
             let mut compact_button =
                 ActionButton::new_with_boxed_theme(String::new(), Arc::clone(&theme))
                     .with_size(size)
@@ -57,8 +57,10 @@ impl CompactibleActionButton {
                     .with_tooltip(label.clone())
                     .on_click(move |ctx| ctx.dispatch_typed_action(action_for_compact.clone()));
 
-            if let Some(keybinding) = keybinding.clone() {
-                compact_button = compact_button.with_tooltip_keybinding(keybinding);
+            if let Some(ref kb) = keybinding
+                && let Some(tooltip_sublabel) = kb.displayed(ctx)
+            {
+                compact_button = compact_button.with_tooltip_sublabel(tooltip_sublabel);
             }
 
             compact_button
@@ -101,7 +103,11 @@ impl CompactibleActionButton {
         });
 
         self.compact_button.update(ctx, |button, ctx| {
-            button.set_tooltip_keybinding(keybinding, ctx);
+            if let Some(keybinding) = keybinding {
+                button.set_tooltip_sublabel(keybinding.displayed(ctx), ctx);
+            } else {
+                button.set_tooltip_sublabel(None::<String>, ctx);
+            }
         });
     }
 

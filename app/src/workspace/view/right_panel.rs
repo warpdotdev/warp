@@ -53,7 +53,7 @@ use crate::util::bindings::{CustomAction, keybinding_name_to_display_string};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::util::path::{display_name_with_host, display_path_with_host};
-use crate::view_components::action_button::{ActionButton, KeystrokeSource, PaneHeaderTheme};
+use crate::view_components::action_button::{ActionButton, PaneHeaderTheme};
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{NakedTheme, TooltipAlignment};
 use crate::view_components::{Dropdown, DropdownItem};
@@ -495,9 +495,7 @@ impl RightPanelView {
             ActionButton::new("", PaneHeaderTheme)
                 .with_icon(Icon::Maximize)
                 .with_tooltip("Maximize")
-                .with_tooltip_keybinding(KeystrokeSource::Binding(
-                    "workspace:toggle_maximize_code_review_panel",
-                ))
+                .with_tooltip_keybinding("workspace:toggle_maximize_code_review_panel")
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
                 .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize))
         });
@@ -1137,9 +1135,7 @@ impl RightPanelView {
             let new_button = ActionButton::new("", PaneHeaderTheme)
                 .with_icon(icon)
                 .with_tooltip(tooltip)
-                .with_tooltip_keybinding(KeystrokeSource::Binding(
-                    "workspace:toggle_maximize_code_review_panel",
-                ))
+                .with_tooltip_keybinding("workspace:toggle_maximize_code_review_panel")
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize);

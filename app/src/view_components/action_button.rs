@@ -52,7 +52,7 @@ pub struct ActionButton {
     /// An optional tooltip to show on hover.
     tooltip: Option<String>,
     tooltip_sublabel: Option<String>,
-    tooltip_keybinding: Option<KeystrokeSource>,
+    tooltip_keybinding: Option<&'static str>,
     /// Maximum height of a tooltip before it truncates.
     tooltip_max_height: Option<f32>,
     size: ButtonSize,
@@ -274,8 +274,9 @@ impl ActionButton {
         self
     }
 
-    pub fn with_tooltip_keybinding(mut self, source: KeystrokeSource) -> Self {
-        self.tooltip_keybinding = Some(source);
+    /// Show this editable binding in the tooltip when one is assigned.
+    pub fn with_tooltip_keybinding(mut self, binding_name: &'static str) -> Self {
+        self.tooltip_keybinding = Some(binding_name);
         self
     }
 
@@ -457,15 +458,6 @@ impl ActionButton {
         ctx.notify();
     }
 
-    pub fn set_tooltip_keybinding(
-        &mut self,
-        source: Option<KeystrokeSource>,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        self.tooltip_keybinding = source;
-        ctx.notify();
-    }
-
     pub fn set_theme(
         &mut self,
         theme: impl ActionButtonTheme + 'static,
@@ -574,8 +566,7 @@ impl ActionButton {
 
         let tooltip_sublabel = self
             .tooltip_keybinding
-            .as_ref()
-            .and_then(|source| source.displayed(app))
+            .and_then(|name| KeystrokeSource::Binding(name).displayed(app))
             .or_else(|| self.tooltip_sublabel.clone());
         let tooltip_element = if let Some(tooltip_sublabel) = tooltip_sublabel {
             appearance

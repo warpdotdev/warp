@@ -9,8 +9,8 @@ use warpui::elements::{
     ScrollToPositionMode, ScrollbarWidth, Shrinkable,
 };
 use warpui::fonts::Weight;
+use warpui::keymap::FixedBinding;
 use warpui::keymap::macros::id;
-use warpui::keymap::{FixedBinding, Keystroke};
 use warpui::platform::Cursor;
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
@@ -27,9 +27,7 @@ use crate::ai::agent_management::{AgentManagementEvent, AgentNotificationsModel}
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::appearance::Appearance;
 use crate::ui_components::icons::Icon;
-use crate::view_components::action_button::{
-    ActionButton, ButtonSize, KeystrokeSource, NakedTheme,
-};
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
 const ITEM_PADDING: f32 = 12.;
 
@@ -124,9 +122,7 @@ impl NotificationMailboxView {
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::XSmall)
                 .with_tooltip("Close")
-                .with_tooltip_keybinding(KeystrokeSource::Fixed(
-                    Keystroke::parse("escape").expect("escape keystroke parses"),
-                ))
+                .with_tooltip_sublabel("Esc")
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(NotificationMailboxViewAction::Dismiss);
                 })
