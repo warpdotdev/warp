@@ -2620,6 +2620,10 @@ impl ansi::Handler for TerminalModel {
 
     fn powershell_table_end(&mut self, data: PowerShellTableEndValue) {
         if FeatureFlag::PowerShellRichTables.is_enabled() {
+            if !self.alt_screen_active {
+                self.block_list
+                    .split_active_block_for_powershell_rich_table();
+            }
             self.emit_handler_event(HandlerEvent::PowerShellTableEnd(data));
         }
     }

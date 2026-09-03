@@ -348,6 +348,8 @@ pub struct BlockList {
     /// to emit the `CommandFinished` hook, and so it would be possible to mistakenly mark the
     /// boolean `false`.
     in_flight_in_band_command_count: usize,
+    /// Earlier output fragments of the active command that must receive its final exit status.
+    powershell_rich_table_split_blocks: Vec<BlockIndex>,
 
     /// The most recently received populated Precmd payload.
     ///
@@ -702,6 +704,7 @@ impl BlockList {
             skip_next_after_block_completed_event: false,
             early_output: EarlyOutput::new(event_proxy),
             in_flight_in_band_command_count: 0,
+            powershell_rich_table_split_blocks: Vec::new(),
             last_populated_precmd_payload: None,
             cached_prompt_data: None,
             obfuscate_secrets,
@@ -3070,6 +3073,20 @@ impl BlockList {
         self.active_block_mut().ensure_executing_for_completion();
     }
 
+    pub(super) fn split_active_block_for_powershell_rich_table(&mut self) {
+        if self.active_block().state() != BlockState::Executing {
+            return;
+        }
+        let split_block_index = self.active_block_index();
+        self.update_active_block_height();
+        self.create_new_block(BlockId::new(), self.bootstrap_stage, None, None);
+        self.active_block_mut().ensure_executing_for_completion();
+        self.active_block_mut().set_should_hide_command_grid(true);
+        self.powershell_rich_table_split_blocks
+            .push(split_block_index);
+        self.update_active_block_height();
+    }
+
     /// Increments `self.in_flight_in_band_command_count` and starts the active block as usual.
     pub fn start_active_block_for_in_band_command(&mut self) {
         self.cache_active_prompt_data();
@@ -3305,6 +3322,22 @@ impl BlockList {
 
         if !self.active_block().is_for_in_band_command {
             self.finish_background_block();
+        }
+        for split_block_index in std::mem::take(&mut self.powershell_rich_table_split_blocks) {
+            let should_update_height =
+                if let Some(split_block) = self.blocks.get_mut(split_block_index.0) {
+                    if split_block.finished() {
+                        false
+                    } else {
+                        split_block.finish(data.exit_code);
+                        true
+                    }
+                } else {
+                    false
+                };
+            if should_update_height {
+                self.update_block_height_at_idx(split_block_index);
+            }
         }
 
         if active_block_was_finished {

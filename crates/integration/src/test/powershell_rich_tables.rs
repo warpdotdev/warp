@@ -49,6 +49,62 @@ fn count_powershell_tables(app: &warpui_core::App, window_id: warpui_core::Windo
     })
 }
 
+fn table_is_between_command_and_plaintext(
+    app: &warpui_core::App,
+    window_id: warpui_core::WindowId,
+) -> bool {
+    let view = single_terminal_view_for_tab(app, window_id, 0);
+    view.read(app, |view, _ctx| {
+        let model = view.model.lock();
+        let block_list = model.block_list();
+        let mut block_index = 0usize;
+        let mut command_total_index = None;
+        let mut table_total_index = None;
+        let mut plaintext_total_index = None;
+        let mut cursor = block_list.block_heights().cursor::<TotalIndex, ()>();
+        cursor.seek(&TotalIndex(0), SeekBias::Left);
+        while let Some(item) = cursor.item() {
+            let total_index = *cursor.start();
+            match item {
+                BlockHeightItem::Block(_) => {
+                    let block = block_list
+                        .block_at(block_index.into())
+                        .expect("block height should have a corresponding block");
+                    if command_total_index.is_none()
+                        && block.command_to_string().contains("after-table")
+                    {
+                        command_total_index = Some(total_index);
+                    }
+                    if plaintext_total_index.is_none()
+                        && block.output_to_string().contains("after-table")
+                    {
+                        plaintext_total_index = Some(total_index);
+                    }
+                    block_index += 1;
+                }
+                BlockHeightItem::RichContent(rich_content)
+                    if command_total_index.is_some()
+                        && table_total_index.is_none()
+                        && rich_content.content_type == Some(RichContentType::PowerShellTable) =>
+                {
+                    table_total_index = Some(total_index);
+                }
+                BlockHeightItem::RichContent(_)
+                | BlockHeightItem::Gap(_)
+                | BlockHeightItem::RestoredBlockSeparator { .. }
+                | BlockHeightItem::InlineBanner { .. }
+                | BlockHeightItem::SubshellSeparator { .. } => {}
+            }
+            cursor.next();
+        }
+
+        command_total_index
+            .zip(table_total_index)
+            .zip(plaintext_total_index)
+            .is_some_and(|((command, table), plaintext)| command < table && table < plaintext)
+    })
+}
+
 fn rich_tables_prelude() -> Builder {
     FeatureFlag::PowerShellRichTables.set_enabled(true);
     new_builder()
@@ -144,7 +200,16 @@ pub fn test_powershell_rich_tables_implicit_format_and_order() -> Builder {
                             "plain text after a table should remain visible, got {output:?}"
                         )
                     })
-                }),
+                })
+                .add_named_assertion(
+                    "native table stays between its command and following plaintext",
+                    |app, window_id| {
+                        async_assert!(
+                            table_is_between_command_and_plaintext(app, window_id),
+                            "expected command < PowerShell table < following plaintext"
+                        )
+                    },
+                ),
         )
 }
 
