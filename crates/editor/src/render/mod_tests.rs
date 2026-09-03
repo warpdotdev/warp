@@ -428,6 +428,35 @@ fn laying_out_many_lines_packs_the_content_tree() {
     });
 }
 
+/// A full-buffer replace hands `layout_pending_edit` a delta spanning the whole document, so it
+/// lays out every block in the file rather than an edited region. That is the worst case for this
+/// path, and `Buffer::replace_all` is the entry point behind file reload and conflict resolution.
+#[test]
+fn replacing_the_whole_buffer_packs_the_content_tree() {
+    init_logging();
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let state = TestState::new(app);
+        state.markdown("replaced\n", app).await;
+
+        let many_lines = (0..200)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.replace_all(&many_lines, app).await;
+
+        let stats = state.content_node_stats(app);
+        assert!(
+            stats.items > stats.slots_per_leaf,
+            "the tree must outgrow one leaf for this to test packing at all, got {stats:?}"
+        );
+        assert!(
+            stats.leaf_occupancy() > 0.9,
+            "a replaced buffer's content tree should pack its leaves, got {stats:?}"
+        );
+    });
+}
+
 /// A delta whose replacement blocks are `lines`, each a plain-text block ending in a newline.
 fn replacement_delta(lines: &[&str]) -> EditDelta {
     EditDelta {
@@ -589,6 +618,16 @@ impl TestState {
             app,
         )
         .await
+    }
+
+    /// Replace the buffer's entire contents and wait for the result to be laid out.
+    async fn replace_all(&self, text: &str, app: &mut App) {
+        self.content
+            .update(app, |buffer, ctx| buffer.replace_all(text, ctx));
+        self.layout_updates
+            .recv()
+            .await
+            .expect("Layout channel should not be closed");
     }
 
     /// Lay a delta out directly, so a test can supply hidden ranges of its own.
