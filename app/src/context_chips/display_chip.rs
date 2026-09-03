@@ -1046,8 +1046,9 @@ impl DisplayChip {
                         menu_open: false,
                         menu: Self::git_operation_menu(kind, ctx),
                     },
-                    // Defensive fallback for an unrecognized token; shouldn't happen since the
-                    // chip only has a value when the detection command emitted a known state.
+                    // Defensive fallback for an unrecognized token; shouldn't happen since
+                    // `GitRepoStatusModel` only produces a value for a known,
+                    // directly-detected operation state.
                     None => DisplayChipKind::Text,
                 }
             }
