@@ -2916,6 +2916,8 @@ pub struct TerminalView {
     #[cfg(all(unix, feature = "local_tty"))]
     dev_container_pty_resize:
         Option<Arc<parking_lot::Mutex<Option<dev_container::PtyResizeHandle>>>>,
+    #[cfg(all(unix, feature = "local_tty"))]
+    dev_container_remote_setup: Option<dev_container::remote_server::DevContainerRemoteSetup>,
 
     /// Conversation details panel (side panel showing conversation/task metadata).
     /// Available for cloud Oz runs and for any active local AI conversation.
@@ -4504,6 +4506,8 @@ impl TerminalView {
             dev_container_awaiting_layout: false,
             #[cfg(all(unix, feature = "local_tty"))]
             dev_container_pty_resize: None,
+            #[cfg(all(unix, feature = "local_tty"))]
+            dev_container_remote_setup: None,
             conversation_details_panel_toggle_mouse_state: Default::default(),
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
@@ -4532,16 +4536,26 @@ impl TerminalView {
 
         // Forward RemoteServerManager setup events into the terminal event stream
         // so the ModelEventDispatcher can gate session initialization on them.
-        if FeatureFlag::SshRemoteServer.is_enabled() {
+        if FeatureFlag::SshRemoteServer.is_enabled() || FeatureFlag::LocalDevContainer.is_enabled()
+        {
             let mgr_handle = RemoteServerManager::handle(ctx);
             ctx.subscribe_to_model(&mgr_handle, |me, _, event, ctx| {
+                #[cfg(all(unix, feature = "local_tty"))]
+                if me.handle_dev_container_remote_server_event(event, ctx) {
+                    return;
+                }
                 // `RemoteServerManager` is a singleton, so every `TerminalView` receives every event.
                 // Filter for session-scoped events that are specifically tracked by this view.
                 // Host-scoped variants return `None` and pass through unfiltered.
-                if let Some(sid) = event.session_id()
-                    && !me.sessions.as_ref(ctx).tracks_session(sid)
-                {
-                    return;
+                if let Some(sid) = event.session_id() {
+                    #[cfg(all(unix, feature = "local_tty"))]
+                    let is_pending_dev_container =
+                        me.pending_dev_container_remote_session_id() == Some(sid);
+                    #[cfg(not(all(unix, feature = "local_tty")))]
+                    let is_pending_dev_container = false;
+                    if !me.sessions.as_ref(ctx).tracks_session(sid) && !is_pending_dev_container {
+                        return;
+                    }
                 }
                 match event {
                     RemoteServerManagerEvent::SetupStateChanged { .. } => {
@@ -12998,7 +13012,9 @@ impl TerminalView {
                 // multiplexed channel on the ControlMaster so the foreground
                 // ssh can exit cleanly instead of hanging.
                 #[cfg(not(target_family = "wasm"))]
-                if FeatureFlag::SshRemoteServer.is_enabled() {
+                if FeatureFlag::SshRemoteServer.is_enabled()
+                    || FeatureFlag::LocalDevContainer.is_enabled()
+                {
                     use crate::remote_server::manager::RemoteServerManager;
                     RemoteServerManager::handle(ctx).update(
                         ctx,

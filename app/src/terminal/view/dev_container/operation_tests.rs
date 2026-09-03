@@ -33,6 +33,18 @@ fn tombstone_rejects_late_completions_for_the_same_attempt() {
 }
 
 #[test]
+fn retry_clears_remote_server_session_id() {
+    let mut op = DevContainerBuildOperation::new(key());
+    op.remote_server_session_id = Some(warp_core::SessionId::from(9));
+    op.status = DevContainerBuildStatus::Failed;
+    op.attempt_id += 1;
+    op.phase = DevContainerBuildPhase::Build;
+    op.status = DevContainerBuildStatus::Running;
+    op.remote_server_session_id = None;
+    assert_eq!(op.remote_server_session_id(), None);
+}
+
+#[test]
 fn retry_increments_attempt_and_resets_running() {
     let mut op = DevContainerBuildOperation::new(key());
     let first_attempt = op.attempt_id();

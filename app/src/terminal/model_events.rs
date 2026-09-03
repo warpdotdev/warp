@@ -335,7 +335,12 @@ impl ModelEventDispatcher {
         // `SessionsEvent::SessionBootstrapped`, which causes subscribers to
         // immediately queue `RunCommand` requests (e.g. `load_external_commands`).
         // The daemon must have the executor ready before those requests arrive.
-        if self.should_use_ssh_remote_server(is_ssh_wrapper_session) {
+        #[cfg(feature = "local_tty")]
+        let notify_remote_server = self.should_use_ssh_remote_server(is_ssh_wrapper_session)
+            || crate::terminal::model::session::session_origin_uses_remote_server(&session_info);
+        #[cfg(not(feature = "local_tty"))]
+        let notify_remote_server = self.should_use_ssh_remote_server(is_ssh_wrapper_session);
+        if notify_remote_server {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
                     session_id,

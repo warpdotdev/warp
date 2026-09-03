@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use warpui::elements::Empty;
@@ -6,7 +7,10 @@ use warpui::platform::WindowStyle;
 use warpui::{App, AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext};
 
 use super::command_executor::testing::TestCommandExecutor;
-use super::{BootstrapSessionType, Session, SessionId, SessionInfo, Sessions, SessionsEvent};
+use super::{
+    BootstrapSessionType, Session, SessionId, SessionInfo, SessionType, Sessions, SessionsEvent,
+    get_local_hostname,
+};
 
 struct TestView {
     events: Vec<SessionsEvent>,
@@ -150,6 +154,148 @@ fn can_resolve_cwd_to_native_path_rejects_unix_encoded_path_on_windows() {
         SessionInfo::new_for_test().with_shell_type(crate::terminal::shell::ShellType::Bash);
     let session = Session::new(session_info, Arc::new(TestCommandExecutor::default()));
     assert!(!session.can_resolve_cwd_to_native_path("/E:/CLAUDE-BASE"));
+}
+
+fn dev_container_launch_data(session_id: SessionId) -> crate::terminal::ShellLaunchData {
+    crate::terminal::ShellLaunchData::DevContainer {
+        workspace_folder: PathBuf::from("/host/project"),
+        docker_path: PathBuf::from("/usr/bin/docker"),
+        container_id: "abc123".to_owned(),
+        remote_user: Some("vscode".to_owned()),
+        remote_workspace_folder: "/workspaces/project".to_owned(),
+        sandbox_id: "sandbox".to_owned(),
+        session_id,
+    }
+}
+
+fn init_shell(hostname: &str) -> crate::terminal::model::ansi::InitShellValue {
+    crate::terminal::model::ansi::InitShellValue {
+        session_id: SessionId::from(7),
+        shell: "bash".to_owned(),
+        is_subshell: false,
+        user: "vscode".to_owned(),
+        hostname: hostname.to_owned(),
+        wsl_name: None,
+    }
+}
+
+#[cfg(all(not(feature = "remote_tty"), feature = "local_tty"))]
+#[test]
+fn create_pending_classifies_dev_container_as_remote_when_hostnames_match() {
+    let hostname = get_local_hostname().unwrap_or_else(|_| "testhost".to_owned());
+    let info = SessionInfo::create_pending(
+        crate::terminal::shell::ShellType::Bash,
+        init_shell(&hostname),
+        None,
+        Some(dev_container_launch_data(SessionId::from(7))),
+        None,
+        None,
+    );
+    assert_eq!(info.session_type, BootstrapSessionType::WarpifiedRemote);
+    assert!(!matches!(
+        info.is_ssh_wrapper_session,
+        super::IsSSHWrapperSession::Yes { .. }
+    ));
+}
+
+#[cfg(all(not(feature = "remote_tty"), feature = "local_tty"))]
+#[test]
+fn create_pending_classifies_dev_container_as_remote_when_hostnames_differ() {
+    let info = SessionInfo::create_pending(
+        crate::terminal::shell::ShellType::Bash,
+        init_shell("container-host"),
+        None,
+        Some(dev_container_launch_data(SessionId::from(7))),
+        None,
+        None,
+    );
+    assert_eq!(info.session_type, BootstrapSessionType::WarpifiedRemote);
+}
+
+#[cfg(all(not(feature = "remote_tty"), feature = "local_tty"))]
+#[test]
+fn create_pending_preserves_local_classification_for_matching_hostnames() {
+    let Ok(hostname) = get_local_hostname() else {
+        return;
+    };
+    let info = SessionInfo::create_pending(
+        crate::terminal::shell::ShellType::Bash,
+        init_shell(&hostname),
+        None,
+        Some(crate::terminal::ShellLaunchData::Executable {
+            executable_path: PathBuf::from("/bin/bash"),
+            shell_type: crate::terminal::shell::ShellType::Bash,
+        }),
+        None,
+        None,
+    );
+    assert_eq!(info.session_type, BootstrapSessionType::Local);
+}
+
+#[cfg(all(not(feature = "remote_tty"), feature = "local_tty"))]
+#[test]
+fn create_pending_preserves_ssh_classification_for_matching_hostnames() {
+    let hostname = get_local_hostname().unwrap_or_else(|_| "testhost".to_owned());
+    let info = SessionInfo::create_pending(
+        crate::terminal::shell::ShellType::Bash,
+        init_shell(&hostname),
+        None,
+        None,
+        Some(crate::terminal::model::ansi::SSHValue {
+            socket_path: PathBuf::from("/tmp/ssh.sock"),
+            remote_shell: "bash".to_owned(),
+            session_id: Default::default(),
+            remote_session_id: Default::default(),
+            external_control_master: false,
+        }),
+        None,
+    );
+    assert_eq!(info.session_type, BootstrapSessionType::WarpifiedRemote);
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn session_origin_uses_remote_server_for_dev_container_when_flag_enabled() {
+    let _flag = crate::features::FeatureFlag::LocalDevContainer.override_enabled(true);
+    let info =
+        SessionInfo::new_for_test().with_launch_data(dev_container_launch_data(SessionId::from(0)));
+    assert!(super::session_origin_uses_remote_server(&info));
+}
+
+#[test]
+fn remote_host_id_attaches_and_clears_without_local_fallback() {
+    let info = SessionInfo::new_for_test()
+        .with_session_type(BootstrapSessionType::WarpifiedRemote)
+        .with_launch_data(dev_container_launch_data(SessionId::from(0)));
+    let session = Session::new(info, Arc::new(TestCommandExecutor::default()));
+    assert!(matches!(
+        session.session_type(),
+        SessionType::WarpifiedRemote { host_id: None }
+    ));
+
+    session.set_remote_host_id(Some(warp_core::HostId::new("container-host".to_owned())));
+    match session.session_type() {
+        SessionType::WarpifiedRemote { host_id: Some(id) } => {
+            assert_eq!(id.as_str(), "container-host");
+        }
+        other => panic!("expected connected remote session, got {other:?}"),
+    }
+
+    session.set_remote_host_id(None);
+    assert!(matches!(
+        session.session_type(),
+        SessionType::WarpifiedRemote { host_id: None }
+    ));
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn session_origin_does_not_use_remote_server_for_dev_container_when_flag_disabled() {
+    let _flag = crate::features::FeatureFlag::LocalDevContainer.override_enabled(false);
+    let _ssh = crate::features::FeatureFlag::SshRemoteServer.override_enabled(false);
+    let info =
+        SessionInfo::new_for_test().with_launch_data(dev_container_launch_data(SessionId::from(0)));
+    assert!(!super::session_origin_uses_remote_server(&info));
 }
 
 #[cfg(windows)]

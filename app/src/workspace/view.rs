@@ -17515,11 +17515,8 @@ impl Workspace {
                 let is_unsupported_session = is_wsl_session;
 
                 // Check whether this remote session has an active remote server
-                // connection (or is in the process of connecting). This is only
-                // true for Auto SSH Warpification (mode 1) sessions where
-                // `connect_session` was called at `InitShell` time.
+                // connection (or is in the process of connecting).
                 let has_remote_server = is_remote
-                    && FeatureFlag::SshRemoteServer.is_enabled()
                     && session_id.is_some_and(|sid| {
                         RemoteServerManager::as_ref(ctx).is_session_potentially_active(sid)
                     });
