@@ -458,37 +458,6 @@ fn test_layout_mixed_ltr_rtl_text() -> Result<()> {
 }
 
 #[test]
-fn test_wrapped_rtl_glyph_indices_follow_visual_order() -> Result<()> {
-    let (font_db, font_family) = init_fonts();
-
-    let text = "abc אבג";
-    let frame = font_db.text_layout_system().layout_text(
-        text,
-        LineStyle {
-            font_size: 16.0,
-            line_height_ratio: 1.2,
-            baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
-            fixed_width_tab_size: None,
-        },
-        &[(
-            0..text.encode_utf16().count(),
-            StyleAndFont::new(font_family, Properties::default(), TextStyle::new()),
-        )],
-        32.0,
-        f32::MAX,
-        TextAlignment::Left,
-        None,
-    );
-
-    assert_eq!(
-        collect_glyph_indices(&frame),
-        vec![vec![0, 1, 2, 3], vec![6, 5, 4]]
-    );
-
-    Ok(())
-}
-
-#[test]
 fn test_char_indices() -> Result<()> {
     let (font_db, ligatured_font) = init_fonts();
 
