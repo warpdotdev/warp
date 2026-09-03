@@ -18,7 +18,7 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput,
     AIAgentPtyWriteMode, AskUserQuestionItem, FileLocations, PassiveSuggestionResultType,
     ReadFilesRequest, RequestComputerUseRequest, SearchCodebaseRequest, UseComputerRequest,
-    UserQueryMode,
+    UserQueryMode, external_query_body,
 };
 use crate::ai::llms::LLMId;
 use crate::persistence::ModelEvent;
@@ -66,6 +66,18 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
                 ..
             } => Ok(Self::Query {
                 text: query.clone(),
+                context: context.clone(),
+                referenced_attachments: referenced_attachments.clone(),
+            }),
+            // Persisted only for up-arrow history, where the platform message text is what a
+            // user would want to recall; the sender and origin are not needed there.
+            AIAgentInput::ExternalQuery {
+                query,
+                context,
+                referenced_attachments,
+                ..
+            } => Ok(Self::Query {
+                text: external_query_body(query).to_owned(),
                 context: context.clone(),
                 referenced_attachments: referenced_attachments.clone(),
             }),

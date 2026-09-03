@@ -161,6 +161,7 @@ fn input_for_query_converts_prompt_attachments_and_ignores_live_staging() {
                 HashMap::new(),
                 prompt_attachments,
                 /*attribution_token*/ None,
+                /*external_query_token*/ None,
                 context_model.as_ref(ctx),
                 active_session.as_ref(ctx),
                 ctx,
@@ -237,6 +238,7 @@ fn input_for_query_carries_attribution_token() {
                 HashMap::new(),
                 vec![],
                 Some("opaque-attribution-token".to_owned()),
+                None,
                 context_model.as_ref(ctx),
                 active_session.as_ref(ctx),
                 ctx,
@@ -922,5 +924,134 @@ fn passive_suggestions_request_params_scope_member_byo_credentials_by_the_window
             !params_b.member_byo_credentials_allowed,
             "the restrictive team's decision must be recorded on the params"
         );
+    });
+}
+
+fn encoded_external_query_token(body: &str) -> String {
+    use base64::Engine as _;
+    use prost::Message as _;
+
+    let token = warp_multi_agent_api::request::input::user_inputs::ExternalQueryToken {
+        query: Some(warp_multi_agent_api::ExternalQuery {
+            message: Some(warp_multi_agent_api::ExternalMessage {
+                body: body.to_owned(),
+                ..Default::default()
+            }),
+            mode: Some(warp_multi_agent_api::UserQueryMode {
+                r#type: Some(warp_multi_agent_api::user_query_mode::Type::Plan(())),
+            }),
+            ..Default::default()
+        }),
+        run_id: "run-1".to_owned(),
+        ..Default::default()
+    };
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.encode_to_vec());
+    format!("{payload}.signature")
+}
+
+/// A relayed external-query token becomes an `ExternalQuery` input that keeps the raw token for
+/// the server to verify and takes its mode from the token payload.
+#[test]
+fn input_for_query_decodes_external_query_token() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |terminal, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+
+            let controller = terminal.ai_controller();
+            let context_model = controller.as_ref(ctx).context_model.clone();
+            let active_session = controller.as_ref(ctx).active_session.clone();
+            let task_id = TaskId::new("test-task".to_owned());
+            let raw_token = encoded_external_query_token("fix the flaky test");
+
+            let input = super::input_for_query(
+                "legacy formatted prompt".to_owned(),
+                &task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                HashMap::new(),
+                vec![],
+                None,
+                Some(raw_token.clone()),
+                context_model.as_ref(ctx),
+                active_session.as_ref(ctx),
+                ctx,
+            );
+
+            let AIAgentInput::ExternalQuery {
+                query,
+                token,
+                user_query_mode,
+                ..
+            } = input
+            else {
+                panic!("expected ExternalQuery, got {input:?}");
+            };
+            assert_eq!(token.as_deref(), Some(raw_token.as_str()));
+            assert_eq!(user_query_mode, UserQueryMode::Plan);
+            assert_eq!(
+                query.message.as_ref().map(|m| m.body.as_str()),
+                Some("fix the flaky test")
+            );
+        });
+    });
+}
+
+/// An undecodable token must not lose the turn: the relayed prompt text is sent as a regular
+/// `UserQuery`, still carrying any attribution token.
+#[test]
+fn input_for_query_falls_back_to_user_query_on_bad_external_query_token() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |terminal, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    history_model.start_new_conversation(terminal.id(), false, false, false, ctx)
+                });
+
+            let controller = terminal.ai_controller();
+            let context_model = controller.as_ref(ctx).context_model.clone();
+            let active_session = controller.as_ref(ctx).active_session.clone();
+            let task_id = TaskId::new("test-task".to_owned());
+
+            let input = super::input_for_query(
+                "legacy formatted prompt".to_owned(),
+                &task_id,
+                conversation_id,
+                None,
+                UserQueryMode::Normal,
+                None,
+                HashMap::new(),
+                vec![],
+                Some("opaque-attribution-token".to_owned()),
+                Some("not-a-token".to_owned()),
+                context_model.as_ref(ctx),
+                active_session.as_ref(ctx),
+                ctx,
+            );
+
+            let AIAgentInput::UserQuery {
+                query,
+                attribution_token,
+                ..
+            } = input
+            else {
+                panic!("expected UserQuery fallback, got {input:?}");
+            };
+            assert_eq!(query, "legacy formatted prompt");
+            assert_eq!(
+                attribution_token.as_deref(),
+                Some("opaque-attribution-token")
+            );
+        });
     });
 }

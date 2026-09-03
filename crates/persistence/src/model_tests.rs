@@ -560,3 +560,47 @@ fn model_token_usage_replay_skips_non_custom_endpoint_entries() {
     };
     assert!(warp_only.to_proto_custom_endpoint_usage().is_none());
 }
+
+fn external_query_message(task_id: &str, body: &str, pwd: Option<&str>) -> api::Message {
+    let context = pwd.map(|pwd| api::InputContext {
+        directory: Some(api::input_context::Directory {
+            pwd: pwd.to_string(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    api::Message {
+        id: format!("{task_id}-external-query"),
+        task_id: task_id.to_string(),
+        message: Some(api::message::Message::ExternalQuery(api::ExternalQuery {
+            message: Some(api::ExternalMessage {
+                body: body.to_string(),
+                ..Default::default()
+            }),
+            context,
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+/// A platform-originated first turn counts as a user query: it titles the conversation, keeps
+/// it listed, and supplies the initial working directory.
+#[test]
+fn summary_from_tasks_reads_external_query_body_and_context() {
+    let mut root = parentless_task("root", 0);
+    root.messages = vec![
+        auto_code_diff_message("root"),
+        external_query_message("root", "Fix the flaky test", Some("/tmp/repo")),
+    ];
+
+    let summary = AgentConversationSummary::from_tasks([&root]);
+
+    assert_eq!(summary.initial_query, "Fix the flaky test");
+    assert_eq!(summary.title, "Fix the flaky test");
+    assert_eq!(
+        summary.initial_working_directory.as_deref(),
+        Some("/tmp/repo")
+    );
+    assert!(!summary.is_unlisted_auto_code_diff);
+}

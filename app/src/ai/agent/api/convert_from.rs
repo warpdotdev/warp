@@ -582,6 +582,7 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
             }
             // These messages don't indicate an error but they don't translate to a client-side output message.
             api::message::Message::UserQuery(_)
+            | api::message::Message::ExternalQuery(_)
             | api::message::Message::SystemQuery(_)
             | api::message::Message::ToolCallResult(_)
             | api::message::Message::CodeReview(_)
@@ -868,6 +869,24 @@ pub fn user_inputs_from_messages(messages: &[api::Message]) -> Vec<AIAgentInput>
                     running_command: None,
                     intended_agent: Some(uq.intended_agent()),
                     attribution_token: None,
+                });
+            }
+            api::message::Message::ExternalQuery(external_query) => {
+                let referenced_attachments = external_query
+                    .referenced_attachments
+                    .iter()
+                    .filter_map(|(key, attachment)| {
+                        AIAgentAttachment::try_from(attachment.clone())
+                            .ok()
+                            .map(|a| (key.clone(), a))
+                    })
+                    .collect();
+                inputs.push(AIAgentInput::ExternalQuery {
+                    context: convert_input_context(external_query.context.as_ref()),
+                    user_query_mode: convert_user_query_mode(external_query.mode.as_ref()),
+                    referenced_attachments,
+                    token: None,
+                    query: Box::new(external_query.clone()),
                 });
             }
             api::message::Message::SystemQuery(sq) => {

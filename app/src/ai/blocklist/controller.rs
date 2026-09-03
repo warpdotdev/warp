@@ -43,8 +43,9 @@ use super::orchestration_events::{OrchestrationEventService, OrchestrationEventS
 use super::queued_query::{QueuedQueryId, QueuedQueryModel};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
-use crate::ai::agent::api::{self, ServerConversationToken};
+use crate::ai::agent::api::{self, ServerConversationToken, convert_user_query_mode};
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::external_query::decode_external_query_token;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResult, AIAgentActionResultType, AIAgentAttachment, AIAgentContext,
@@ -419,6 +420,10 @@ struct InputQuery {
     /// Opaque, server-issued attribution token for follow-ups injected into a shared
     /// session; echoed verbatim on the outgoing `UserQuery`. `None` for local submissions.
     attribution_token: Option<String>,
+    /// Server-issued `ExternalQueryToken` for platform-originated follow-ups injected into a
+    /// shared session. When it decodes, the submission becomes an `ExternalQuery` input that
+    /// echoes the token verbatim; otherwise the query falls back to a plain `UserQuery`.
+    external_query_token: Option<String>,
 }
 
 impl InputQuery {
@@ -812,6 +817,7 @@ impl BlocklistAIController {
         let additional_attachments = input_query.additional_attachments;
         let queued_query_id = input_query.queued_query_id;
         let attribution_token = input_query.attribution_token;
+        let external_query_token = input_query.external_query_token;
         let ai_input = match input_query.input_query {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
@@ -842,6 +848,7 @@ impl BlocklistAIController {
                     additional_attachments,
                     prompt_attachments,
                     attribution_token,
+                    external_query_token,
                     self.context_model.as_ref(ctx),
                     self.active_session.as_ref(ctx),
                     ctx,
@@ -1065,6 +1072,7 @@ impl BlocklistAIController {
                     additional_attachments: HashMap::new(),
                     queued_query_id,
                     attribution_token: None,
+                    external_query_token: None,
                 },
                 entrypoint_type,
                 participant_id,
@@ -1083,6 +1091,7 @@ impl BlocklistAIController {
                     additional_attachments: HashMap::new(),
                     queued_query_id,
                     attribution_token: None,
+                    external_query_token: None,
                 },
                 entrypoint_type,
                 participant_id,
@@ -1110,6 +1119,7 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             /*attribution_token*/ None,
+            /*external_query_token*/ None,
             ctx,
         );
     }
@@ -1133,6 +1143,7 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             /*attribution_token*/ None,
+            /*external_query_token*/ None,
             ctx,
         )
     }
@@ -1159,12 +1170,15 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ true,
             Some(queued_query_id),
             /*attribution_token*/ None,
+            /*external_query_token*/ None,
             ctx,
         );
     }
 
     /// Sends the given user query to the AI model, with additional referenced attachments and
-    /// an optional opaque attribution token (set for follow-ups injected into a shared session).
+    /// the optional server-issued tokens that accompany follow-ups injected into a shared
+    /// session.
+    #[allow(clippy::too_many_arguments)]
     pub fn send_user_query_in_conversation_with_attachments(
         &mut self,
         query: String,
@@ -1172,6 +1186,7 @@ impl BlocklistAIController {
         participant_id: Option<ParticipantId>,
         additional_attachments: HashMap<String, AIAgentAttachment>,
         attribution_token: Option<String>,
+        external_query_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.send_user_query_in_conversation_internal(
@@ -1184,6 +1199,7 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             attribution_token,
+            external_query_token,
             ctx,
         );
     }
@@ -1209,6 +1225,7 @@ impl BlocklistAIController {
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             /*attribution_token*/ None,
+            /*external_query_token*/ None,
             ctx,
         );
     }
@@ -1225,6 +1242,7 @@ impl BlocklistAIController {
         is_queued_prompt: bool,
         queued_query_id: Option<QueuedQueryId>,
         attribution_token: Option<String>,
+        external_query_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         let is_viewer = self
@@ -1340,6 +1358,7 @@ impl BlocklistAIController {
                 additional_attachments,
                 queued_query_id,
                 attribution_token,
+                external_query_token,
             },
             entrypoint_type,
             participant_id,
@@ -1367,6 +1386,7 @@ impl BlocklistAIController {
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
                 attribution_token: None,
+                external_query_token: None,
             },
             EntrypointType::ZeroStateAgentModePromptSuggestion,
             participant_id,
@@ -1405,6 +1425,7 @@ impl BlocklistAIController {
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
                 attribution_token: None,
+                external_query_token: None,
             },
             EntrypointType::UserInitiated,
             participant_id,
@@ -1588,6 +1609,7 @@ impl BlocklistAIController {
                 additional_attachments: HashMap::new(),
                 queued_query_id: None,
                 attribution_token: None,
+                external_query_token: None,
             },
             EntrypointType::TriggerPassiveSuggestion {
                 trigger: trigger_type,
@@ -3558,6 +3580,7 @@ fn input_for_query(
     additional_attachments: HashMap<String, AIAgentAttachment>,
     prompt_attachments: Vec<PendingAttachment>,
     attribution_token: Option<String>,
+    external_query_token: Option<String>,
     context_model: &BlocklistAIContextModel,
     active_session: &ActiveSession,
     app: &AppContext,
@@ -3595,6 +3618,31 @@ fn input_for_query(
     let mut referenced_attachments = parse_context_attachments(&query, context_model, app);
     referenced_attachments.extend(additional_attachments);
     add_pending_file_attachments(&mut referenced_attachments, file_attachments);
+
+    if let Some(token) = external_query_token {
+        match decode_external_query_token(&token) {
+            Ok(external_query) => {
+                // The token's mode is authoritative when present; the relay request's mode only
+                // fills in for tokens minted without one.
+                let user_query_mode = external_query
+                    .mode
+                    .as_ref()
+                    .map(|mode| convert_user_query_mode(Some(mode)))
+                    .unwrap_or(user_query_mode);
+                return AIAgentInput::ExternalQuery {
+                    query: Box::new(external_query),
+                    token: Some(token),
+                    context,
+                    referenced_attachments,
+                    user_query_mode,
+                };
+            }
+            // Fall back to the pre-formatted prompt text so the follow-up is never lost.
+            Err(error) => log::warn!(
+                "Failed to decode external query token; sending the follow-up as a user query: {error:#}"
+            ),
+        }
+    }
 
     AIAgentInput::UserQuery {
         query,

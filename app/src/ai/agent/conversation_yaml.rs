@@ -14,6 +14,7 @@ use api::message::tool_call::Tool;
 use api::message::tool_call_result::Result as ToolCallResultType;
 use warp_multi_agent_api as api;
 
+use super::external_query::{container_label, platform_name, sender_display_name};
 use super::task::helper::{SubagentExt, ToolExt};
 
 const BASE_DIR_NAME: &str = "warp_conversation_search";
@@ -94,6 +95,33 @@ fn write_task_messages(
                 content.push_str("query: |\n");
                 write_block_scalar(&mut content, &uq.query);
                 if let Some(ctx) = &uq.context
+                    && let Some(dir_ctx) = &ctx.directory
+                    && !dir_ctx.pwd.is_empty()
+                {
+                    content.push_str(&format!("working_directory: {}\n", dir_ctx.pwd));
+                }
+                write_yaml_file(dir, &filename, &content)?;
+                *index += 1;
+            }
+            Message::ExternalQuery(eq) => {
+                let filename = format!("{:03}.{msg_id}.external_query.yaml", *index);
+                let mut content = String::new();
+                content.push_str("type: external_query\n");
+                if let Some(message) = &eq.message {
+                    content.push_str(&format!("platform: {}\n", platform_name(message)));
+                    content.push_str(&format!("sender: {}\n", sender_display_name(message)));
+                    if let Some(container) = container_label(message) {
+                        // Quoted because Slack channels start with `#`, which YAML reads as a
+                        // comment.
+                        content.push_str(&format!("container: \"{container}\"\n"));
+                    }
+                    if !message.permalink.is_empty() {
+                        content.push_str(&format!("permalink: {}\n", message.permalink));
+                    }
+                    content.push_str("body: |\n");
+                    write_block_scalar(&mut content, &message.body);
+                }
+                if let Some(ctx) = &eq.context
                     && let Some(dir_ctx) = &ctx.directory
                     && !dir_ctx.pwd.is_empty()
                 {

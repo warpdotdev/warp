@@ -111,6 +111,7 @@ arboard = { workspace = true, features = ["wayland-data-control"] }
 dunce.workspace = true
 
 [dev-dependencies]
+warp_multi_agent_api.workspace = true
 criterion = { version = "0.5.1", features = ["html_reports"] }
 tempfile.workspace = true
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`

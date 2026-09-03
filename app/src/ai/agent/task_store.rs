@@ -262,6 +262,7 @@ impl TaskStore {
                 let skills = exchange.input.iter().find_map(|input| {
                     let context = match input {
                         AIAgentInput::UserQuery { context, .. } => Some(context),
+                        AIAgentInput::ExternalQuery { context, .. } => Some(context),
                         AIAgentInput::ResumeConversation { context, .. } => Some(context),
                         AIAgentInput::ActionResult { context, .. } => Some(context),
                         AIAgentInput::TriggerPassiveSuggestion { context, .. } => Some(context),

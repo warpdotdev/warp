@@ -32,6 +32,8 @@ fn make_user_query_message(id: &str, task_id: &str, query: &str) -> api::Message
             mode: None,
             referenced_attachments: Default::default(),
             intended_agent: Default::default(),
+            author: None,
+            origin: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -434,6 +436,55 @@ fn upload_file_artifact_tool_call_result_serializes_only_supported_success_field
     assert!(success_content.contains("size_bytes: 42"));
     assert!(!success_content.contains("filepath:"));
     assert!(!success_content.contains("description:"));
+
+    cleanup_dir(&dir);
+}
+
+#[test]
+fn external_query_writes_sender_platform_and_body() {
+    let task_id = "root";
+    let tasks = vec![create_api_task(
+        task_id,
+        vec![api::Message {
+            fetched_memories: vec![],
+            id: "m1".to_string(),
+            task_id: task_id.to_string(),
+            server_message_data: String::new(),
+            citations: vec![],
+            message: Some(api::message::Message::ExternalQuery(api::ExternalQuery {
+                message: Some(api::ExternalMessage {
+                    sender: Some(api::ExternalUser {
+                        display_name: "Jane Doe".to_string(),
+                        ..Default::default()
+                    }),
+                    body: "please look at the\nfailing build".to_string(),
+                    permalink: "https://slack.example/p1".to_string(),
+                    platform: Some(api::external_message::Platform::Slack(
+                        api::external_message::Slack {
+                            channel_name: "eng".to_string(),
+                            ..Default::default()
+                        },
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            request_id: String::new(),
+            timestamp: None,
+        }],
+    )];
+
+    let dir = materialize_tasks_to_yaml(&tasks).unwrap();
+    let files = list_dir_sorted(Path::new(&dir));
+    assert_eq!(files, vec!["000.m1.external_query.yaml".to_string()]);
+
+    let content = fs::read_to_string(Path::new(&dir).join(&files[0])).unwrap();
+    assert!(content.contains("type: external_query\n"));
+    assert!(content.contains("platform: Slack\n"));
+    assert!(content.contains("sender: Jane Doe\n"));
+    assert!(content.contains("container: \"#eng\"\n"));
+    assert!(content.contains("permalink: https://slack.example/p1\n"));
+    assert!(content.contains("body: |\n  please look at the\n  failing build\n"));
 
     cleanup_dir(&dir);
 }

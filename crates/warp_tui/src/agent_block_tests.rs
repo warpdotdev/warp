@@ -2881,3 +2881,55 @@ fn query_input(query: &str) -> AIAgentInput {
         attribution_token: None,
     }
 }
+
+/// Builds one platform-originated input for model-backed extraction tests.
+fn external_query_input(sender: &str, body: &str) -> AIAgentInput {
+    AIAgentInput::ExternalQuery {
+        query: Box::new(warp_multi_agent_api::ExternalQuery {
+            message: Some(warp_multi_agent_api::ExternalMessage {
+                sender: Some(warp_multi_agent_api::ExternalUser {
+                    display_name: sender.to_owned(),
+                    ..Default::default()
+                }),
+                body: body.to_owned(),
+                platform: Some(warp_multi_agent_api::external_message::Platform::Slack(
+                    warp_multi_agent_api::external_message::Slack::default(),
+                )),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        token: None,
+        context: Default::default(),
+        referenced_attachments: Default::default(),
+        user_query_mode: UserQueryMode::default(),
+    }
+}
+
+#[test]
+fn agent_block_labels_external_query_with_sender_and_platform() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: vec![external_query_input("Jane Doe", "fix the build")],
+                status: complete_output(vec![AIAgentTextSection::PlainText {
+                    text: "on it".to_owned().into(),
+                }]),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            assert_eq!(
+                block.sections(app_ctx),
+                vec![
+                    TuiAIBlockSection::Input("Jane Doe (Slack): fix the build".to_owned()),
+                    rich_text("on it"),
+                ]
+            );
+            let lines = render_block_lines(block, 60, app_ctx);
+            assert_eq!(lines, vec!["> Jane Doe (Slack): fix the build", "on it"]);
+        });
+    });
+}

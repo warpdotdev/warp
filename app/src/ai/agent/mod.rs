@@ -1,5 +1,6 @@
 pub(crate) mod conversation;
 pub(crate) mod conversation_yaml;
+pub mod external_query;
 pub(crate) mod todos;
 
 pub(crate) mod api;
@@ -38,9 +39,12 @@ use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_editor::render::model::LineCount;
-use warp_multi_agent_api::{AgentEvent, AgentType, diff_hunk as diff_hunk_api};
+use warp_multi_agent_api::{
+    AgentEvent, AgentType, ExternalQuery as ApiExternalQuery, diff_hunk as diff_hunk_api,
+};
 
 pub use self::api::{MaybeAIAgentOutputMessage, MessageToAIAgentOutputMessageError};
+pub use self::external_query::external_query_body;
 use super::llms::LLMId;
 use crate::TelemetryEvent;
 use crate::ai::block_context::BlockContext;
@@ -2893,6 +2897,21 @@ pub enum AIAgentInput {
         attribution_token: Option<String>,
     },
 
+    /// A turn that originated as a message on a third-party platform (Slack thread reply,
+    /// GitHub comment, ...). Server-authored: the client renders sender and body and never
+    /// composes one itself.
+    ExternalQuery {
+        /// Boxed: the proto payload is large enough to dominate the enum's size otherwise.
+        query: Box<ApiExternalQuery>,
+        /// Verbatim server-issued `ExternalQueryToken` string, echoed on the outgoing
+        /// `ExternalQueryInput.token`. `Some` only when the query was injected live into this
+        /// session; restored turns carry `None` and are never re-sent.
+        token: Option<String>,
+        context: Arc<[AIAgentContext]>,
+        referenced_attachments: HashMap<String, AIAgentAttachment>,
+        user_query_mode: UserQueryMode,
+    },
+
     AutoCodeDiffQuery {
         query: String,
         context: Arc<[AIAgentContext]>,
@@ -3052,6 +3071,13 @@ impl Display for AIAgentInput {
             Self::UserQuery { .. } => {
                 write!(f, "UserQuery: {}", self.display_query().unwrap_or_default())
             }
+            Self::ExternalQuery { .. } => {
+                write!(
+                    f,
+                    "ExternalQuery: {}",
+                    self.display_query().unwrap_or_default()
+                )
+            }
             Self::AutoCodeDiffQuery { query, .. } => {
                 write!(f, "AutoCodeDiffQuery: {query}")
             }
@@ -3102,6 +3128,14 @@ impl AIAgentInput {
                 user_query_mode,
                 ..
             } => Some(display_user_query_with_mode(*user_query_mode, query)),
+            Self::ExternalQuery {
+                query,
+                user_query_mode,
+                ..
+            } => Some(display_user_query_with_mode(
+                *user_query_mode,
+                external_query_body(query),
+            )),
             Self::CreateNewProject { query, .. } => Some(query.clone()),
             Self::CloneRepository {
                 clone_repo_url: url,
@@ -3181,6 +3215,9 @@ impl AIAgentInput {
         match self {
             AIAgentInput::UserQuery {
                 user_query_mode, ..
+            }
+            | AIAgentInput::ExternalQuery {
+                user_query_mode, ..
             } => Some(*user_query_mode),
             _ => None,
         }
@@ -3237,6 +3274,7 @@ impl AIAgentInput {
     pub fn context(&self) -> Option<&[AIAgentContext]> {
         match self {
             Self::UserQuery { context, .. }
+            | Self::ExternalQuery { context, .. }
             | Self::ActionResult { context, .. }
             | Self::AutoCodeDiffQuery { context, .. }
             | Self::ResumeConversation { context, .. }
@@ -3261,6 +3299,10 @@ impl AIAgentInput {
     pub fn attachments(&self) -> Option<Vec<AIAgentAttachment>> {
         match self {
             Self::UserQuery {
+                referenced_attachments,
+                ..
+            }
+            | Self::ExternalQuery {
                 referenced_attachments,
                 ..
             } => {
@@ -3299,6 +3341,7 @@ impl AIAgentInput {
             AIAgentInput::InitProjectRules { .. }
                 | AIAgentInput::CreateEnvironment { .. }
                 | AIAgentInput::InvokeSkill { .. }
+                | AIAgentInput::ExternalQuery { .. }
         )
     }
 }

@@ -2264,6 +2264,8 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                                                 referenced_attachments: HashMap::new(),
                                                 mode: None,
                                                 intended_agent: Default::default(),
+                                                author: None,
+                                                origin: None,
                                             },
                                         )),
                                         request_id: request_id.to_string(),

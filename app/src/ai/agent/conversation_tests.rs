@@ -92,6 +92,8 @@ fn user_query_message(id: &str, request_id: &str, query: &str) -> api::Message {
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            author: None,
+            origin: None,
         })),
         request_id: request_id.to_string(),
         timestamp: None,

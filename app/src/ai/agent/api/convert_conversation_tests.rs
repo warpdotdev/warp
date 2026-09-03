@@ -8,7 +8,7 @@ use crate::ai::agent::api::convert_conversation::*;
 use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversationId, ServerAIConversationMetadata,
 };
-use crate::ai::agent::{AIAgentInput, UserQueryMode};
+use crate::ai::agent::{AIAgentContext, AIAgentInput, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::cloud_object::{Revision, ServerMetadata, ServerPermissions};
 use crate::persistence::model::ConversationUsageMetadata;
@@ -418,6 +418,8 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -448,6 +450,8 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -478,6 +482,8 @@ fn test_into_exchanges_basic() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -542,6 +548,8 @@ fn test_invoke_skill_arguments_round_trip() {
                         referenced_attachments: HashMap::new(),
                         mode: None,
                         intended_agent: Default::default(),
+                        author: None,
+                        origin: None,
                     }),
                 },
             )),
@@ -655,6 +663,8 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -857,6 +867,8 @@ fn test_into_exchanges_with_tool_calls_and_cancellation() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req3".to_string(),
             timestamp: None,
@@ -975,6 +987,8 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1046,6 +1060,8 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req2".to_string(),
             timestamp: None,
@@ -1143,6 +1159,8 @@ fn test_into_exchanges_with_code_diffs() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req4".to_string(),
             timestamp: None,
@@ -1260,6 +1278,8 @@ fn test_user_query_mode_conversion() {
                 r#type: Some(api::user_query_mode::Type::Plan(())),
             }),
             intended_agent: Default::default(),
+            author: None,
+            origin: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1305,6 +1325,8 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: Some(api::UserQueryMode { r#type: None }),
             intended_agent: Default::default(),
+            author: None,
+            origin: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1350,6 +1372,8 @@ fn test_user_query_mode_conversion() {
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            author: None,
+            origin: None,
         })),
         request_id: String::new(),
         timestamp: None,
@@ -1424,6 +1448,8 @@ fn test_exchanges_grouped_by_request_id() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
         },
         // Message 2: Agent output with same request_id
@@ -1683,6 +1709,8 @@ fn test_multiple_create_documents_get_default_version() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -1900,6 +1928,8 @@ fn test_create_then_edit_then_create_version_tracking() {
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             })),
             request_id: "req1".to_string(),
             timestamp: None,
@@ -2246,4 +2276,153 @@ fn test_handoff_rehydration_system_query_is_hidden() {
         !output.get().messages.is_empty(),
         "Agent output should still be rendered"
     );
+}
+
+fn external_query_message(id: &str, body: &str) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "task1".to_string(),
+        server_message_data: "".to_string(),
+        citations: vec![],
+        message: Some(api::message::Message::ExternalQuery(api::ExternalQuery {
+            message: Some(api::ExternalMessage {
+                sender: Some(api::ExternalUser {
+                    display_name: "Jane Doe".to_string(),
+                    ..Default::default()
+                }),
+                body: body.to_string(),
+                platform: Some(api::external_message::Platform::Slack(
+                    api::external_message::Slack {
+                        channel_name: "eng".to_string(),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }),
+            context: Some(api::InputContext {
+                directory: Some(api::input_context::Directory {
+                    pwd: "/tmp/repo".to_string(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            mode: Some(api::UserQueryMode {
+                r#type: Some(api::user_query_mode::Type::Plan(())),
+            }),
+            ..Default::default()
+        })),
+        request_id: "req1".to_string(),
+        timestamp: None,
+    }
+}
+
+/// An `ExternalQuery` message restores as an `AIAgentInput::ExternalQuery` exchange input
+/// carrying the proto payload, its context, and its mode, but no token (restored turns are
+/// never re-sent).
+#[test]
+fn test_external_query_message_restores_as_exchange_input() {
+    let task = api::Task {
+        id: "task1".to_string(),
+        messages: vec![
+            external_query_message("msg_external", "please fix the flaky test"),
+            api::Message {
+                fetched_memories: vec![],
+                id: "msg_output".to_string(),
+                task_id: "task1".to_string(),
+                server_message_data: "".to_string(),
+                citations: vec![],
+                message: Some(api::message::Message::AgentOutput(
+                    api::message::AgentOutput {
+                        text: "On it.".to_string(),
+                    },
+                )),
+                request_id: "req1".to_string(),
+                timestamp: None,
+            },
+        ],
+        dependencies: None,
+        description: "".to_string(),
+        summary: "".to_string(),
+        server_data: "".to_string(),
+    };
+
+    let exchanges = task.into_exchanges();
+    assert_eq!(exchanges.len(), 1);
+    let exchange = &exchanges[0];
+    assert_eq!(exchange.input.len(), 1);
+
+    let AIAgentInput::ExternalQuery {
+        query,
+        token,
+        context,
+        user_query_mode,
+        ..
+    } = &exchange.input[0]
+    else {
+        panic!("expected ExternalQuery input, got {:?}", exchange.input[0]);
+    };
+    assert_eq!(token, &None);
+    assert_eq!(*user_query_mode, UserQueryMode::Plan);
+    assert_eq!(
+        query.message.as_ref().map(|m| m.body.as_str()),
+        Some("please fix the flaky test")
+    );
+    assert!(
+        context.iter().any(|c| matches!(
+            c,
+            AIAgentContext::Directory { pwd: Some(pwd), .. } if pwd == "/tmp/repo"
+        )),
+        "directory context should be converted, got {context:?}"
+    );
+    assert!(exchange.has_user_query());
+    assert_eq!(
+        exchange.input[0].display_query().as_deref(),
+        Some("/plan please fix the flaky test")
+    );
+}
+
+/// `SystemQuery::IntegrationRunContext` is server-injected agent context, hidden like
+/// `HandoffRehydration`.
+#[test]
+fn test_integration_run_context_system_query_is_hidden() {
+    let task = api::Task {
+        id: "task1".to_string(),
+        messages: vec![
+            api::Message {
+                fetched_memories: vec![],
+                id: "msg_context".to_string(),
+                task_id: "task1".to_string(),
+                server_message_data: "".to_string(),
+                citations: vec![],
+                message: Some(api::message::Message::SystemQuery(
+                    api::message::SystemQuery {
+                        r#type: Some(api::message::system_query::Type::IntegrationRunContext(
+                            api::message::IntegrationRunContext {
+                                instructions: "thread history and reply rules".to_string(),
+                            },
+                        )),
+                        context: None,
+                    },
+                )),
+                request_id: "req1".to_string(),
+                timestamp: None,
+            },
+            external_query_message("msg_external", "hello from slack"),
+        ],
+        dependencies: None,
+        description: "".to_string(),
+        summary: "".to_string(),
+        server_data: "".to_string(),
+    };
+
+    let exchanges = task.into_exchanges();
+    assert_eq!(exchanges.len(), 1);
+    let inputs = &exchanges[0].input;
+    assert_eq!(
+        inputs.len(),
+        1,
+        "only the ExternalQuery is an input: {inputs:?}"
+    );
+    assert!(matches!(inputs[0], AIAgentInput::ExternalQuery { .. }));
 }
