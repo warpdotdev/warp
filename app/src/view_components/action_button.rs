@@ -274,7 +274,6 @@ impl ActionButton {
         self
     }
 
-    /// Show this editable binding in the tooltip when one is assigned.
     pub fn with_tooltip_keybinding(mut self, binding_name: &'static str) -> Self {
         self.tooltip_keybinding = Some(binding_name);
         self
