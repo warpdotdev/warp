@@ -246,54 +246,6 @@ pub fn shell_git_line_changes() -> ShellCommandGenerator {
     ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
 }
 
-/// Generator function that detects an in-progress Git operation (rebase,
-/// merge, cherry-pick, revert, `git am`, bisect) via the resolved `.git`
-/// directory. `git rev-parse --git-dir` correctly resolves the worktree- or
-/// submodule-specific gitdir even when `.git` in the working tree is a file
-/// rather than a directory, so this stays correct for linked worktrees.
-/// Keep the emitted tokens in sync with `GitOperationKind::from_token`.
-pub fn shell_git_operation_state() -> ShellCommandGenerator {
-    const SH_COMMAND: &str = "sh -c '\
-        GIT_DIR=$(GIT_OPTIONAL_LOCKS=0 git rev-parse --git-dir 2>/dev/null) || exit 1; \
-        if [ -d \"$GIT_DIR/rebase-merge\" ]; then \
-            printf \"rebase-interactive\"; \
-        elif [ -d \"$GIT_DIR/rebase-apply\" ]; then \
-            if [ -f \"$GIT_DIR/rebase-apply/applying\" ]; then printf \"am\"; else printf \"rebase-apply\"; fi; \
-        elif [ -f \"$GIT_DIR/MERGE_HEAD\" ]; then \
-            printf \"merge\"; \
-        elif [ -f \"$GIT_DIR/CHERRY_PICK_HEAD\" ]; then \
-            printf \"cherry-pick\"; \
-        elif [ -f \"$GIT_DIR/REVERT_HEAD\" ]; then \
-            printf \"revert\"; \
-        elif [ -f \"$GIT_DIR/BISECT_LOG\" ]; then \
-            printf \"bisect\"; \
-        else \
-            exit 1; \
-        fi'";
-    let pwsh_command = safe_git_powershell(
-        "$gitDir = git rev-parse --git-dir 2>$null; \
-        if ($LASTEXITCODE -ne 0 -or -not $gitDir) { throw }; \
-        if (Test-Path (Join-Path $gitDir 'rebase-merge')) { Write-Output 'rebase-interactive' } \
-        elseif (Test-Path (Join-Path $gitDir 'rebase-apply')) { \
-            if (Test-Path (Join-Path $gitDir 'rebase-apply/applying')) { Write-Output 'am' } else { Write-Output 'rebase-apply' } \
-        } \
-        elseif (Test-Path (Join-Path $gitDir 'MERGE_HEAD')) { Write-Output 'merge' } \
-        elseif (Test-Path (Join-Path $gitDir 'CHERRY_PICK_HEAD')) { Write-Output 'cherry-pick' } \
-        elseif (Test-Path (Join-Path $gitDir 'REVERT_HEAD')) { Write-Output 'revert' } \
-        elseif (Test-Path (Join-Path $gitDir 'BISECT_LOG')) { Write-Output 'bisect' } \
-        else { throw }",
-    );
-
-    let command = ShellCommand::shell_specific([
-        (ShellType::PowerShell, pwsh_command),
-        (ShellType::Bash, SH_COMMAND.to_string()),
-        (ShellType::Zsh, SH_COMMAND.to_string()),
-        (ShellType::Fish, SH_COMMAND.to_string()),
-    ]);
-
-    ShellCommandGenerator::new(command, Some(vec!["git".to_owned()]))
-}
-
 pub fn kubernetes_current_context() -> ShellCommandGenerator {
     ShellCommandGenerator::new(
         ShellCommand::portable("kubectl config current-context"),

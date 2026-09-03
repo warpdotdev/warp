@@ -11,6 +11,7 @@ pub use remote::RemoteGitRepoStatusModel;
 use super::diff_state::DiffStats;
 pub use super::git_repo_models::GitRepoModels;
 use crate::context_chips::display_chip::GitBranchTrackingStatus;
+use crate::context_chips::git_operation_state::GitOperationKind;
 
 /// Public metadata exposed to consumers — the subset of diff metadata
 /// that the git chip (prompt display, agent view footer) needs.
@@ -21,6 +22,10 @@ pub struct GitStatusMetadata {
     pub main_branch_name: String,
     pub stats_against_head: DiffStats,
     pub branch_tracking_status: GitBranchTrackingStatus,
+    /// The in-progress Git operation (rebase, merge, cherry-pick, revert,
+    /// `git am`, bisect), if any, detected from the repository's resolved
+    /// per-worktree Git directory. See `context_chips::git_operation_state`.
+    pub git_operation_state: Option<GitOperationKind>,
 }
 
 // ── GitRepoStatusModel ──────────────────────────────────────────────────────

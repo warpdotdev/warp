@@ -5170,6 +5170,7 @@ impl TerminalView {
                 ContextChipKind::GitBranchStatus
                     | ContextChipKind::GitDiffStats
                     | ContextChipKind::GithubPullRequest
+                    | ContextChipKind::GitOperationState
             )
         })
     }

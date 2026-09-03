@@ -20,8 +20,8 @@ cfg_if::cfg_if! {
         use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
         use crate::entry::{
             extract_worktree_git_dir, is_commit_related_git_file, is_git_internal_path,
-            is_common_git_config, is_index_lock_file, is_remote_tracking_ref,
-            is_shared_git_ref, is_tracking_state_git_file,
+            is_common_git_config, is_index_lock_file, is_operation_state_git_file,
+            is_remote_tracking_ref, is_shared_git_ref, is_tracking_state_git_file,
         };
         /// Duration between filesystem watch events in milliseconds
         const FILESYSTEM_WATCHER_DEBOUNCE_MILLI_SECS: u64 = 500;
@@ -496,9 +496,10 @@ impl DirectoryWatcher {
         let is_lock = is_index_lock_file(path);
         let is_remote_ref = is_remote_tracking_ref(path);
         let is_tracking_state = is_tracking_state_git_file(path);
+        let is_operation_state = is_operation_state_git_file(path);
 
         for repo_handle in &affected {
-            if is_commit || is_lock || is_remote_ref {
+            if is_commit || is_lock || is_remote_ref || is_operation_state {
                 let repo_update = repo_updates.entry(repo_handle.clone()).or_default();
                 if is_commit {
                     repo_update.commit_updated = true;
@@ -509,6 +510,9 @@ impl DirectoryWatcher {
                 if is_remote_ref {
                     repo_update.remote_ref_updated = true;
                 }
+                if is_operation_state {
+                    repo_update.operation_state_updated = true;
+                }
             }
             if is_tracking_state {
                 repos_to_refresh_tracked_remote_ref.insert(repo_handle.clone());
@@ -517,7 +521,7 @@ impl DirectoryWatcher {
 
         if !affected.is_empty() {
             log::debug!(
-                "[GIT_EVENT_ROUTING] dispatched path={} commit_updated={is_commit} remote_ref_updated={is_remote_ref} index_lock={is_lock} tracking_state={is_tracking_state} to {} repo(s)",
+                "[GIT_EVENT_ROUTING] dispatched path={} commit_updated={is_commit} remote_ref_updated={is_remote_ref} index_lock={is_lock} tracking_state={is_tracking_state} operation_state={is_operation_state} to {} repo(s)",
                 path.display(),
                 affected.len()
             );
@@ -738,6 +742,11 @@ pub struct RepositoryUpdate {
 
     /// Whether the tracked upstream ref changed or the current tracked remote ref was updated.
     pub remote_ref_updated: bool,
+
+    /// Whether a Git-operation sentinel file/directory changed (`.git/rebase-merge`,
+    /// `.git/rebase-apply` including its `applying` marker, `.git/MERGE_HEAD`,
+    /// `.git/CHERRY_PICK_HEAD`, `.git/REVERT_HEAD`, `.git/BISECT_LOG`).
+    pub operation_state_updated: bool,
 }
 
 impl RepositoryUpdate {
@@ -750,6 +759,7 @@ impl RepositoryUpdate {
             && !self.commit_updated
             && !self.index_lock_detected
             && !self.remote_ref_updated
+            && !self.operation_state_updated
     }
 
     /// Iterator over all created and modified files.

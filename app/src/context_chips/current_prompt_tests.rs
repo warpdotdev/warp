@@ -59,6 +59,7 @@ fn git_status_metadata(branch: &str) -> GitStatusMetadata {
         main_branch_name: "main".to_string(),
         stats_against_head: DiffStats::default(),
         branch_tracking_status: GitBranchTrackingStatus::new(branch.to_string(), None, 0, 0),
+        git_operation_state: None,
     }
 }
 
@@ -939,6 +940,7 @@ fn test_git_status_change_updates_branch_status_chip_value() {
                     main_branch_name: "main".to_string(),
                     stats_against_head: DiffStats::default(),
                     branch_tracking_status: branch_tracking_status.clone(),
+                    git_operation_state: None,
                 }),
                 ctx,
             );
@@ -954,6 +956,104 @@ fn test_git_status_change_updates_branch_status_chip_value() {
                     branch_tracking_status,
                 )),
                 "Branch status chip should reflect ahead and behind metadata"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_git_status_change_updates_git_operation_state_chip_value() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [ContextChipKind::GitOperationState],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let watcher_handle = app.add_singleton_model(DirectoryWatcher::new_for_testing);
+        let repo_handle = watcher_handle.update(&mut app, |watcher, ctx| {
+            watcher
+                .add_directory(
+                    warp_util::standardized_path::StandardizedPath::from_local_canonicalized(
+                        temp_dir.path(),
+                    )
+                    .unwrap(),
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let git_status = app
+            .add_model(move |ctx| GitRepoStatusModel::new_local_for_test(repo_handle, None, ctx));
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |cp, ctx| {
+            cp.set_git_repo_status(Some(git_status.downgrade()), ctx);
+            cp.update_states_with_new_context(ctx);
+        });
+
+        // No operation in progress yet: the chip has no value.
+        app.read(|ctx| {
+            let value = current_prompt
+                .as_ref(ctx)
+                .latest_chip_value(&ContextChipKind::GitOperationState);
+            assert_eq!(value, None);
+        });
+
+        // Simulate a rebase starting.
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(
+                Some(GitStatusMetadata {
+                    git_operation_state: Some(
+                        crate::context_chips::git_operation_state::GitOperationKind::RebaseInteractive,
+                    ),
+                    ..git_status_metadata("main")
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let value = current_prompt
+                .as_ref(ctx)
+                .latest_chip_value(&ContextChipKind::GitOperationState);
+            assert_eq!(
+                value,
+                Some(&crate::context_chips::ChipValue::Text(
+                    "rebase-interactive".to_string()
+                )),
+                "Chip value should reflect the detected operation state"
+            );
+        });
+
+        // Simulate the rebase finishing: the chip should clear.
+        git_status.update(&mut app, |model, ctx| {
+            model.set_metadata_for_test(Some(git_status_metadata("main")), ctx);
+        });
+
+        app.read(|ctx| {
+            let value = current_prompt
+                .as_ref(ctx)
+                .latest_chip_value(&ContextChipKind::GitOperationState);
+            assert_eq!(
+                value, None,
+                "Chip value should clear once the operation is no longer in progress"
             );
         });
     });

@@ -326,6 +326,7 @@ fn mixed_watch_modes_filter_git_flags_per_subscriber() {
                     commit_updated: true,
                     index_lock_detected: true,
                     remote_ref_updated: true,
+                    operation_state_updated: true,
                     ..Default::default()
                 };
 
@@ -344,10 +345,12 @@ fn mixed_watch_modes_filter_git_flags_per_subscriber() {
                 assert!(!filesystem_update.commit_updated);
                 assert!(!filesystem_update.index_lock_detected);
                 assert!(!filesystem_update.remote_ref_updated);
+                assert!(!filesystem_update.operation_state_updated);
                 assert_eq!(git_update.modified, [changed_file].into());
                 assert!(git_update.commit_updated);
                 assert!(git_update.index_lock_detected);
                 assert!(git_update.remote_ref_updated);
+                assert!(git_update.operation_state_updated);
             });
         },
     );

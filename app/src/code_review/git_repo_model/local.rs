@@ -10,6 +10,7 @@ use warpui::{Entity, ModelContext, ModelHandle};
 use super::{GitRepoStatusEvent, GitStatusMetadata};
 use crate::code_review::diff_state::diff_metadata_against_head;
 use crate::context_chips::display_chip::GitBranchTrackingStatus;
+use crate::context_chips::git_operation_state::GitOperationKind;
 use crate::throttle::throttle;
 use crate::util::git::{detect_current_branch_display, detect_main_branch};
 
@@ -121,8 +122,9 @@ impl LocalGitRepoStatusModel {
             handle.abort();
         }
         let repo_path_buf = self.repo_path.clone();
+        let git_dir = self.repository.as_ref(ctx).git_dir();
         self.computing_metadata_abort_handle = Some(ctx.spawn(
-            async move { Self::load_metadata(repo_path_buf).await },
+            async move { Self::load_metadata(repo_path_buf, git_dir).await },
             |me, result, ctx| {
                 me.handle_metadata_result(result, ctx);
             },
@@ -153,7 +155,11 @@ impl LocalGitRepoStatusModel {
         if update.is_empty() {
             return false;
         }
-        if update.commit_updated || update.index_lock_detected || update.remote_ref_updated {
+        if update.commit_updated
+            || update.index_lock_detected
+            || update.remote_ref_updated
+            || update.operation_state_updated
+        {
             return true;
         }
         // Check if any non-ignored file was touched.
@@ -233,12 +239,18 @@ impl LocalGitRepoStatusModel {
         )
     }
 
-    /// Compute metadata for a repo — branch names and diff stats against HEAD.
+    /// Compute metadata for a repo — branch names, diff stats against HEAD,
+    /// and any in-progress Git operation.
     ///
     /// This reuses logic extracted from `DiffStateModel::load_metadata_for_repo`
     /// but only computes the HEAD (uncommitted) stats since that's all the git
-    /// chip needs.
-    async fn load_metadata(repo_path: PathBuf) -> anyhow::Result<GitStatusMetadata> {
+    /// chip needs. `git_dir` is the repository's already-resolved per-worktree
+    /// Git directory (`Repository::git_dir`); operation-state detection reads
+    /// its sentinel files directly rather than shelling out.
+    async fn load_metadata(
+        repo_path: PathBuf,
+        git_dir: PathBuf,
+    ) -> anyhow::Result<GitStatusMetadata> {
         // Detect main branch.
         let main_branch_name = detect_main_branch(&repo_path).await?;
         // Detect current branch (using the display variant so detached HEAD
@@ -248,12 +260,14 @@ impl LocalGitRepoStatusModel {
         let stats_against_head = diff_metadata_against_head(&repo_path).await?;
         let branch_tracking_status =
             Self::branch_tracking_status(&repo_path, &current_branch_name).await;
+        let git_operation_state = GitOperationKind::detect(&git_dir);
 
         Ok(GitStatusMetadata {
             current_branch_name,
             main_branch_name,
             stats_against_head: stats_against_head.aggregate_stats,
             branch_tracking_status,
+            git_operation_state,
         })
     }
 }

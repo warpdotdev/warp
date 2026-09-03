@@ -332,11 +332,14 @@ impl ContextChipKind {
                 )
                 .with_allow_empty_value(),
             ),
-            Self::GitOperationState => Some(ContextChip::shell_builtin(
+            // Populated from `GitRepoStatusModel` (see `CurrentPrompt::apply_git_repo_metadata`)
+            // rather than a shell generator: the chip must not spawn a shell or run
+            // `git rev-parse` on refresh. `TerminalView::uses_git_status_chips` treats this
+            // chip as a consumer so the model is subscribed only when it's configured.
+            Self::GitOperationState => Some(ContextChip::builtin(
                 "Git Operation",
-                builtins::shell_git_operation_state(),
-                None,
-                GIT_REFRESH_CONFIG,
+                |_| None,
+                RefreshConfig::OnDemandOnly,
             )),
             Self::GithubPullRequest if !FeatureFlag::GithubPrPromptChip.is_enabled() => None,
             Self::GithubPullRequest => Some(ContextChip::builtin(

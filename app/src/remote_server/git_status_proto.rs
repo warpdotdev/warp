@@ -11,6 +11,7 @@ use super::proto;
 use crate::code_review::diff_state::DiffStats;
 use crate::code_review::git_repo_model::GitStatusMetadata;
 use crate::context_chips::display_chip::GitBranchTrackingStatus;
+use crate::context_chips::git_operation_state::GitOperationKind;
 use crate::util::git::RepositoryInfo;
 
 impl From<&proto::RepositoryInfo> for RepositoryInfo {
@@ -43,6 +44,9 @@ impl From<&GitStatusMetadata> for proto::GitStatusMetadata {
             tracking_ahead: metadata.branch_tracking_status.ahead,
             tracking_behind: metadata.branch_tracking_status.behind,
             tracking_counts_available: metadata.branch_tracking_status.counts_available,
+            git_operation_state: metadata
+                .git_operation_state
+                .map(|kind| kind.token().to_string()),
         }
     }
 }
@@ -72,6 +76,14 @@ impl TryFrom<&proto::GitStatusMetadata> for GitStatusMetadata {
                     metadata.tracking_upstream.clone(),
                 )
             },
+            git_operation_state: metadata
+                .git_operation_state
+                .as_deref()
+                .and_then(GitOperationKind::from_token),
         })
     }
 }
+
+#[cfg(test)]
+#[path = "git_status_proto_tests.rs"]
+mod tests;

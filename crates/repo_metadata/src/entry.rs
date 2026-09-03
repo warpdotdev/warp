@@ -923,11 +923,32 @@ pub(crate) fn is_index_lock_file(path: &Path) -> bool {
     suffix.len() == 1 && suffix[0].as_os_str() == "index.lock"
 }
 
+/// Returns true for the sentinel files/directories that indicate an
+/// in-progress Git operation (rebase, `git am`, merge, cherry-pick, revert,
+/// bisect) — the same ones `GitOperationKind::detect` inspects — and their
+/// worktree equivalents under `.git/worktrees/<name>/...`. `rebase-apply`'s
+/// `applying` marker distinguishes a `git am` in progress from a plain
+/// non-interactive rebase.
+pub(crate) fn is_operation_state_git_file(path: &Path) -> bool {
+    let Some(suffix) = git_suffix_components(path) else {
+        return false;
+    };
+    match suffix.first().and_then(|c| c.as_os_str().to_str()) {
+        Some("rebase-merge") => suffix.len() == 1,
+        Some("rebase-apply") => {
+            suffix.len() == 1 || (suffix.len() == 2 && suffix[1].as_os_str() == "applying")
+        }
+        Some("MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "BISECT_LOG") => suffix.len() == 1,
+        _ => false,
+    }
+}
+
 /// Determines if a git-related path should be ignored by the filesystem watcher.
 ///
 /// Uses an allowlist approach: only commit-related files (HEAD, refs/heads/*),
-/// loose remote-tracking refs, tracked-upstream state files, and the index lock
-/// file are allowed through. Everything else inside `.git/` is ignored.
+/// loose remote-tracking refs, tracked-upstream state files, the index lock
+/// file, and Git-operation sentinel files/directories are allowed through.
+/// Everything else inside `.git/` is ignored.
 pub fn should_ignore_git_path(path: &Path) -> bool {
     if !is_git_internal_path(path) {
         return false; // Not a git path, don't ignore
@@ -937,6 +958,7 @@ pub fn should_ignore_git_path(path: &Path) -> bool {
         && !is_index_lock_file(path)
         && !is_remote_tracking_ref(path)
         && !is_tracking_state_git_file(path)
+        && !is_operation_state_git_file(path)
 }
 
 /// Returns `true` when the directory at `path` should be registered for watching.
@@ -991,6 +1013,11 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
         Some("refs") => matches!(refs_subdir, None | Some("heads") | Some("remotes")),
         // Worktree dispatcher — needed to reach `.git/worktrees/<name>/...`.
         Some("worktrees") => true,
+        // Descend into `rebase-apply` to reach its `applying` marker file, which
+        // distinguishes a `git am` from a plain non-interactive rebase.
+        // `rebase-merge`'s own creation/removal is visible from the parent `.git/`
+        // watch without descending into it, since only its presence matters.
+        Some("rebase-apply") => true,
         // All other `.git/` subdirectories (objects, hooks, logs, info, lfs, …) are pruned.
         Some(_) => false,
         // `.git/` itself — descend so allowlisted children stay reachable.
@@ -1060,7 +1087,9 @@ fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
 ///
 /// Emit predicate: forwards events for everything outside `.git/` plus the
 /// allowlisted files inside `.git/` (HEAD, refs/heads/*, index.lock,
-/// config, config.worktree, refs/remotes/<r>/*, and worktree equivalents).
+/// config, config.worktree, refs/remotes/<r>/*, the Git-operation sentinels
+/// `rebase-merge`, `rebase-apply` (+ its `applying` marker), `MERGE_HEAD`,
+/// `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, and worktree equivalents).
 /// Gitignored files that live directly in a watched (non-ignored) directory
 /// are still emitted here and tagged `is_ignored` downstream, preserving
 /// existing behavior.

@@ -8,7 +8,12 @@
 //! worktree, `.git` in the working tree is a *file* pointing at the real git
 //! dir under the main repository's `.git/worktrees/<name>`, and the sentinel
 //! files this module looks for (e.g. `MERGE_HEAD`) live there instead.
-//! Callers must resolve the git dir first, e.g. via `git rev-parse --git-dir`.
+//! Callers must resolve the git dir first, e.g. via
+//! `repo_metadata::Repository::git_dir`, which already returns the correct
+//! per-worktree directory. This is the detection backing the
+//! `GitRepoStatusModel`'s `git_operation_state` metadata field
+//! (`code_review/git_repo_model`), and by extension the `GitOperationState`
+//! prompt chip; it never shells out.
 
 use std::path::Path;
 
@@ -55,10 +60,9 @@ impl GitOperationKind {
         }
     }
 
-    /// Parses the single-line token emitted by the chip's cross-shell
-    /// detection command (`builtins::shell_git_operation_state`), which walks
-    /// the same sentinel files, in the same precedence order, as
-    /// [`Self::detect`].
+    /// Parses the stable wire/chip-value token produced by [`Self::token`].
+    /// Used to decode both the `GitStatusMetadata` proto field and the
+    /// `GitOperationState` chip's `ChipValue::Text`.
     pub fn from_token(token: &str) -> Option<Self> {
         match token.trim() {
             "rebase-interactive" => Some(Self::RebaseInteractive),
@@ -69,6 +73,19 @@ impl GitOperationKind {
             "revert" => Some(Self::Revert),
             "bisect" => Some(Self::Bisect),
             _ => None,
+        }
+    }
+
+    /// The stable token identifying this state, inverse of [`Self::from_token`].
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::RebaseInteractive => "rebase-interactive",
+            Self::RebaseApply => "rebase-apply",
+            Self::Am => "am",
+            Self::Merge => "merge",
+            Self::CherryPick => "cherry-pick",
+            Self::Revert => "revert",
+            Self::Bisect => "bisect",
         }
     }
 

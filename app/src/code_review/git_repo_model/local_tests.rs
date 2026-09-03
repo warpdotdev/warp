@@ -29,6 +29,14 @@ fn should_refresh_metadata_ignores_ignored_file_updates() {
     assert!(LocalGitRepoStatusModel::should_refresh_metadata(
         &remote_ref_update
     ));
+
+    let operation_state_update = RepositoryUpdate {
+        operation_state_updated: true,
+        ..Default::default()
+    };
+    assert!(LocalGitRepoStatusModel::should_refresh_metadata(
+        &operation_state_update
+    ));
 }
 
 #[cfg(feature = "local_fs")]

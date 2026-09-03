@@ -1510,6 +1510,7 @@ impl CurrentPrompt {
             for chip_kind in [
                 ContextChipKind::GitDiffStats,
                 ContextChipKind::GitBranchStatus,
+                ContextChipKind::GitOperationState,
             ] {
                 if let Some(state) = self.states.get_mut(&chip_kind) {
                     state.clear_abort_handlers();
@@ -1635,6 +1636,19 @@ impl CurrentPrompt {
         if current_diff_stats.as_ref() != Some(&new_diff_stats) {
             self.update_chip_value(&ContextChipKind::GitDiffStats, Some(new_diff_stats));
         }
+
+        // Update GitOperationState with the detection token, or clear it when no
+        // operation is in progress. `DisplayChip` parses this back via
+        // `GitOperationKind::from_token`.
+        let new_operation_state = metadata
+            .git_operation_state
+            .map(|kind| ChipValue::Text(kind.token().to_string()));
+        let current_operation_state = self
+            .latest_chip_value(&ContextChipKind::GitOperationState)
+            .cloned();
+        if current_operation_state != new_operation_state {
+            self.update_chip_value(&ContextChipKind::GitOperationState, new_operation_state);
+        }
     }
 
     /// Reads PR info from the per-repo `GitHubRepoModel` and updates the
@@ -1663,7 +1677,8 @@ impl CurrentPrompt {
         match chip_kind {
             ContextChipKind::ShellGitBranch
             | ContextChipKind::GitBranchStatus
-            | ContextChipKind::GitDiffStats => self.git_repo_status.is_some(),
+            | ContextChipKind::GitDiffStats
+            | ContextChipKind::GitOperationState => self.git_repo_status.is_some(),
             ContextChipKind::GithubPullRequest => self.github_repo_model.is_some(),
             _ => false,
         }

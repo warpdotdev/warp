@@ -540,6 +540,7 @@ impl Repository {
                     update.commit_updated = false;
                     update.index_lock_detected = false;
                     update.remote_ref_updated = false;
+                    update.operation_state_updated = false;
                 }
                 (!update.is_empty()).then_some((subscriber_id, update))
             })
@@ -639,6 +640,7 @@ fn merge_repository_updates(acc: &mut RepositoryUpdate, incoming: &RepositoryUpd
     acc.commit_updated |= incoming.commit_updated;
     acc.index_lock_detected |= incoming.index_lock_detected;
     acc.remote_ref_updated |= incoming.remote_ref_updated;
+    acc.operation_state_updated |= incoming.operation_state_updated;
 }
 
 /// A generic debouncing layer for any RepositorySubscriber.

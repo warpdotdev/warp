@@ -145,6 +145,7 @@ fn test_handle_repository_update_single_skill_added() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -463,6 +464,7 @@ fn test_local_project_fallback_update_reuses_repository_update_handler() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -503,6 +505,7 @@ fn test_local_project_fallback_directory_addition_scans_filesystem() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -541,6 +544,7 @@ fn test_handle_repository_update_skill_modified() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -578,6 +582,7 @@ fn test_handle_repository_update_skill_deleted() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -619,6 +624,7 @@ fn test_handle_repository_update_multiple_skills_deleted() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -662,6 +668,7 @@ fn test_handle_repository_update_skill_moved() {
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {
@@ -712,6 +719,7 @@ fn test_handle_repository_update_non_skill_directory_added_does_not_emit_project
             commit_updated: false,
             index_lock_detected: false,
             remote_ref_updated: false,
+            operation_state_updated: false,
         };
 
         skill_watcher_handle.update(&mut app, |skill_watcher, ctx| {

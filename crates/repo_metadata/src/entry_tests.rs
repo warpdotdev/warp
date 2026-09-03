@@ -182,6 +182,51 @@ fn test_git_path_filtering_allowlist() {
     }
 }
 
+#[test]
+fn test_operation_state_git_file_allowlist() {
+    use std::path::Path;
+
+    use super::{is_operation_state_git_file, should_ignore_git_path};
+
+    // Allowlisted: Git-operation sentinel files/directories are NOT ignored.
+    for path in [
+        "/repo/.git/rebase-merge",
+        "/repo/.git/rebase-apply",
+        "/repo/.git/rebase-apply/applying",
+        "/repo/.git/MERGE_HEAD",
+        "/repo/.git/CHERRY_PICK_HEAD",
+        "/repo/.git/REVERT_HEAD",
+        "/repo/.git/BISECT_LOG",
+        "/repo/.git/worktrees/wt/rebase-merge",
+        "/repo/.git/worktrees/wt/rebase-apply/applying",
+        "/repo/.git/worktrees/wt/MERGE_HEAD",
+    ] {
+        assert!(
+            is_operation_state_git_file(Path::new(path)),
+            "{path} should be classified as an operation-state sentinel"
+        );
+        assert!(
+            !should_ignore_git_path(Path::new(path)),
+            "{path} should be allowlisted through the watcher"
+        );
+    }
+
+    // Not operation-state sentinels: nested content inside rebase-merge (only
+    // its own presence matters), a differently-named top-level file, and
+    // non-`.git` paths.
+    for path in [
+        "/repo/.git/rebase-merge/msgnum",
+        "/repo/.git/rebase-apply/patch",
+        "/repo/.git/ORIG_HEAD",
+        "/repo/src/MERGE_HEAD",
+    ] {
+        assert!(
+            !is_operation_state_git_file(Path::new(path)),
+            "{path} should not be classified as an operation-state sentinel"
+        );
+    }
+}
+
 /// Writes a `.gitignore` with `content` at `root` and returns an
 /// [`Arc<Gitignore>`] rooted there. Uses only the repo-root gitignore (not
 /// the machine's global gitignore) so tests are deterministic.
@@ -939,6 +984,8 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
         "/repo/.git/worktrees/my-wt",
         "/repo/.git/worktrees/my-wt/refs",
         "/repo/.git/worktrees/my-wt/refs/heads",
+        "/repo/.git/rebase-apply",
+        "/repo/.git/worktrees/my-wt/rebase-apply",
     ] {
         assert!(
             should_watch_directory_in_git_path(Path::new(path)),
@@ -955,6 +1002,9 @@ fn should_watch_directory_in_git_path_prunes_non_allowlisted_subtrees() {
         "/repo/.git/refs/tags",
         "/repo/.git/worktrees/my-wt/objects",
         "/repo/.git/worktrees/my-wt/logs",
+        // rebase-merge's own presence is visible from the parent `.git/`
+        // watch, so it never needs to be descended into.
+        "/repo/.git/rebase-merge",
     ] {
         assert!(
             !should_watch_directory_in_git_path(Path::new(path)),

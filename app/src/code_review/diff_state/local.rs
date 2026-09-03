@@ -1046,6 +1046,10 @@ impl LocalDiffStateModel {
             commit_updated,
             index_lock_detected,
             remote_ref_updated,
+            // Diff-state reload/invalidation decisions don't depend on
+            // in-progress Git operation state; that's consumed separately by
+            // `GitRepoStatusModel` for the `GitOperationState` chip.
+            operation_state_updated: _,
         } = update;
 
         // When the code review pane is closed (metadata_refresh_enabled ==

@@ -468,6 +468,11 @@ message GitStatusMetadata {
   uint32 tracking_ahead = 5;
   uint32 tracking_behind = 6;
   bool tracking_counts_available = 7;
+  // The in-progress Git operation, if any, as the stable token produced by
+  // GitOperationKind::token in Rust (context_chips/git_operation_state.rs):
+  // one of "rebase-interactive", "rebase-apply", "am", "merge",
+  // "cherry-pick", "revert", "bisect". Absent when no operation is in progress.
+  optional string git_operation_state = 8;
 }
 
 // Server -> client push: aggregate git status for a repo. Sent on every

@@ -52,6 +52,7 @@ fn filter_repository_update_by_prefix_keeps_only_matching_paths() {
         commit_updated: false,
         index_lock_detected: false,
         remote_ref_updated: false,
+        operation_state_updated: false,
     };
 
     let filtered =
@@ -78,6 +79,7 @@ fn filter_repository_update_by_prefix_converts_cross_boundary_moves() {
         commit_updated: false,
         index_lock_detected: false,
         remote_ref_updated: false,
+        operation_state_updated: false,
     };
 
     let filtered =
