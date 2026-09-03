@@ -733,6 +733,66 @@ pub fn create_transferred_window(
     new_window_id
 }
 
+/// Creates the floating preview window for a whole-group drag and moves every
+/// member's live view tree into it.
+///
+/// The first member goes through [`create_transferred_window`] so the preview
+/// is built by exactly the same placeholder path a single-tab drag uses; the
+/// remaining members are transferred and appended, and the group is registered
+/// in the new window.
+///
+/// Returns `None` if the new window's workspace cannot be resolved. Returning
+/// the window id anyway would tell the caller that N members moved when only
+/// the first one did, and the caller would then remove N tabs from the source.
+pub fn create_transferred_group_window(
+    transferred_group: crate::workspace::view::TransferredTabGroup,
+    source_window_id: WindowId,
+    window_size: Vector2F,
+    window_position: Vector2F,
+    ctx: &mut AppContext,
+) -> Option<WindowId> {
+    let crate::workspace::view::TransferredTabGroup {
+        group,
+        mut tabs,
+        member_pane_group_ids: _,
+    } = transferred_group;
+    if tabs.is_empty() {
+        return None;
+    }
+
+    let first = tabs.remove(0);
+    let new_window_id = create_transferred_window(
+        first,
+        source_window_id,
+        window_size,
+        window_position,
+        true,
+        ctx,
+    );
+
+    // Move the rest of the members' view trees before touching the new
+    // window's tab list, so the list never references a pane group whose
+    // views still live in the source window.
+    for member in &tabs {
+        ctx.transfer_view_tree_to_window(member.pane_group.id(), source_window_id, new_window_id);
+    }
+
+    match WorkspaceRegistry::as_ref(ctx).get(new_window_id, ctx) {
+        Some(new_workspace) => {
+            new_workspace.update(ctx, |workspace, ctx| {
+                workspace.adopt_transferred_group_members(group, tabs, ctx);
+            });
+            Some(new_window_id)
+        }
+        _ => {
+            log::warn!(
+                "Failed to find workspace in newly created group preview window {new_window_id:?}"
+            );
+            None
+        }
+    }
+}
+
 #[cfg(feature = "crash_reporting")]
 fn on_gpu_driver_selected_callback() -> Option<Box<OnGPUDeviceSelected>> {
     Some(Box::new(|gpu_device_info| {

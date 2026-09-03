@@ -17,8 +17,8 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warpui::platform::WindowStyle;
-use warpui::{AddSingletonModel, App, ViewHandle};
+use warpui::platform::{WindowBounds, WindowStyle};
+use warpui::{AddSingletonModel, App, ViewHandle, WindowId};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
@@ -268,6 +268,72 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+/// Like [`mock_workspace`], but with an explicit window rect.
+///
+/// Required for anything that exercises a cross-window drag. `mock_workspace`
+/// leaves the window at `WindowBounds::Default`, for which
+/// `AppContext::window_bounds` returns `None`, and `CrossWindowTabDrag::on_drag`
+/// then bails early — so a drag test built on `mock_workspace` passes
+/// vacuously without ever running the code it claims to cover.
+pub(crate) fn mock_workspace_at(app: &mut App, bounds: RectF) -> (WindowId, ViewHandle<Workspace>) {
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    let active_window_id = app.read(|ctx| ctx.windows().active_window());
+    app.add_window_with_bounds(
+        WindowStyle::NotStealFocus,
+        WindowBounds::ExactPosition(bounds),
+        |ctx| {
+            Workspace::new(
+                global_resource_handles,
+                None,
+                NewWorkspaceSource::Empty {
+                    previous_active_window: active_window_id,
+                    shell: None,
+                },
+                ctx,
+            )
+        },
+    )
+}
+
+#[test]
+fn test_mock_workspace_at_has_real_window_bounds() {
+    // Guards the helper itself. A cross-window drag test built on a window
+    // whose bounds resolve to None never reaches the drag machinery at all -
+    // `CrossWindowTabDrag::on_drag` bails immediately - so it would pass
+    // without exercising anything. If this assertion ever fails, every
+    // cross-window test in this file is silently green for the wrong reason.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (window_id, _workspace) =
+            mock_workspace_at(&mut app, RectF::new(vec2f(0., 0.), vec2f(1200., 800.)));
+        let bounds = app.read(|ctx| ctx.window_bounds(&window_id));
+        assert!(
+            bounds.is_some(),
+            "mock_workspace_at must produce a window with resolvable bounds"
+        );
+
+        let handles = GlobalResourceHandles::mock(&mut app);
+        let (default_window_id, _) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            Workspace::new(
+                handles,
+                None,
+                NewWorkspaceSource::Empty {
+                    previous_active_window: None,
+                    shell: None,
+                },
+                ctx,
+            )
+        });
+        assert!(
+            app.read(|ctx| ctx.window_bounds(&default_window_id))
+                .is_none(),
+            "the default-bounds window is expected to have no bounds - that is why \
+             mock_workspace_at exists"
+        );
+    });
 }
 
 #[test]
@@ -4446,6 +4512,466 @@ fn test_new_tab_group_from_selected_tabs_in_group_anchors_after_group() {
             assert_eq!(workspace.tabs[0].group_id, Some(existing_group_id));
             assert_eq!(workspace.tabs[1].group_id, Some(existing_group_id));
             assert!(workspace.tabs[4].group_id.is_none());
+        });
+    });
+}
+
+/// Seeds a workspace with `tab_count` tabs and puts `member_indices` into one
+/// group. Returns that group's id.
+#[cfg(test)]
+fn seed_group_over(
+    workspace: &mut Workspace,
+    ctx: &mut ViewContext<Workspace>,
+    tab_count: usize,
+    member_indices: &[usize],
+) -> TabGroupId {
+    while workspace.tab_count() < tab_count {
+        workspace.add_terminal_tab(false, ctx);
+    }
+    let group = TabGroup::new();
+    let group_id = group.id;
+    workspace.tab_groups.insert(group_id, group);
+    for &index in member_indices {
+        workspace.tabs[index].group_id = Some(group_id);
+    }
+    group_id
+}
+
+#[test]
+fn test_group_transfer_snapshot_refuses_a_non_contiguous_run() {
+    // group_member_index_range returns the span between the first and last
+    // match and only assumes contiguity. Capturing that span on a broken run
+    // would pull bystanders into the payload and transfer them to another
+    // window, so the snapshot has to refuse instead.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Deliberately non-contiguous: tabs 0 and 2, with 1 in between.
+            let group_id = seed_group_over(workspace, ctx, 3, &[0, 2]);
+            assert!(
+                workspace
+                    .get_tab_group_transfer_info_for_attach(group_id, ctx)
+                    .is_none(),
+                "a non-contiguous group must not produce a transfer payload"
+            );
+
+            // Make it contiguous and it snapshots normally.
+            workspace.tabs[1].group_id = Some(group_id);
+            let payload = workspace
+                .get_tab_group_transfer_info_for_attach(group_id, ctx)
+                .expect("contiguous group should snapshot");
+            assert_eq!(payload.tabs.len(), 3);
+            assert_eq!(payload.member_pane_group_ids.len(), 3);
+            assert_eq!(payload.group.id, group_id);
+        });
+    });
+}
+
+#[test]
+fn test_group_source_cleanup_removes_members_by_identity_after_a_shift() {
+    // The drop carries identities, not an index range, so a source list that
+    // shifted mid-drag still removes exactly the members.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // 5 tabs, group over 2..=3.
+            let group_id = seed_group_over(workspace, ctx, 5, &[2, 3]);
+            let members: Vec<_> = [2, 3]
+                .iter()
+                .map(|&i| workspace.tabs[i].pane_group.id())
+                .collect();
+            let bystanders: Vec<_> = [0, 1, 4]
+                .iter()
+                .map(|&i| workspace.tabs[i].pane_group.id())
+                .collect();
+
+            // A shell exits mid-drag and closes tab 0: the members slide to 1..=2.
+            workspace.remove_tab_without_undo(0, ctx);
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceGroup {
+                    member_pane_group_ids: members.clone(),
+                },
+                ctx,
+            );
+
+            let remaining: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            for member in &members {
+                assert!(
+                    !remaining.contains(member),
+                    "every member should be removed"
+                );
+            }
+            for bystander in bystanders.iter().skip(1) {
+                assert!(
+                    remaining.contains(bystander),
+                    "bystanders must survive - they were never dragged"
+                );
+            }
+            // The group itself is pruned once its last member leaves.
+            assert!(!workspace.tab_groups.contains_key(&group_id));
+        });
+    });
+}
+
+#[test]
+fn test_group_source_cleanup_ignores_members_already_gone() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            seed_group_over(workspace, ctx, 3, &[1]);
+            let before: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceGroup {
+                    member_pane_group_ids: vec![EntityId::from_usize(987_654)],
+                },
+                ctx,
+            );
+
+            let after: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert_eq!(before, after, "no tab should be removed");
+        });
+    });
+}
+
+#[test]
+fn test_group_cleanup_taking_every_tab_closes_without_detaching_panes() {
+    // Removing the last remaining tab through remove_tab would close the
+    // window with a bare close, leaving pane detach unsuppressed - and those
+    // pane groups now live in the target window.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let _group_id = seed_group_over(workspace, ctx, 2, &[0, 1]);
+            let members: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert!(!workspace.suppress_detach_panes_on_window_close);
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceGroup {
+                    member_pane_group_ids: members,
+                },
+                ctx,
+            );
+
+            assert!(
+                workspace.suppress_detach_panes_on_window_close,
+                "transferred pane groups must not be detached when the source closes"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_insert_transferred_group_stays_contiguous_at_every_index() {
+    // Contiguity is the invariant every group_member_index_range caller
+    // assumes, so the insert has to hold it wherever the drop lands.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        for target_index in 0..=3usize {
+            // Source window supplies a 2-member group.
+            let source = mock_workspace(&mut app);
+            let (source_group, payload) = source.update(&mut app, |workspace, ctx| {
+                let group_id = seed_group_over(workspace, ctx, 3, &[1, 2]);
+                let payload = workspace
+                    .get_tab_group_transfer_info_for_attach(group_id, ctx)
+                    .expect("contiguous group should snapshot");
+                (group_id, payload)
+            });
+
+            // Insert into a DIFFERENT workspace, which is the real shape of the
+            // feature and means exactly one run carries the group id.
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                while workspace.tab_count() < 3 {
+                    workspace.add_terminal_tab(false, ctx);
+                }
+                let moved_ids = payload.member_pane_group_ids.clone();
+                let resolved = workspace.resolve_group_drop_index(target_index, false);
+                workspace.insert_transferred_tab_group_at_index(payload, resolved, ctx);
+
+                // Assert the REAL landing positions. Building the expected
+                // range and checking it against itself would hold even if the
+                // insert were deleted.
+                let landed: Vec<usize> = workspace
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tab)| tab.group_id == Some(source_group))
+                    .map(|(i, _)| i)
+                    .collect();
+                assert_eq!(
+                    landed,
+                    (resolved..resolved + moved_ids.len()).collect::<Vec<_>>(),
+                    "the group must land as one contiguous run starting at the \
+                     resolved index (target_index {target_index})"
+                );
+                assert!(workspace.tab_groups.contains_key(&source_group));
+            });
+        }
+    });
+}
+
+#[test]
+fn test_post_drain_index_maps_around_a_drained_run() {
+    // A run at [first, first+len) collapses to a point at `first`.
+    // Before the run: unchanged. After it: shifts down by the whole run.
+    // Strictly inside: nowhere to go, so it resolves to `first`.
+    let (first, len) = (3usize, 4usize);
+    assert_eq!(post_drain_index(0, first, len), 0);
+    assert_eq!(post_drain_index(3, first, len), 3);
+    // Inside the run - a flat `- len` would under-shoot each of these.
+    assert_eq!(post_drain_index(4, first, len), 3);
+    assert_eq!(post_drain_index(5, first, len), 3);
+    assert_eq!(post_drain_index(6, first, len), 3);
+    // At and past the end.
+    assert_eq!(post_drain_index(7, first, len), 3);
+    assert_eq!(post_drain_index(8, first, len), 4);
+    assert_eq!(post_drain_index(12, first, len), 8);
+    // A single-tab run behaves like the existing `- 1` arithmetic.
+    assert_eq!(post_drain_index(0, 2, 1), 0);
+    assert_eq!(post_drain_index(2, 2, 1), 2);
+    assert_eq!(post_drain_index(3, 2, 1), 2);
+    assert_eq!(post_drain_index(9, 2, 1), 8);
+}
+
+#[test]
+fn test_resolve_group_drop_index_never_splits_a_target_group() {
+    // The load-bearing clamp: a group dropped at an index strictly inside
+    // another group's run must be pushed past that run, or both groups stop
+    // being contiguous and every group_member_index_range caller breaks.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Four tabs, with tabs 1..=2 forming an existing group.
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            let group = TabGroup::new();
+            let existing_group_id = group.id;
+            workspace.tab_groups.insert(existing_group_id, group);
+            workspace.tabs[1].group_id = Some(existing_group_id);
+            workspace.tabs[2].group_id = Some(existing_group_id);
+
+            // Index 2 is strictly inside the existing run, so it is pushed to
+            // just past its last member.
+            assert_eq!(workspace.resolve_group_drop_index(2, false), 3);
+            // The run's outer edges are untouched.
+            assert_eq!(workspace.resolve_group_drop_index(1, false), 1);
+            assert_eq!(workspace.resolve_group_drop_index(3, false), 3);
+            // Out-of-range is bounded by the list length.
+            assert_eq!(workspace.resolve_group_drop_index(99, false), 4);
+        });
+    });
+}
+
+#[test]
+fn test_resolve_group_drop_index_respects_the_pinned_boundary_both_ways() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _pinned_guard = FeatureFlag::PinnedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            // Pin the first tab, so the unpinned region starts at 1.
+            workspace.tabs[0].pinned = true;
+            assert_eq!(workspace.pinned_boundary_index(&workspace.tabs), 1);
+
+            // An unpinned group may not land inside the pinned prefix.
+            assert_eq!(workspace.resolve_group_drop_index(0, false), 1);
+            assert_eq!(workspace.resolve_group_drop_index(2, false), 2);
+
+            // A pinned group may not land outside it.
+            assert_eq!(workspace.resolve_group_drop_index(3, true), 1);
+            assert_eq!(workspace.resolve_group_drop_index(0, true), 0);
+        });
+    });
+}
+
+#[test]
+fn test_cross_window_drop_removes_the_dragged_tab_not_whatever_took_its_index() {
+    // A cross-window drag records the source tab's INDEX when the drag starts,
+    // and the drop removes whatever sits at that index. Nothing keeps the index
+    // in step with the source window's tab list, so anything that closes a tab
+    // mid-drag (a shell exiting, cmd-W, another window handing a tab off)
+    // shifts the list and the drop removes a bystander instead - and leaves the
+    // dragged tab behind, now present in two windows at once.
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Four tabs; the user grabs the one at index 2.
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 4);
+
+            let dragged_id = workspace.tabs[2].pane_group.id();
+            let bystander_id = workspace.tabs[3].pane_group.id();
+
+            // Mid-drag, the shell in tab 0 exits and its tab closes. The dragged
+            // tab is now at index 1, and index 2 holds an innocent bystander.
+            workspace.remove_tab_without_undo(0, ctx);
+            assert_eq!(workspace.tabs[1].pane_group.id(), dragged_id);
+            assert_eq!(workspace.tabs[2].pane_group.id(), bystander_id);
+
+            // The drop resolves the source tab by pane-group identity, so the
+            // shift above is irrelevant to it. Resolving by the drag-start
+            // index (2) would remove the bystander instead - and that index is
+            // still in bounds, so a bounds check does not catch it.
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceTab {
+                    pane_group_id: dragged_id,
+                },
+                ctx,
+            );
+
+            let remaining: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert!(
+                !remaining.contains(&dragged_id),
+                "the dragged tab should have been removed from the source window"
+            );
+            assert!(
+                remaining.contains(&bystander_id),
+                "the bystander tab must survive - it was never dragged anywhere"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cross_window_drop_of_the_last_source_tab_closes_without_detaching_panes() {
+    // When the handed-off tab is the only one left, removing it has to close
+    // the window the content-transfer way. `remove_tab` treats the last tab as
+    // "close the window" using a bare close, which leaves
+    // `suppress_detach_panes_on_window_close` false - and `on_window_closed`
+    // would then detach the panes of a pane group that now lives in the target
+    // window.
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Two tabs; the second is dragged out, then the first one's shell
+            // exits mid-drag, leaving the dragged tab as the only tab.
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 2);
+
+            let dragged_id = workspace.tabs[1].pane_group.id();
+            workspace.remove_tab_without_undo(0, ctx);
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(!workspace.suppress_detach_panes_on_window_close);
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceTab {
+                    pane_group_id: dragged_id,
+                },
+                ctx,
+            );
+
+            assert!(
+                workspace.suppress_detach_panes_on_window_close,
+                "the transferred pane group must not be detached when the source window closes"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cross_window_drop_ignores_a_source_tab_that_is_already_gone() {
+    // If the dragged tab's own shell exits mid-drag its tab is closed, so at
+    // drop time there is nothing left to remove. Doing nothing is correct;
+    // falling back to an index would remove some other tab.
+    let _drag_guard = FeatureFlag::DragTabsToWindows.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            assert_eq!(workspace.tab_count(), 3);
+
+            let survivors: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            let vanished_id = EntityId::from_usize(999_999);
+
+            workspace.handle_drop_result(
+                DropResult::RemoveSourceTab {
+                    pane_group_id: vanished_id,
+                },
+                ctx,
+            );
+
+            let after: Vec<_> = workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.pane_group.id())
+                .collect();
+            assert_eq!(survivors, after, "no tab should have been removed");
         });
     });
 }

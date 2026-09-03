@@ -993,6 +993,23 @@ pub struct TransferredTab {
     pub is_right_panel_maximized: bool,
     pub draggable_state: DraggableState,
 }
+
+/// Snapshot of a whole tab group moving between windows.
+///
+/// Built by [`Workspace::get_tab_group_transfer_info_for_attach`]. The
+/// `TabGroupId` is preserved rather than re-minted: `Workspace::tab_groups` is
+/// per-window and the id is a v4 UUID, so carrying it across keeps the
+/// group-keyed drag geometry stable for the whole gesture and makes putting
+/// the group back symmetric.
+pub struct TransferredTabGroup {
+    /// Group metadata: name, colour, collapsed and pinned state.
+    pub group: TabGroup,
+    /// Members in tab-bar order. Non-empty by construction.
+    pub tabs: Vec<TransferredTab>,
+    /// Pane-group identities captured at drag start, used to re-derive the
+    /// source tabs by identity at drop time.
+    pub member_pane_group_ids: Vec<EntityId>,
+}
 #[cfg(not(target_family = "wasm"))]
 struct ThirdPartyLocalContinuationLaunch {
     command: String,
@@ -11670,31 +11687,53 @@ impl Workspace {
         // Use the placeholder-aware getter so we don't skip an unrelated
         // tab at a stale `source_tab_index` after a put-back handoff has
         // already removed the real placeholder.
-        let transferred_tab_index = if drag_model.is_active()
+        // Indices of tabs that are mid-transfer and must not be snapshotted.
+        // A group drag puts N of them in flight at once, so this is a set
+        // rather than a single index: snapshotting a tab whose view is being
+        // updated in the target window calls `terminal_view.as_ref()` on a
+        // handle that no longer resolves here, which panics rather than
+        // returning `None`.
+        let transferred_tab_indices: Vec<usize> = if drag_model.is_active()
             && drag_model.source_window_id() == Some(window_id)
         {
             if drag_model.has_dedicated_preview_window() {
-                // Multi-tab drag: skip the dedicated-preview placeholder.
-                drag_model.source_placeholder_tab_index()
-            } else if drag_model.source_was_single_tab() && drag_model.handed_off_target().is_some()
+                // A dedicated preview holds the detached tab(s); skip the
+                // placeholder(s) left behind in the source. Resolved by
+                // identity in both cases, since the drag-start indices go
+                // stale if the source tab list shifts mid-drag.
+                let member_ids = drag_model.member_pane_group_ids();
+                if member_ids.is_empty() {
+                    drag_model
+                        .source_placeholder_tab_index()
+                        .and_then(|_| drag_model.source_pane_group_id())
+                        .and_then(|id| self.tab_index_for_pane_group_id(id))
+                        .into_iter()
+                        .collect()
+                } else {
+                    self.tab_indices_for_pane_group_ids(&member_ids)
+                }
+            } else if drag_model.source_is_own_preview() && drag_model.handed_off_target().is_some()
             {
-                // Single-tab drag in InsertedInTarget phase: the source's
-                // only tab has been transferred to the target window's live
-                // view context.  Snapshotting it here would call
-                // `terminal_view.as_ref()` while that view is being updated
-                // in the target window, triggering a circular view reference
-                // panic.  Skip index 0 (the sole tab).
-                Some(0)
+                // The source window IS the preview and its content has been
+                // transferred into the target's live view context. Skip every
+                // tab that went with it: index 0 for a single-tab drag, the
+                // whole membership for a whole-window group drag.
+                let member_ids = drag_model.member_pane_group_ids();
+                if member_ids.is_empty() {
+                    vec![0]
+                } else {
+                    self.tab_indices_for_pane_group_ids(&member_ids)
+                }
             } else {
-                None
+                Vec::new()
             }
         } else {
-            None
+            Vec::new()
         };
         let tabs: Vec<TabSnapshot> = self
             .tab_views()
             .enumerate()
-            .filter(|(tab_index, _)| Some(*tab_index) != transferred_tab_index)
+            .filter(|(tab_index, _)| !transferred_tab_indices.contains(tab_index))
             .map(|(tab_index, pane_group_view)| {
                 let resizable_data = ResizableData::handle(app);
                 let modal_sizes = resizable_data.as_ref(app).get_all_handles(window_id);
@@ -20095,7 +20134,12 @@ impl Workspace {
             .on_drop(move |ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
             })
-            .with_drag_axis(DragAxis::HorizontalOnly)
+            // Unconstrained when cross-window drag is on: the axis lock pins the
+            // perpendicular axis to the laid-out origin, so the detach hit-test
+            // could never fire and a group could only ever be reordered in place.
+            .with_optional_drag_axis(
+                (!FeatureFlag::DragTabsToWindows.is_enabled()).then_some(DragAxis::HorizontalOnly),
+            )
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down
             // so dragging a member tab fires `DragTab`, not group drag.
             .with_defer_to_handled_child_mouse_down()
@@ -20378,6 +20422,34 @@ impl Workspace {
     /// (via `render_tab_in_tab_bar`) when it was horizontal. Constructed with
     /// neutral `TabBarState` so the snapshot doesn't carry over local-drag or
     /// rename state.
+    /// Renders every tab in this (preview) workspace as one chip, for the
+    /// floating ghost of a whole-group drag.
+    ///
+    /// Each member goes through [`Self::render_tab_for_drag_ghost`], which uses
+    /// `TabComponent::for_drag_ghost()` and therefore skips the outer
+    /// `SavePosition` / `Draggable` / `DropTarget` wrappers - so the chip
+    /// overlay cannot pollute the target window's position cache.
+    pub(crate) fn render_group_for_drag_ghost(
+        &self,
+        was_vertical: bool,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
+        if self.tabs.is_empty() {
+            return Empty::new().finish();
+        }
+        // Laid out along the axis the source used, so the chip reads like the
+        // block the user grabbed.
+        let mut row = if was_vertical {
+            Flex::column()
+        } else {
+            Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center)
+        };
+        for index in 0..self.tabs.len() {
+            row.add_child(self.render_tab_for_drag_ghost(index, was_vertical, ctx));
+        }
+        row.finish()
+    }
+
     pub(crate) fn render_tab_for_drag_ghost(
         &self,
         tab_index: usize,
@@ -20748,8 +20820,17 @@ impl Workspace {
     /// Renders the insertion slot for a cross-window ghost drag in the
     /// horizontal tab bar. Shows an empty space with `fg_overlay_1`
     /// background — identical to same-window drag's origin slot.
-    fn render_ghost_tab_slot(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
+    /// Insertion slot shown in the target's tab bar. `member_count` is how many
+    /// tabs will land there, so a group opens a gap the size of the whole block
+    /// rather than of a single tab.
+    fn render_ghost_tab_slot(
+        &self,
+        member_count: usize,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Box<dyn Element> {
         let theme = appearance.theme();
+        let members = member_count.max(1) as f32;
         let width = self.tab_fixed_width.or_else(|| {
             self.tabs.first().and_then(|_| {
                 ctx.element_position_by_id_at_last_frame(self.window_id, tab_position_id(0))
@@ -20760,11 +20841,11 @@ impl Workspace {
             .with_background(internal_colors::fg_overlay_1(theme))
             .finish();
         let inner = if let Some(w) = width {
-            ConstrainedBox::new(slot).with_width(w).finish()
+            ConstrainedBox::new(slot).with_width(w * members).finish()
         } else {
             ConstrainedBox::new(slot)
-                .with_min_width(80.)
-                .with_max_width(200.)
+                .with_min_width(80. * members)
+                .with_max_width(200. * members)
                 .finish()
         };
         Shrinkable::new(1.0, inner).finish()
@@ -21047,10 +21128,24 @@ impl Workspace {
             // drag and must stay full width, otherwise the drop zone vanishes
             // and the slot oscillates ("fuzzy shake"). See
             // `CrossWindowTabDrag::collapsed_source_placeholder_index`.
-            let transferred_tab_index =
-                drag_model.collapsed_source_placeholder_index(self.window_id);
+            // Resolved by identity: `collapsed_source_placeholder_index`
+            // decides WHETHER to collapse a slot, but the index it carries is
+            // frozen at drag start, so after a mid-drag tab close it would
+            // zero-width an innocent neighbour.
+            let transferred_tab_index = drag_model
+                .collapsed_source_placeholder_index(self.window_id)
+                .and_then(|_| drag_model.source_pane_group_id())
+                .and_then(|id| self.tab_index_for_pane_group_id(id));
+            // Set only while THIS window is the source of a group drag, so the
+            // detached group's slot can be collapsed by identity below.
+            let dragged_group_id = (drag_model.source_window_id() == Some(self.window_id))
+                .then(|| drag_model.source_group_id())
+                .flatten();
             // Ghost state for cross-window drag hovering over this tab bar.
             let ghost = drag_model.ghost_state_for_window(self.window_id);
+            // Slot is sized for the whole dragged block, so the gap matches
+            // what will land in it.
+            let ghost_member_count = ghost.as_ref().map(|g| g.member_count).unwrap_or(1);
 
             // Collapse tabs into render slots: each ungrouped tab is a
             // `Single`, and each contiguous run of same-group tabs is one
@@ -21069,7 +21164,11 @@ impl Workspace {
                     .as_ref()
                     .is_some_and(|g| g.insertion_index == start_index)
                 {
-                    tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
+                    tab_bar.add_child(self.render_ghost_tab_slot(
+                        ghost_member_count,
+                        appearance,
+                        ctx,
+                    ));
                 }
 
                 match slot {
@@ -21085,7 +21184,16 @@ impl Workspace {
                         }
                         // Filtered above; the group must exist in `tab_groups`.
                         let group = self.tab_groups[group_id].clone();
-                        tab_bar.add_child(self.render_horizontal_tab_group(
+                        // A group detached into a preview window collapses to
+                        // zero width here, the same way a detached single tab
+                        // does. Without this the group renders at full width in
+                        // the source bar AND in the floating preview at once.
+                        // Matched by group identity rather than by the drag's
+                        // frozen first index, which stops pointing at this run
+                        // if the source tab list shifts mid-drag.
+                        let group_is_transferred =
+                            transferred_tab_index.is_some() && dragged_group_id == Some(*group_id);
+                        let rendered_group = self.render_horizontal_tab_group(
                             &group,
                             *first_index,
                             *run_len,
@@ -21093,7 +21201,14 @@ impl Workspace {
                             *first_index == 0,
                             appearance,
                             ctx,
-                        ));
+                        );
+                        if group_is_transferred {
+                            tab_bar.add_child(
+                                ConstrainedBox::new(rendered_group).with_width(0.).finish(),
+                            );
+                        } else {
+                            tab_bar.add_child(rendered_group);
+                        }
                     }
                     TabBarSlot::Single { index } => {
                         let i = *index;
@@ -21126,7 +21241,7 @@ impl Workspace {
                 .as_ref()
                 .is_some_and(|g| g.insertion_index == self.tabs.len())
             {
-                tab_bar.add_child(self.render_ghost_tab_slot(appearance, ctx));
+                tab_bar.add_child(self.render_ghost_tab_slot(ghost_member_count, appearance, ctx));
             } else if show_before_indicator(self.hovered_tab_index, self.tabs.len(), None) {
                 tab_bar.add_child(self.render_tab_hover_indicator(appearance));
             }
@@ -24582,6 +24697,9 @@ impl TypedActionView for Workspace {
             StartGroupDrag(_group_id) => {
                 self.clear_tab_multi_selection(ctx);
                 self.finish_tab_group_rename(ctx);
+                // Mirrors `StartTabDrag`: the tab bar renders differently while
+                // a drag is in progress, and a group drag is still a drag.
+                self.current_workspace_state.is_tab_being_dragged = true;
             }
             DragGroup {
                 group_id,
@@ -24591,7 +24709,46 @@ impl TypedActionView for Workspace {
                 self.on_group_drag(*group_id, *position, *cursor_position, ctx);
             }
             DropGroup => {
+                let is_cross_window = CrossWindowTabDrag::as_ref(ctx).is_active();
+                // Members already handed off to another window are cleaned up
+                // by `handle_drop_result` below; everything else must have its
+                // `detached` flag cleared here, on every path including an
+                // aborted drag, or those tabs stay undraggable for the rest of
+                // the session.
+                let handed_off: Vec<usize> = CrossWindowTabDrag::as_ref(ctx)
+                    .handed_off_target()
+                    .map(|_| {
+                        let ids = CrossWindowTabDrag::as_ref(ctx).member_pane_group_ids();
+                        self.tab_indices_for_pane_group_ids(&ids)
+                    })
+                    .unwrap_or_default();
+                self.current_workspace_state.is_tab_being_dragged = false;
+                // A whole-window group drag suppresses the group's overlay
+                // paint at detach. Nothing else clears it - the existing
+                // clears all operate on a TAB's DraggableState, and a group
+                // has its own - so without this the group header's drag
+                // overlay stays suppressed for the rest of the session and
+                // the flag travels with the group into other windows.
+                if let Some(group_id) = CrossWindowTabDrag::as_ref(ctx).source_group_id()
+                    && let Some(group) = self.tab_groups.get(&group_id)
+                {
+                    group.draggable_state.set_suppress_overlay_paint(false);
+                }
+                for (i, tab) in self.tabs.iter_mut().enumerate() {
+                    if handed_off.contains(&i) {
+                        continue;
+                    }
+                    tab.detached = false;
+                    if tab.pinned && tab.group_id.is_some() {
+                        tab.pinned = false;
+                    }
+                }
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
+                if is_cross_window {
+                    let result =
+                        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, ctx| drag.on_drop(ctx));
+                    self.handle_drop_result(result, ctx);
+                }
                 ctx.notify();
             }
             OpenWarpDrive => {
@@ -27949,6 +28106,144 @@ impl Workspace {
         self.tab_transfer_info_at_index(index, ctx)
     }
 
+    /// Snapshots a whole tab group for transfer to another window.
+    ///
+    /// Read-only: mutates nothing, so a `None` here is a clean bail with no
+    /// state to unwind. Returns `None` when the group has no members, when a
+    /// member's transfer info cannot be built, or when the run is not
+    /// contiguous - `group_member_index_range` returns the span between the
+    /// first and last match and only *assumes* contiguity, so a span-based
+    /// capture on a broken run would pull in bystanders.
+    pub fn get_tab_group_transfer_info_for_attach(
+        &self,
+        group_id: TabGroupId,
+        ctx: &AppContext,
+    ) -> Option<TransferredTabGroup> {
+        let group = self.tab_groups.get(&group_id)?.clone();
+        let indices: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        let (&first, &last) = (indices.first()?, indices.last()?);
+        if last - first + 1 != indices.len() {
+            log::warn!(
+                "tab_drag: refusing to drag group {group_id:?} - run is not contiguous                  (first={first} last={last} members={})",
+                indices.len()
+            );
+            return None;
+        }
+
+        let mut tabs = Vec::with_capacity(indices.len());
+        let mut member_pane_group_ids = Vec::with_capacity(indices.len());
+        for &index in &indices {
+            tabs.push(self.tab_transfer_info_at_index(index, ctx)?);
+            member_pane_group_ids.push(self.tabs.get(index)?.pane_group.id());
+        }
+
+        Some(TransferredTabGroup {
+            group,
+            tabs,
+            member_pane_group_ids,
+        })
+    }
+
+    /// Appends the remaining members of a transferred group to this window and
+    /// registers the group itself.
+    ///
+    /// The first member arrives through the normal
+    /// `NewWorkspaceSource::TransferredTab` placeholder path, so this handles
+    /// members 1..N. Their view trees must already have been transferred into
+    /// this window.
+    ///
+    /// Activates once at the end rather than per member: the per-tab insert
+    /// path activates on every call, which for an N-member group would close
+    /// the palette, close the agent view and retitle the window N times.
+    pub(crate) fn adopt_transferred_group_members(
+        &mut self,
+        mut group: TabGroup,
+        members: Vec<TransferredTab>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let group_id = group.id;
+        // DraggableState is a shared Arc, so the clone taken from the source
+        // group is the SAME live drag handle. Left alone, this window would
+        // bind a second Draggable to it and its on_drop would dispatch
+        // DropGroup into the preview workspace instead of the source.
+        group.draggable_state = Default::default();
+        for member in members {
+            let TransferredTab {
+                pane_group,
+                color,
+                draggable_state,
+                ..
+            } = member;
+            ctx.subscribe_to_view(&pane_group, move |me, pane_group, event, ctx| {
+                me.handle_file_tree_event(pane_group, event, ctx)
+            });
+            let mut tab_data = TabData::new(pane_group);
+            tab_data.selected_color =
+                color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            tab_data.draggable_state = draggable_state;
+            tab_data.group_id = Some(group_id);
+            self.tabs.push(tab_data);
+        }
+        // Stamp the placeholder member that arrived via the TransferredTab
+        // path, then register the group so every member resolves to it.
+        if let Some(first) = self.tabs.first_mut() {
+            first.group_id = Some(group_id);
+        }
+        self.tab_groups.insert(group_id, group);
+
+        let last = self.tabs.len().saturating_sub(1);
+        self.activate_tab_internal(last, ctx);
+        ctx.notify();
+    }
+
+    /// Removes the members of a transferred group from this (source) window,
+    /// resolved by pane-group identity.
+    ///
+    /// Goes through `remove_tab_without_undo` per member rather than draining
+    /// the vector directly, so each removal still clears the vertical-tabs
+    /// detail sidecar, prunes the MRU order, and prunes the group once its
+    /// last member leaves. Removes in descending index order so earlier
+    /// indices stay valid.
+    ///
+    /// When the members are everything this window has left, closes the window
+    /// the content-transfer way instead: `remove_tab` treats the last tab as
+    /// "close the window" using a bare close, which leaves pane detach
+    /// unsuppressed and would tear down pane groups that now live elsewhere.
+    fn remove_transferred_source_group(
+        &mut self,
+        member_pane_group_ids: &[EntityId],
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let indices = self.tab_indices_for_pane_group_ids(member_pane_group_ids);
+        log::info!(
+            "tab_drag: remove_transferred_source_group members={} resolved={:?} tabs={}",
+            member_pane_group_ids.len(),
+            indices,
+            self.tabs.len()
+        );
+        if indices.is_empty() {
+            log::warn!(
+                "tab_drag: transferred group members are already gone from the source                  (skipping remove)"
+            );
+            return;
+        }
+        for &index in &indices {
+            ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+        }
+        if indices.len() >= self.tabs.len() {
+            self.close_window_for_content_transfer(ctx);
+            return;
+        }
+        for &index in indices.iter().rev() {
+            self.remove_tab_without_undo(index, ctx);
+        }
+        log::info!(
+            "tab_drag: remove_transferred_source_group done wid={:?} tabs_now={}",
+            ctx.window_id(),
+            self.tabs.len()
+        );
+    }
+
     /// Prepares this workspace for having a pane group transferred out by
     /// suppressing pane-detach on close and unsubscribing from the view.
     /// The suppress flag is **not** auto-restored; callers that keep the
@@ -28002,12 +28297,73 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// Inserts a transferred group into this window's tab list as one
+    /// contiguous block.
+    ///
+    /// `insertion_index` must already have been resolved through
+    /// [`Self::resolve_group_drop_index`] - this does NOT re-clamp. The
+    /// per-tab insert clamps internally, which would shove a pinned group back
+    /// out of the pinned prefix and make the block land somewhere other than
+    /// where its ghost was drawn.
+    ///
+    /// Members go in with a single splice so the pinned boundary is not
+    /// re-evaluated part-way through, and the group is registered only after
+    /// the splice so anything reading `tab_groups` during it still sees the
+    /// pre-insert state. Activates once at the end rather than per member.
+    pub(crate) fn insert_transferred_tab_group_at_index(
+        &mut self,
+        transferred_group: TransferredTabGroup,
+        insertion_index: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let TransferredTabGroup {
+            mut group,
+            tabs,
+            member_pane_group_ids: _,
+        } = transferred_group;
+        if tabs.is_empty() {
+            return;
+        }
+        let group_id = group.id;
+        // The source's drag state must not be shared with this window's copy;
+        // the two would then be one live drag bound to two elements.
+        group.draggable_state = Default::default();
+
+        let index = insertion_index.min(self.tabs.len());
+        let mut members = Vec::with_capacity(tabs.len());
+        for member in tabs {
+            let TransferredTab {
+                pane_group,
+                color,
+                draggable_state,
+                ..
+            } = member;
+            ctx.subscribe_to_view(&pane_group, move |me, pane_group, event, ctx| {
+                me.handle_file_tree_event(pane_group, event, ctx)
+            });
+            let mut tab_data = TabData::new(pane_group);
+            tab_data.selected_color =
+                color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
+            tab_data.draggable_state = draggable_state;
+            tab_data.group_id = Some(group_id);
+            // Group pinning is the source of truth; members do not carry it.
+            tab_data.pinned = false;
+            members.push(tab_data);
+        }
+        let member_count = members.len();
+        self.tabs.splice(index..index, members);
+        self.tab_groups.insert(group_id, group);
+
+        self.activate_tab_internal(index + member_count - 1, ctx);
+        ctx.notify();
+    }
+
     /// If an insertion at `index` would land strictly inside a group's
     /// contiguous run (i.e. between two members of the same group), pushes it
     /// just past that group's last member so a cross-window drop can't split
     /// the group. Mirrors `clamp_to_unpinned_region`'s "push past the
     /// boundary" behavior; drops at a group's outer edges are left untouched.
-    fn clamp_past_group(&self, index: usize) -> usize {
+    pub(super) fn clamp_past_group(&self, index: usize) -> usize {
         // Record the group of the tab before our insertion.
         let Some(before) = index
             .checked_sub(1)
@@ -28035,6 +28391,25 @@ impl Workspace {
     /// Cross-window drags carry ungrouped, unpinned tabs, so the insertion
     /// point — and the ghost slot drawn from it — must never land inside the
     /// pinned prefix.
+    /// Insertion index for a dragged GROUP under the cursor.
+    ///
+    /// Resolves through the same function the commit uses, so the ghost slot
+    /// and the landing position cannot diverge. Takes `group_pinned` as a
+    /// parameter rather than reading the drag model: this runs inside
+    /// `CrossWindowTabDrag::update`, and re-borrowing the singleton there
+    /// fails its downcast and panics.
+    pub(crate) fn group_insertion_index_for_cursor(
+        &self,
+        window_id: WindowId,
+        cursor_position_on_screen: Vector2F,
+        group_pinned: bool,
+        ctx: &AppContext,
+    ) -> usize {
+        let raw_index =
+            self.raw_tab_insertion_index_for_cursor(window_id, cursor_position_on_screen, ctx);
+        self.resolve_group_drop_index(raw_index, group_pinned)
+    }
+
     pub(crate) fn tab_insertion_index_for_cursor(
         &self,
         window_id: WindowId,
@@ -28274,10 +28649,15 @@ impl Workspace {
         let source_tab_index = CrossWindowTabDrag::as_ref(ctx)
             .transferred_tab_index()
             .unwrap_or(0);
-        let source_was_single_tab = CrossWindowTabDrag::as_ref(ctx).source_was_single_tab();
+        // Identity of the dragged pane group. The put-back branch below
+        // resolves the source tab through this rather than through
+        // `source_tab_index`, which is frozen at drag start and goes stale if
+        // the source tab list changes mid-drag.
+        let source_pane_group_id = CrossWindowTabDrag::as_ref(ctx).source_pane_group_id();
+        let source_is_own_preview = CrossWindowTabDrag::as_ref(ctx).source_is_own_preview();
 
         log::info!(
-            "tab_drag: perform_handoff caller_wid={caller_window_id} target_wid={} insertion_index={} has_dedicated_preview={has_dedicated_preview} source_tab_index={source_tab_index} source_was_single_tab={source_was_single_tab}",
+            "tab_drag: perform_handoff caller_wid={caller_window_id} target_wid={} insertion_index={} has_dedicated_preview={has_dedicated_preview} source_tab_index={source_tab_index} source_is_own_preview={source_is_own_preview}",
             target.window_id,
             target.insertion_index
         );
@@ -28318,10 +28698,12 @@ impl Workspace {
                 return;
             }
 
-            let caller_draggable_state = self
-                .tabs
-                .get(source_tab_index)
-                .map(|tab| tab.draggable_state.clone());
+            // Resolve once by identity and reuse for the draggable-state clone,
+            // the unsubscribe and the removal below.
+            let source_index =
+                source_pane_group_id.and_then(|id| self.tab_index_for_pane_group_id(id));
+            let caller_draggable_state =
+                source_index.map(|index| self.tabs[index].draggable_state.clone());
 
             let Some(caller_draggable_state) = caller_draggable_state else {
                 CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
@@ -28339,14 +28721,31 @@ impl Workspace {
                 )
             });
 
-            if let Some(info) = result {
-                if let Some(tab) = self.tabs.get(source_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
+            // A group put-back needs none of the remove-and-reinsert dance
+            // below. Its placeholders are still in this window, still carry
+            // their group_id, and `execute_handoff_back_to_caller` has already
+            // moved every member's view tree home, so they simply own their
+            // views again. Removing one placeholder and inserting one tab
+            // would drop that member out of the group - the tab count would
+            // look right while one member came back ungrouped.
+            let is_group_put_back = CrossWindowTabDrag::as_ref(ctx).source_group_id().is_some();
+            if is_group_put_back {
+                if result.is_some() {
+                    self.current_workspace_state.is_tab_being_dragged = true;
+                    self.focus_active_tab(ctx);
+                    ctx.notify();
                 }
-                if source_was_single_tab {
+                return;
+            }
+
+            if let Some(info) = result {
+                if let Some(index) = source_index {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+                }
+                if source_is_own_preview {
                     self.close_window_for_content_transfer(ctx);
-                } else {
-                    self.remove_tab_without_undo(source_tab_index, ctx);
+                } else if let Some(index) = source_index {
+                    self.remove_tab_without_undo(index, ctx);
                 }
                 // The source placeholder is now removed, so `source_tab_index`
                 // is stale. Mark it consumed so a later reverse_handoff +
@@ -28368,6 +28767,75 @@ impl Workspace {
         }
 
         if !has_dedicated_preview {
+            // A group that took every tab in its window has no dedicated
+            // preview - this window IS the preview. Without a group branch
+            // here the single-tab path below would move ONE member across as
+            // an ungrouped tab, and finalize would then close this window with
+            // pane detach suppressed, destroying the other members' live
+            // shells.
+            if let Some(group_id) = CrossWindowTabDrag::as_ref(ctx).source_group_id() {
+                log::info!(
+                    "tab_drag: perform_handoff branch=whole_window_group->other target_wid={} caller_wid={caller_window_id}",
+                    target.window_id
+                );
+                let Some(transferred_group) =
+                    self.get_tab_group_transfer_info_for_attach(group_id, ctx)
+                else {
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.reset_to_floating();
+                    });
+                    return;
+                };
+                let group_pinned = transferred_group.group.pinned;
+                let member_ids = transferred_group.member_pane_group_ids.clone();
+
+                // Resolve the target BEFORE unsubscribing or transferring
+                // anything. This window is its own preview, so once the
+                // members are unsubscribed and their view trees moved there is
+                // no preview to fall back to - bailing after that point would
+                // leave the dragged sessions without a workspace.
+                let Some(target_workspace) =
+                    WorkspaceRegistry::as_ref(ctx).get(target.window_id, ctx)
+                else {
+                    log::warn!(
+                        "tab_drag: whole_window_group->other no target workspace for target_wid={} (reset_to_floating)",
+                        target.window_id
+                    );
+                    CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                        drag.reset_to_floating();
+                    });
+                    return;
+                };
+
+                for id in &member_ids {
+                    if let Some(index) = self.tab_index_for_pane_group_id(*id) {
+                        let pane_group = self.tabs[index].pane_group.clone();
+                        self.prepare_for_transferred_tab_attach(&pane_group, ctx);
+                    }
+                }
+                // Every view tree moves before the target's list is touched.
+                for id in &member_ids {
+                    ctx.transfer_view_tree_to_window(*id, caller_window_id, target.window_id);
+                }
+
+                let raw_index = target.insertion_index;
+                target_workspace.update(ctx, move |workspace, ctx| {
+                    let resolved = workspace.resolve_group_drop_index(raw_index, group_pinned);
+                    workspace.insert_transferred_tab_group_at_index(
+                        transferred_group,
+                        resolved,
+                        ctx,
+                    );
+                    workspace.current_workspace_state.is_tab_being_dragged = true;
+                });
+
+                ctx.windows().show_window_and_focus_app(target.window_id);
+                CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                    drag.mark_inserted_in_target(target.window_id, raw_index);
+                });
+                return;
+            }
+
             log::info!(
                 "tab_drag: perform_handoff branch=single_tab_source->other target_wid={} caller_wid={caller_window_id}",
                 target.window_id
@@ -28577,9 +29045,11 @@ impl Workspace {
                         .adjust_mouse_position(source_window_origin - window_position);
                 }
 
+                let source_pane_group_id = self.tabs[current_index].pane_group.id();
                 CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
                     drag.begin_single_tab_drag(
                         source_window_id,
+                        source_pane_group_id,
                         initial_drag_center_offset,
                         window_size,
                         last_known_target_tab_origin_in_window,
@@ -28593,6 +29063,7 @@ impl Workspace {
                 else {
                     return;
                 };
+                let source_pane_group_id = transferred_tab.pane_group.id();
 
                 let preview_window_id = crate::root_view::create_transferred_window(
                     transferred_tab,
@@ -28608,6 +29079,7 @@ impl Workspace {
                     drag.begin_multi_tab_drag(
                         source_window_id,
                         current_index,
+                        source_pane_group_id,
                         initial_drag_center_offset,
                         window_size,
                         last_known_target_tab_origin_in_window,
@@ -28762,7 +29234,88 @@ impl Workspace {
         }
     }
 
+    /// Removes the tab that was handed off to another window, resolving it by
+    /// pane-group identity.
+    ///
+    /// Resolving by the index captured at drag start is not safe: the source
+    /// tab list can shift while the drag is in flight (a shell exits and closes
+    /// its tab, a cmd-W, another window hands a tab off), and the stale index
+    /// then points at a bystander that is still in bounds, so a bounds check
+    /// does not catch it. A tab that is already gone is simply skipped.
+    fn remove_transferred_source_tab(
+        &mut self,
+        pane_group_id: EntityId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(index) = self.tab_index_for_pane_group_id(pane_group_id) else {
+            log::warn!(
+                "tab_drag: handle_drop_result source tab for pane_group={pane_group_id:?} is already gone (skipping remove)"
+            );
+            return;
+        };
+        ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+        if self.tabs.len() == 1 {
+            // `remove_tab` treats the last tab as "close the window" and does so
+            // with a plain `ctx.close_window()`, which leaves
+            // `suppress_detach_panes_on_window_close` false — `on_window_closed`
+            // would then detach the panes of every tab, including this pane
+            // group, which now lives in the target window. Close the same way
+            // the other content-transfer paths do instead.
+            self.close_window_for_content_transfer(ctx);
+            return;
+        }
+        self.remove_tab_without_undo(index, ctx);
+    }
+
+    /// Number of tabs that belong to any group, for integration testing.
+    ///
+    /// Gated on `integration_tests` so it does not exist in shipped builds.
+    #[cfg(feature = "integration_tests")]
+    pub fn grouped_tab_count(&self) -> usize {
+        self.tabs.iter().filter(|t| t.group_id.is_some()).count()
+    }
+
+    /// Group id of the tab at `index`, or `None` when it is ungrouped. Used by
+    /// integration tests to assert a group's members occupy one contiguous run.
+    ///
+    /// Gated on `integration_tests` so it does not exist in shipped builds.
+    #[cfg(feature = "integration_tests")]
+    pub fn tab_group_id_at(&self, index: usize) -> Option<TabGroupId> {
+        self.tabs.get(index).and_then(|tab| tab.group_id)
+    }
+
+    /// Read access to this window's tab groups, for integration testing.
+    ///
+    /// Gated on `integration_tests` so it does not exist in shipped builds.
+    #[cfg(feature = "integration_tests")]
+    pub fn tab_groups_read(&self) -> &HashMap<TabGroupId, TabGroup> {
+        &self.tab_groups
+    }
+
+    /// Index of the tab whose pane group is `pane_group_id`, if still present.
+    pub(crate) fn tab_index_for_pane_group_id(&self, pane_group_id: EntityId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.pane_group.id() == pane_group_id)
+    }
+
+    /// Indices of the tabs whose pane group is in `pane_group_ids`, ascending.
+    ///
+    /// The identity half of cross-window cleanup and snapshot filtering: the
+    /// source tab list can shift while a drag is in flight, so a drag-start
+    /// index no longer identifies the tab it was captured for. Ids that are no
+    /// longer present are simply absent from the result.
+    pub(crate) fn tab_indices_for_pane_group_ids(&self, pane_group_ids: &[EntityId]) -> Vec<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| pane_group_ids.contains(&tab.pane_group.id()))
+            .map(|(index, _)| index)
+            .collect()
+    }
+
     /// Performs the source-workspace cleanup indicated by `DropResult`.
+    ///
     /// Cross-workspace mutations (preview/target updates, focus) happen inside
     /// `CrossWindowTabDrag::on_drop`; this method only touches `self`.
     pub(crate) fn handle_drop_result(&mut self, result: DropResult, ctx: &mut ViewContext<Self>) {
@@ -28774,44 +29327,20 @@ impl Workspace {
                 }
                 self.focus_active_tab(ctx);
             }
-            DropResult::CloseSourceWindow {
-                transferred_tab_index,
-            } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
+            DropResult::CloseSourceWindow { pane_group_id } => {
+                if let Some(index) = self.tab_index_for_pane_group_id(pane_group_id) {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
                 }
                 self.close_window_for_content_transfer(ctx);
             }
-            DropResult::RemoveSourceTab {
-                transferred_tab_index,
-            } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
-                } else {
-                    log::warn!(
-                        "tab_drag: handle_drop_result RemoveSourceTab stale index={transferred_tab_index} tabs_len={} (skipping remove)",
-                        self.tabs.len()
-                    );
-                }
-                if transferred_tab_index < self.tabs.len() {
-                    self.remove_tab_without_undo(transferred_tab_index, ctx);
-                }
+            DropResult::RemoveSourceTab { pane_group_id } => {
+                self.remove_transferred_source_tab(pane_group_id, ctx);
             }
             DropResult::RemoveSourceTabAndClosePreview {
-                transferred_tab_index,
+                pane_group_id,
                 preview_window_id,
             } => {
-                if let Some(tab) = self.tabs.get(transferred_tab_index) {
-                    ctx.unsubscribe_to_view(&tab.pane_group);
-                } else {
-                    log::warn!(
-                        "tab_drag: handle_drop_result RemoveSourceTabAndClosePreview stale index={transferred_tab_index} tabs_len={} (skipping remove)",
-                        self.tabs.len()
-                    );
-                }
-                if transferred_tab_index < self.tabs.len() {
-                    self.remove_tab_without_undo(transferred_tab_index, ctx);
-                }
+                self.remove_transferred_source_tab(pane_group_id, ctx);
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
             }
@@ -28824,6 +29353,27 @@ impl Workspace {
                 // until `on_window_closed` fires.
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
+            }
+            DropResult::RemoveSourceGroup {
+                member_pane_group_ids,
+            } => {
+                self.remove_transferred_source_group(&member_pane_group_ids, ctx);
+            }
+            DropResult::RemoveSourceGroupAndClosePreview {
+                member_pane_group_ids,
+                preview_window_id,
+            } => {
+                self.remove_transferred_source_group(&member_pane_group_ids, ctx);
+                ctx.windows()
+                    .close_window(preview_window_id, TerminationMode::ContentTransferred);
+            }
+            DropResult::CloseSourceWindowForGroup {
+                member_pane_group_ids,
+            } => {
+                for index in self.tab_indices_for_pane_group_ids(&member_pane_group_ids) {
+                    ctx.unsubscribe_to_view(&self.tabs[index].pane_group);
+                }
+                self.close_window_for_content_transfer(ctx);
             }
             DropResult::DropInto { target } => {
                 // Drop landed on a tab bar that hadn't yet triggered a
@@ -29149,6 +29699,165 @@ impl Workspace {
     /// group's center. The split also gives swap/un-swap hysteresis that prevents
     /// constantly swapping back and forth. A collapsed group is one tab wide, so
     /// both directions use its center instead.
+    /// True when a group drag has left the tab bar on its perpendicular axis
+    /// far enough to mean "detach", using the same rects and sensitivity as
+    /// the per-tab path so both gestures feel identical.
+    fn is_group_drag_outside_tab_bar(&self, position: RectF, ctx: &ViewContext<Self>) -> bool {
+        const DETACH_SENSITIVITY: f32 = 10.0;
+        let drag_center = position.center();
+        let rects = tab_bar_rects_for_window(ctx.window_id(), ctx);
+        if rects.is_empty() {
+            let drag_y = position.min_y();
+            return !(-DETACH_SENSITIVITY..=TAB_BAR_HEIGHT + DETACH_SENSITIVITY).contains(&drag_y);
+        }
+        rects.into_iter().all(|rect| {
+            let is_vertical = rect.height() > rect.width();
+            if is_vertical {
+                drag_center.x() < rect.min_x() - DETACH_SENSITIVITY
+                    || drag_center.x() > rect.max_x() + DETACH_SENSITIVITY
+            } else {
+                drag_center.y() < rect.min_y() - DETACH_SENSITIVITY
+                    || drag_center.y() > rect.max_y() + DETACH_SENSITIVITY
+            }
+        })
+    }
+
+    /// Moves a whole group out of this window into a floating preview and arms
+    /// the cross-window drag model.
+    ///
+    /// Ordering is load-bearing. The payload is captured first, while it is
+    /// still only a read; the members are marked detached; the preview window
+    /// is created and every member's view tree moved into it in one update
+    /// with no repaint in between, so no render can observe the group split
+    /// across two windows. The source tab list is deliberately NOT mutated
+    /// here - the members stay as detached placeholders and are removed at
+    /// drop time, which keeps the list consistent with view ownership at every
+    /// render boundary during the drag.
+    fn detach_tab_group_to_preview_window(
+        &mut self,
+        group_id: TabGroupId,
+        position: RectF,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
+            return;
+        };
+        let Some(transferred_group) = self.get_tab_group_transfer_info_for_attach(group_id, ctx)
+        else {
+            return;
+        };
+        let Some(window_bounds) = ctx.window_bounds(&ctx.window_id()) else {
+            return;
+        };
+
+        let member_pane_group_ids = transferred_group.member_pane_group_ids.clone();
+        let group_pinned = transferred_group.group.pinned;
+        let takes_every_tab = last - first + 1 >= self.tabs.len();
+
+        let source_window_origin = window_bounds.origin();
+        let drag_origin_in_window = vec2f(position.min_x(), position.min_y());
+        let drag_origin_on_screen = vec2f(
+            source_window_origin.x() + drag_origin_in_window.x(),
+            source_window_origin.y() + drag_origin_in_window.y(),
+        );
+        let last_known_target_tab_origin_in_window = ctx
+            .element_position_by_id(tab_position_id(0))
+            .map(|rect| vec2f(rect.min_x(), rect.min_y()))
+            .unwrap_or_else(|| vec2f(0.0, 0.0));
+        let window_position = drag_origin_on_screen - last_known_target_tab_origin_in_window;
+        let window_size = window_bounds.size();
+        let initial_drag_center_offset =
+            position.center() - vec2f(position.min_x(), position.min_y());
+        let source_window_id = ctx.window_id();
+        let was_vertical_layout = uses_vertical_tabs(ctx);
+        let source_element_size = position.size();
+
+        if takes_every_tab {
+            // Nothing would be left behind, so the source window is itself the
+            // floating preview and no view transfer happens - the same shape
+            // as dragging a single-tab window.
+            let new_bounds = RectF::new(window_position, window_size);
+            ctx.set_and_cache_window_bounds(source_window_id, new_bounds);
+            ctx.windows().cancel_synthetic_drag(source_window_id);
+            if let Some(group) = self.tab_groups.get(&group_id) {
+                group.draggable_state.set_suppress_overlay_paint(true);
+                group
+                    .draggable_state
+                    .adjust_mouse_position(source_window_origin - window_position);
+            }
+            CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
+                drag.begin_group_drag(
+                    source_window_id,
+                    group_id,
+                    first,
+                    member_pane_group_ids,
+                    group_pinned,
+                    None,
+                    initial_drag_center_offset,
+                    window_size,
+                    last_known_target_tab_origin_in_window,
+                    was_vertical_layout,
+                    source_element_size,
+                );
+            });
+            ctx.notify();
+            return;
+        }
+
+        for index in first..=last {
+            if let Some(tab_data) = self.tabs.get_mut(index) {
+                tab_data.detached = true;
+            }
+        }
+
+        let Some(preview_window_id) = crate::root_view::create_transferred_group_window(
+            transferred_group,
+            source_window_id,
+            window_size,
+            window_position,
+            ctx,
+        ) else {
+            // Nothing was armed, so undo the placeholder marking or those tabs
+            // stay undraggable for the rest of the session.
+            for index in first..=last {
+                if let Some(tab_data) = self.tabs.get_mut(index) {
+                    tab_data.detached = false;
+                }
+            }
+            ctx.notify();
+            return;
+        };
+        ctx.set_suppress_focus_for_window(Some(preview_window_id));
+
+        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _ctx| {
+            drag.begin_group_drag(
+                source_window_id,
+                group_id,
+                first,
+                member_pane_group_ids,
+                group_pinned,
+                Some(preview_window_id),
+                initial_drag_center_offset,
+                window_size,
+                last_known_target_tab_origin_in_window,
+                was_vertical_layout,
+                source_element_size,
+            );
+        });
+
+        // The active tab went with the group; move focus to a survivor.
+        if (first..=last).contains(&self.active_tab_index) {
+            let adjacent = if last + 1 < self.tabs.len() {
+                last + 1
+            } else {
+                first.saturating_sub(1)
+            };
+            self.set_active_tab_index(adjacent, ctx);
+        }
+
+        ctx.notify();
+    }
+
     pub(crate) fn on_group_drag(
         &mut self,
         group_id: TabGroupId,
@@ -29159,6 +29868,55 @@ impl Workspace {
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };
+
+        // A cross-window drag is already in flight: forward to the drag model
+        // and let it drive, exactly as `on_tab_drag` does. Without this the
+        // in-window reorder below would keep churning the source list while
+        // the group floats in its preview window.
+        if CrossWindowTabDrag::as_ref(ctx).is_active() {
+            let window_id = ctx.window_id();
+            let drag_result = CrossWindowTabDrag::handle(ctx)
+                .update(ctx, |drag, ctx| drag.on_drag(window_id, position, ctx));
+            match drag_result {
+                DragResult::AdjustDraggable { adjustment } => {
+                    if let Some(group) = self.tab_groups.get(&group_id) {
+                        group.draggable_state.adjust_mouse_position(adjustment);
+                    }
+                }
+                DragResult::ReorderInSource => {
+                    // Cursor is back over this window's own tab bar. Reorder
+                    // the detached placeholder run in place, like an in-window
+                    // group drag, and report where it now starts so the drop
+                    // puts the group back at the position the user sees.
+                    let raw = self.raw_tab_insertion_index_for_cursor(
+                        ctx.window_id(),
+                        cursor_position,
+                        ctx,
+                    );
+                    let group_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
+                    let target = self.resolve_group_drop_index(raw, group_pinned);
+                    self.move_group_block(group_id, target, ctx);
+                    if let Some((new_first, _)) = group_member_index_range(&self.tabs, group_id) {
+                        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                            drag.set_source_placeholder_index(new_first);
+                        });
+                    }
+                }
+                DragResult::Handled => {}
+            }
+            ctx.notify();
+            return;
+        }
+
+        // Detach the whole group into its own window once the drag leaves the
+        // tab bar on the perpendicular axis, mirroring `on_tab_drag`.
+        if FeatureFlag::DragTabsToWindows.is_enabled()
+            && self.is_group_drag_outside_tab_bar(position, ctx)
+        {
+            self.detach_tab_group_to_preview_window(group_id, position, ctx);
+            return;
+        }
+
         // Reorders that would carry the block across the pinned/unpinned
         // boundary are skipped below: a pinned group must stay in the pinned
         // prefix and an unpinned group must stay out of it.
@@ -29417,6 +30175,28 @@ fn group_member_indices(
 /// in `tabs` that belong to `group_id`, or `None` if the group has no members.
 /// The run is assumed to be contiguous (the workspace enforces this invariant);
 /// only the earliest and latest matching indices are returned.
+/// Maps an insertion index computed BEFORE a contiguous run is drained out of
+/// a list to the equivalent index AFTER the drain.
+///
+/// A run occupying `[first, first + len)` collapses to a single point at
+/// `first`. An insertion at or before `first` is unaffected; one at or after
+/// the run's end shifts down by the whole run; one strictly inside the run has
+/// nowhere to go, because a block cannot be inserted into itself, so it
+/// resolves to `first`.
+///
+/// Subtracting a flat `len` would under-shoot by up to `len - 1` inside that
+/// straddle window, which is why this is not the same arithmetic as the
+/// single-tab path's `- 1`.
+pub(crate) fn post_drain_index(index: usize, first: usize, len: usize) -> usize {
+    if index <= first {
+        index
+    } else if index >= first + len {
+        index - len
+    } else {
+        first
+    }
+}
+
 fn group_member_index_range(tabs: &[TabData], group_id: TabGroupId) -> Option<(usize, usize)> {
     let mut members = group_member_indices(tabs, group_id);
     let first = members.next()?;
@@ -29514,11 +30294,18 @@ fn render_cross_window_ghost_chip(
     // (single-tab drags use the source window itself as the preview, which
     // by definition has only one tab; multi-tab drags move the dragged tab
     // to a dedicated preview window's index 0).
+    // A group drag shows every member, so the chip matches the block that was
+    // grabbed rather than just its first tab.
+    let is_group_drag = CrossWindowTabDrag::as_ref(app).source_group_id().is_some();
     let inner = WorkspaceRegistry::as_ref(app)
         .get(ghost.preview_window_id, app)
         .map(|ws| {
-            ws.as_ref(app)
-                .render_tab_for_drag_ghost(0, ghost.was_vertical_layout, app)
+            let workspace = ws.as_ref(app);
+            if is_group_drag {
+                workspace.render_group_for_drag_ghost(ghost.was_vertical_layout, app)
+            } else {
+                workspace.render_tab_for_drag_ghost(0, ghost.was_vertical_layout, app)
+            }
         })
         .unwrap_or_else(|| Empty::new().finish());
 
