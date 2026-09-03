@@ -4110,16 +4110,29 @@ impl AgentDriver {
              harness={harness_name} attempt=3 method=force_kill"
         );
         Self::send_harness_exit_telemetry(harness_name, "force_kill", foreground).await;
-        if let Err(error) = runner
-            .force_kill(foreground)
-            .await
-            .context("Failed to force-kill harness")
-        {
-            report_error!(error);
-        }
+        Self::force_kill_harness(foreground).await;
         Err(AgentDriverError::HarnessExitTimedOut {
             harness: harness_name.to_owned(),
         })
+    }
+
+    /// Best-effort SIGKILL of the harness process group on this driver's terminal.
+    async fn force_kill_harness(foreground: &ModelSpawner<Self>) {
+        let shell_process_info = match foreground
+            .spawn(|me, ctx| me.terminal_driver.as_ref(ctx).shell_process_info(ctx))
+            .await
+        {
+            Ok(info) => info,
+            Err(error) => {
+                report_error!(anyhow!(error).context("Failed to force-kill harness"));
+                return;
+            }
+        };
+        let Some(shell_process_info) = shell_process_info else {
+            log::warn!("No shell process info available; skipping harness force-kill");
+            return;
+        };
+        harness::process_control::force_kill_harness_if_safe(&shell_process_info);
     }
 
     /// Emits a telemetry event for one attempt in the harness exit

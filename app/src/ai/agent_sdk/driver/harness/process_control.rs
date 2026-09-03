@@ -8,7 +8,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 ///
 /// If that cannot be proved, skips the signal. The caller still returns on
 /// the bounded path; the sandbox is torn down afterward.
-pub(super) fn force_kill_harness_if_safe(shell: &ShellProcessInfo) {
+pub(crate) fn force_kill_harness_if_safe(shell: &ShellProcessInfo) {
     #[cfg(unix)]
     {
         let target = proven_kill_pgid(
@@ -54,22 +54,22 @@ pub(super) fn proven_kill_pgid(
 #[cfg(unix)]
 fn untrusted_foreground_pgid(shell: &ShellProcessInfo) -> Option<u32> {
     let fd = shell.pty_leader_fd?;
-    // SAFETY: `tcgetpgrp` only reads terminal state for `fd`. A closed or
-    // reused descriptor can fail or name an unrelated terminal's group; that
-    // value is not signaled unless `proven_kill_pgid` accepts it.
-    let pgid = unsafe { libc::tcgetpgrp(fd) };
-    (pgid > 0).then_some(pgid as u32)
+    // A closed or reused descriptor can fail or name an unrelated terminal's
+    // group; that value is not signaled unless `proven_kill_pgid` accepts it.
+    nix::unistd::tcgetpgrp(fd)
+        .ok()
+        .map(|pid| pid.as_raw() as u32)
+        .filter(|&pgid| pgid > 0)
 }
 
 #[cfg(unix)]
 fn current_pgid() -> u32 {
-    // SAFETY: `getpgrp` has no failure mode and only reads this process's group.
-    unsafe { libc::getpgrp() as u32 }
+    nix::unistd::getpgrp().as_raw() as u32
 }
 
 #[cfg(unix)]
 fn live_tree_pgids(shell_pid: u32) -> Vec<u32> {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
 
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 
@@ -84,50 +84,59 @@ fn live_tree_pgids(shell_pid: u32) -> Vec<u32> {
         return Vec::new();
     }
 
+    let mut children_of: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, process) in system.processes() {
+        if let Some(parent) = process.parent() {
+            children_of
+                .entry(parent.as_u32())
+                .or_default()
+                .push(pid.as_u32());
+        }
+    }
+
     let mut pgids = HashSet::new();
     if let Some(pgid) = process_group_of(shell) {
         pgids.insert(pgid);
     }
-    for pid in descendants_of(&system, shell) {
-        if let Some(pgid) = process_group_of(pid) {
+    for pid in descendants_from_parent_map(&children_of, shell_pid) {
+        if let Some(pgid) = process_group_of(Pid::from_u32(pid)) {
             pgids.insert(pgid);
         }
     }
     pgids.into_iter().collect()
 }
 
-#[cfg(unix)]
-fn descendants_of(
-    system: &sysinfo::System,
-    pid: sysinfo::Pid,
-) -> std::collections::HashSet<sysinfo::Pid> {
-    let mut descendants = std::collections::HashSet::new();
-    loop {
-        let mut added = false;
-        for (candidate, process) in system.processes() {
-            if descendants.contains(candidate) {
-                continue;
+/// Direct descendants of `root`, walking a parent→children map once.
+/// `root` itself is not included. Duplicate edges and cycles are skipped.
+#[cfg(any(unix, test))]
+fn descendants_from_parent_map(
+    children_of: &std::collections::HashMap<u32, Vec<u32>>,
+    root: u32,
+) -> std::collections::HashSet<u32> {
+    use std::collections::HashSet;
+
+    let mut descendants = HashSet::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        let Some(children) = children_of.get(&pid) else {
+            continue;
+        };
+        for &child in children {
+            if descendants.insert(child) {
+                stack.push(child);
             }
-            let Some(parent) = process.parent() else {
-                continue;
-            };
-            if parent == pid || descendants.contains(&parent) {
-                descendants.insert(*candidate);
-                added = true;
-            }
-        }
-        if !added {
-            return descendants;
         }
     }
+    descendants
 }
 
 #[cfg(unix)]
 fn process_group_of(pid: sysinfo::Pid) -> Option<u32> {
-    // SAFETY: `getpgid` only reads scheduling metadata for `pid`, and reports
-    // failure through its return value for pids that no longer exist.
-    let pgid = unsafe { libc::getpgid(pid.as_u32() as libc::pid_t) };
-    (pgid > 0).then_some(pgid as u32)
+    let pid = nix::unistd::Pid::from_raw(pid.as_u32() as i32);
+    nix::unistd::getpgid(Some(pid))
+        .ok()
+        .map(|pgid| pgid.as_raw() as u32)
+        .filter(|&pgid| pgid > 0)
 }
 
 #[cfg(unix)]

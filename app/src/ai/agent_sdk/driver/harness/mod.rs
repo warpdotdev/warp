@@ -45,7 +45,7 @@ pub(crate) mod codex_transcript;
 pub(crate) mod exit_escalation;
 mod gemini;
 mod json_utils;
-mod process_control;
+pub(crate) mod process_control;
 mod skill_dirs_publish;
 mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
@@ -536,41 +536,12 @@ pub(crate) trait HarnessRunner: Send + Sync {
     /// Gracefully ask the harness to exit.
     async fn exit(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()>;
 
-    /// Terminal driver backing this harness's terminal session. Required so
-    /// the default [`Self::force_kill`] implementation can locate the
-    /// harness's underlying pty/shell process without every implementor
-    /// having to duplicate that lookup.
-    fn terminal_driver(&self) -> ModelHandle<TerminalDriver>;
-
     /// Sends a follow-up input shortly after [`Self::exit`], without waiting
     /// to see whether it's needed, to retry a dropped write or dismiss a
     /// confirmation the harness may have opened (e.g. Claude Code's
     /// background-task exit confirmation). No-op by default; override for
     /// harnesses with a known follow-up worth sending blind.
     async fn exit_followup(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
-        Ok(())
-    }
-
-    /// Best-effort last resort when [`Self::exit`] and [`Self::exit_followup`]
-    /// did not get the CLI to exit. Signals only a process group proved to
-    /// belong to this terminal's shell tree; skips the kill if that cannot be
-    /// proved. Does not wait for the process to disappear.
-    async fn force_kill(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
-        let terminal_driver = self.terminal_driver();
-        let shell_process_info = foreground
-            .spawn(move |_, ctx| {
-                let terminal = terminal_driver.as_ref(ctx);
-                terminal.shell_process_info(ctx)
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Agent driver dropped while force-killing harness"))?;
-
-        let Some(shell_process_info) = shell_process_info else {
-            log::warn!("No shell process info available; skipping harness force-kill");
-            return Ok(());
-        };
-
-        process_control::force_kill_harness_if_safe(&shell_process_info);
         Ok(())
     }
 

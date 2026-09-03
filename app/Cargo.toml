@@ -375,6 +375,7 @@ signal-hook = "0.3.17"
 nix = { workspace = true, features = [
     "fs",
     "hostname",
+    "process",
     "resource",
     "signal",
     "socket",

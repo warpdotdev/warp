@@ -209,10 +209,6 @@ impl HarnessRunner for GeminiHarnessRunner {
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /quit"))
     }
 
-    fn terminal_driver(&self) -> ModelHandle<TerminalDriver> {
-        self.terminal_driver.clone()
-    }
-
     async fn save_conversation(
         &self,
         save_point: SavePoint,

@@ -371,10 +371,6 @@ impl HarnessRunner for CodexHarnessRunner {
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /exit"))
     }
 
-    fn terminal_driver(&self) -> ModelHandle<TerminalDriver> {
-        self.terminal_driver.clone()
-    }
-
     async fn exit_followup(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         // Retry with a bare Enter shortly after `/exit`, in case the first
         // write was dropped (e.g. the block was transiently under agent
