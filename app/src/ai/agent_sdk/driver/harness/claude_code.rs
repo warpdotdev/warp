@@ -20,7 +20,7 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
     ClaudeResumeInfo, ClaudeTranscriptEnvelope, claude_config_dir, home_dir_for_claude_config,
-    read_envelope, rehydrate_claude_transcript,
+    read_envelope, read_envelope_requiring_main_transcript, rehydrate_claude_transcript,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
@@ -134,7 +134,7 @@ impl ThirdPartyHarness for ClaudeHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -145,12 +145,12 @@ impl ThirdPartyHarness for ClaudeHarness {
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_claude_environment_config(working_dir, resolved_env_vars).map_err(|error| {
-            AgentDriverError::HarnessConfigSetupFailed {
+        prepare_claude_environment_config(harness_working_dir, resolved_env_vars).map_err(
+            |error| AgentDriverError::HarnessConfigSetupFailed {
                 harness: self.cli_agent().command_prefix().to_owned(),
                 error,
-            }
-        })?;
+            },
+        )?;
 
         // The ResumePayload shouldn't contain non-Claude information, error if it does.
         let claude_resume = resume.map(ClaudeResumeInfo::try_from).transpose()?;
@@ -174,7 +174,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             self.cli_agent().command_prefix(),
             &owned_prompt,
             system_prompt,
-            working_dir,
+            harness_working_dir,
             task_id,
             server_api,
             terminal_driver,
@@ -245,7 +245,7 @@ struct ClaudeHarnessRunner {
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<ClaudeRunnerState>,
     session_id: Uuid,
-    working_dir: PathBuf,
+    harness_working_dir: PathBuf,
     parent_bridge: Option<MessageBridge>,
     /// Lazily cached output of `claude --version`.
     claude_version: Mutex<Option<String>>,
@@ -261,7 +261,7 @@ impl ClaudeHarnessRunner {
         cli_command: &str,
         prompt: &str,
         system_prompt: Option<&str>,
-        working_dir: &Path,
+        harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -279,7 +279,7 @@ impl ClaudeHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                rehydrate_claude_transcript(&mut envelope, working_dir)
+                rehydrate_claude_transcript(&mut envelope, harness_working_dir)
                     .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (session_id, Some(conversation_id))
             }
@@ -328,7 +328,7 @@ impl ClaudeHarnessRunner {
             terminal_driver,
             state: Mutex::new(ClaudeRunnerState::Preexec),
             session_id,
-            working_dir: working_dir.to_path_buf(),
+            harness_working_dir: harness_working_dir.to_path_buf(),
             parent_bridge,
             claude_version: Mutex::new(None),
             preexisting_conversation_id,
@@ -579,7 +579,8 @@ impl HarnessRunner for ClaudeHarnessRunner {
 
         let client = self.client.as_ref();
         let session_id = self.session_id;
-        let working_dir = &self.working_dir;
+        let harness_working_dir = &self.harness_working_dir;
+        let require_main_transcript = matches!(save_point, SavePoint::Final);
 
         futures::try_join!(
             super::upload_current_block_snapshot(
@@ -593,8 +594,9 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 client,
                 conversation_id,
                 session_id,
-                working_dir,
-                claude_version
+                harness_working_dir,
+                claude_version,
+                require_main_transcript,
             ),
         )?;
 
@@ -618,16 +620,21 @@ async fn upload_transcript(
     client: &dyn HarnessSupportClient,
     conversation_id: AIConversationId,
     session_id: Uuid,
-    working_dir: &Path,
+    harness_working_dir: &Path,
     claude_version: Option<String>,
+    require_main_transcript: bool,
 ) -> Result<()> {
     log::info!("Uploading Claude Code transcript to conversation {conversation_id}");
 
     let config_dir = claude_config_dir().context("Failed to resolve Claude config dir")?;
-    let working_dir = working_dir.to_path_buf();
+    let harness_working_dir = harness_working_dir.to_path_buf();
     let body = tokio::task::spawn_blocking(move || {
-        let mut envelope = read_envelope(session_id, &working_dir, &config_dir)
-            .with_context(|| format!("Failed to read transcript for session {session_id}"))?;
+        let mut envelope = if require_main_transcript {
+            read_envelope_requiring_main_transcript(session_id, &harness_working_dir, &config_dir)
+        } else {
+            read_envelope(session_id, &harness_working_dir, &config_dir)
+        }
+        .with_context(|| format!("Failed to read transcript for session {session_id}"))?;
         envelope.claude_version = claude_version;
         serde_json::to_vec(&envelope).context("Failed to serialize transcript envelope")
     })
@@ -640,16 +647,20 @@ async fn upload_transcript(
     upload_to_target(client.http_client(), &target, body).await
 }
 pub(crate) fn prepare_claude_environment_config(
-    working_dir: &Path,
+    harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
     let claude_dir = claude_config_dir()?;
     let claude_settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let api_key_suffix = resolve_anthropic_api_key_suffix(resolved_env_vars);
-    prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
+    prepare_claude_config(
+        &claude_json_path,
+        harness_working_dir,
+        api_key_suffix.as_deref(),
+    )?;
     prepare_claude_settings(&claude_settings_path)?;
-    publish_warp_skill_dirs_for_claude(working_dir);
+    publish_warp_skill_dirs_for_claude(harness_working_dir);
     Ok(())
 }
 

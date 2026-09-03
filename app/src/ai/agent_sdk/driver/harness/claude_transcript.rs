@@ -121,11 +121,35 @@ pub(crate) fn read_envelope(
     cwd: &Path,
     config_root: &Path,
 ) -> Result<ClaudeTranscriptEnvelope> {
+    read_envelope_impl(session_uuid, cwd, config_root, false)
+}
+
+/// Assemble a [`ClaudeTranscriptEnvelope`], returning an error if the main transcript is absent.
+pub(crate) fn read_envelope_requiring_main_transcript(
+    session_uuid: Uuid,
+    cwd: &Path,
+    config_root: &Path,
+) -> Result<ClaudeTranscriptEnvelope> {
+    read_envelope_impl(session_uuid, cwd, config_root, true)
+}
+
+fn read_envelope_impl(
+    session_uuid: Uuid,
+    cwd: &Path,
+    config_root: &Path,
+    require_main_transcript: bool,
+) -> Result<ClaudeTranscriptEnvelope> {
     let encoded = encode_cwd(cwd);
     let projects_dir = config_root.join("projects").join(&encoded);
 
     // Main session transcript.
     let session_file = projects_dir.join(format!("{session_uuid}.jsonl"));
+    if require_main_transcript && !session_file.exists() {
+        anyhow::bail!(
+            "Claude Code transcript does not exist after harness termination: {}",
+            session_file.display()
+        );
+    }
     let entries = read_jsonl(&session_file)?;
 
     // Subagents are stored in a directory named after the session UUID.

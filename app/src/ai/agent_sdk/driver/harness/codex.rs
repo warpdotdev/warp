@@ -122,7 +122,7 @@ impl ThirdPartyHarness for CodexHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -134,7 +134,7 @@ impl ThirdPartyHarness for CodexHarness {
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_codex_environment_config(
-            working_dir,
+            harness_working_dir,
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
@@ -170,7 +170,7 @@ impl ThirdPartyHarness for CodexHarness {
             self.cli_agent().command_prefix(),
             &owned_prompt,
             system_prompt,
-            working_dir,
+            harness_working_dir,
             client,
             terminal_driver,
             codex_resume,
@@ -234,7 +234,7 @@ impl CodexHarnessRunner {
         cli_command: &str,
         prompt: &str,
         _system_prompt: Option<&str>,
-        _working_dir: &Path,
+        harness_working_dir: &Path,
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
@@ -248,7 +248,7 @@ impl CodexHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                let continuation = rehydrate_codex_transcript(&mut envelope, _working_dir)
+                let continuation = rehydrate_codex_transcript(&mut envelope, harness_working_dir)
                     .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (
                     Some(session_id),
