@@ -2911,6 +2911,11 @@ pub struct TerminalView {
     orchestration_child_live_unavailable: bool,
     #[cfg(feature = "local_tty")]
     dev_container_build: Option<ModelHandle<dev_container::operation::DevContainerBuildOperation>>,
+    #[cfg(feature = "local_tty")]
+    dev_container_awaiting_layout: bool,
+    #[cfg(all(unix, feature = "local_tty"))]
+    dev_container_pty_resize:
+        Option<Arc<parking_lot::Mutex<Option<dev_container::PtyResizeHandle>>>>,
 
     /// Conversation details panel (side panel showing conversation/task metadata).
     /// Available for cloud Oz runs and for any active local AI conversation.
@@ -4495,6 +4500,10 @@ impl TerminalView {
             orchestration_child_live_unavailable: false,
             #[cfg(feature = "local_tty")]
             dev_container_build: None,
+            #[cfg(feature = "local_tty")]
+            dev_container_awaiting_layout: false,
+            #[cfg(all(unix, feature = "local_tty"))]
+            dev_container_pty_resize: None,
             conversation_details_panel_toggle_mouse_state: Default::default(),
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
@@ -16426,6 +16435,8 @@ impl TerminalView {
 
         let size_update = SizeUpdateBuilder::after_layout(*self.size_info, size).build(self, ctx);
         self.resize_internal(size_update, ctx);
+        #[cfg(feature = "local_tty")]
+        self.after_dev_container_layout(size, ctx);
 
         // Update the height of the "gap" - the space we would need to clear
         // in the terminal to accommodate a clear or ctrl-L.

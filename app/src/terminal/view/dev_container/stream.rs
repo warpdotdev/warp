@@ -21,7 +21,7 @@ use super::operation::DevContainerBuildCancel;
 pub(crate) const STDOUT_LIMIT: usize = 1024 * 1024;
 const STDERR_TAIL_LIMIT: usize = 8 * 1024;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PtySize {
     pub columns: u16,
     pub rows: u16,
@@ -33,6 +33,40 @@ impl Default for PtySize {
             columns: 80,
             rows: 24,
         }
+    }
+}
+
+impl PtySize {
+    pub(crate) fn from_grid(columns: usize, rows: usize) -> Self {
+        Self {
+            columns: columns.max(1) as u16,
+            rows: rows.max(1) as u16,
+        }
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone)]
+pub(crate) struct PtyResizeHandle {
+    stdout: Arc<std::fs::File>,
+    stderr: Arc<std::fs::File>,
+}
+
+#[cfg(not(unix))]
+#[derive(Clone)]
+pub(crate) struct PtyResizeHandle;
+
+#[cfg(unix)]
+impl PtyResizeHandle {
+    pub(crate) fn resize(&self, size: PtySize) -> io::Result<()> {
+        set_pty_winsize(&*self.stdout, size)?;
+        set_pty_winsize(&*self.stderr, size)?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reported_sizes(&self) -> io::Result<(PtySize, PtySize)> {
+        Ok((pty_winsize(&*self.stdout)?, pty_winsize(&*self.stderr)?))
     }
 }
 
@@ -83,21 +117,32 @@ pub(crate) async fn drain_dev_container_child<F>(
 where
     F: FnMut(&[u8]) + Send,
 {
-    drain_dev_container_child_with_size(command, cancel, on_output, PtySize::default()).await
+    drain_dev_container_child_with_size_and_resize(
+        command,
+        cancel,
+        on_output,
+        PtySize::default(),
+        None,
+    )
+    .await
 }
 
-pub(crate) async fn drain_dev_container_child_with_size<F>(
+pub(crate) async fn drain_dev_container_child_with_size_and_resize<F>(
     mut command: Command,
     cancel: Option<&DevContainerBuildCancel>,
     on_output: F,
     pty_size: PtySize,
+    resize_slot: Option<Arc<Mutex<Option<PtyResizeHandle>>>>,
 ) -> io::Result<(DevContainerDrain, bool)>
 where
     F: FnMut(&[u8]) + Send,
 {
     #[cfg(unix)]
     {
-        let (stdout_master, stderr_master) = attach_stdio_ptys(&mut command, pty_size)?;
+        let (stdout_master, stderr_master, resize) = attach_stdio_ptys(&mut command, pty_size)?;
+        if let Some(slot) = resize_slot {
+            *slot.lock() = Some(resize);
+        }
         let mut child = command.spawn()?;
         drop(command);
         let process_group_id = child.id();
@@ -130,6 +175,7 @@ where
     #[cfg(not(unix))]
     {
         let _ = pty_size;
+        let _ = resize_slot;
         let mut child = command.spawn()?;
         let process_group_id = child.id();
         let kill_group = ProcessGroupKillOnDrop::new(process_group_id);
@@ -499,27 +545,35 @@ where
 }
 
 #[cfg(unix)]
-fn attach_stdio_ptys(
+pub(crate) fn attach_stdio_ptys(
     command: &mut Command,
     pty_size: PtySize,
 ) -> io::Result<(
     async_io::Async<std::fs::File>,
     async_io::Async<std::fs::File>,
+    PtyResizeHandle,
 )> {
-    let (stdout_master, stdout_slave) = open_stdio_pty(pty_size)?;
-    let (stderr_master, stderr_slave) = open_stdio_pty(pty_size)?;
+    let (stdout_master, stdout_slave, stdout_resize) = open_stdio_pty(pty_size)?;
+    let (stderr_master, stderr_slave, stderr_resize) = open_stdio_pty(pty_size)?;
     command
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_slave))
         .stderr(Stdio::from(stderr_slave))
         .env("TERM", "xterm-256color");
-    Ok((stdout_master, stderr_master))
+    Ok((
+        stdout_master,
+        stderr_master,
+        PtyResizeHandle {
+            stdout: Arc::new(stdout_resize),
+            stderr: Arc::new(stderr_resize),
+        },
+    ))
 }
 
 #[cfg(unix)]
 fn open_stdio_pty(
     pty_size: PtySize,
-) -> io::Result<(async_io::Async<std::fs::File>, std::fs::File)> {
+) -> io::Result<(async_io::Async<std::fs::File>, std::fs::File, std::fs::File)> {
     use std::os::unix::io::FromRawFd;
 
     let size = libc::winsize {
@@ -534,7 +588,58 @@ fn open_stdio_pty(
         libc::fcntl(ends.slave, libc::F_SETFD, libc::FD_CLOEXEC);
         let master = std::fs::File::from_raw_fd(ends.master);
         let slave = std::fs::File::from_raw_fd(ends.slave);
-        Ok((async_io::Async::new(master)?, slave))
+        let resize = dup_cloexec(&master)?;
+        Ok((async_io::Async::new(master)?, slave, resize))
+    }
+}
+
+#[cfg(unix)]
+fn dup_cloexec(file: &impl std::os::unix::io::AsRawFd) -> io::Result<std::fs::File> {
+    use std::os::unix::io::{FromRawFd, RawFd};
+
+    let fd: RawFd = unsafe { libc::dup(file.as_raw_fd()) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    unsafe {
+        libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        Ok(std::fs::File::from_raw_fd(fd))
+    }
+}
+
+#[cfg(unix)]
+fn set_pty_winsize(file: &impl std::os::unix::io::AsRawFd, size: PtySize) -> io::Result<()> {
+    let ws = libc::winsize {
+        ws_row: size.rows.max(1),
+        ws_col: size.columns.max(1),
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+fn pty_winsize(file: &impl std::os::unix::io::AsRawFd) -> io::Result<PtySize> {
+    let mut ws = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let rc = unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) };
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(PtySize {
+            columns: ws.ws_col,
+            rows: ws.ws_row,
+        })
     }
 }
 

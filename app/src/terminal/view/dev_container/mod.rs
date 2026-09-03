@@ -31,6 +31,8 @@ use futures::FutureExt as _;
 #[cfg(feature = "local_tty")]
 use serde::Deserialize;
 #[cfg(feature = "local_tty")]
+pub(crate) use stream::PtyResizeHandle;
+#[cfg(feature = "local_tty")]
 use warp_core::SessionId;
 #[cfg(feature = "local_tty")]
 use warpui::ModelHandle;
@@ -272,7 +274,7 @@ impl TerminalView {
         self.dev_container_build = Some(operation);
         self.model.lock().start_commandless_output_block();
         self.sync_dev_container_build_header(ctx);
-        self.start_dev_container_build_attempt(ctx);
+        self.dev_container_awaiting_layout = true;
         ctx.notify();
     }
 
@@ -291,6 +293,7 @@ impl TerminalView {
         });
         self.model.lock().reset_commandless_output_block();
         self.sync_dev_container_build_header(ctx);
+        self.dev_container_awaiting_layout = false;
         self.start_dev_container_build_attempt(ctx);
         ctx.notify();
     }
@@ -302,6 +305,8 @@ impl TerminalView {
                 return;
             };
             let key = operation.read(ctx, |operation, _| operation.key().clone());
+            self.dev_container_awaiting_layout = false;
+            self.clear_dev_container_pty_resize();
             operation.update(ctx, |operation, ctx| {
                 operation.tombstone(ctx);
                 operation.mark_cancelled(ctx);
@@ -460,7 +465,50 @@ impl TerminalView {
     }
 
     #[cfg(feature = "local_tty")]
-    fn start_dev_container_build_attempt(&self, ctx: &mut ViewContext<Self>) {
+    pub(crate) fn after_dev_container_layout(
+        &mut self,
+        size: Vector2F,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if size.x() == 0. || size.y() == 0. {
+            return;
+        }
+        if self.dev_container_awaiting_layout {
+            self.dev_container_awaiting_layout = false;
+            self.start_dev_container_build_attempt(ctx);
+        }
+        self.sync_dev_container_pty_size();
+    }
+
+    #[cfg(feature = "local_tty")]
+    fn clear_dev_container_pty_resize(&mut self) {
+        #[cfg(unix)]
+        {
+            self.dev_container_pty_resize = None;
+        }
+    }
+
+    #[cfg(feature = "local_tty")]
+    fn sync_dev_container_pty_size(&self) {
+        #[cfg(unix)]
+        {
+            let Some(slot) = &self.dev_container_pty_resize else {
+                return;
+            };
+            let Some(handle) = slot.lock().clone() else {
+                return;
+            };
+            let _ = handle.resize(self.current_dev_container_pty_size());
+        }
+    }
+
+    #[cfg(feature = "local_tty")]
+    fn current_dev_container_pty_size(&self) -> stream::PtySize {
+        stream::PtySize::from_grid(self.size_info().columns(), self.size_info().rows())
+    }
+
+    #[cfg(feature = "local_tty")]
+    fn start_dev_container_build_attempt(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(operation) = self.dev_container_build.clone() else {
             return;
         };
@@ -534,6 +582,10 @@ impl TerminalView {
         });
         self.append_dev_container_failure_to_grid(&message);
         self.sync_dev_container_build_header(ctx);
+        #[cfg(unix)]
+        if let Some(slot) = &self.dev_container_pty_resize {
+            *slot.lock() = None;
+        }
         ctx.notify();
     }
 
@@ -555,7 +607,7 @@ impl TerminalView {
     #[cfg(feature = "local_tty")]
     #[allow(clippy::too_many_arguments)]
     fn run_dev_container_up(
-        &self,
+        &mut self,
         cli: PathBuf,
         docker_path: PathBuf,
         workspace_folder: PathBuf,
@@ -581,14 +633,19 @@ impl TerminalView {
             .dev_container_build
             .as_ref()
             .map(|operation| operation.read(ctx, |operation, _| operation.output_tx()));
-        let pty_size = stream::PtySize {
-            columns: self.size_info().columns().max(1) as u16,
-            rows: self.size_info().rows().max(1) as u16,
+        let pty_size = self.current_dev_container_pty_size();
+        let resize_slot = {
+            let slot = Arc::new(Mutex::new(None));
+            #[cfg(unix)]
+            {
+                self.dev_container_pty_resize = Some(slot.clone());
+            }
+            Some(slot)
         };
         let up_future = async move {
             let command =
                 stream::dev_container_up_command(&cli, &workspace_folder, &config_file, pty_size);
-            let (drain, exit_success) = stream::drain_dev_container_child_with_size(
+            let (drain, exit_success) = stream::drain_dev_container_child_with_size_and_resize(
                 command,
                 Some(&cancel),
                 move |chunk| {
@@ -606,11 +663,13 @@ impl TerminalView {
                     event_proxy.send_wakeup_event();
                 },
                 pty_size,
+                resize_slot,
             )
             .await?;
             std::io::Result::Ok((drain, exit_success, docker_path, workspace_folder))
         };
         ctx.spawn(up_future, move |me, result, ctx| {
+            me.clear_dev_container_pty_resize();
             if !me.is_current_dev_container_attempt(operation_id, attempt_id, ctx) {
                 return;
             }

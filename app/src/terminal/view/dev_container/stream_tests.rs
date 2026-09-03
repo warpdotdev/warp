@@ -1348,3 +1348,190 @@ impl io::Write for WriteCapture<'_> {
         Ok(())
     }
 }
+
+#[test]
+fn pty_size_from_grid_matches_requested_columns_and_rows() {
+    assert_eq!(
+        super::PtySize::from_grid(64, 20),
+        super::PtySize {
+            columns: 64,
+            rows: 20,
+        }
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_ptys_open_at_requested_winsize() {
+    let size = super::PtySize {
+        columns: 42,
+        rows: 17,
+    };
+    let mut command = command::r#async::Command::new("true");
+    let (stdout, stderr, handle) =
+        super::attach_stdio_ptys(&mut command, size).expect("open stdio ptys");
+    assert_eq!(handle.reported_sizes().expect("TIOCGWINSZ"), (size, size));
+    drop((stdout, stderr, command));
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_pty_resize_updates_both_winsizes() {
+    let initial = super::PtySize {
+        columns: 40,
+        rows: 12,
+    };
+    let updated = super::PtySize {
+        columns: 64,
+        rows: 20,
+    };
+    let mut command = command::r#async::Command::new("true");
+    let (stdout, stderr, handle) =
+        super::attach_stdio_ptys(&mut command, initial).expect("open stdio ptys");
+    handle.resize(updated).expect("TIOCSWINSZ");
+    assert_eq!(
+        handle.reported_sizes().expect("TIOCGWINSZ"),
+        (updated, updated)
+    );
+    drop((stdout, stderr, command));
+}
+
+#[cfg(unix)]
+#[test]
+fn drain_installs_resize_handle_and_child_sees_both_pty_winsizes() {
+    use std::time::Duration;
+
+    use futures::future::{self, Either};
+    use instant::Instant;
+    use parking_lot::Mutex as ParkingMutex;
+
+    let initial = super::PtySize {
+        columns: 40,
+        rows: 12,
+    };
+    let updated = super::PtySize {
+        columns: 64,
+        rows: 20,
+    };
+    let release_dir = tempfile::tempdir().expect("release dir");
+    let release_path = release_dir.path().join("go");
+    let mut command = command::r#async::Command::new_with_process_group("python3");
+    command
+        .arg("-c")
+        .arg(
+            r#"
+import fcntl, os, struct, termios, time
+def winsize(fd):
+    rows, cols, _, _ = struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\0" * 8))
+    return f"{cols}x{rows}"
+os.write(2, f"initial stdout={winsize(1)} stderr={winsize(2)}\n".encode())
+path = os.environ["DC_RELEASE_PATH"]
+while not os.path.exists(path):
+    time.sleep(0.01)
+os.write(2, f"resized stdout={winsize(1)} stderr={winsize(2)}\n".encode())
+"#,
+        )
+        .env("DC_RELEASE_PATH", &release_path)
+        .kill_on_drop(true);
+    let resize_slot = Arc::new(ParkingMutex::new(None));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_cb = seen.clone();
+    block_on(async {
+        let drain_fut = super::drain_dev_container_child_with_size_and_resize(
+            command,
+            None,
+            move |chunk| {
+                seen_cb.lock().unwrap().extend_from_slice(chunk);
+            },
+            initial,
+            Some(resize_slot.clone()),
+        );
+        let wait_fut = async {
+            let started = Instant::now();
+            loop {
+                let output = String::from_utf8_lossy(&seen.lock().unwrap().clone()).into_owned();
+                if output.contains("initial stdout=40x12") && output.contains("stderr=40x12") {
+                    let handle = resize_slot
+                        .lock()
+                        .clone()
+                        .expect("resize handle installed at spawn");
+                    handle.resize(updated).expect("TIOCSWINSZ both ptys");
+                    std::fs::write(&release_path, b"go").expect("release child");
+                    return;
+                }
+                assert!(
+                    started.elapsed().as_secs() < 5,
+                    "child must report initial winsize, got {output:?}"
+                );
+                warpui::r#async::Timer::after(Duration::from_millis(10)).await;
+            }
+        };
+        let work = async { futures::join!(drain_fut, wait_fut) };
+        let timeout = async {
+            warpui::r#async::Timer::after(Duration::from_secs(5)).await;
+        };
+        match future::select(Box::pin(work), Box::pin(timeout)).await {
+            Either::Right(_) => panic!("timed out waiting for dual-PTY winsize"),
+            Either::Left(((drain_result, _), _)) => {
+                let (_drain, success) = drain_result.expect("drain");
+                assert!(success);
+                let displayed = String::from_utf8_lossy(&seen.lock().unwrap().clone()).into_owned();
+                assert!(
+                    displayed.contains("resized stdout=64x20"),
+                    "stdout PTY must observe TIOCSWINSZ, got {displayed:?}"
+                );
+                assert!(
+                    displayed.contains("stderr=64x20"),
+                    "stderr PTY must observe TIOCSWINSZ, got {displayed:?}"
+                );
+            }
+        }
+    });
+}
+
+fn terminal_model_with_cols(cols: usize) -> TerminalModel {
+    let mut sizes = block_size();
+    sizes.size = SizeInfo::new_without_font_metrics(24, cols);
+    TerminalModel::new_for_test(
+        sizes,
+        color::List::from(&Colors::default()),
+        ChannelEventListener::new_for_test(),
+        Arc::new(Background::default()),
+        false,
+        None,
+        false,
+        false,
+        None,
+    )
+}
+
+#[test]
+fn buildkit_duration_stays_on_same_row_when_pty_cols_match_grid() {
+    let cols = 80;
+    let mut model = terminal_model_with_cols(cols);
+    model.start_commandless_output_block();
+    let mut processor = Processor::new();
+    let prefix = " => [internal] load build definition from Dockerfile";
+    let duration = "0.0s";
+    let pad = cols - prefix.len() - duration.len();
+    let mut line = String::new();
+    line.push_str(prefix);
+    line.push_str(&" ".repeat(pad));
+    line.push_str(duration);
+    line.push('\n');
+    assert_eq!(line.len() - 1, cols);
+    processor.parse_bytes(&mut model, line.as_bytes(), &mut io::sink());
+    let output = model
+        .block_list()
+        .active_block()
+        .output_grid()
+        .contents_to_string(false, None);
+    let row = output
+        .lines()
+        .find(|line| line.contains("load build definition"))
+        .unwrap_or_else(|| panic!("=> row missing from {output:?}"));
+    assert!(
+        row.contains(duration),
+        "duration must stay on the => row when PTY cols match the grid, got {output:?}"
+    );
+}
