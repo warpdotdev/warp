@@ -112,8 +112,10 @@ retain owner-only daemon directories.
 
 Supported-platform/install failures block attach. The client-copy fallback covers containers
 without download tools or outbound access, not unsupported architectures or missing Docker
-permissions. Container disconnects disable remote operations without exposing host data. Hostname
-collisions never affect identity.
+permissions. The published Linux CLI tarball is a static ELF (no dynamic interpreter), so musl
+hosts such as Alpine are treated as supported by the preinstall check; Android bionic and uClibc
+still fail closed. Container disconnects disable remote operations without exposing host data.
+Hostname collisions never affect identity.
 
 ## Non-goals
 

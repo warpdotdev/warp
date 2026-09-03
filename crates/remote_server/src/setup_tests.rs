@@ -233,9 +233,25 @@ fn parse_preinstall_unsupported_glibc_too_old() {
 }
 
 #[test]
-fn parse_preinstall_unsupported_non_glibc() {
+fn parse_preinstall_supported_musl() {
     let stdout = "required_glibc=2.31\n\
                   libc_family=musl\n\
+                  status=supported\n";
+    let result = PreinstallCheckResult::parse(stdout);
+    assert_eq!(result.status, PreinstallStatus::Supported);
+    assert_eq!(
+        result.libc,
+        RemoteLibc::NonGlibc {
+            name: "musl".to_string()
+        }
+    );
+    assert!(result.is_supported());
+}
+
+#[test]
+fn parse_preinstall_unsupported_non_glibc() {
+    let stdout = "required_glibc=2.31\n\
+                  libc_family=uclibc\n\
                   status=unsupported\n\
                   reason=non_glibc\n";
     let result = PreinstallCheckResult::parse(stdout);
@@ -243,14 +259,14 @@ fn parse_preinstall_unsupported_non_glibc() {
         result.status,
         PreinstallStatus::Unsupported {
             reason: UnsupportedReason::NonGlibc {
-                name: "musl".to_string()
+                name: "uclibc".to_string()
             }
         }
     );
     assert_eq!(
         result.libc,
         RemoteLibc::NonGlibc {
-            name: "musl".to_string()
+            name: "uclibc".to_string()
         }
     );
     assert!(!result.is_supported());

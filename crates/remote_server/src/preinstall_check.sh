@@ -7,9 +7,11 @@
 
 set -u
 
-# The minimum glibc the prebuilt Linux CLI requires. The Linux CLI is
-# built on Ubuntu 20.04 (see `.github/workflows/create_release.yml`),
-# which ships glibc 2.31. Bump this when the runner image is bumped.
+# The minimum glibc a *dynamically* linked Linux CLI would require. The
+# published `download/cli` Linux artifacts are static ELFs (no PT_INTERP),
+# so musl hosts such as Alpine can run them. Keep this floor for the glibc
+# probe so an old dynamically linked binary still fails closed.
+# Built on Ubuntu 20.04 (see `.github/workflows/create_release.yml`).
 required_glibc="2.31"
 echo "required_glibc=${required_glibc}"
 
@@ -55,7 +57,11 @@ if [ "$libc_family" = "glibc" ] && [ -n "$libc_version" ]; then
         status="unsupported"
         reason="glibc_too_old"
     fi
-elif [ "$libc_family" = "musl" ] || [ "$libc_family" = "bionic" ] || [ "$libc_family" = "uclibc" ]; then
+elif [ "$libc_family" = "musl" ]; then
+    # Static Linux CLI artifacts do not need glibc. Rejecting musl blocked Dev
+    # Container attach, which has no ControlMaster fallback.
+    status="supported"
+elif [ "$libc_family" = "bionic" ] || [ "$libc_family" = "uclibc" ]; then
     status="unsupported"
     reason="non_glibc"
 fi

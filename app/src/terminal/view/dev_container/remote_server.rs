@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use remote_server::setup::{PreinstallCheckResult, PreinstallStatus};
+use remote_server::setup::{PreinstallCheckResult, PreinstallStatus, UnsupportedReason};
 use remote_server::transport::Error;
 use warp_core::SessionId;
 use warpui::{SingletonEntity, ViewContext};
@@ -29,6 +29,33 @@ enum BinaryCheckDecision {
     Install,
     Unsupported,
     Failed,
+}
+
+fn unsupported_container_message(preinstall_check: Option<&PreinstallCheckResult>) -> String {
+    match preinstall_check.map(|check| &check.status) {
+        Some(PreinstallStatus::Unsupported {
+            reason: UnsupportedReason::NonGlibc { name },
+        }) => {
+            format!("This container's C library ({name}) is not supported by Warp's remote server.")
+        }
+        Some(PreinstallStatus::Unsupported {
+            reason: UnsupportedReason::GlibcTooOld { detected, required },
+        }) => format!(
+            "This container's glibc {detected} is older than Warp's remote server requires \
+             ({required})."
+        ),
+        Some(PreinstallStatus::Unsupported {
+            reason: UnsupportedReason::UnsupportedOs { os },
+        }) => format!("This container's OS ({os}) is not supported by Warp's remote server."),
+        Some(PreinstallStatus::Unsupported {
+            reason: UnsupportedReason::UnsupportedArch { arch },
+        }) => format!(
+            "This container's architecture ({arch}) is not supported by Warp's remote server."
+        ),
+        Some(PreinstallStatus::Supported | PreinstallStatus::Unknown) | None => {
+            "This container is not supported by Warp's remote server.".to_owned()
+        }
+    }
 }
 
 fn binary_check_decision(
@@ -221,7 +248,7 @@ impl TerminalView {
         }
         match binary_check_decision(&result, preinstall_check.as_ref()) {
             BinaryCheckDecision::Unsupported => self.fail_dev_container_remote_setup(
-                "This container is not supported by Warp's remote server.".to_owned(),
+                unsupported_container_message(preinstall_check.as_ref()),
                 ctx,
             ),
             BinaryCheckDecision::Connect => self.connect_dev_container_remote_server(ctx),
@@ -432,6 +459,26 @@ mod tests {
         assert_eq!(
             binary_check_decision(&Ok(true), Some(&preinstall)),
             BinaryCheckDecision::Unsupported
+        );
+        assert!(
+            unsupported_container_message(Some(&preinstall)).contains("plan9"),
+            "{}",
+            unsupported_container_message(Some(&preinstall))
+        );
+    }
+
+    #[test]
+    fn musl_preinstall_does_not_block_install() {
+        let preinstall = PreinstallCheckResult::parse(
+            "required_glibc=2.31\nlibc_family=musl\nstatus=supported\n",
+        );
+        assert_eq!(
+            binary_check_decision(&Ok(false), Some(&preinstall)),
+            BinaryCheckDecision::Install
+        );
+        assert_eq!(
+            binary_check_decision(&Ok(true), Some(&preinstall)),
+            BinaryCheckDecision::Connect
         );
     }
 
