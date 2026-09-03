@@ -2,10 +2,9 @@ use std::path::Path;
 use std::time::Duration;
 
 use command::blocking::Command;
-
 use warp::integration_testing::context_chips::{
-    assert_git_operation_state_chip_value, enable_git_operation_state_chip,
-    open_git_operation_state_chip_menu,
+    assert_git_operation_state_chip_value, assert_git_operation_state_chip_value_one_of,
+    enable_git_operation_state_chip, open_git_operation_state_chip_menu,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::terminal::{
@@ -93,9 +92,13 @@ pub fn test_git_operation_state_chip_rebase_menu() -> Builder {
         .with_step(
             new_step_with_default_assertions("Git Operation State chip shows the rebase conflict")
                 .set_timeout(Duration::from_secs(20))
-                .add_assertion(assert_git_operation_state_chip_value(
+                // A plain `git rebase` may be detected as either `rebase-interactive` or
+                // `rebase-apply` depending on the installed git version's default backend
+                // (`rebase.backend`); either is a correct detection of an in-progress rebase
+                // (both surface as "REBASING" and offer the same Continue/Skip/Abort actions).
+                .add_assertion(assert_git_operation_state_chip_value_one_of(
                     0,
-                    Some("rebase-interactive"),
+                    &["rebase-interactive", "rebase-apply"],
                 )),
         )
         .with_step(TestStep::new("Start recording").with_start_recording())
