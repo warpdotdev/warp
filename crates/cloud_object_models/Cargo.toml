@@ -27,6 +27,8 @@ serde_regex = "1.1.0"
 session-sharing-protocol.workspace = true
 settings.workspace = true
 settings_value = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+url.workspace = true
 uuid.workspace = true
 warp-workflows.workspace = true
 warp_cli.workspace = true

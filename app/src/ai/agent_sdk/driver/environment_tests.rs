@@ -180,7 +180,12 @@ fn branch_head_override(
 }
 
 fn clone_request(repo: SourceRepo, checkout: Option<RepositoryHeadRef>) -> RepositoryCloneRequest {
-    RepositoryCloneRequest { repo, checkout }
+    let clone_url = repo.https_clone_url().unwrap();
+    RepositoryCloneRequest {
+        repo,
+        clone_url,
+        checkout,
+    }
 }
 
 fn named_checkout_request(repo: SourceRepo) -> RepositoryCloneRequest {
@@ -514,15 +519,61 @@ fn clone_requests_use_each_repository_host() {
     let command = build_parallel_clone_command(&prepared, ShellType::Bash);
 
     assert_eq!(
-        prepared[0].repo.https_clone_url(),
+        prepared[0].clone_url,
         "https://github.com/warpdotdev/warp.git"
     );
     assert_eq!(
-        prepared[1].repo.https_clone_url(),
+        prepared[1].clone_url,
         "https://gitlab.com/platform/backend/api.git"
     );
     assert!(command.contains("https://github.com/warpdotdev/warp.git"));
     assert!(command.contains("https://gitlab.com/platform/backend/api.git"));
+}
+
+#[test]
+fn azure_clone_requests_apply_matching_head_override() {
+    let repos = vec![SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "safiaabdallla/demo".to_string(),
+        "demo".to_string(),
+    )];
+    let overrides = vec![branch_head_override(
+        RepositoryForge::AzureDevOps,
+        "safiaabdallla/demo",
+        "demo",
+        "main",
+    )];
+
+    let prepared = repository_clone_requests(&repos, &overrides).unwrap();
+    let command = build_parallel_clone_command(&prepared, ShellType::Bash);
+
+    assert_eq!(
+        prepared[0].clone_url,
+        "https://dev.azure.com/safiaabdallla/demo/_git/demo"
+    );
+    assert_eq!(
+        prepared[0].checkout,
+        Some(RepositoryHeadRef::Branch("main".to_string()))
+    );
+    assert!(command.contains("https://dev.azure.com/safiaabdallla/demo/_git/demo"));
+    assert!(command.contains("'main'"));
+}
+
+#[test]
+fn clone_requests_reject_azure_owner_without_project() {
+    let repos = vec![SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "safiaabdallla".to_string(),
+        "demo".to_string(),
+    )];
+
+    let error = repository_clone_requests(&repos, &[]).unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::InvalidCloneUrl { repo_name, .. }
+            if repo_name == "safiaabdallla/demo"
+    ));
 }
 
 #[test]

@@ -8,7 +8,7 @@ use ai::index::full_source_code_embedding::manager::{
     CodebaseIndexManager, CodebaseIndexManagerEvent,
 };
 use chrono::Utc;
-use cloud_object_models::CodeForge;
+use cloud_object_models::{CodeForge, SourceRepoCloneUrlError};
 use futures::channel::oneshot;
 use futures::future::join_all;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
@@ -65,6 +65,11 @@ pub enum PrepareEnvironmentError {
         "Repository {repo_name} has a code forge this client build doesn't support; update Warp to a version that does"
     )]
     UnsupportedRepositoryForge { repo_name: String },
+    #[error("Invalid clone URL for {repo_name}: {source}")]
+    InvalidCloneUrl {
+        repo_name: String,
+        source: SourceRepoCloneUrlError,
+    },
     #[error("Terminal driver error while preparing environment: {source}")]
     TerminalDriver { source: AgentDriverError },
 }
@@ -583,6 +588,7 @@ fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge {
         Some(CodeForge::GitHub) => Some(RepositoryForge::GitHub),
         Some(CodeForge::GitLab) => Some(RepositoryForge::GitLab),
+        Some(CodeForge::AzureDevOps) => Some(RepositoryForge::AzureDevOps),
         Some(CodeForge::None | CodeForge::Unknown) | None => None,
     }
 }
@@ -604,6 +610,7 @@ fn head_override_for_repo<'a>(
 #[derive(Debug, Clone)]
 struct RepositoryCloneRequest {
     repo: SourceRepo,
+    clone_url: String,
     checkout: Option<RepositoryHeadRef>,
 }
 
@@ -624,11 +631,21 @@ fn repository_clone_requests(
                     repo_name: format!("{}/{}", repo.owner, repo.repo),
                 });
             }
+            let clone_url = repo.https_clone_url().map_err(|source| {
+                PrepareEnvironmentError::InvalidCloneUrl {
+                    repo_name: format!("{}/{}", repo.owner, repo.repo),
+                    source,
+                }
+            })?;
             let checkout = match head_override_for_repo(overrides, &repo) {
                 Some(head_override) => Some(head_override.head.clone()),
                 None => repo.checkout_ref.clone().map(RepositoryHeadRef::Branch),
             };
-            Ok(RepositoryCloneRequest { repo, checkout })
+            Ok(RepositoryCloneRequest {
+                repo,
+                clone_url,
+                checkout,
+            })
         })
         .collect()
 }
@@ -729,9 +746,9 @@ clone_repo() {
     let mut log_outputs = String::new();
     for (index, request) in repos.iter().enumerate() {
         let repo_name = format!("{}/{}", request.repo.owner, request.repo.repo);
-        let repo_url = request.repo.https_clone_url();
+        let repo_url = &request.clone_url;
         let escaped_repo_name = shell_escape_single_quotes(&repo_name, ShellType::Bash);
-        let escaped_repo_url = shell_escape_single_quotes(&repo_url, ShellType::Bash);
+        let escaped_repo_url = shell_escape_single_quotes(repo_url, ShellType::Bash);
         let escaped_target = shell_escape_single_quotes(&request.repo.repo, ShellType::Bash);
         let checkout_ref = request
             .checkout
@@ -848,7 +865,7 @@ async fn clone_repo(
 ) -> Result<(), PrepareEnvironmentError> {
     let repo = &request.repo;
     let repo_name = format!("{}/{}", repo.owner, repo.repo);
-    let repo_url = repo.https_clone_url();
+    let repo_url = &request.clone_url;
     // Get the session's shell type for proper escaping, falling back to Bash
     // when the session is not yet bootstrapped or the spawn fails.
     let shell_type = spawner
@@ -859,7 +876,7 @@ async fn clone_repo(
         })
         .await
         .unwrap_or(ShellType::Bash);
-    let escaped_url = shell_escape_single_quotes(&repo_url, shell_type);
+    let escaped_url = shell_escape_single_quotes(repo_url, shell_type);
     let repo_dir = working_dir.join(&repo.repo);
     let commit_sha = match &request.checkout {
         Some(RepositoryHeadRef::CommitSha(commit_sha)) => Some(commit_sha.as_str()),
