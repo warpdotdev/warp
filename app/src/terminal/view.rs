@@ -8074,12 +8074,14 @@ impl TerminalView {
     }
 
     fn can_attach_file(&self, app: &AppContext) -> bool {
-        self.is_in_agent_or_cli_attach_context(app)
-            && file_attach_allowed_for_shared_session(
-                self.model.lock().shared_session_status(),
+        self.is_in_agent_or_cli_attach_context(app) && {
+            let status = self.model.lock().shared_session_status().clone();
+            file_attach_allowed_for_shared_session(
+                &status,
                 self.ambient_agent_view_model.as_ref(),
                 app,
             )
+        }
     }
 
     /// Ensures this pane has an [`ambient_agent::AmbientAgentViewModel`], creating and wiring
