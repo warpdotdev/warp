@@ -3,6 +3,36 @@ use command::r#async::Command;
 use warp_util::git::run_git_command;
 
 use super::{GitOperationAction, GitOperationKind};
+use crate::context_chips::builtins::shell_git_operation_state;
+use crate::terminal::shell::ShellType;
+
+/// Runs the actual bash variant of `shell_git_operation_state`'s detection
+/// command (the same text sent to a user's shell to refresh the chip) inside
+/// `repo`, and parses its output. Exercises the real shell script end to end,
+/// rather than only the Rust-side token parsing.
+async fn detect_via_generated_shell_command(repo: &std::path::Path) -> Option<GitOperationKind> {
+    let generator = shell_git_operation_state();
+    let command = generator
+        .command()
+        .for_shell(ShellType::Bash)
+        .expect("a bash command should be defined")
+        .to_string();
+
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("failed to run the generated detection command");
+
+    if !output.status.success() {
+        return None;
+    }
+    GitOperationKind::from_token(&String::from_utf8_lossy(&output.stdout))
+}
 
 /// Run a git command inside `repo`, ignoring its output. Used only to put a
 /// repository into a specific mid-operation state.
@@ -347,5 +377,51 @@ async fn detect_finds_rebase_in_progress_from_a_linked_worktree() {
             Some(GitOperationKind::RebaseInteractive | GitOperationKind::RebaseApply)
         ),
         "expected an in-progress rebase to be detected"
+    );
+}
+
+#[tokio::test]
+async fn generated_shell_command_reports_no_state_for_a_clean_repo() {
+    let (_dir, repo) = init_repo().await;
+    assert_eq!(detect_via_generated_shell_command(&repo).await, None);
+}
+
+#[tokio::test]
+async fn generated_shell_command_reports_bisect_during_a_real_bisect() {
+    let (_dir, repo) = init_repo().await;
+    for i in 1..=3 {
+        git(
+            &repo,
+            &["commit", "--allow-empty", "-m", &format!("commit {i}")],
+        )
+        .await;
+    }
+    git(&repo, &["bisect", "start"]).await;
+    git(&repo, &["bisect", "bad"]).await;
+    let root_commit = run_git_command(&repo, &["rev-list", "--max-parents=0", "HEAD"])
+        .await
+        .expect("failed to resolve the root commit");
+    git(&repo, &["bisect", "good", root_commit.trim()]).await;
+
+    assert_eq!(
+        detect_via_generated_shell_command(&repo).await,
+        Some(GitOperationKind::Bisect)
+    );
+}
+
+#[tokio::test]
+async fn generated_shell_command_reports_merge_during_a_real_conflicting_merge() {
+    let (_dir, repo) = init_repo().await;
+    git(&repo, &["checkout", "-b", "feature"]).await;
+    std::fs::write(repo.join("file.txt"), "feature\n").unwrap();
+    git(&repo, &["commit", "-am", "feature change"]).await;
+    git(&repo, &["checkout", "main"]).await;
+    std::fs::write(repo.join("file.txt"), "main\n").unwrap();
+    git(&repo, &["commit", "-am", "main change"]).await;
+    git(&repo, &["merge", "feature"]).await;
+
+    assert_eq!(
+        detect_via_generated_shell_command(&repo).await,
+        Some(GitOperationKind::Merge)
     );
 }

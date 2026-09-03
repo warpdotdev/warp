@@ -921,11 +921,11 @@ impl DisplayChip {
                 };
 
                 ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(command));
-                me.close_git_branch_menu(ctx);
+                me.close_dropdown_menu(ctx);
                 ctx.notify();
             }
             PromptDisplayMenuEvent::CloseMenu => {
-                me.close_git_branch_menu(ctx);
+                me.close_dropdown_menu(ctx);
                 ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
                 ctx.notify();
             }
@@ -963,11 +963,11 @@ impl DisplayChip {
                 ctx.emit(PromptDisplayChipEvent::TryExecuteCommand(
                     PromptChipShellCommand::GitOperationAction(git_operation_item.0),
                 ));
-                me.close_git_branch_menu(ctx);
+                me.close_dropdown_menu(ctx);
                 ctx.notify();
             }
             PromptDisplayMenuEvent::CloseMenu => {
-                me.close_git_branch_menu(ctx);
+                me.close_dropdown_menu(ctx);
                 ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
                 ctx.notify();
             }
@@ -1329,7 +1329,7 @@ impl DisplayChip {
 
     /// Closes the currently open dropdown menu, if this chip has one
     /// (`GitBranch`, `GitBranchStatus`, or `GitOperationState`).
-    pub fn close_git_branch_menu(&mut self, ctx: &mut ViewContext<Self>) {
+    pub fn close_dropdown_menu(&mut self, ctx: &mut ViewContext<Self>) {
         if let DisplayChipKind::GitBranch { menu_open, menu }
         | DisplayChipKind::GitBranchStatus {
             menu_open, menu, ..
