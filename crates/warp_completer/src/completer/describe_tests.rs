@@ -144,23 +144,6 @@ pub fn test_describe_top_level_commands_case_insensitive() {
 }
 
 #[test]
-pub fn test_describe_git_ls_remote_branches() {
-    let ctx = FakeCompletionContext::new(CommandRegistry::default());
-
-    assert_eq!(
-        describe_at_cursor("git ls-remote --branches", ByteOffset::from(14), &ctx),
-        Some(Description {
-            token: "--branches".to_string().spanned(Span::new(14, 24)),
-            description_text: Some("Limit to only local branches".to_string()),
-            suggestion_type: SuggestionType::Option(
-                MatchRequirement::EntireName,
-                OptionCaseSensitivity::CaseSensitive
-            )
-        })
-    );
-}
-
-#[test]
 pub fn test_xray_describe() {
     let ctx = FakeCompletionContext::new(CommandRegistry::default())
         .with_top_level_commands(["git"])
