@@ -3293,11 +3293,12 @@ impl ansi::Handler for TerminalModel {
                 };
                 self.is_receiving_in_band_command_output = IsReceivingInBandCommandOutput::No;
             }
-            IsReceivingInBandCommandOutput::No => {
-                log::warn!(
-                    "Received 'end_in_band_command_output' while not expecting to read in-band command output."
+            IsReceivingInBandCommandOutput::No if from_osc_sequence => {
+                log::debug!(
+                    "Received an in-band command output end OSC while not expecting in-band command output."
                 );
             }
+            IsReceivingInBandCommandOutput::No => {}
         }
 
         #[cfg(windows)]
