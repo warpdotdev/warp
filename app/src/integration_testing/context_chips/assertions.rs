@@ -1,7 +1,8 @@
-use warpui::async_assert;
 use warpui::integration::AssertionCallback;
+use warpui::{ViewHandle, async_assert, async_assert_eq};
 
 use crate::context_chips::ContextChipKind;
+use crate::context_chips::display_chip::DisplayChip;
 use crate::integration_testing::view_getters::single_terminal_view_for_tab;
 
 /// Assertion that the working dir chip is present in the current prompt.
@@ -19,5 +20,40 @@ pub fn assert_working_dir_is_present(tab_index: usize) -> AssertionCallback {
                 )
             })
         })
+    })
+}
+
+/// Assertion on the raw detection token (e.g. `"rebase-interactive"`, `"bisect"`)
+/// currently surfaced by the `GitOperationState` chip, or `None` if the chip has
+/// no in-progress operation to report.
+pub fn assert_git_operation_state_chip_value(
+    tab_index: usize,
+    expected_token: Option<&'static str>,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, tab_index);
+        terminal_view.read(app, |view, ctx| {
+            let prompt = view.current_prompt();
+            prompt.read(ctx, |prompt, ctx| {
+                let value = prompt
+                    .latest_chip_value(&ContextChipKind::GitOperationState, ctx)
+                    .map(|value| value.to_string());
+                async_assert_eq!(value.as_deref(), expected_token)
+            })
+        })
+    })
+}
+
+/// Assertion that the `GitOperationState` chip's dropdown menu is currently open.
+pub fn assert_git_operation_state_menu_is_open(is_open: bool) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let chips: Vec<ViewHandle<DisplayChip>> = app.views_of_type(window_id).unwrap_or_default();
+        let actual = chips.iter().any(|chip| {
+            chip.read(app, |chip, _ctx| {
+                *chip.chip_kind() == ContextChipKind::GitOperationState
+                    && chip.display_chip_kind().has_open_menu()
+            })
+        });
+        async_assert_eq!(actual, is_open)
     })
 }
