@@ -4,7 +4,8 @@ use prost::Message as _;
 use warp_server_client::base_client::AmbientHeaderPolicy;
 
 use super::{
-    Error, REQUEST_TOO_LARGE_USER_MESSAGE, ambient_policy, decode_response_event, endpoint_url,
+    Error, MULTI_AGENT_REQUEST_SIZE_LIMIT_BYTES, REQUEST_TOO_LARGE_USER_MESSAGE, ambient_policy,
+    decode_response_event, encoded_len_exceeds_request_size_limit, endpoint_url,
     is_passive_suggestion_request, reject_oversized_multi_agent_request,
 };
 
@@ -87,9 +88,26 @@ fn request_too_large_displays_exact_user_copy() {
 }
 
 #[test]
-fn default_multi_agent_request_is_under_the_size_limit() {
-    let request = warp_multi_agent_api::Request::default();
+fn size_guard_applies_to_regular_and_passive_protobuf_requests() {
+    let regular = warp_multi_agent_api::Request::default();
+    let passive = warp_multi_agent_api::Request {
+        input: Some(warp_multi_agent_api::request::Input {
+            r#type: Some(
+                warp_multi_agent_api::request::input::Type::GeneratePassiveSuggestions(
+                    Default::default(),
+                ),
+            ),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
 
-    assert!(reject_oversized_multi_agent_request(&request, false).is_ok());
-    assert!(reject_oversized_multi_agent_request(&request, true).is_ok());
+    assert!(reject_oversized_multi_agent_request(&regular).is_ok());
+    assert!(reject_oversized_multi_agent_request(&passive).is_ok());
+    assert!(!encoded_len_exceeds_request_size_limit(
+        MULTI_AGENT_REQUEST_SIZE_LIMIT_BYTES
+    ));
+    assert!(encoded_len_exceeds_request_size_limit(
+        MULTI_AGENT_REQUEST_SIZE_LIMIT_BYTES + 1
+    ));
 }

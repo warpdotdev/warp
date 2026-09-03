@@ -66,7 +66,7 @@ pub async fn generate_multi_agent_output(
         .await
         .map_err(Error::Authentication)?;
     let is_passive = is_passive_suggestion_request(request);
-    reject_oversized_multi_agent_request(request, is_passive)?;
+    reject_oversized_multi_agent_request(request)?;
     let url = endpoint_url(is_passive);
 
     let mut request_builder = client
@@ -137,11 +137,7 @@ pub async fn generate_multi_agent_output(
 
 fn reject_oversized_multi_agent_request(
     request: &warp_multi_agent_api::Request,
-    is_passive: bool,
 ) -> Result<(), Error> {
-    if is_passive {
-        return Ok(());
-    }
     let encoded_len = request.encoded_len();
     if encoded_len_exceeds_request_size_limit(encoded_len) {
         tracing::warn!(
