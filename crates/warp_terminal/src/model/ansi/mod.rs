@@ -618,6 +618,15 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             }
             Ok(DProtoHook::FinishUpdate { value }) => self.handler.finish_update(value),
             Ok(DProtoHook::ExitShell { value }) => self.handler.exit_shell(value),
+            Ok(DProtoHook::PowerShellTableBegin { value }) => {
+                self.handler.powershell_table_begin(value)
+            }
+            Ok(DProtoHook::PowerShellTableRows { value }) => {
+                self.handler.powershell_table_rows(value)
+            }
+            Ok(DProtoHook::PowerShellTableEnd { value }) => {
+                self.handler.powershell_table_end(value)
+            }
 
             Err(e) => safe_error!(
                 safe: ("Error when deserializing escape sequence data"),

@@ -67,6 +67,7 @@ use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue,
     ExternalShellWidgetSelectionValue, Handler, InitShellValue, InitSubshellValue,
+    PowerShellTableBeginValue, PowerShellTableEndValue, PowerShellTableRowsValue,
     PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata, SSHValue,
     SourcedRcFileForWarpValue,
 };
@@ -2592,6 +2593,9 @@ pub enum HandlerEvent {
     UnsetMode {
         mode: Mode,
     },
+    PowerShellTableBegin(PowerShellTableBeginValue),
+    PowerShellTableRows(PowerShellTableRowsValue),
+    PowerShellTableEnd(PowerShellTableEndValue),
 }
 
 impl ansi::Handler for TerminalModel {
@@ -2601,6 +2605,23 @@ impl ansi::Handler for TerminalModel {
 
     fn should_validate_dcs_hook_session_id(&self) -> bool {
         !self.shared_session_status().is_viewer()
+    }
+    fn powershell_table_begin(&mut self, data: PowerShellTableBeginValue) {
+        if FeatureFlag::PowerShellRichTables.is_enabled() {
+            self.emit_handler_event(HandlerEvent::PowerShellTableBegin(data));
+        }
+    }
+
+    fn powershell_table_rows(&mut self, data: PowerShellTableRowsValue) {
+        if FeatureFlag::PowerShellRichTables.is_enabled() {
+            self.emit_handler_event(HandlerEvent::PowerShellTableRows(data));
+        }
+    }
+
+    fn powershell_table_end(&mut self, data: PowerShellTableEndValue) {
+        if FeatureFlag::PowerShellRichTables.is_enabled() {
+            self.emit_handler_event(HandlerEvent::PowerShellTableEnd(data));
+        }
     }
 
     fn set_title(&mut self, title: Option<String>) {

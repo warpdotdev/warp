@@ -38,6 +38,7 @@ mod passive_suggestions;
 mod pending_user_query;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_instructions_block;
+mod powershell_rich_table;
 pub mod rich_content;
 mod shared_session;
 mod shell_terminated_banner;
@@ -483,6 +484,7 @@ use crate::terminal::view::inline_banner::{
     PromptSuggestionBannerState, VimModeBannerState, render_agent_mode_setup_banner,
 };
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
+use crate::terminal::view::powershell_rich_table::PowerShellTableStream;
 pub use crate::terminal::view::rich_content::{
     AIBlockMetadata, AgentViewEntryMetadata, RichContent, RichContentInsertionPosition,
     RichContentMetadata,
@@ -2744,6 +2746,7 @@ pub struct TerminalView {
     /// The child views that represent rich content. These can be inserted into the block list with
     /// the `insert_rich_content` helper function.
     rich_content_views: Vec<RichContent>,
+    powershell_table_stream: PowerShellTableStream,
     pending_user_query_view_id: Option<EntityId>,
     pending_user_query_kind: Option<PendingUserQueryKind>,
     queued_prompt_callback: Option<ConversationFinishedCallback>,
@@ -4425,6 +4428,7 @@ impl TerminalView {
             block_filter_editor,
             active_filter_editor_block_index: None,
             rich_content_views: Vec::new(),
+            powershell_table_stream: Default::default(),
             pending_user_query_view_id: None,
             pending_user_query_kind: None,
             queued_prompt_callback: None,
@@ -12971,6 +12975,23 @@ impl TerminalView {
                         self.update_long_running_ssh_block_with_lock(|block| block.hide());
                     }
                 }
+            }
+            ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(data)) => {
+                self.powershell_table_stream.begin(data.clone());
+            }
+            ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(data)) => {
+                self.powershell_table_stream.rows(data);
+            }
+            ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(data)) => {
+                self.powershell_table_stream.end(data);
+            }
+            ModelEvent::Handler(
+                AnsiHandlerEvent::UserCommandFinished | AnsiHandlerEvent::Precmd,
+            ) => {
+                self.flush_powershell_tables(ctx);
+            }
+            ModelEvent::Handler(AnsiHandlerEvent::Preexec) => {
+                self.powershell_table_stream.clear();
             }
             ModelEvent::Handler(_) => {}
             ModelEvent::FinishUpdate(data) => {

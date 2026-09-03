@@ -5,7 +5,10 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::event::{BootstrappedEvent, SshLoginStatus};
 use super::model::ansi;
-use super::model::ansi::{ExternalShellWidgetSelectionValue, FinishUpdateValue};
+use super::model::ansi::{
+    ExternalShellWidgetSelectionValue, FinishUpdateValue, PowerShellTableBeginValue,
+    PowerShellTableEndValue, PowerShellTableRowsValue,
+};
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::lifecycle::LifecycleTelemetryEvent;
@@ -201,6 +204,15 @@ impl ModelEventDispatcher {
             Event::Handler(HandlerEvent::UnsetMode {
                 mode: ansi::Mode::BracketedPaste,
             }) => ModelEvent::Handler(AnsiHandlerEvent::UnsetBracketedPaste),
+            Event::Handler(HandlerEvent::PowerShellTableBegin(data)) => {
+                ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(data))
+            }
+            Event::Handler(HandlerEvent::PowerShellTableRows(data)) => {
+                ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(data))
+            }
+            Event::Handler(HandlerEvent::PowerShellTableEnd(data)) => {
+                ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(data))
+            }
             Event::CompletionsFinished(res, replacement_span) => {
                 ModelEvent::CompletionsFinished(res, replacement_span)
             }
@@ -507,6 +519,9 @@ pub enum AnsiHandlerEvent {
     EndRPrompt,
     SetBracketedPaste,
     UnsetBracketedPaste,
+    PowerShellTableBegin(PowerShellTableBeginValue),
+    PowerShellTableRows(PowerShellTableRowsValue),
+    PowerShellTableEnd(PowerShellTableEndValue),
 }
 
 impl Entity for ModelEventDispatcher {
