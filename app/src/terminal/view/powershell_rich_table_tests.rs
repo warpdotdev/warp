@@ -42,13 +42,12 @@ fn end(table_id: &str) -> PowerShellTableEndValue {
 #[test]
 fn end_makes_table_available_without_waiting_for_command_finished() {
     let mut stream = PowerShellTableStream::default();
-    assert!(stream.begin(begin("a")).is_none());
+    stream.begin(begin("a"));
     stream.rows(&rows("a", vec![vec!["alpha"]]));
 
-    let table = stream
-        .end(&end("a"))
-        .expect("End should insert immediately");
-    assert_eq!(table.rows, vec![vec!["alpha", ""]]);
+    let tables = stream.end(&end("a"));
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0].rows, vec![vec!["alpha", ""]]);
     assert!(stream.finish_command().is_empty());
 }
 
@@ -59,11 +58,11 @@ fn tables_are_emitted_in_stream_order_when_ended() {
 
     stream.begin(begin("a"));
     stream.rows(&rows("a", vec![vec!["alpha"]]));
-    inserted.push(stream.end(&end("a")).unwrap());
+    inserted.extend(stream.end(&end("a")));
 
     stream.begin(begin("b"));
     stream.rows(&rows("b", vec![vec!["beta", "2", "ignored"]]));
-    inserted.push(stream.end(&end("b")).unwrap());
+    inserted.extend(stream.end(&end("b")));
 
     assert_eq!(inserted.len(), 2);
     assert_eq!(inserted[0].table_id, "a");
@@ -97,24 +96,31 @@ fn precmd_recovery_uses_the_same_missing_end_path_as_command_finished() {
 }
 
 #[test]
-fn begin_without_end_inserts_the_previous_table_before_starting_the_next() {
+fn begin_without_end_keeps_both_tables_until_the_next_stable_insertion_point() {
     let mut stream = PowerShellTableStream::default();
     stream.begin(begin("a"));
     stream.rows(&rows("a", vec![vec!["first"]]));
 
-    let previous = stream
-        .begin(begin("b"))
-        .expect("unfinished table should insert when the next Begin arrives");
-    assert_eq!(previous.table_id, "a");
+    stream.begin(begin("b"));
     stream.rows(&rows("b", vec![vec!["second"]]));
-    assert_eq!(stream.end(&end("b")).unwrap().table_id, "b");
+
+    let tables = stream.end(&end("b"));
+    assert_eq!(
+        tables
+            .iter()
+            .map(|table| table.table_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a", "b"]
+    );
 }
 
 #[test]
-fn clear_discards_an_unfinished_table() {
+fn clear_discards_current_and_queued_tables() {
     let mut stream = PowerShellTableStream::default();
     stream.begin(begin("stale"));
     stream.rows(&rows("stale", vec![vec!["discarded"]]));
+    stream.begin(begin("also-stale"));
+    stream.rows(&rows("also-stale", vec![vec!["discarded"]]));
 
     stream.clear();
     assert!(stream.finish_command().is_empty());
@@ -125,7 +131,7 @@ fn mismatched_chunks_do_not_corrupt_the_active_table() {
     let mut stream = PowerShellTableStream::default();
     stream.begin(begin("expected"));
     stream.rows(&rows("other", vec![vec!["discarded"]]));
-    assert!(stream.end(&end("other")).is_none());
+    assert!(stream.end(&end("other")).is_empty());
     stream.rows(&rows("expected", vec![vec!["kept", "7"]]));
 
     let tables = stream.finish_command();
@@ -143,21 +149,17 @@ fn more_than_64_columns_are_rejected_before_any_rows_are_kept() {
         })
         .collect();
     let mut stream = PowerShellTableStream::default();
-    assert!(
-        stream
-            .begin(PowerShellTableBeginValue {
-                table_id: "wide".to_owned(),
-                columns,
-                ..Default::default()
-            })
-            .is_none()
-    );
+    stream.begin(PowerShellTableBeginValue {
+        table_id: "wide".to_owned(),
+        columns,
+        ..Default::default()
+    });
     stream.rows(&PowerShellTableRowsValue {
         table_id: "wide".to_owned(),
         rows: vec![vec!["x".to_owned(); 65]],
         ..Default::default()
     });
-    assert!(stream.end(&end("wide")).is_none());
+    assert!(stream.end(&end("wide")).is_empty());
     assert!(stream.finish_command().is_empty());
 }
 
@@ -171,8 +173,8 @@ fn row_stream_stops_at_ten_thousand_rows() {
         ..Default::default()
     });
 
-    let table = stream.end(&end("bounded")).unwrap();
-    assert_eq!(table.rows.len(), 10_000);
+    let tables = stream.end(&end("bounded"));
+    assert_eq!(tables[0].rows.len(), 10_000);
 }
 
 #[test]

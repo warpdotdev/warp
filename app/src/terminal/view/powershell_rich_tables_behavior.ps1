@@ -46,6 +46,13 @@ function Get-RowCount {
     $count
 }
 
+function Get-EncodedMessageByteCount {
+    param([System.Collections.Hashtable]$Message)
+
+    $json = ConvertTo-Json -InputObject $Message -Compress -Depth 8
+    (2 * [System.Text.Encoding]::UTF8.GetByteCount($json)) + 10
+}
+
 $simple = [pscustomobject]@{ Name = 'alpha'; Id = 1 }
 $columns = Warp-Get-PowerShellTableColumns $simple
 Assert-True ($null -ne $columns) 'implicit two-property object should be a table'
@@ -97,6 +104,31 @@ $rowMessages = @($script:warpMessages | Where-Object { $_.hook -eq 'PowerShellTa
 Assert-True ($rowMessages.Count -eq 2) 'producer should flush every 25 rows'
 Assert-True (@($rowMessages[0].value.rows).Count -eq 25) 'first row chunk should contain 25 rows'
 Assert-True (@($rowMessages[1].value.rows).Count -eq 5) 'remainder should be a second chunk'
+
+$script:warpMessages.Clear()
+1..10 | ForEach-Object {
+    [pscustomobject]@{ Name = (('x' * 8000) + $_); Id = $_ }
+} | Warp-Out-Default
+$rowMessages = @($script:warpMessages | Where-Object { $_.hook -eq 'PowerShellTableRows' })
+Assert-True ($rowMessages.Count -gt 1) 'producer should split row chunks below the byte budget'
+foreach ($message in $script:warpMessages) {
+    Assert-True ((Get-EncodedMessageByteCount $message) -le 65536) `
+        "encoded $($message.hook) message exceeded the byte budget"
+}
+
+$script:warpMessages.Clear()
+$oversizedPropertyName = 'p' * 33000
+$oversizedMetadata = [pscustomobject]@{}
+Add-Member -InputObject $oversizedMetadata -NotePropertyName $oversizedPropertyName `
+    -NotePropertyValue 'value'
+$oversizedMetadata | Warp-Out-Default
+Assert-True ((Get-HookNames).Count -eq 0) `
+    'oversized metadata must fall back before emitting a table'
+
+$script:warpMessages.Clear()
+$simple, ([pscustomobject]@{ Name = ('x' * 33000); Id = 2 }) | Warp-Out-Default
+Assert-True ((Get-HookNames).Count -eq 0) `
+    'an oversized row must fall back the buffered table before emitting any OSC'
 
 $script:warpMessages.Clear()
 1..10001 | ForEach-Object { [pscustomobject]@{ Name = "$_"; Id = $_ } } | Warp-Out-Default

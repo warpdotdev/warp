@@ -53,13 +53,15 @@ impl PowerShellTableData {
 #[derive(Default)]
 pub(super) struct PowerShellTableStream {
     current: Option<PowerShellTableData>,
+    pending: Vec<PowerShellTableData>,
 }
 
 impl PowerShellTableStream {
-    pub fn begin(&mut self, value: PowerShellTableBeginValue) -> Option<PowerShellTableData> {
-        let previous = self.take_current();
+    pub fn begin(&mut self, value: PowerShellTableBeginValue) {
+        if let Some(previous) = self.take_current() {
+            self.pending.push(previous);
+        }
         self.current = PowerShellTableData::from_begin(value);
-        previous
     }
 
     pub fn rows(&mut self, value: &PowerShellTableRowsValue) {
@@ -70,24 +72,30 @@ impl PowerShellTableStream {
         }
     }
 
-    pub fn end(&mut self, value: &PowerShellTableEndValue) -> Option<PowerShellTableData> {
+    pub fn end(&mut self, value: &PowerShellTableEndValue) -> Vec<PowerShellTableData> {
         if self
             .current
             .as_ref()
             .is_some_and(|table| table.table_id == value.table_id)
         {
-            self.take_current()
-        } else {
-            None
+            if let Some(current) = self.take_current() {
+                self.pending.push(current);
+            }
+            return std::mem::take(&mut self.pending);
         }
+        Vec::new()
     }
 
     pub fn finish_command(&mut self) -> Vec<PowerShellTableData> {
-        self.take_current().into_iter().collect()
+        if let Some(current) = self.take_current() {
+            self.pending.push(current);
+        }
+        std::mem::take(&mut self.pending)
     }
 
     pub fn clear(&mut self) {
         self.current = None;
+        self.pending.clear();
     }
 
     fn take_current(&mut self) -> Option<PowerShellTableData> {

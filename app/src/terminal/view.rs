@@ -12822,6 +12822,7 @@ impl TerminalView {
             }
 
             ModelEvent::TerminalModeSwapped(mode) => {
+                self.powershell_table_stream.clear();
                 #[cfg(feature = "local_tty")]
                 {
                     let active_command = self
@@ -12977,9 +12978,7 @@ impl TerminalView {
                 }
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(data)) => {
-                if let Some(table) = self.powershell_table_stream.begin(data.clone()) {
-                    self.insert_powershell_table(table, None, ctx);
-                }
+                self.powershell_table_stream.begin(data.clone());
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(data)) => {
                 self.powershell_table_stream.rows(data);
@@ -12988,7 +12987,7 @@ impl TerminalView {
                 data,
                 insert_before_block_index,
             )) => {
-                if let Some(table) = self.powershell_table_stream.end(data) {
+                for table in self.powershell_table_stream.end(data) {
                     self.insert_powershell_table(table, *insert_before_block_index, ctx);
                 }
             }
