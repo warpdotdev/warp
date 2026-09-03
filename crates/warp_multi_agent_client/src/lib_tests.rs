@@ -4,7 +4,8 @@ use prost::Message as _;
 use warp_server_client::base_client::AmbientHeaderPolicy;
 
 use super::{
-    Error, ambient_policy, decode_response_event, endpoint_url, is_passive_suggestion_request,
+    Error, REQUEST_TOO_LARGE_USER_MESSAGE, ambient_policy, decode_response_event, endpoint_url,
+    is_passive_suggestion_request, reject_oversized_multi_agent_request,
 };
 
 #[test]
@@ -74,4 +75,21 @@ fn native_output_stream_is_send() {
     fn assert_send<T: Send>() {}
 
     assert_send::<super::OutputStream>();
+}
+
+#[test]
+fn request_too_large_displays_exact_user_copy() {
+    let error = Error::RequestTooLarge {
+        encoded_len: 50_000_001,
+    };
+
+    assert_eq!(error.to_string(), REQUEST_TOO_LARGE_USER_MESSAGE);
+}
+
+#[test]
+fn default_multi_agent_request_is_under_the_size_limit() {
+    let request = warp_multi_agent_api::Request::default();
+
+    assert!(reject_oversized_multi_agent_request(&request, false).is_ok());
+    assert!(reject_oversized_multi_agent_request(&request, true).is_ok());
 }
