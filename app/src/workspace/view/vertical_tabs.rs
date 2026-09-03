@@ -4086,11 +4086,7 @@ fn group_display_name(group: &TabGroup) -> String {
         .unwrap_or_else(|| UNTITLED_GROUP_NAME.to_string())
 }
 
-/// The ids of every tab group whose displayed name contains `query_lower`.
-///
-/// Shared by the two search filter sites — the rendered list in `render_groups`
-/// and the tab-navigation list in `matching_tab_indices` — so the tabs you can
-/// see under a query and the tabs you can cycle to cannot disagree.
+/// Returns the ids of tab groups whose displayed name contains `query_lower`.
 fn matched_group_ids(
     tab_groups: &HashMap<TabGroupId, TabGroup>,
     query_lower: &str,
@@ -4115,18 +4111,8 @@ fn tab_admitted_by_group_name(
     group_id.is_some_and(|id| matched_groups.contains(&id))
 }
 
-/// Force-includes every member of a name-matched tab group into the search
-/// results, so matching a group by name reveals all the tabs under it.
-///
-/// `own_matches` holds the tabs that matched the query on their own text, as
-/// `(tab index, matching pane ids)` where `None` means "render all pane rows".
-/// Output stays ordered by tab index: `render_groups` collapses a group's
-/// members into one container by scanning a contiguous run, so an out-of-order
-/// entry would split the group across several rendered containers.
-///
-/// A member already present from its own text match is upgraded to `None`
-/// rather than duplicated — a group-name match shows whole tabs, not
-/// pane-filtered slices of them.
+/// Merges text matches with members of name-matched tab groups while preserving tab order.
+/// Members admitted by group name use `None` so the full tab is shown.
 fn merge_group_name_matches(
     tab_group_ids: &[Option<TabGroupId>],
     matched_groups: &HashSet<TabGroupId>,
