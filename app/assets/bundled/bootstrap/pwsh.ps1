@@ -1101,6 +1101,12 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             $labels = @()
         }
 
+        # PowerShell's default table view is unbounded, but Warp's prototype renderer
+        # cannot lay out an arbitrary number of columns. Fall back before any OSC.
+        if ($propertyNames.Count -gt 64) {
+            return $null
+        }
+
         $columns = @()
         for ($index = 0; $index -lt $propertyNames.Count; $index++) {
             $propertyName = [string]$propertyNames[$index]
@@ -1158,86 +1164,45 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         return ,$row
     }
 
-    function Warp-Send-PowerShellTable {
+    function Warp-Send-PowerShellTableRows {
         param(
-            [array]$Columns,
+            [string]$TableId,
             [System.Collections.Generic.List[object]]$Rows
         )
 
-        if ($Rows.Count -eq 0) {
+        if ([string]::IsNullOrEmpty($TableId) -or $Rows.Count -eq 0) {
             return
         }
 
-        $tableId = [Guid]::NewGuid().ToString('N')
         Warp-Send-JsonMessage @{
-            hook = 'PowerShellTableBegin'
+            hook = 'PowerShellTableRows'
             value = @{
                 session_id = $global:_warpSessionId
-                table_id = $tableId
-                columns = $Columns
+                table_id = $TableId
+                rows = @($Rows)
             }
         }
+        $Rows.Clear()
+    }
 
-        for ($offset = 0; $offset -lt $Rows.Count; $offset += 25) {
-            $lastIndex = [Math]::Min($offset + 24, $Rows.Count - 1)
-            Warp-Send-JsonMessage @{
-                hook = 'PowerShellTableRows'
-                value = @{
-                    session_id = $global:_warpSessionId
-                    table_id = $tableId
-                    rows = @($Rows[$offset..$lastIndex])
-                }
-            }
+    function Warp-Complete-PowerShellTable {
+        param(
+            [string]$TableId,
+            [System.Collections.Generic.List[object]]$Rows
+        )
+
+        if ([string]::IsNullOrEmpty($TableId)) {
+            return
         }
 
+        Warp-Send-PowerShellTableRows -TableId $TableId -Rows $Rows
         Warp-Send-JsonMessage @{
             hook = 'PowerShellTableEnd'
             value = @{
                 session_id = $global:_warpSessionId
-                table_id = $tableId
+                table_id = $TableId
             }
         }
-    }
-
-    function Warp-Write-PowerShellRichOutput {
-        param(
-            [System.Collections.Generic.List[object]]$InputObjects,
-            [switch]$Transcript
-        )
-
-        $columns = $null
-        $schema = $null
-        $rows = [System.Collections.Generic.List[object]]::new()
-
-        for ($index = 0; $index -lt $InputObjects.Count; $index++) {
-            $nextColumns = Warp-Get-PowerShellTableColumns $InputObjects[$index]
-            if ($null -eq $nextColumns) {
-                Warp-Send-PowerShellTable -Columns $columns -Rows $rows
-                $InputObjects[$index..($InputObjects.Count - 1)] |
-                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
-                return
-            }
-
-            $nextSchema = ($nextColumns | ConvertTo-Json -Compress -Depth 4)
-            if ($null -ne $schema -and $schema -ne $nextSchema) {
-                Warp-Send-PowerShellTable -Columns $columns -Rows $rows
-                $rows = [System.Collections.Generic.List[object]]::new()
-            }
-
-            $nextRow = Warp-Get-PowerShellTableRow -InputObject $InputObjects[$index] -Columns $nextColumns
-            if ($null -eq $nextRow) {
-                Warp-Send-PowerShellTable -Columns $columns -Rows $rows
-                $InputObjects[$index..($InputObjects.Count - 1)] |
-                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
-                return
-            }
-
-            $columns = $nextColumns
-            $schema = $nextSchema
-            $rows.Add($nextRow)
-        }
-
-        Warp-Send-PowerShellTable -Columns $columns -Rows $rows
     }
 
     function Warp-Out-Default {
@@ -1249,13 +1214,84 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         )
 
         begin {
-            $inputObjects = [System.Collections.Generic.List[object]]::new()
+            $maxTableRows = 10000
+            $rowChunkSize = 25
+            $columns = $null
+            $schema = $null
+            $tableId = $null
+            $rowBuffer = [System.Collections.Generic.List[object]]::new()
+            $acceptedRows = 0
+            $fallback = $false
+            $fallbackPipeline = $null
         }
         process {
-            $inputObjects.Add($InputObject)
+            if ($fallback) {
+                $fallbackPipeline.Process($InputObject)
+                return
+            }
+
+            $nextColumns = Warp-Get-PowerShellTableColumns $InputObject
+            $nextRow = $null
+            if ($null -ne $nextColumns) {
+                $nextRow = Warp-Get-PowerShellTableRow -InputObject $InputObject -Columns $nextColumns
+            }
+
+            $nextSchema = $null
+            if ($null -ne $nextColumns) {
+                $nextSchema = ($nextColumns | ConvertTo-Json -Compress -Depth 4)
+            }
+
+            $schemaChanged = ($null -ne $schema -and $null -ne $nextSchema -and $schema -ne $nextSchema)
+            $unsupported = ($null -eq $nextColumns -or $null -eq $nextRow)
+            $overRowCap = (-not $schemaChanged -and $acceptedRows -ge $maxTableRows)
+
+            if ($unsupported -or $overRowCap) {
+                Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
+                $tableId = $null
+                $fallback = $true
+                $fallbackPipeline = {
+                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
+                }.GetSteppablePipeline($MyInvocation.CommandOrigin)
+                $fallbackPipeline.Begin($PSCmdlet)
+                $fallbackPipeline.Process($InputObject)
+                return
+            }
+
+            if ($schemaChanged) {
+                Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
+                $tableId = $null
+                $acceptedRows = 0
+            }
+
+            if ([string]::IsNullOrEmpty($tableId)) {
+                $tableId = [Guid]::NewGuid().ToString('N')
+                $columns = $nextColumns
+                $schema = $nextSchema
+                Warp-Send-JsonMessage @{
+                    hook = 'PowerShellTableBegin'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $tableId
+                        columns = $columns
+                    }
+                }
+            }
+
+            $rowBuffer.Add($nextRow)
+            $acceptedRows++
+            if ($rowBuffer.Count -ge $rowChunkSize) {
+                Warp-Send-PowerShellTableRows -TableId $tableId -Rows $rowBuffer
+            }
         }
         end {
-            Warp-Write-PowerShellRichOutput -InputObjects $inputObjects -Transcript:$Transcript
+            if ($fallback) {
+                if ($null -ne $fallbackPipeline) {
+                    $fallbackPipeline.End()
+                }
+                return
+            }
+
+            Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
         }
     }
 

@@ -12977,13 +12977,17 @@ impl TerminalView {
                 }
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(data)) => {
-                self.powershell_table_stream.begin(data.clone());
+                if let Some(table) = self.powershell_table_stream.begin(data.clone()) {
+                    self.insert_powershell_table(table, ctx);
+                }
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(data)) => {
                 self.powershell_table_stream.rows(data);
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(data)) => {
-                self.powershell_table_stream.end(data);
+                if let Some(table) = self.powershell_table_stream.end(data) {
+                    self.insert_powershell_table(table, ctx);
+                }
             }
             ModelEvent::Handler(
                 AnsiHandlerEvent::UserCommandFinished | AnsiHandlerEvent::Precmd,

@@ -52,13 +52,13 @@ impl PowerShellTableData {
 #[derive(Default)]
 pub(super) struct PowerShellTableStream {
     current: Option<PowerShellTableData>,
-    completed: Vec<PowerShellTableData>,
 }
 
 impl PowerShellTableStream {
-    pub fn begin(&mut self, value: PowerShellTableBeginValue) {
-        self.finalize_current();
+    pub fn begin(&mut self, value: PowerShellTableBeginValue) -> Option<PowerShellTableData> {
+        let previous = self.take_current();
         self.current = PowerShellTableData::from_begin(value);
+        previous
     }
 
     pub fn rows(&mut self, value: &PowerShellTableRowsValue) {
@@ -69,32 +69,28 @@ impl PowerShellTableStream {
         }
     }
 
-    pub fn end(&mut self, value: &PowerShellTableEndValue) {
+    pub fn end(&mut self, value: &PowerShellTableEndValue) -> Option<PowerShellTableData> {
         if self
             .current
             .as_ref()
             .is_some_and(|table| table.table_id == value.table_id)
         {
-            self.finalize_current();
+            self.take_current()
+        } else {
+            None
         }
     }
 
     pub fn finish_command(&mut self) -> Vec<PowerShellTableData> {
-        self.finalize_current();
-        std::mem::take(&mut self.completed)
+        self.take_current().into_iter().collect()
     }
 
     pub fn clear(&mut self) {
         self.current = None;
-        self.completed.clear();
     }
 
-    fn finalize_current(&mut self) {
-        if let Some(table) = self.current.take()
-            && !table.rows.is_empty()
-        {
-            self.completed.push(table);
-        }
+    fn take_current(&mut self) -> Option<PowerShellTableData> {
+        self.current.take().filter(|table| !table.rows.is_empty())
     }
 }
 
@@ -199,18 +195,26 @@ impl View for PowerShellRichTable {
 }
 
 impl TerminalView {
+    pub(super) fn insert_powershell_table(
+        &mut self,
+        table: PowerShellTableData,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let view = ctx.add_view(|_| PowerShellRichTable::new(table));
+        self.insert_rich_content(
+            Some(RichContentType::PowerShellTable),
+            view,
+            Some(RichContentMetadata::PowerShellTable),
+            RichContentInsertionPosition::Append {
+                insert_below_long_running_block: false,
+            },
+            ctx,
+        );
+    }
+
     pub(super) fn flush_powershell_tables(&mut self, ctx: &mut ViewContext<Self>) {
         for table in self.powershell_table_stream.finish_command() {
-            let view = ctx.add_view(|_| PowerShellRichTable::new(table));
-            self.insert_rich_content(
-                Some(RichContentType::PowerShellTable),
-                view,
-                Some(RichContentMetadata::PowerShellTable),
-                RichContentInsertionPosition::Append {
-                    insert_below_long_running_block: false,
-                },
-                ctx,
-            );
+            self.insert_powershell_table(table, ctx);
         }
     }
 }
