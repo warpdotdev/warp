@@ -3073,9 +3073,9 @@ impl BlockList {
         self.active_block_mut().ensure_executing_for_completion();
     }
 
-    pub(super) fn split_active_block_for_powershell_rich_table(&mut self) {
+    pub(super) fn split_active_block_for_powershell_rich_table(&mut self) -> Option<BlockIndex> {
         if self.active_block().state() != BlockState::Executing {
-            return;
+            return None;
         }
         let split_block_index = self.active_block_index();
         self.update_active_block_height();
@@ -3085,6 +3085,7 @@ impl BlockList {
         self.powershell_rich_table_split_blocks
             .push(split_block_index);
         self.update_active_block_height();
+        Some(self.active_block_index())
     }
 
     /// Increments `self.in_flight_in_band_command_count` and starts the active block as usual.

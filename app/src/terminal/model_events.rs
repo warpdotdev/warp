@@ -13,7 +13,7 @@ use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::lifecycle::LifecycleTelemetryEvent;
 use super::model::session::{IsSSHWrapperSession, SessionId, SessionInfo};
-use super::model::terminal_model::{CommandType, ExitReason, HandlerEvent};
+use super::model::terminal_model::{BlockIndex, CommandType, ExitReason, HandlerEvent};
 use crate::features::FeatureFlag;
 use crate::remote_server::manager::RemoteServerManager;
 use crate::server::telemetry::ImageProtocol;
@@ -210,8 +210,11 @@ impl ModelEventDispatcher {
             Event::Handler(HandlerEvent::PowerShellTableRows(data)) => {
                 ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(data))
             }
-            Event::Handler(HandlerEvent::PowerShellTableEnd(data)) => {
-                ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(data))
+            Event::Handler(HandlerEvent::PowerShellTableEnd(data, insert_before_block_index)) => {
+                ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(
+                    data,
+                    insert_before_block_index,
+                ))
             }
             Event::CompletionsFinished(res, replacement_span) => {
                 ModelEvent::CompletionsFinished(res, replacement_span)
@@ -521,7 +524,7 @@ pub enum AnsiHandlerEvent {
     UnsetBracketedPaste,
     PowerShellTableBegin(PowerShellTableBeginValue),
     PowerShellTableRows(PowerShellTableRowsValue),
-    PowerShellTableEnd(PowerShellTableEndValue),
+    PowerShellTableEnd(PowerShellTableEndValue, Option<BlockIndex>),
 }
 
 impl Entity for ModelEventDispatcher {

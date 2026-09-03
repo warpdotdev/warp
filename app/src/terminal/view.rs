@@ -12978,15 +12978,18 @@ impl TerminalView {
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(data)) => {
                 if let Some(table) = self.powershell_table_stream.begin(data.clone()) {
-                    self.insert_powershell_table(table, ctx);
+                    self.insert_powershell_table(table, None, ctx);
                 }
             }
             ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(data)) => {
                 self.powershell_table_stream.rows(data);
             }
-            ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(data)) => {
+            ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(
+                data,
+                insert_before_block_index,
+            )) => {
                 if let Some(table) = self.powershell_table_stream.end(data) {
-                    self.insert_powershell_table(table, ctx);
+                    self.insert_powershell_table(table, *insert_before_block_index, ctx);
                 }
             }
             ModelEvent::Handler(

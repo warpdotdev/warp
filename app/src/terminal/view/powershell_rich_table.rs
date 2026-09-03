@@ -13,6 +13,7 @@ use crate::terminal::model::ansi::{
     PowerShellTableRowsValue,
 };
 use crate::terminal::model::rich_content::RichContentType;
+use crate::terminal::model::terminal_model::BlockIndex;
 
 const MAX_COLUMNS: usize = 64;
 const MAX_ROWS_PER_TABLE: usize = 10_000;
@@ -198,23 +199,28 @@ impl TerminalView {
     pub(super) fn insert_powershell_table(
         &mut self,
         table: PowerShellTableData,
+        insert_before_block_index: Option<BlockIndex>,
         ctx: &mut ViewContext<Self>,
     ) {
         let view = ctx.add_view(|_| PowerShellRichTable::new(table));
+        let position = match insert_before_block_index {
+            Some(block_index) => RichContentInsertionPosition::BeforeBlockIndex(block_index),
+            None => RichContentInsertionPosition::Append {
+                insert_below_long_running_block: false,
+            },
+        };
         self.insert_rich_content(
             Some(RichContentType::PowerShellTable),
             view,
             Some(RichContentMetadata::PowerShellTable),
-            RichContentInsertionPosition::Append {
-                insert_below_long_running_block: false,
-            },
+            position,
             ctx,
         );
     }
 
     pub(super) fn flush_powershell_tables(&mut self, ctx: &mut ViewContext<Self>) {
         for table in self.powershell_table_stream.finish_command() {
-            self.insert_powershell_table(table, ctx);
+            self.insert_powershell_table(table, None, ctx);
         }
     }
 }

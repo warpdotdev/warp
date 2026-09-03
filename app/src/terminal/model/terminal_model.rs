@@ -2595,7 +2595,7 @@ pub enum HandlerEvent {
     },
     PowerShellTableBegin(PowerShellTableBeginValue),
     PowerShellTableRows(PowerShellTableRowsValue),
-    PowerShellTableEnd(PowerShellTableEndValue),
+    PowerShellTableEnd(PowerShellTableEndValue, Option<BlockIndex>),
 }
 
 impl ansi::Handler for TerminalModel {
@@ -2620,11 +2620,16 @@ impl ansi::Handler for TerminalModel {
 
     fn powershell_table_end(&mut self, data: PowerShellTableEndValue) {
         if FeatureFlag::PowerShellRichTables.is_enabled() {
-            if !self.alt_screen_active {
+            let insert_before_block_index = if self.alt_screen_active {
+                None
+            } else {
                 self.block_list
-                    .split_active_block_for_powershell_rich_table();
-            }
-            self.emit_handler_event(HandlerEvent::PowerShellTableEnd(data));
+                    .split_active_block_for_powershell_rich_table()
+            };
+            self.emit_handler_event(HandlerEvent::PowerShellTableEnd(
+                data,
+                insert_before_block_index,
+            ));
         }
     }
 
