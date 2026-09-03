@@ -13050,13 +13050,19 @@ impl TerminalView {
                     return;
                 }
 
-                // Suppress OSC 9 notifications when a Codex listener is active.
-                // The listener's subscription handles these via CodexSessionHandler.
+                // Suppress legacy OSC 9 notifications when a Codex listener is
+                // active, or when Coredex has already activated its rich plugin.
+                // The listener handles Codex's OSC 9 fallback; Coredex's generic
+                // completion popup would otherwise duplicate its rich status event.
                 if title.is_none() {
-                    let has_codex_listener = CLIAgentSessionsModel::as_ref(ctx)
+                    let suppress_legacy_notification = CLIAgentSessionsModel::as_ref(ctx)
                         .session(self.view_id)
-                        .is_some_and(|s| s.agent == CLIAgent::Codex && s.listener.is_some());
-                    if has_codex_listener {
+                        .is_some_and(|session| {
+                            (session.agent == CLIAgent::Codex && session.listener.is_some())
+                                || (session.agent == CLIAgent::Coredex
+                                    && session.received_rich_notification)
+                        });
+                    if suppress_legacy_notification {
                         return;
                     }
                 }

@@ -141,6 +141,7 @@ pub enum CLIAgent {
     Claude,
     Gemini,
     Codex,
+    Coredex,
     Amp,
     Droid,
     OpenCode,
@@ -166,6 +167,7 @@ impl CLIAgent {
             CLIAgent::Claude => &["claude"],
             CLIAgent::Gemini => &["gemini"],
             CLIAgent::Codex => &["codex"],
+            CLIAgent::Coredex => &["coredex"],
             CLIAgent::Amp => &["amp"],
             CLIAgent::Droid => &["droid"],
             CLIAgent::OpenCode => &["opencode"],
@@ -229,6 +231,7 @@ impl CLIAgent {
             CLIAgent::Claude => "Claude Code",
             CLIAgent::Gemini => "Gemini",
             CLIAgent::Codex => "Codex",
+            CLIAgent::Coredex => "Coredex",
             CLIAgent::Amp => "Amp",
             CLIAgent::Droid => "Droid",
             CLIAgent::OpenCode => "OpenCode",
@@ -252,6 +255,7 @@ impl CLIAgent {
             CLIAgent::Claude => Some(Icon::ClaudeLogo),
             CLIAgent::Gemini => Some(Icon::GeminiLogo),
             CLIAgent::Codex => Some(Icon::OpenAILogo),
+            CLIAgent::Coredex => None,
             CLIAgent::Amp => Some(Icon::AmpLogo),
             CLIAgent::Droid => Some(Icon::DroidLogo),
             CLIAgent::OpenCode => Some(Icon::OpenCodeLogo),
@@ -283,6 +287,7 @@ impl CLIAgent {
                 SkillProvider::Claude,
                 SkillProvider::Codex,
             ],
+            CLIAgent::Coredex => &[],
             CLIAgent::OpenCode => &[
                 SkillProvider::OpenCode,
                 SkillProvider::Agents,
@@ -329,7 +334,7 @@ impl CLIAgent {
 
     /// Whether Warp should show its CLI-agent footer for this agent.
     pub(crate) fn supports_cli_agent_footer(&self) -> bool {
-        !matches!(self, CLIAgent::WarpTui)
+        !matches!(self, CLIAgent::Coredex | CLIAgent::WarpTui)
     }
 
     /// Returns the brand color for this CLI agent, or `None` for unknown/custom agents.
@@ -338,6 +343,7 @@ impl CLIAgent {
             CLIAgent::Claude => Some(CLAUDE_ORANGE),
             CLIAgent::Gemini => Some(GEMINI_BLUE),
             CLIAgent::Codex => Some(OPENAI_COLOR),
+            CLIAgent::Coredex => None,
             CLIAgent::Amp => Some(AMP_COLOR),
             CLIAgent::Droid => Some(DROID_COLOR),
             CLIAgent::OpenCode => Some(OPENCODE_COLOR),
@@ -614,6 +620,7 @@ impl From<CLIAgent> for CLIAgentType {
             CLIAgent::Claude => CLIAgentType::Claude,
             CLIAgent::Gemini => CLIAgentType::Gemini,
             CLIAgent::Codex => CLIAgentType::Codex,
+            CLIAgent::Coredex => CLIAgentType::Coredex,
             CLIAgent::Amp => CLIAgentType::Amp,
             CLIAgent::Droid => CLIAgentType::Droid,
             CLIAgent::OpenCode => CLIAgentType::OpenCode,

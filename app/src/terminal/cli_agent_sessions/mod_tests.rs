@@ -33,6 +33,78 @@ fn parse_stop_notification() {
 }
 
 #[test]
+fn coredex_events_drive_shared_native_status_transitions() {
+    let mut session = CLIAgentSession {
+        agent: CLIAgent::Coredex,
+        status: CLIAgentSessionStatus::InProgress,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification: true,
+    };
+
+    let parse = |event: &str| {
+        parse_event(
+            Some("warp://cli-agent"),
+            &format!(
+                r#"{{"v":1,"agent":"coredex","event":"{event}","session_id":"coredex-1","summary":"Input needed","response":"Failed","error_type":"server_error"}}"#
+            ),
+        )
+        .expect("Coredex event should parse")
+    };
+
+    let permission = parse("permission_request");
+    assert!(matches!(
+        session.apply_event(&permission),
+        Some(CLIAgentSessionStatus::Blocked { .. })
+    ));
+
+    let tool_complete = parse("tool_complete");
+    assert_eq!(
+        session.apply_event(&tool_complete),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+
+    let question = parse("question_asked");
+    assert!(matches!(
+        session.apply_event(&question),
+        Some(CLIAgentSessionStatus::Blocked { .. })
+    ));
+
+    let permission_replied = parse("permission_replied");
+    assert_eq!(
+        session.apply_event(&permission_replied),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+
+    let stop = parse("stop");
+    assert_eq!(
+        session.apply_event(&stop),
+        Some(CLIAgentSessionStatus::Success)
+    );
+
+    let prompt = parse("prompt_submit");
+    assert_eq!(
+        session.apply_event(&prompt),
+        Some(CLIAgentSessionStatus::InProgress)
+    );
+
+    let failure = parse("stop_failure");
+    assert_eq!(
+        session.apply_event(&failure),
+        Some(CLIAgentSessionStatus::Failed {
+            error_type: Some("server_error".to_owned()),
+            message: Some("Failed".to_owned()),
+        })
+    );
+}
+
+#[test]
 fn cli_agent_session_context_title_like_text_uses_trimmed_summary() {
     let context = CLIAgentSessionContext {
         summary: Some("  Reviewing changes  ".to_string()),

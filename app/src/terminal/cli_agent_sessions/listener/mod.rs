@@ -42,6 +42,7 @@ pub fn is_agent_supported(agent: &CLIAgent) -> bool {
         CLIAgent::Claude
             | CLIAgent::OpenCode
             | CLIAgent::Codex
+            | CLIAgent::Coredex
             | CLIAgent::Gemini
             | CLIAgent::Auggie
             | CLIAgent::Droid
@@ -57,12 +58,14 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         // Auggie and Pi are supported via community-maintained plugins
         // (https://github.com/augmentmoogi/auggie-warp,
         // https://github.com/badlogic/pi-mono). OhMyPi emits these structured
-        // OSC 777 events natively. Droid can be supported by user-configured
-        // hooks or future integrations that emit the same events. We don't ship
-        // install flows for these agents here — we just listen.
+        // OSC 777 events natively. Coredex uses an external hook plugin. Droid
+        // can be supported by user-configured hooks or future integrations that
+        // emit the same events. We don't ship install flows for these agents
+        // here — we just listen.
         // WarpTui emits OSC 777 events directly (no external plugin needed).
         CLIAgent::Claude
         | CLIAgent::OpenCode
+        | CLIAgent::Coredex
         | CLIAgent::Gemini
         | CLIAgent::Auggie
         | CLIAgent::Droid

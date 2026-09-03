@@ -661,3 +661,23 @@ fn test_warp_tui_variant_properties() {
         CLIAgent::WarpTui
     );
 }
+
+#[test]
+fn test_coredex_matches_binary_and_exposes_status_only_metadata() {
+    assert!(CLIAgent::Coredex.matches_command("coredex", None));
+    assert!(CLIAgent::Coredex.matches_command("/usr/local/bin/coredex --resume abc", None));
+    assert!(!CLIAgent::Coredex.matches_command("codex", None));
+    assert_eq!(CLIAgent::Coredex.command_prefix(), "coredex");
+    assert_eq!(CLIAgent::Coredex.display_name(), "Coredex");
+    assert_eq!(CLIAgent::Coredex.icon(), None);
+    assert_eq!(CLIAgent::Coredex.brand_color(), None);
+    assert!(!CLIAgent::Coredex.supports_cli_agent_footer());
+    assert!(matches!(
+        crate::server::telemetry::CLIAgentType::from(CLIAgent::Coredex),
+        crate::server::telemetry::CLIAgentType::Coredex
+    ));
+    assert_eq!(
+        CLIAgent::from_serialized_name(&CLIAgent::Coredex.to_serialized_name()),
+        CLIAgent::Coredex
+    );
+}

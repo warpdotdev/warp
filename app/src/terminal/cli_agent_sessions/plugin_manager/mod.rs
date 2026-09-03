@@ -287,6 +287,7 @@ pub(crate) fn plugin_manager_for_with_shell(
         }
         CLIAgent::OpenCode
         | CLIAgent::Codex
+        | CLIAgent::Coredex
         | CLIAgent::Gemini
         | CLIAgent::Amp
         | CLIAgent::Droid

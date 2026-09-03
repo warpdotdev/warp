@@ -135,6 +135,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         CLIAgent::Hermes => RichInputSubmitStrategy::BracketedPaste,
         CLIAgent::Amp
         | CLIAgent::Droid
+        | CLIAgent::Coredex
         | CLIAgent::Pi
         | CLIAgent::Goose
         | CLIAgent::Vibe
