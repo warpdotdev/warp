@@ -974,7 +974,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             ATTACH_FILE_KEYBINDING,
-            "Attach file",
+            "Attach file to agent conversation",
             TerminalAction::AttachFile,
         )
         .with_group(bindings::BindingGroup::WarpAi.as_str())
