@@ -1,6 +1,8 @@
 #[cfg(unix)]
 use std::fs;
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::process::Stdio;
 
 #[cfg(unix)]
@@ -267,6 +269,30 @@ fn parse_preinstall_unsupported_non_glibc() {
         result.libc,
         RemoteLibc::NonGlibc {
             name: "uclibc".to_string()
+        }
+    );
+    assert!(!result.is_supported());
+}
+
+#[test]
+fn parse_preinstall_unsupported_bionic() {
+    let stdout = "required_glibc=2.31\n\
+                  libc_family=bionic\n\
+                  status=unsupported\n\
+                  reason=non_glibc\n";
+    let result = PreinstallCheckResult::parse(stdout);
+    assert_eq!(
+        result.status,
+        PreinstallStatus::Unsupported {
+            reason: UnsupportedReason::NonGlibc {
+                name: "bionic".to_string()
+            }
+        }
+    );
+    assert_eq!(
+        result.libc,
+        RemoteLibc::NonGlibc {
+            name: "bionic".to_string()
         }
     );
     assert!(!result.is_supported());
@@ -724,4 +750,199 @@ fn parse_preinstall_missing_status_falls_open() {
     let result = PreinstallCheckResult::parse(stdout);
     assert_eq!(result.status, PreinstallStatus::Unknown);
     assert!(result.is_supported());
+}
+
+#[cfg(unix)]
+const FAILING_STUB: &str = "#!/bin/sh\nexit 1\n";
+#[cfg(unix)]
+const UNRECOGNIZABLE_LDD: &str = "#!/bin/sh\necho 'not a dynamic executable'\nexit 1\n";
+
+#[cfg(unix)]
+fn write_executable(path: &std::path::Path, contents: &str) {
+    fs::write(path, contents).unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+/// Runs the production preinstall script with `stubs` prepended on PATH so
+/// `getconf`/`ldd`/`getprop` can be faked without hiding `head`/`grep`.
+#[cfg(unix)]
+fn run_preinstall_with_stubs(stubs: &[(&str, &str)]) -> PreinstallCheckResult {
+    let test_root =
+        std::env::temp_dir().join(format!("remote-server-preinstall-{}", uuid::Uuid::new_v4()));
+    let bin_dir = test_root.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    for (name, body) in stubs {
+        write_executable(&bin_dir.join(name), body);
+    }
+    let path = match std::env::var("PATH") {
+        Ok(rest) => format!("{}:{rest}", bin_dir.display()),
+        Err(_) => bin_dir.display().to_string(),
+    };
+    let output = Command::new("bash")
+        .arg("-c")
+        .arg(PREINSTALL_CHECK_SCRIPT)
+        .env("PATH", &path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run preinstall_check.sh");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let _ = fs::remove_dir_all(&test_root);
+    assert!(
+        output.status.success(),
+        "preinstall_check.sh failed: stdout={stdout} stderr={stderr}"
+    );
+    PreinstallCheckResult::parse(&stdout)
+}
+
+#[cfg(unix)]
+fn assert_unsupported_non_glibc(result: &PreinstallCheckResult, name: &str) {
+    assert_eq!(
+        result.status,
+        PreinstallStatus::Unsupported {
+            reason: UnsupportedReason::NonGlibc {
+                name: name.to_string()
+            }
+        },
+        "raw={}",
+        result.raw
+    );
+    assert_eq!(
+        result.libc,
+        RemoteLibc::NonGlibc {
+            name: name.to_string()
+        }
+    );
+    assert!(!result.is_supported());
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_getprop_reports_bionic_unsupported() {
+    let result = run_preinstall_with_stubs(&[
+        ("getconf", FAILING_STUB),
+        ("ldd", UNRECOGNIZABLE_LDD),
+        (
+            "getprop",
+            "#!/bin/sh\n\
+             [ \"$1\" = \"ro.build.version.sdk\" ] && echo 33 && exit 0\n\
+             exit 1\n",
+        ),
+    ]);
+    assert_unsupported_non_glibc(&result, "bionic");
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_ldd_bionic_reports_unsupported() {
+    let result = run_preinstall_with_stubs(&[
+        ("getconf", FAILING_STUB),
+        ("ldd", "#!/bin/sh\necho 'bionic libc'\nexit 0\n"),
+        ("getprop", FAILING_STUB),
+    ]);
+    assert_unsupported_non_glibc(&result, "bionic");
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_unknown_without_android_probes() {
+    let result = run_preinstall_with_stubs(&[
+        ("getconf", FAILING_STUB),
+        ("ldd", UNRECOGNIZABLE_LDD),
+        ("getprop", FAILING_STUB),
+    ]);
+    assert_eq!(
+        result.status,
+        PreinstallStatus::Unknown,
+        "raw={}",
+        result.raw
+    );
+    assert_eq!(result.libc, RemoteLibc::Unknown);
+    assert!(result.is_supported());
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_non_numeric_getprop_is_not_bionic() {
+    let result = run_preinstall_with_stubs(&[
+        ("getconf", FAILING_STUB),
+        ("ldd", UNRECOGNIZABLE_LDD),
+        (
+            "getprop",
+            "#!/bin/sh\necho 'usage: getprop [name]'\nexit 0\n",
+        ),
+    ]);
+    assert_eq!(
+        result.status,
+        PreinstallStatus::Unknown,
+        "raw={}",
+        result.raw
+    );
+    assert_ne!(
+        result.libc,
+        RemoteLibc::NonGlibc {
+            name: "bionic".to_string()
+        }
+    );
+    assert!(result.is_supported());
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_musl_is_supported() {
+    let result = run_preinstall_with_stubs(&[
+        ("getconf", FAILING_STUB),
+        ("ldd", "#!/bin/sh\necho 'musl libc (x86_64)'\nexit 0\n"),
+        ("getprop", FAILING_STUB),
+    ]);
+    assert_eq!(
+        result.status,
+        PreinstallStatus::Supported,
+        "raw={}",
+        result.raw
+    );
+    assert_eq!(
+        result.libc,
+        RemoteLibc::NonGlibc {
+            name: "musl".to_string()
+        }
+    );
+    assert!(result.is_supported());
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_glibc_is_supported() {
+    let result = run_preinstall_with_stubs(&[
+        (
+            "getconf",
+            "#!/bin/sh\n\
+             [ \"$1\" = \"GNU_LIBC_VERSION\" ] && echo 'glibc 2.35' && exit 0\n\
+             exit 1\n",
+        ),
+        ("ldd", UNRECOGNIZABLE_LDD),
+        ("getprop", FAILING_STUB),
+    ]);
+    assert_eq!(
+        result.status,
+        PreinstallStatus::Supported,
+        "raw={}",
+        result.raw
+    );
+    assert_eq!(result.libc, RemoteLibc::Glibc(GlibcVersion::new(2, 35)));
+    assert!(result.is_supported());
+}
+
+#[cfg(unix)]
+#[test]
+fn preinstall_script_uclibc_is_unsupported() {
+    let result = run_preinstall_with_stubs(&[
+        ("getconf", FAILING_STUB),
+        ("ldd", "#!/bin/sh\necho 'uClibc 0.9.33'\nexit 0\n"),
+        ("getprop", FAILING_STUB),
+    ]);
+    assert_unsupported_non_glibc(&result, "uclibc");
 }
