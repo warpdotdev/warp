@@ -420,7 +420,7 @@ impl AgentInputFooter {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Plus)
                 .with_tooltip("Attach file")
-                .with_tooltip_keybinding(ATTACH_FILE_KEYBINDING)
+                .with_tooltip_keybinding(KeystrokeSource::Binding(ATTACH_FILE_KEYBINDING))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {

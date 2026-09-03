@@ -53,7 +53,7 @@ use crate::util::bindings::{CustomAction, keybinding_name_to_display_string};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
 use crate::util::path::{display_name_with_host, display_path_with_host};
-use crate::view_components::action_button::{ActionButton, PaneHeaderTheme};
+use crate::view_components::action_button::{ActionButton, KeystrokeSource, PaneHeaderTheme};
 #[cfg(feature = "local_fs")]
 use crate::view_components::action_button::{NakedTheme, TooltipAlignment};
 use crate::view_components::{Dropdown, DropdownItem};
@@ -491,21 +491,15 @@ impl RightPanelView {
             }
         });
 
-        let maximize_button = ctx.add_typed_action_view(|ctx| {
-            let mut button = ActionButton::new("", PaneHeaderTheme)
+        let maximize_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("", PaneHeaderTheme)
                 .with_icon(Icon::Maximize)
                 .with_tooltip("Maximize")
+                .with_tooltip_keybinding(KeystrokeSource::Binding(
+                    "workspace:toggle_maximize_code_review_panel",
+                ))
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
-                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize));
-
-            if let Some(keybinding_label) = keybinding_name_to_display_string(
-                "workspace:toggle_maximize_code_review_panel",
-                ctx,
-            ) {
-                button = button.with_tooltip_sublabel(keybinding_label);
-            }
-
-            button
+                .on_click(|ctx| ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize))
         });
 
         #[cfg(feature = "local_fs")]
@@ -1140,20 +1134,16 @@ impl RightPanelView {
         };
 
         self.maximize_button.update(ctx, |button, ctx| {
-            let mut new_button = ActionButton::new("", PaneHeaderTheme)
+            let new_button = ActionButton::new("", PaneHeaderTheme)
                 .with_icon(icon)
                 .with_tooltip(tooltip)
+                .with_tooltip_keybinding(KeystrokeSource::Binding(
+                    "workspace:toggle_maximize_code_review_panel",
+                ))
                 .with_tooltip_positioning_provider(Arc::new(MenuPositioning::BelowInputBox))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RightPanelAction::ToggleMaximize);
                 });
-
-            if let Some(keybinding_label) = keybinding_name_to_display_string(
-                "workspace:toggle_maximize_code_review_panel",
-                ctx,
-            ) {
-                new_button = new_button.with_tooltip_sublabel(keybinding_label);
-            }
 
             *button = new_button;
             ctx.notify();
