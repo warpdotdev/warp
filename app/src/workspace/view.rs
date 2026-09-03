@@ -851,7 +851,7 @@ impl ShowTabBar {
 
 /// The type of content being displayed when the simplified WASM tab bar is shown.
 /// Used to determine which elements to render (e.g., icon, info button).
-#[cfg(any(test, target_family = "wasm"))]
+#[cfg(target_family = "wasm")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SimplifiedWasmTabBarContent {
     /// Viewing a Warp Drive object (notebook, workflow, env vars, AI facts, MCP servers)
@@ -4687,7 +4687,7 @@ impl Workspace {
     }
 
     /// Returns the type of simplified WASM tab bar content to display, if any.
-    #[cfg(any(test, target_family = "wasm"))]
+    #[cfg(target_family = "wasm")]
     fn get_simplified_wasm_tab_bar_content(
         &self,
         ctx: &AppContext,
@@ -26564,7 +26564,7 @@ impl View for Workspace {
             }
         }
 
-        #[cfg(any(test, target_family = "wasm"))]
+        #[cfg(target_family = "wasm")]
         if matches!(
             self.get_simplified_wasm_tab_bar_content(app),
             Some(SimplifiedWasmTabBarContent::ConversationTranscript { .. })
