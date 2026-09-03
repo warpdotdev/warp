@@ -49,7 +49,6 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_sdk::driver::harness::exit_escalation::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, driver_result_after_harness_run,
-    may_synthesize_succeeded_on_flush,
 };
 use crate::ai::agent_sdk::driver::harness::{
     HarnessCleanupDisposition, HarnessKind, HarnessRunner, ResumePayload, SavePoint,
@@ -1477,9 +1476,12 @@ impl AgentDriver {
                 // the caller can terminate the process (see the doc comment on
                 // `run`). Must run before the send below.
                 if let Some(task_id) = task_id {
+                    // `HarnessExitTimedOut` is still `Err` here, so this does not
+                    // synthesize SUCCEEDED. Map it to `Ok` for the caller after flush
+                    // so `report_driver_error` cannot overwrite Failed/Blocked/Cancelled.
                     Self::flush_task_status_before_exit(
                         task_id,
-                        may_synthesize_succeeded_on_flush(&result),
+                        result.is_ok(),
                         &server_api,
                         &foreground,
                     )
@@ -4000,18 +4002,14 @@ impl AgentDriver {
             });
         }
 
-        match command_result {
-            Ok(exit_code) => {
-                log::debug!("Agent harness exited with status {exit_code}");
-                if exit_code.was_successful() {
-                    Ok(())
-                } else {
-                    Err(AgentDriverError::HarnessCommandFailed {
-                        exit_code: exit_code.value(),
-                    })
-                }
-            }
-            Err(err) => Err(err),
+        let exit_code = command_result?;
+        log::debug!("Agent harness exited with status {exit_code}");
+        if exit_code.was_successful() {
+            Ok(())
+        } else {
+            Err(AgentDriverError::HarnessCommandFailed {
+                exit_code: exit_code.value(),
+            })
         }
     }
 

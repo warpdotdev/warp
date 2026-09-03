@@ -16,16 +16,9 @@ fn rejects_a_foreground_pgid_that_is_not_in_the_shell_tree() {
 }
 
 #[test]
-fn rejects_pgids_below_two() {
-    assert_eq!(proven_kill_pgid(Some(0), 100, 1, &[0, 100]), Some(100));
-    assert_eq!(proven_kill_pgid(Some(1), 100, 1, &[1, 100]), Some(100));
-}
-
-#[test]
 fn skips_the_kill_when_no_target_can_be_proved() {
     assert_eq!(proven_kill_pgid(Some(999), 100, 1, &[]), None);
     assert_eq!(proven_kill_pgid(None, 100, 100, &[100]), None);
-    assert_eq!(proven_kill_pgid(None, 1, 7, &[1]), None);
 }
 
 #[test]

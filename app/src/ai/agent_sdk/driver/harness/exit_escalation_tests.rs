@@ -1,6 +1,6 @@
 use super::{
     ExitEscalation, ExitEscalationAction, ExitEscalationEvent, ExitEscalationPhase,
-    driver_result_after_harness_run, may_synthesize_succeeded_on_flush,
+    driver_result_after_harness_run,
 };
 use crate::ai::agent_sdk::driver::AgentDriverError;
 
@@ -101,30 +101,29 @@ fn scanner_detection_during_an_in_flight_ladder_does_not_restart_it() {
 }
 
 #[test]
-fn bounded_timeout_does_not_synthesize_succeeded_and_is_not_a_driver_error() {
+fn bounded_timeout_is_not_a_driver_error_and_is_still_err_before_mapping() {
     let timeout = Err(AgentDriverError::HarnessExitTimedOut {
         harness: "claude".into(),
     });
 
-    assert!(!may_synthesize_succeeded_on_flush(&timeout));
+    // Flush uses `result.is_ok()` before this mapping, so timeout skips SUCCEEDED.
+    assert!(timeout.is_err());
     assert!(driver_result_after_harness_run(timeout).is_ok());
 }
 
 #[test]
-fn successful_harness_completion_may_synthesize_succeeded() {
-    assert!(may_synthesize_succeeded_on_flush(&Ok(())));
+fn successful_harness_completion_stays_ok() {
     assert!(driver_result_after_harness_run(Ok(())).is_ok());
 }
 
 #[test]
-fn runtime_failure_stays_a_driver_error_and_does_not_synthesize_succeeded() {
+fn runtime_failure_stays_a_driver_error() {
     let failure = Err(AgentDriverError::HarnessRuntimeFailureDetected {
         harness: "claude".into(),
         pattern: "credit balance is too low".into(),
         excerpt: "Error: Your credit balance is too low".into(),
     });
 
-    assert!(!may_synthesize_succeeded_on_flush(&failure));
     assert!(matches!(
         driver_result_after_harness_run(failure),
         Err(AgentDriverError::HarnessRuntimeFailureDetected { .. })

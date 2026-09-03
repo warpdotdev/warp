@@ -541,7 +541,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
         // a no-op Enter. If a future Claude Code version changes the default
         // selection, this would need to send the digit explicitly instead.
         log::info!("Sending exit confirmation follow-up (Enter) to Claude Code CLI");
-        let terminal_driver = self.terminal_driver.clone();
+        let terminal_driver = self.terminal_driver();
         foreground
             .spawn(move |_, ctx| {
                 terminal_driver.update(ctx, |driver, ctx| {

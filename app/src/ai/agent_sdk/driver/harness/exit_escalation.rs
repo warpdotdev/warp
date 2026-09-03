@@ -56,14 +56,6 @@ impl ExitEscalation {
     pub(crate) fn on_event(&mut self, event: ExitEscalationEvent) -> ExitEscalationAction {
         match (self.phase, event) {
             (
-                ExitEscalationPhase::Done,
-                ExitEscalationEvent::CommandExited
-                | ExitEscalationEvent::ShutdownRequested
-                | ExitEscalationEvent::ScannerDetected
-                | ExitEscalationEvent::FollowupDeadlineElapsed
-                | ExitEscalationEvent::ForceKillDeadlineElapsed,
-            ) => ExitEscalationAction::Ignore,
-            (
                 ExitEscalationPhase::Running
                 | ExitEscalationPhase::AwaitingGracefulExit
                 | ExitEscalationPhase::AwaitingFollowup,
@@ -94,10 +86,18 @@ impl ExitEscalation {
                 ExitEscalationAction::ForceKillAndFinish
             }
             (
+                ExitEscalationPhase::Done,
+                ExitEscalationEvent::CommandExited
+                | ExitEscalationEvent::ShutdownRequested
+                | ExitEscalationEvent::ScannerDetected
+                | ExitEscalationEvent::FollowupDeadlineElapsed
+                | ExitEscalationEvent::ForceKillDeadlineElapsed,
+            )
+            | (
                 ExitEscalationPhase::AwaitingGracefulExit | ExitEscalationPhase::AwaitingFollowup,
                 ExitEscalationEvent::ShutdownRequested | ExitEscalationEvent::ScannerDetected,
-            ) => ExitEscalationAction::Ignore,
-            (
+            )
+            | (
                 ExitEscalationPhase::Running,
                 ExitEscalationEvent::FollowupDeadlineElapsed
                 | ExitEscalationEvent::ForceKillDeadlineElapsed,
@@ -112,16 +112,6 @@ impl ExitEscalation {
             ) => ExitEscalationAction::Ignore,
         }
     }
-}
-
-/// Whether `flush_task_status_before_exit` may report `SUCCEEDED` when no
-/// terminal state was confirmed delivered.
-///
-/// A bounded shutdown timeout is not a successful harness completion: the CLI
-/// session may already have reported Failed/Blocked/Cancelled, and inventing
-/// `SUCCEEDED` would overwrite that.
-pub(crate) fn may_synthesize_succeeded_on_flush(result: &Result<(), AgentDriverError>) -> bool {
-    result.is_ok()
 }
 
 /// Maps a bounded harness-exit timeout to `Ok` so `report_driver_error` cannot

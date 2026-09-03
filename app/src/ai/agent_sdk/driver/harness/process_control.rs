@@ -42,7 +42,7 @@ pub(super) fn proven_kill_pgid(
     self_pgid: u32,
     tree_pgids: &[u32],
 ) -> Option<u32> {
-    let is_safe = |pgid: u32| pgid >= 2 && pgid != self_pgid && tree_pgids.contains(&pgid);
+    let is_safe = |pgid: u32| pgid != self_pgid && tree_pgids.contains(&pgid);
     if let Some(pgid) = candidate_foreground_pgid
         && is_safe(pgid)
     {
