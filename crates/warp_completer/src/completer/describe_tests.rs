@@ -144,6 +144,17 @@ pub fn test_describe_top_level_commands_case_insensitive() {
 }
 
 #[test]
+pub fn test_describe_git_ls_remote_branches() {
+    let ctx = FakeCompletionContext::new(CommandRegistry::default());
+
+    assert_eq!(
+        describe_at_cursor("git ls-remote --branches", ByteOffset::from(14), &ctx)
+            .map(Description::into_token_name),
+        Some("--branches".into())
+    );
+}
+
+#[test]
 pub fn test_xray_describe() {
     let ctx = FakeCompletionContext::new(CommandRegistry::default())
         .with_top_level_commands(["git"])
