@@ -1,4 +1,6 @@
 use lsp::LspManagerModel;
+#[cfg(feature = "local_tty")]
+use remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use remote_server::proto::TextEdit;
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
@@ -320,4 +322,57 @@ fn pending_batch_bumps_client_version_immediately() {
             assert_eq!(clock.server_version, ContentVersion::from_raw(1));
         });
     })
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn remote_buffer_events_subscribe_with_dev_container_only() {
+    let _dc = crate::features::FeatureFlag::LocalDevContainer.override_enabled(true);
+    let _ssh = crate::features::FeatureFlag::SshRemoteServer.override_enabled(false);
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(RemoteServerManager::new);
+        app.add_singleton_model(GlobalBufferModel::new);
+
+        let host_id = test_host_id();
+        let path = test_path();
+        let _buffer_state = gbm(&app).update(&mut app, |gbm, ctx| {
+            gbm.seed_remote_buffer_for_test(host_id.clone(), path.clone(), "hello", 1, ctx)
+        });
+        let file_id = _buffer_state.file_id;
+
+        RemoteServerManager::handle(&app).update(&mut app, |_mgr, ctx| {
+            ctx.emit(RemoteServerManagerEvent::BufferUpdated {
+                host_id: host_id.clone(),
+                path: path.as_str().to_string(),
+                new_server_version: 2,
+                expected_client_version: 0,
+                edits: vec![text_edit(6, 6, " world")],
+            });
+        });
+        assert_eq!(content(&app, file_id), "hello world");
+
+        let client_cv = ContentVersion::new();
+        gbm(&app).update(&mut app, |gbm, _ctx| {
+            gbm.insert_pending_batch_for_test(
+                file_id,
+                2,
+                vec![text_edit(12, 12, " edit")],
+                client_cv,
+            );
+        });
+        RemoteServerManager::handle(&app).update(&mut app, |_mgr, ctx| {
+            ctx.emit(RemoteServerManagerEvent::BufferConflictDetected {
+                host_id: host_id.clone(),
+                path: path.as_str().to_string(),
+            });
+        });
+        let handle = gbm(&app);
+        app.read(|ctx| {
+            assert!(
+                !handle.as_ref(ctx).has_pending_batch_for_test(file_id),
+                "BufferConflictDetected must reach GlobalBufferModel with Dev Container only"
+            );
+        });
+    });
 }

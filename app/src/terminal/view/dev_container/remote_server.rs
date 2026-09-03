@@ -23,6 +23,55 @@ enum DevContainerRemoteSetupPhase {
     Connecting,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BinaryCheckDecision {
+    Connect,
+    Install,
+    Unsupported,
+    Failed,
+}
+
+fn binary_check_decision(
+    result: &Result<bool, Arc<Error>>,
+    preinstall_check: Option<&PreinstallCheckResult>,
+) -> BinaryCheckDecision {
+    if matches!(
+        preinstall_check,
+        Some(PreinstallCheckResult {
+            status: PreinstallStatus::Unsupported { .. },
+            ..
+        })
+    ) {
+        return BinaryCheckDecision::Unsupported;
+    }
+    match result {
+        Ok(true) => BinaryCheckDecision::Connect,
+        Ok(false) => BinaryCheckDecision::Install,
+        Err(_) => BinaryCheckDecision::Failed,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionConnectedDecision {
+    ReplaceBuildPane,
+    DeregisterStale,
+    Ignore,
+}
+
+fn session_connected_decision(
+    setup_session_id: SessionId,
+    event_session_id: SessionId,
+    is_current_attempt: bool,
+) -> SessionConnectedDecision {
+    if setup_session_id != event_session_id {
+        SessionConnectedDecision::Ignore
+    } else if is_current_attempt {
+        SessionConnectedDecision::ReplaceBuildPane
+    } else {
+        SessionConnectedDecision::DeregisterStale
+    }
+}
+
 pub(crate) struct DevContainerRemoteSetup {
     session_id: SessionId,
     transport: DevContainerTransport,
@@ -170,20 +219,13 @@ impl TerminalView {
         if setup.session_id != session_id || setup.phase != DevContainerRemoteSetupPhase::Checking {
             return;
         }
-        if let Some(PreinstallCheckResult {
-            status: PreinstallStatus::Unsupported { .. },
-            ..
-        }) = preinstall_check.as_ref()
-        {
-            self.fail_dev_container_remote_setup(
+        match binary_check_decision(&result, preinstall_check.as_ref()) {
+            BinaryCheckDecision::Unsupported => self.fail_dev_container_remote_setup(
                 "This container is not supported by Warp's remote server.".to_owned(),
                 ctx,
-            );
-            return;
-        }
-        match result {
-            Ok(true) => self.connect_dev_container_remote_server(ctx),
-            Ok(false) => {
+            ),
+            BinaryCheckDecision::Connect => self.connect_dev_container_remote_server(ctx),
+            BinaryCheckDecision::Install => {
                 let Some(setup) = self.dev_container_remote_setup.as_mut() else {
                     return;
                 };
@@ -194,10 +236,15 @@ impl TerminalView {
                     mgr.install_binary(session_id, transport, false, ctx);
                 });
             }
-            Err(err) => self.fail_dev_container_remote_setup(
-                format!("Failed to verify the Warp remote server in the container: {err}"),
-                ctx,
-            ),
+            BinaryCheckDecision::Failed => {
+                let message = match result {
+                    Err(err) => {
+                        format!("Failed to verify the Warp remote server in the container: {err}")
+                    }
+                    Ok(_) => "Failed to verify the Warp remote server in the container.".to_owned(),
+                };
+                self.fail_dev_container_remote_setup(message, ctx);
+            }
         }
     }
 
@@ -262,15 +309,20 @@ impl TerminalView {
         let Some(setup) = self.dev_container_remote_setup.take() else {
             return;
         };
-        if setup.session_id != session_id {
-            self.dev_container_remote_setup = Some(setup);
-            return;
-        }
-        if !self.is_current_dev_container_attempt(setup.operation_id, setup.attempt_id, ctx) {
-            RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                mgr.deregister_session(session_id, ctx);
-            });
-            return;
+        let is_current_attempt =
+            self.is_current_dev_container_attempt(setup.operation_id, setup.attempt_id, ctx);
+        match session_connected_decision(setup.session_id, session_id, is_current_attempt) {
+            SessionConnectedDecision::Ignore => {
+                self.dev_container_remote_setup = Some(setup);
+                return;
+            }
+            SessionConnectedDecision::DeregisterStale => {
+                RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                    mgr.deregister_session(session_id, ctx);
+                });
+                return;
+            }
+            SessionConnectedDecision::ReplaceBuildPane => {}
         }
         if let Some(operation) = self.dev_container_build.clone() {
             operation.update(ctx, |operation, ctx| {
@@ -334,13 +386,69 @@ impl TerminalView {
 
 #[cfg(test)]
 mod tests {
-    use super::DevContainerRemoteSetupPhase;
+    use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn setup_phases_are_distinct() {
         assert_ne!(
             DevContainerRemoteSetupPhase::Checking,
             DevContainerRemoteSetupPhase::Connecting
+        );
+    }
+
+    #[test]
+    fn binary_check_connects_when_present() {
+        assert_eq!(
+            binary_check_decision(&Ok(true), None),
+            BinaryCheckDecision::Connect
+        );
+    }
+
+    #[test]
+    fn binary_check_installs_when_missing() {
+        assert_eq!(
+            binary_check_decision(&Ok(false), None),
+            BinaryCheckDecision::Install
+        );
+    }
+
+    #[test]
+    fn binary_check_fails_when_check_errors() {
+        assert_eq!(
+            binary_check_decision(&Err(Arc::new(Error::TimedOut)), None),
+            BinaryCheckDecision::Failed
+        );
+    }
+
+    #[test]
+    fn binary_check_fails_closed_when_unsupported() {
+        let preinstall = PreinstallCheckResult::unsupported(
+            remote_server::setup::UnsupportedReason::UnsupportedOs {
+                os: "plan9".to_owned(),
+            },
+        );
+        assert_eq!(
+            binary_check_decision(&Ok(true), Some(&preinstall)),
+            BinaryCheckDecision::Unsupported
+        );
+    }
+
+    #[test]
+    fn session_connected_replaces_pane_only_for_current_attempt() {
+        let session_id = SessionId::from(3);
+        assert_eq!(
+            session_connected_decision(session_id, session_id, true),
+            SessionConnectedDecision::ReplaceBuildPane
+        );
+        assert_eq!(
+            session_connected_decision(session_id, session_id, false),
+            SessionConnectedDecision::DeregisterStale
+        );
+        assert_eq!(
+            session_connected_decision(session_id, SessionId::from(4), true),
+            SessionConnectedDecision::Ignore
         );
     }
 }

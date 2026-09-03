@@ -141,6 +141,73 @@ fn debug_fmt_omits_auth_context() {
 }
 
 #[test]
+fn exec_argv_passes_home_and_tarball_paths_without_shell() {
+    let transport = test_transport();
+    let install_dir = "/home/user with spaces/o'brien/.warp/remote-server";
+    let tarball = "/home/user with spaces/o'brien/.warp/remote-server/oz-upload-;rm.tar.gz";
+    let mkdir_args = transport.exec_argv(["mkdir", "-p", "--", install_dir]);
+    assert_eq!(
+        mkdir_args,
+        os(&[
+            "exec",
+            "-u",
+            "vscode",
+            "-w",
+            "/workspaces/project",
+            "abc123",
+            "mkdir",
+            "-p",
+            "--",
+            install_dir,
+        ])
+    );
+    assert!(!mkdir_args.iter().any(|arg| arg == "sh" || arg == "-c"));
+
+    let rm_args = transport.exec_argv(["rm", "-f", "--", tarball]);
+    assert_eq!(
+        rm_args.last().map(|arg| arg.as_os_str()),
+        Some(std::ffi::OsStr::new(tarball))
+    );
+    assert!(!rm_args.iter().any(|arg| arg == "sh" || arg == "-c"));
+
+    let script_args = transport.script_args_with_positional([tarball]);
+    assert_eq!(
+        script_args,
+        os(&[
+            "exec",
+            "-i",
+            "-u",
+            "vscode",
+            "-w",
+            "/workspaces/project",
+            "abc123",
+            "bash",
+            "-s",
+            "--",
+            tarball,
+        ])
+    );
+}
+
+#[test]
+fn cp_args_preserve_spaces_and_metacharacters() {
+    let container_path = "/home/user with spaces/.warp/remote-server/oz-upload-$HOME.tar.gz";
+    let args = DevContainerTransport::cp_args(
+        "abc123",
+        Path::new("/tmp/oz with spaces.tar.gz"),
+        container_path,
+    );
+    assert_eq!(
+        args,
+        os(&[
+            "cp",
+            "/tmp/oz with spaces.tar.gz",
+            &format!("abc123:{container_path}"),
+        ])
+    );
+}
+
+#[test]
 fn is_reconnectable_rejects_docker_cli_failure_and_signal_kill() {
     let transport = test_transport();
     assert!(!transport.is_reconnectable(Some(&RemoteServerExitStatus {

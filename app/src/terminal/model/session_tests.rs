@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(feature = "local_tty")]
+use warpui::SingletonEntity;
 use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
 use warpui::{App, AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext};
@@ -286,6 +288,93 @@ fn remote_host_id_attaches_and_clears_without_local_fallback() {
         session.session_type(),
         SessionType::WarpifiedRemote { host_id: None }
     ));
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn disconnect_clears_host_id_until_reconnect_handshake() {
+    let _dc = crate::features::FeatureFlag::LocalDevContainer.override_enabled(true);
+    let _ssh = crate::features::FeatureFlag::SshRemoteServer.override_enabled(false);
+    App::test((), |mut app| async move {
+        app.add_singleton_model(crate::remote_server::manager::RemoteServerManager::new);
+        let (tx, _rx) = async_channel::unbounded();
+        let sessions = app.add_model(|ctx| Sessions::new(tx, ctx));
+        let session_id = SessionId::from(11);
+        let info = SessionInfo::new_for_test()
+            .with_id(session_id)
+            .with_session_type(BootstrapSessionType::WarpifiedRemote)
+            .with_launch_data(dev_container_launch_data(session_id));
+        sessions.update(&mut app, |sessions, _ctx| {
+            sessions.register_session_for_test(info);
+        });
+
+        let connected = warp_core::HostId::new("container-a".to_owned());
+        crate::remote_server::manager::RemoteServerManager::handle(&app).update(
+            &mut app,
+            |_mgr, ctx| {
+                ctx.emit(
+                    crate::remote_server::manager::RemoteServerManagerEvent::SessionConnected {
+                        session_id,
+                        host_id: connected.clone(),
+                    },
+                );
+            },
+        );
+        sessions.read(&app, |sessions, _ctx| {
+            let session = sessions.get(session_id).expect("session registered");
+            match session.session_type() {
+                SessionType::WarpifiedRemote {
+                    host_id: Some(host_id),
+                } => assert_eq!(host_id.as_str(), "container-a"),
+                other => panic!("expected connected host id, got {other:?}"),
+            }
+        });
+
+        crate::remote_server::manager::RemoteServerManager::handle(&app).update(
+            &mut app,
+            |_mgr, ctx| {
+                ctx.emit(
+                    crate::remote_server::manager::RemoteServerManagerEvent::SessionDisconnected {
+                        session_id,
+                        host_id: connected.clone(),
+                        exit_status: None,
+                        was_reconnect_attempt: false,
+                    },
+                );
+            },
+        );
+        sessions.read(&app, |sessions, _ctx| {
+            let session = sessions.get(session_id).expect("session registered");
+            assert!(
+                matches!(
+                    session.session_type(),
+                    SessionType::WarpifiedRemote { host_id: None }
+                ),
+                "host id must be cleared during the reconnect window"
+            );
+        });
+
+        crate::remote_server::manager::RemoteServerManager::handle(&app).update(
+            &mut app,
+            |_mgr, ctx| {
+                ctx.emit(
+                    crate::remote_server::manager::RemoteServerManagerEvent::SessionConnected {
+                        session_id,
+                        host_id: warp_core::HostId::new("container-b".to_owned()),
+                    },
+                );
+            },
+        );
+        sessions.read(&app, |sessions, _ctx| {
+            let session = sessions.get(session_id).expect("session registered");
+            match session.session_type() {
+                SessionType::WarpifiedRemote {
+                    host_id: Some(host_id),
+                } => assert_eq!(host_id.as_str(), "container-b"),
+                other => panic!("expected handshake host id, got {other:?}"),
+            }
+        });
+    });
 }
 
 #[cfg(feature = "local_tty")]

@@ -3,7 +3,7 @@
 //! [`DevContainerTransport`] uses non-TTY `docker exec` against a running
 //! container to check/install the remote server binary and to launch the
 //! `remote-server-proxy` process whose stdin/stdout become the protocol channel.
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -90,10 +90,33 @@ impl DevContainerTransport {
         args
     }
 
+    pub(crate) fn exec_argv(
+        &self,
+        command: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    ) -> Vec<OsString> {
+        let mut args = self.exec_prefix(false);
+        args.extend(command.into_iter().map(|arg| arg.as_ref().to_os_string()));
+        args
+    }
+
     pub(crate) fn script_args(&self) -> Vec<OsString> {
         let mut args = self.exec_prefix(true);
         args.push(OsString::from("bash"));
         args.push(OsString::from("-s"));
+        args
+    }
+
+    pub(crate) fn script_args_with_positional(
+        &self,
+        positional: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    ) -> Vec<OsString> {
+        let mut args = self.script_args();
+        args.push(OsString::from("--"));
+        args.extend(
+            positional
+                .into_iter()
+                .map(|arg| arg.as_ref().to_os_string()),
+        );
         args
     }
 

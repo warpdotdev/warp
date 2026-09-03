@@ -103,7 +103,7 @@ async fn install_via_client_copy(transport: &DevContainerTransport) -> Result<()
     let remote_tarball_name = format!("oz-upload-{}.tar.gz", uuid::Uuid::new_v4());
     let remote_tarball_path = format!("{install_dir}/{remote_tarball_name}");
 
-    let mkdir_args = transport.command_args(&format!("mkdir -p {install_dir}"));
+    let mkdir_args = transport.exec_argv(["mkdir", "-p", "--", &install_dir]);
     let mkdir_output = run_docker_command(
         &transport.docker_path,
         &mkdir_args,
@@ -129,12 +129,12 @@ async fn install_via_client_copy(transport: &DevContainerTransport) -> Result<()
     )
     .await?;
 
-    let script = remote_server::setup::install_script(Some(&remote_tarball_path));
-    let args = transport.script_args();
+    let script = remote_server::setup::install_script(None);
+    let args = transport.script_args_with_positional([&remote_tarball_path]);
     let output = run_docker_script(&transport.docker_path, &args, &script, timeout).await?;
     let _ = run_docker_command(
         &transport.docker_path,
-        &transport.command_args(&format!("rm -f {remote_tarball_path}")),
+        &transport.exec_argv(["rm", "-f", "--", &remote_tarball_path]),
         remote_server::setup::CHECK_TIMEOUT,
     )
     .await;

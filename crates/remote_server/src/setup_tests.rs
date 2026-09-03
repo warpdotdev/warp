@@ -289,6 +289,14 @@ fn install_script_substitutes_bundled_resources_dir_name() {
     assert!(script.contains(&format!("$install_dir/{BUNDLED_RESOURCES_DIR_NAME}")));
 }
 
+#[test]
+fn install_script_prefers_positional_tarball_path() {
+    let script = install_script(None);
+    assert!(script.contains("staging_tarball_path=\"${1:-}\""));
+    let interpolated = install_script(Some("/tmp/oz.tar.gz"));
+    assert!(interpolated.contains("staging_tarball_path=\"${1:-/tmp/oz.tar.gz}\""));
+}
+
 #[cfg(unix)]
 fn make_test_tarball(
     test_root: &std::path::Path,

@@ -20,7 +20,8 @@
 #   {version_suffix}            — e.g. -v0.2026...        (empty when no release tag)
 #   {bundled_resources_dir_name} — global resources directory name (e.g. bundled_resources)
 #   {no_http_client_exit_code}  — exit code when neither curl nor wget is available
-#   {staging_tarball_path}      — path to a pre-uploaded tarball (SCP fallback; empty normally)
+#   {staging_tarball_path}      — path to a pre-uploaded tarball (SCP fallback; empty normally).
+#                                 `$1` overrides this when the script is invoked as `bash -s -- path`.
 set -e
 
 arch=$(uname -m)
@@ -66,7 +67,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-staging_tarball_path="{staging_tarball_path}"
+staging_tarball_path="${1:-{staging_tarball_path}}"
 if [ -n "$staging_tarball_path" ]; then
   # SCP fallback: tarball already uploaded by the client.
   # Same tilde-expansion caveat as install_dir above.

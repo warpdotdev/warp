@@ -175,8 +175,7 @@ impl Sessions {
         // (see `new_command_executor_for_local_tty_session`) so we no
         // longer need to wire it here on connect/disconnect.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::SshRemoteServer.is_enabled() || FeatureFlag::LocalDevContainer.is_enabled()
-        {
+        if FeatureFlag::remote_server_backend_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
             ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
@@ -233,10 +232,12 @@ impl Sessions {
                 | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
+                    host_id,
                     client,
                     ..
                 } => {
                     if let Some(session) = sessions.sessions.get(sid) {
+                        session.set_remote_host_id(Some(host_id.clone()));
                         let new_executor =
                             Arc::new(RemoteServerCommandExecutor::new(*sid, client.clone()));
                         session.set_command_executor(new_executor);

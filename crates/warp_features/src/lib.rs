@@ -1101,6 +1101,11 @@ impl FeatureFlag {
             .unwrap_or(false)
     }
 
+    /// True when any remote-server-backed session origin is enabled.
+    pub fn remote_server_backend_enabled() -> bool {
+        Self::SshRemoteServer.is_enabled() || Self::LocalDevContainer.is_enabled()
+    }
+
     #[allow(dead_code)]
     pub fn set_enabled(self, enabled: bool) {
         // Allow calling this in integration tests because we sometimes use it in the app
