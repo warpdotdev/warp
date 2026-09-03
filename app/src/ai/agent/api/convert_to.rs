@@ -345,6 +345,30 @@ fn convert_input_to_user_input(
                 }
             ))
         }
+        AIAgentInput::ExternalQuery {
+            token,
+            referenced_attachments,
+            user_query_mode,
+            ..
+        } => {
+            // Only the server can author an ExternalQuery, so the client echoes its token rather
+            // than the decoded payload. Restored turns have no token and must never be re-sent.
+            let token = token.ok_or_else(|| {
+                anyhow!("ExternalQuery input without a server-issued token cannot be sent")
+            })?;
+            Ok(
+                api::request::input::user_inputs::user_input::Input::ExternalQuery(
+                    api::request::input::user_inputs::ExternalQueryInput {
+                        token,
+                        referenced_attachments: referenced_attachments
+                            .into_iter()
+                            .map(|(k, attachment)| (k, attachment.into()))
+                            .collect(),
+                        mode: Some(user_query_mode.into()),
+                    },
+                ),
+            )
+        }
         AIAgentInput::ActionResult { result, .. } => result.try_into(),
         AIAgentInput::MessagesReceivedFromAgents { messages } => Ok(
             api::request::input::user_inputs::user_input::Input::MessagesReceivedFromAgents(

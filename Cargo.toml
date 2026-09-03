@@ -582,8 +582,15 @@ tikv-jemalloc-sys = { git = "https://github.com/warpdotdev/jemallocator.git", re
 
 [patch."https://github.com/warpdotdev/warp-proto-apis.git"]
 # Uncomment for local development of warp-proto-apis
-# warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
+# TEMPORARY local dev override; re-pin `warp_multi_agent_api` above to the landed rev and re-comment before landing.
+warp_multi_agent_api = { path = "../warp-proto-apis/apis/multi_agent/v1/gen/rust" }
+# NOTE: master's pin (f0028fa) predates several upstream proto changes (uint64 ModelTokenUsage
+# counters, LongRunningShellCommandSnapshot.activity, RawImage.source) that break the build
+# until the Phase 0 pin bump lands. To build Phase 3 in isolation, point at a copy of the
+# pinned rev plus only the `attribution_token` field instead:
+# warp_multi_agent_api = { path = "../warp-proto-apis-uqa-pinned/apis/multi_agent/v1/gen/rust" }
 
 [patch."https://github.com/warpdotdev/session-sharing-protocol.git"]
 # Uncomment for local development of session-sharing-protocol
-# session-sharing-protocol = { path = "../session-sharing-protocol" }
+# TEMPORARY local dev override; re-pin `session-sharing-protocol` above to the landed rev and re-comment before landing.
+session-sharing-protocol = { path = "../session-sharing-protocol" }

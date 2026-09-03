@@ -3625,6 +3625,9 @@ pub(super) fn query_prefix_highlight_len(
 ) -> Option<usize> {
     if let AIAgentInput::UserQuery {
         user_query_mode, ..
+    }
+    | AIAgentInput::ExternalQuery {
+        user_query_mode, ..
     } = input
         && let Some(prefix_len) = user_query_mode_prefix_highlight_len(*user_query_mode)
     {
@@ -3641,6 +3644,7 @@ pub(super) fn query_prefix_highlight_len(
         match input {
             AIAgentInput::InvokeSkill { skill, .. } => Some(1 + skill.name.len()),
             AIAgentInput::UserQuery { .. }
+            | AIAgentInput::ExternalQuery { .. }
             | AIAgentInput::AutoCodeDiffQuery { .. }
             | AIAgentInput::ResumeConversation { .. }
             | AIAgentInput::InitProjectRules { .. }

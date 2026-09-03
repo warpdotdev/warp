@@ -462,6 +462,8 @@ pub(super) struct AIBlockStateHandles {
     /// Persistent mouse-state handles per received-message transcript row,
     /// used by the clickable sender avatar.
     pub(super) transcript_avatar_handles: HashMap<MessageId, MouseStateHandle>,
+    /// Mouse state for the permalink affordance on a platform-originated query.
+    pub(super) external_query_permalink_handle: MouseStateHandle,
 
     references_section_collapsible_handle: MouseStateHandle,
 
@@ -6140,6 +6142,10 @@ pub(super) fn attachment_names(inputs: &[AIAgentInput]) -> Vec<(AttachmentType, 
     // (which may contain a UUID prefix from the VM filesystem path).
     for input in inputs {
         if let AIAgentInput::UserQuery {
+            referenced_attachments,
+            ..
+        }
+        | AIAgentInput::ExternalQuery {
             referenced_attachments,
             ..
         } = input

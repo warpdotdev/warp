@@ -242,3 +242,44 @@ fn transfer_control_finished_result_converts_to_tool_call_result_input() {
         other => panic!("Expected tool-call-result input, got {other:?}"),
     }
 }
+
+fn external_query_input(token: Option<String>) -> AIAgentInput {
+    AIAgentInput::ExternalQuery {
+        query: Box::new(api::ExternalQuery {
+            message: Some(api::ExternalMessage {
+                body: "reply from slack".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        token,
+        context: std::sync::Arc::new([]),
+        referenced_attachments: std::collections::HashMap::new(),
+        user_query_mode: UserQueryMode::Plan,
+    }
+}
+
+/// The client cannot author an `ExternalQuery`: only the server-issued token (plus the host's
+/// attachments and mode) goes on the wire, never the decoded payload.
+#[test]
+fn external_query_converts_to_token_only_input() {
+    let input =
+        super::convert_input_to_user_input(external_query_input(Some("raw.token".to_string())))
+            .unwrap();
+    let api::request::input::user_inputs::user_input::Input::ExternalQuery(external_query) = input
+    else {
+        panic!("Expected external-query input, got {input:?}");
+    };
+    assert_eq!(external_query.token, "raw.token");
+    assert!(external_query.referenced_attachments.is_empty());
+    assert_eq!(
+        external_query.mode.and_then(|mode| mode.r#type),
+        Some(api::user_query_mode::Type::Plan(()))
+    );
+}
+
+/// Restored external queries carry no token and must never be re-sent.
+#[test]
+fn external_query_without_token_fails_conversion() {
+    assert!(super::convert_input_to_user_input(external_query_input(None)).is_err());
+}

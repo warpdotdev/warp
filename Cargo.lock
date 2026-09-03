@@ -12645,7 +12645,6 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=fcd0fea35ab9f782043c8ec74fd81bce187ded9f#fcd0fea35ab9f782043c8ec74fd81bce187ded9f"
 dependencies = [
  "byte-unit",
  "serde",
@@ -15860,7 +15859,6 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=7b638a3bce15b6159116c25caa1dda62cf004b0e#7b638a3bce15b6159116c25caa1dda62cf004b0e"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -16151,6 +16149,7 @@ dependencies = [
  "warp_errors",
  "warp_files",
  "warp_logging",
+ "warp_multi_agent_api",
  "warp_search_core",
  "warp_terminal",
  "warp_util",

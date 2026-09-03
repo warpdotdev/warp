@@ -397,6 +397,16 @@ impl ConvertToExchanges for &api::Task {
                     });
                     true
                 }
+                api::message::Message::ExternalQuery(external_query) => {
+                    current_inputs.push(AIAgentInput::ExternalQuery {
+                        context: convert_input_context(external_query.context.as_ref()),
+                        user_query_mode: convert_user_query_mode(external_query.mode.as_ref()),
+                        referenced_attachments: HashMap::new(),
+                        token: None,
+                        query: Box::new(external_query.clone()),
+                    });
+                    true
+                }
                 api::message::Message::SystemQuery(query) => {
                     let Some(query_type) = &query.r#type else {
                         continue;
@@ -439,9 +449,11 @@ impl ConvertToExchanges for &api::Task {
                         | api::message::system_query::Type::GeneratePassiveSuggestions(_)
                         // TODO: Implement this for real. ZB adding this to bump proto version for unrelated API changes.
                         | api::message::system_query::Type::SummarizeConversation(_)
-                        // HandoffRehydration is injected by the server for agent-only
-                        // context; the client must never render it as user input.
-                        | api::message::system_query::Type::HandoffRehydration(_) => false,
+                        // HandoffRehydration and IntegrationRunContext are injected by the
+                        // server for agent-only context; the client must never render them as
+                        // user input.
+                        | api::message::system_query::Type::HandoffRehydration(_)
+                        | api::message::system_query::Type::IntegrationRunContext(_) => false,
                     }
                 }
                 api::message::Message::ToolCallResult(tool_call_result) => {
@@ -2078,6 +2090,7 @@ where
             match msg {
                 // Messages treated as inputs in create_exchange_from_messages
                 api::message::Message::UserQuery(_)
+                | api::message::Message::ExternalQuery(_)
                 | api::message::Message::SystemQuery(_)
                 | api::message::Message::ToolCallResult(_)
                 | api::message::Message::UpdateTodos(_)

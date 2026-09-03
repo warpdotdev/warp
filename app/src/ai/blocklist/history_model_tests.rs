@@ -242,6 +242,8 @@ fn create_user_query_message(
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             },
         )),
         request_id: request_id.to_string(),

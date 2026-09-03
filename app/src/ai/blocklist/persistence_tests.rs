@@ -21,6 +21,8 @@ fn user_query_message(task_id: &str, query: &str) -> warp_multi_agent_api::Messa
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                author: None,
+                origin: None,
             },
         )),
         request_id: "request-id".to_owned(),

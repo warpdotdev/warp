@@ -953,8 +953,9 @@ impl Network {
             server_conversation_token,
             prompt,
             attachments,
-            // Only warp-server-injected follow-ups carry an attribution token.
+            // Only warp-server-injected follow-ups carry attribution or external-query tokens.
             attribution_token: None,
+            external_query_token: None,
         };
         self.send_message_to_server(UpstreamMessage::SendAgentPrompt(request));
     }

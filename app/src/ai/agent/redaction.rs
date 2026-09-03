@@ -25,6 +25,25 @@ pub(crate) fn redact_inputs(inputs: &mut [AIAgentInput]) {
                     .values_mut()
                     .for_each(redact_attachment);
             }
+            AIAgentInput::ExternalQuery {
+                query,
+                context,
+                referenced_attachments,
+                ..
+            } => {
+                if let Some(message) = query.message.as_mut() {
+                    redact_secrets(&mut message.body);
+                    redact_secrets(&mut message.permalink);
+                    if let Some(sender) = message.sender.as_mut() {
+                        redact_secrets(&mut sender.display_name);
+                        redact_secrets(&mut sender.handle);
+                    }
+                }
+                redact_context(Arc::make_mut(context));
+                referenced_attachments
+                    .values_mut()
+                    .for_each(redact_attachment);
+            }
             AIAgentInput::AutoCodeDiffQuery { query, context, .. } => {
                 redact_secrets(query);
                 redact_context(Arc::make_mut(context));
@@ -401,3 +420,7 @@ fn redact_attachment(attachment: &mut AIAgentAttachment) {
         AIAgentAttachment::FilePathReference { .. } => {}
     }
 }
+
+#[cfg(test)]
+#[path = "redaction_tests.rs"]
+mod tests;

@@ -20,7 +20,7 @@ use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentExchangeId, AIAgentInput as FullAIAgentInput, AIIdentifiers,
-    EntrypointType, PassiveSuggestionTrigger, ServerOutputId, SuggestedLoggingId,
+    EntrypointType, PassiveSuggestionTrigger, ServerOutputId, SuggestedLoggingId, external_query,
 };
 use crate::ai::agent_management::notifications::NotificationSourceAgent;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -981,21 +981,48 @@ pub enum InputUXChangeOrigin {
 
 #[derive(Clone, Debug, Serialize)]
 pub enum AIAgentInput {
-    UserQuery { query: String },
-    AutoCodeDiffQuery { query: String },
+    UserQuery {
+        query: String,
+    },
+    /// Platform-originated turn; only the platform name is recorded, never the message body
+    /// or sender.
+    ExternalQuery {
+        platform: String,
+    },
+    AutoCodeDiffQuery {
+        query: String,
+    },
     ResumeConversation,
-    InitProjectRules { display_query: Option<String> },
-    CreateEnvironment { display_query: Option<String> },
-    TriggerSuggestPrompt { trigger: PassiveSuggestionTrigger },
-    ActionResult { action_id: AIAgentActionId },
-    CreateNewProject { query: String },
-    CloneRepository { url: String },
+    InitProjectRules {
+        display_query: Option<String>,
+    },
+    CreateEnvironment {
+        display_query: Option<String>,
+    },
+    TriggerSuggestPrompt {
+        trigger: PassiveSuggestionTrigger,
+    },
+    ActionResult {
+        action_id: AIAgentActionId,
+    },
+    CreateNewProject {
+        query: String,
+    },
+    CloneRepository {
+        url: String,
+    },
     CodeReview,
     SummarizeConversation,
-    InvokeSkill { skill_name: String },
+    InvokeSkill {
+        skill_name: String,
+    },
     StartFromAmbientRunPrompt,
-    MessagesReceivedFromAgents { message_count: usize },
-    EventsFromAgents { event_count: usize },
+    MessagesReceivedFromAgents {
+        message_count: usize,
+    },
+    EventsFromAgents {
+        event_count: usize,
+    },
     PassiveSuggestionResult,
     OrchestrationConfigUpdate,
 }
@@ -1004,6 +1031,14 @@ impl From<FullAIAgentInput> for AIAgentInput {
     fn from(input: FullAIAgentInput) -> Self {
         match input {
             FullAIAgentInput::UserQuery { query, .. } => Self::UserQuery { query },
+            FullAIAgentInput::ExternalQuery { query, .. } => Self::ExternalQuery {
+                platform: query
+                    .message
+                    .as_ref()
+                    .map(external_query::platform_name)
+                    .unwrap_or_default()
+                    .to_owned(),
+            },
             FullAIAgentInput::AutoCodeDiffQuery { query, .. } => Self::AutoCodeDiffQuery { query },
             FullAIAgentInput::ResumeConversation { .. } => Self::ResumeConversation,
             FullAIAgentInput::InitProjectRules { display_query, .. } => {

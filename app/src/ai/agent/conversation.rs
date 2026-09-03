@@ -4117,9 +4117,13 @@ impl AIConversation {
                 }
             }
 
-            // Extract from UserQuery/SystemQuery attachments.
+            // Extract from UserQuery/ExternalQuery/SystemQuery attachments.
             let attachments = match message.message.as_ref() {
                 Some(api::message::Message::UserQuery(user_query)) => user_query
+                    .referenced_attachments
+                    .values()
+                    .collect::<Vec<_>>(),
+                Some(api::message::Message::ExternalQuery(external_query)) => external_query
                     .referenced_attachments
                     .values()
                     .collect::<Vec<_>>(),
@@ -4167,9 +4171,12 @@ impl AIConversation {
                 }
             }
 
-            // Extract from UserQuery/SystemQuery context blocks.
+            // Extract from UserQuery/ExternalQuery/SystemQuery context blocks.
             let context_blocks = match message.message.as_ref() {
                 Some(api::message::Message::UserQuery(user_query)) => user_query.context.as_ref(),
+                Some(api::message::Message::ExternalQuery(external_query)) => {
+                    external_query.context.as_ref()
+                }
                 Some(api::message::Message::SystemQuery(system_query)) => {
                     system_query.context.as_ref()
                 }

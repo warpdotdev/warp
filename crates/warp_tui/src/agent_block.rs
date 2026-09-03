@@ -17,14 +17,14 @@ use markdown_parser::{FormattedTable, FormattedText};
 use parking_lot::FairMutex;
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentExchangeId,
-    AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo, AIBlockModel,
-    AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, AuthStateProvider, BlockId,
-    BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel, CancellationReason,
-    FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, MessageId, ModelEvent,
-    ModelEventDispatcher, ReceivedMessageDisplay, RenderableAIError, SummarizationType,
+    AIAgentInput, AIAgentOutputMessageType, AIAgentText, AIAgentTextSection, AIAgentTodo,
+    AIBlockModel, AIBlockModelHelper, AIBlockOutputStatus, AIConversationId, AuthStateProvider,
+    BlockId, BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIHistoryModel,
+    CancellationReason, FAILED_OUTPUT_USAGE_NOTICE_TEXT, FailedOutputPresentation, MessageId,
+    ModelEvent, ModelEventDispatcher, ReceivedMessageDisplay, RenderableAIError, SummarizationType,
     TelemetryEvent, TerminalModel, TodoOperation, TodoStatus, TuiOnboardingMarker,
-    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, UserWorkspaces, failed_output_presentation,
-    should_show_failed_output_usage_notice,
+    TuiOnboardingMarkers, TuiOnboardingMarkersEvent, UserWorkspaces, external_query,
+    failed_output_presentation, should_show_failed_output_usage_notice,
 };
 use warpui::SingletonEntity;
 use warpui_core::elements::MouseStateHandle;
@@ -142,6 +142,22 @@ enum TuiRichTextSection {
         alt_text: String,
         source: String,
     },
+}
+
+/// Transcript text for one exchange input. A platform-originated query is prefixed with its
+/// sender and platform so the row reads as that person's message rather than the local user's.
+fn input_section_text(input: &AIAgentInput) -> Option<String> {
+    let text = input.display_query()?;
+    if let AIAgentInput::ExternalQuery { query, .. } = input
+        && let Some(message) = &query.message
+    {
+        return Some(format!(
+            "{} ({}): {text}",
+            external_query::sender_display_name(message),
+            external_query::platform_name(message)
+        ));
+    }
+    Some(text)
 }
 
 /// Renderable pieces of an agent block; this will grow as we render richer sections.
@@ -1534,7 +1550,7 @@ impl TuiAIBlock {
             .block_model
             .inputs_to_render(app)
             .iter()
-            .filter_map(|input| input.display_query())
+            .filter_map(input_section_text)
             .join("\n");
         if !input.is_empty() {
             sections.push(TuiAIBlockSection::Input(input));

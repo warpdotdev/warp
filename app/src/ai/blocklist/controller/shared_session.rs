@@ -387,6 +387,7 @@ impl BlocklistAIController {
                     if let Some(inner) = &message.message {
                         let ctx_opt = match inner {
                             Message::UserQuery(uq) => uq.context.as_ref(),
+                            Message::ExternalQuery(eq) => eq.context.as_ref(),
                             Message::SystemQuery(sq) => sq.context.as_ref(),
                             Message::ToolCallResult(tcr) => tcr.context.as_ref(),
                             _ => None,
@@ -662,6 +663,7 @@ impl BlocklistAIController {
     }
 
     /// Execute an agent prompt on behalf of the viewer.
+    #[allow(clippy::too_many_arguments)]
     pub fn execute_agent_prompt_for_shared_session(
         &mut self,
         prompt: String,
@@ -669,6 +671,7 @@ impl BlocklistAIController {
         attachments: Vec<AgentAttachment>,
         participant_id: ParticipantId,
         attribution_token: Option<String>,
+        external_query_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Map server token to sharer's local conversation ID
@@ -732,6 +735,7 @@ impl BlocklistAIController {
                 participant_id,
                 HashMap::new(),
                 attribution_token,
+                external_query_token,
                 ctx,
             );
             return;
@@ -748,6 +752,7 @@ impl BlocklistAIController {
                 participant_id,
                 HashMap::new(),
                 attribution_token,
+                external_query_token,
                 ctx,
             );
             return;
@@ -760,6 +765,7 @@ impl BlocklistAIController {
                 participant_id,
                 HashMap::new(),
                 attribution_token,
+                external_query_token,
                 ctx,
             );
             return;
@@ -833,6 +839,7 @@ impl BlocklistAIController {
                     participant_id,
                     file_attachments,
                     attribution_token,
+                    external_query_token,
                     ctx,
                 );
             },
@@ -872,6 +879,7 @@ impl BlocklistAIController {
 
     /// Helper to send a shared-session query, used both for immediate sends
     /// (no file attachments) and deferred sends (after file downloads complete).
+    #[allow(clippy::too_many_arguments)]
     fn send_shared_session_query(
         &mut self,
         prompt: String,
@@ -879,6 +887,7 @@ impl BlocklistAIController {
         participant_id: ParticipantId,
         file_attachments: HashMap<String, AIAgentAttachment>,
         attribution_token: Option<String>,
+        external_query_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation_id) = conversation_id {
@@ -899,6 +908,7 @@ impl BlocklistAIController {
                 Some(participant_id),
                 file_attachments,
                 attribution_token,
+                external_query_token,
                 ctx,
             );
         } else {
@@ -946,13 +956,14 @@ impl BlocklistAIController {
                     Some(participant_id),
                     file_attachments,
                     attribution_token,
+                    external_query_token,
                     ctx,
                 );
                 return;
             }
 
             // Legacy non-AgentView path: the new-conversation entry point has no attachment or
-            // attribution_token plumbing, so the token is dropped here. Cloud-run hosts, the
+            // token plumbing, so both tokens are dropped here. Cloud-run hosts, the
             // only senders of injected follow-ups, always have AgentView enabled.
             self.send_user_query_in_new_conversation(
                 prompt,

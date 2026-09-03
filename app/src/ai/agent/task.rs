@@ -580,6 +580,7 @@ impl Task {
                 message.message.as_ref().and_then(|content| {
                     let context = match content {
                         Message::UserQuery(user_query) => user_query.context.as_ref(),
+                        Message::ExternalQuery(external_query) => external_query.context.as_ref(),
                         Message::ToolCallResult(tool_call_result) => {
                             tool_call_result.context.as_ref()
                         }

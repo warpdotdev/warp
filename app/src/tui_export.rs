@@ -40,7 +40,7 @@ pub use crate::ai::agent::{
     RenderableAIError, RequestCommandOutputResult, RunAgentsAgentOutcomeKind, RunAgentsResult,
     SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared, ShellCommandDelay,
     StartAgentExecutionMode, StopRecordingResult, SuggestNewConversationResult, SummarizationType,
-    TodoOperation, UserQueryMode,
+    TodoOperation, UserQueryMode, external_query,
 };
 pub use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationEntryId, AgentConversationListEntryState,

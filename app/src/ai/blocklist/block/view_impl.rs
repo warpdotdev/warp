@@ -958,70 +958,108 @@ impl View for AIBlock {
                 contents.add_child(header.with_content_item_spacing().finish());
                 did_render_header = true;
             }
-            // Derive the display info for the participant who initiated this exchange.
-            // For non-shared sessions, this is just the current user.
-            // For shared sessions, this is the user who initiated the request.
-            let (avatar_display_name, profile_image_path, avatar_color) = self
-                .model
-                .response_initiator(app)
-                .and_then(|participant_id| {
-                    app.view_with_id::<TerminalView>(self.window_id, self.terminal_view_id)
-                        .and_then(|terminal_view| {
-                            terminal_view.read(app, |view, app| {
-                                view.shared_session_presence_manager().and_then(move |pm| {
-                                    pm.as_ref(app).get_participant(&participant_id).map(
-                                        |participant| {
-                                            // Get the display info from the participant
-                                            // who sent this query.
-                                            (
-                                                participant.info.profile_data.display_name.clone(),
-                                                participant.info.profile_data.photo_url.clone(),
-                                                Some(participant.color),
-                                            )
-                                        },
-                                    )
+            let is_selecting_text = self.state_handles.selection_handle.is_selecting();
+            let is_ai_input_enabled = self
+                .context_model
+                .as_ref(app)
+                .pending_context_selected_text()
+                .is_some();
+            let find_context =
+                self.find_model
+                    .as_ref(app)
+                    .is_find_bar_open()
+                    .then_some(FindContext {
+                        model: self.find_model.as_ref(app),
+                        state: &self.find_state,
+                    });
+            let rendered_query = if let Some(AIAgentInput::ExternalQuery {
+                query: external_query,
+                ..
+            }) = self.model.inputs_to_render(app).get(input_index)
+            {
+                // The author is the platform sender carried by the input, not the shared-session
+                // participant who relayed it.
+                Some(query::render_external_query(
+                    query::ExternalQueryProps {
+                        query: external_query,
+                        display_text: &query_for_display,
+                        input_index,
+                        query_prefix_highlight_len,
+                        detected_links_state: &self.detected_links_state,
+                        secret_redaction_state: &self.secret_redaction_state,
+                        is_selecting_text,
+                        is_ai_input_enabled,
+                        attachments: &attachment_name_list,
+                        find_context,
+                        permalink_mouse_state: self
+                            .state_handles
+                            .external_query_permalink_handle
+                            .clone(),
+                    },
+                    app,
+                ))
+            } else {
+                // Derive the display info for the participant who initiated this exchange.
+                // For non-shared sessions, this is just the current user.
+                // For shared sessions, this is the user who initiated the request.
+                let (avatar_display_name, profile_image_path, avatar_color) = self
+                    .model
+                    .response_initiator(app)
+                    .and_then(|participant_id| {
+                        app.view_with_id::<TerminalView>(self.window_id, self.terminal_view_id)
+                            .and_then(|terminal_view| {
+                                terminal_view.read(app, |view, app| {
+                                    view.shared_session_presence_manager().and_then(move |pm| {
+                                        pm.as_ref(app).get_participant(&participant_id).map(
+                                            |participant| {
+                                                // Get the display info from the participant
+                                                // who sent this query.
+                                                (
+                                                    participant
+                                                        .info
+                                                        .profile_data
+                                                        .display_name
+                                                        .clone(),
+                                                    participant.info.profile_data.photo_url.clone(),
+                                                    Some(participant.color),
+                                                )
+                                            },
+                                        )
+                                    })
                                 })
                             })
-                        })
-                })
-                // Fallback to the current user's info if this is not a shared session
-                // or the participant is not found.
-                .unwrap_or((
-                    self.user_display_name.clone(),
-                    self.profile_image_path.clone(),
-                    None,
-                ));
-            if let Some(rendered_query) = query::maybe_render(
-                query::Props {
-                    user_display_name: &avatar_display_name,
-                    profile_image_path: profile_image_path.as_ref(),
-                    avatar_color,
-                    query_sent_at: self.query_sent_at(app),
-                    query_timestamp_tooltip_handle: &self
-                        .state_handles
-                        .query_timestamp_tooltip_handle,
-                    query_and_index: Some((&query_for_display, input_index)),
-                    query_prefix_highlight_len,
-                    detected_links_state: &self.detected_links_state,
-                    secret_redaction_state: &self.secret_redaction_state,
-                    is_selecting_text: self.state_handles.selection_handle.is_selecting(),
-                    is_ai_input_enabled: self
-                        .context_model
-                        .as_ref(app)
-                        .pending_context_selected_text()
-                        .is_some(),
-                    attachments: &attachment_name_list,
-                    find_context: self.find_model.as_ref(app).is_find_bar_open().then_some(
-                        FindContext {
-                            model: self.find_model.as_ref(app),
-                            state: &self.find_state,
-                        },
-                    ),
-                    is_agent_transcript_navigation_target: self
-                        .is_agent_transcript_navigation_target(),
-                },
-                app,
-            ) {
+                    })
+                    // Fallback to the current user's info if this is not a shared session
+                    // or the participant is not found.
+                    .unwrap_or((
+                        self.user_display_name.clone(),
+                        self.profile_image_path.clone(),
+                        None,
+                    ));
+                query::maybe_render(
+                    query::Props {
+                        user_display_name: &avatar_display_name,
+                        profile_image_path: profile_image_path.as_ref(),
+                        avatar_color,
+                        query_sent_at: self.query_sent_at(app),
+                        query_timestamp_tooltip_handle: &self
+                            .state_handles
+                            .query_timestamp_tooltip_handle,
+                        query_and_index: Some((&query_for_display, input_index)),
+                        query_prefix_highlight_len,
+                        detected_links_state: &self.detected_links_state,
+                        secret_redaction_state: &self.secret_redaction_state,
+                        is_selecting_text,
+                        is_ai_input_enabled,
+                        attachments: &attachment_name_list,
+                        find_context,
+                        is_agent_transcript_navigation_target: self
+                            .is_agent_transcript_navigation_target(),
+                    },
+                    app,
+                )
+            };
+            if let Some(rendered_query) = rendered_query {
                 if did_render_header {
                     contents.add_child(rendered_query.with_content_item_spacing().finish());
                 } else {
@@ -1377,6 +1415,7 @@ impl AIAgentInput {
                 app,
             )),
             AIAgentInput::UserQuery { .. }
+            | AIAgentInput::ExternalQuery { .. }
             | AIAgentInput::AutoCodeDiffQuery { .. }
             | AIAgentInput::ResumeConversation { .. }
             | AIAgentInput::InitProjectRules { .. }

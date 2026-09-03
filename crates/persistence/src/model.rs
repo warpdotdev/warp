@@ -1027,6 +1027,9 @@ pub fn api_task_initial_working_directory(task: &api::Task) -> Option<String> {
             message.message.as_ref().and_then(|content| {
                 let context = match content {
                     api::message::Message::UserQuery(user_query) => user_query.context.as_ref(),
+                    api::message::Message::ExternalQuery(external_query) => {
+                        external_query.context.as_ref()
+                    }
                     api::message::Message::ToolCallResult(tool_call_result) => {
                         tool_call_result.context.as_ref()
                     }
@@ -1082,7 +1085,8 @@ impl AgentConversationSummary {
         for task in &tasks {
             for message in &task.messages {
                 match &message.message {
-                    Some(api::message::Message::UserQuery(_)) => {
+                    Some(api::message::Message::UserQuery(_))
+                    | Some(api::message::Message::ExternalQuery(_)) => {
                         has_user_query = true;
                     }
                     Some(api::message::Message::SystemQuery(sys)) => {
@@ -1108,6 +1112,13 @@ impl AgentConversationSummary {
                         Some(api::message::Message::UserQuery(user_query)) => {
                             Some(user_query.query.clone())
                         }
+                        Some(api::message::Message::ExternalQuery(external_query)) => Some(
+                            external_query
+                                .message
+                                .as_ref()
+                                .map(|message| message.body.clone())
+                                .unwrap_or_default(),
+                        ),
                         Some(api::message::Message::ToolCall(tool_call)) => {
                             match tool_call.tool.as_ref()? {
                                 api::message::tool_call::Tool::ApplyFileDiffs(diff_suggestion) => {
