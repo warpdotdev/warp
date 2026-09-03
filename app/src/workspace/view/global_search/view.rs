@@ -63,6 +63,13 @@ const DO_NOT_TRUNCATE_CHAR_COUNT: usize = 40;
 const DO_TRUNCATE_END_CHAR_COUNT: usize = 200;
 const PRE_MATCH_CHARS: usize = 15;
 const MAX_MATCH_COUNT: usize = 20000;
+/// Hard cap, in bytes, on how much of a matched line's text is retained per
+/// stored result. Applied once at ingestion (see `truncate_line_text_for_storage`),
+/// independent of the render-time elision below, so an extremely long single
+/// line (e.g. a minified/bundled file) can't retain a multi-megabyte `String`
+/// per stored match, regardless of `MAX_MATCH_COUNT` or how many search roots
+/// the file falls under.
+const MAX_STORED_LINE_TEXT_BYTES: usize = 4096;
 
 const QUERY_EDITOR_MAX_LINES: usize = 6;
 
@@ -601,6 +608,74 @@ impl GlobalSearchView {
         (snippet, highlight_indices)
     }
 
+    /// Truncates `line_text` to a bounded window around its submatches before it is stored, so a
+    /// single very long line (e.g. a minified/bundled file, or a multiline-mode match) can't
+    /// retain a multi-megabyte `String` per stored match. `submatches` byte offsets are remapped
+    /// to stay valid for the truncated text; a submatch that falls entirely outside the retained
+    /// window is dropped. `line_number` and `column_num` are tracked independently of `line_text`
+    /// and are unaffected, so "open at location" still navigates to the correct place even when
+    /// the stored snippet is truncated.
+    fn truncate_line_text_for_storage(
+        line_text: &str,
+        submatches: &[Submatch],
+    ) -> (String, Vec<Submatch>) {
+        if line_text.len() <= MAX_STORED_LINE_TEXT_BYTES {
+            return (line_text.to_owned(), submatches.to_vec());
+        }
+
+        // Anchor the retained window on the first submatch (if any) so the match itself is never
+        // the part that gets cut away.
+        let anchor = submatches
+            .first()
+            .map(|s| s.byte_start.as_usize())
+            .unwrap_or(0)
+            .min(line_text.len());
+
+        let half_window = MAX_STORED_LINE_TEXT_BYTES / 2;
+        let raw_start = anchor.saturating_sub(half_window);
+        let raw_end = (raw_start + MAX_STORED_LINE_TEXT_BYTES).min(line_text.len());
+
+        // Snap both bounds outward to the nearest UTF-8 char boundary so the slice below never
+        // cuts through a multi-byte character.
+        let window_start = (0..=raw_start)
+            .rev()
+            .find(|&i| line_text.is_char_boundary(i))
+            .unwrap_or(0);
+        let window_end = (raw_end..=line_text.len())
+            .find(|&i| line_text.is_char_boundary(i))
+            .unwrap_or(line_text.len());
+
+        let prefix_ellipsis = window_start > 0;
+        let suffix_ellipsis = window_end < line_text.len();
+
+        let mut truncated = String::with_capacity(window_end - window_start + 8);
+        if prefix_ellipsis {
+            truncated.push('…');
+        }
+        truncated.push_str(&line_text[window_start..window_end]);
+        if suffix_ellipsis {
+            truncated.push('…');
+        }
+
+        let prefix_offset_bytes = if prefix_ellipsis { '…'.len_utf8() } else { 0 };
+        let truncated_submatches = submatches
+            .iter()
+            .filter_map(|s| {
+                let start = s.byte_start.as_usize();
+                let end = s.byte_end.as_usize();
+                if start < window_start || end > window_end {
+                    return None;
+                }
+                Some(Submatch {
+                    byte_start: ByteOffset::from(start - window_start + prefix_offset_bytes),
+                    byte_end: ByteOffset::from(end - window_start + prefix_offset_bytes),
+                })
+            })
+            .collect();
+
+        (truncated, truncated_submatches)
+    }
+
     pub fn init(app: &mut AppContext) {
         use warpui::keymap::macros::*;
 
@@ -781,6 +856,11 @@ impl GlobalSearchView {
         }
         let matching_directories: Vec<_> = matching_directories.cloned().collect();
 
+        // Truncate once, regardless of how many root directories this file falls under, rather
+        // than cloning the (potentially multi-megabyte) full line text into every one of them.
+        let (line_text, submatches) =
+            Self::truncate_line_text_for_storage(&result.line_text, &result.submatches);
+
         // Populate hierarchical data model (directory_entries)
         let (directory_entries, directory_path_to_directory_index_entry) = (
             &mut self.directory_entries,
@@ -803,10 +883,10 @@ impl GlobalSearchView {
 
             // Add the match
             matched_path.matches.push(Match::new(
-                result.line_text.clone(),
+                line_text.clone(),
                 result.line_number,
                 result.column_num,
-                result.submatches.clone(),
+                submatches.clone(),
             ));
         }
 
@@ -2364,3 +2444,7 @@ impl GlobalSearchView {
         )
     }
 }
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod tests;
