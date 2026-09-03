@@ -425,3 +425,87 @@ async fn generated_shell_command_reports_merge_during_a_real_conflicting_merge()
         Some(GitOperationKind::Merge)
     );
 }
+
+/// Runs the actual PowerShell variant of `shell_git_operation_state`'s
+/// detection command inside `repo`, and parses its output. Windows CI ships
+/// `pwsh` on its runners (see `.github/workflows/ci.yml`), so this exercises
+/// the real PowerShell script end to end, mirroring the Bash coverage above.
+#[cfg(windows)]
+async fn detect_via_generated_shell_command_powershell(
+    repo: &std::path::Path,
+) -> Option<GitOperationKind> {
+    let generator = shell_git_operation_state();
+    let command = generator
+        .command()
+        .for_shell(ShellType::PowerShell)
+        .expect("a powershell command should be defined")
+        .to_string();
+
+    let output = Command::new("pwsh")
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg(&command)
+        .current_dir(repo)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .expect("failed to run the generated detection command");
+
+    if !output.status.success() {
+        return None;
+    }
+    GitOperationKind::from_token(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn generated_shell_command_reports_no_state_for_a_clean_repo_powershell() {
+    let (_dir, repo) = init_repo().await;
+    assert_eq!(
+        detect_via_generated_shell_command_powershell(&repo).await,
+        None
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn generated_shell_command_reports_bisect_during_a_real_bisect_powershell() {
+    let (_dir, repo) = init_repo().await;
+    for i in 1..=3 {
+        git(
+            &repo,
+            &["commit", "--allow-empty", "-m", &format!("commit {i}")],
+        )
+        .await;
+    }
+    git(&repo, &["bisect", "start"]).await;
+    git(&repo, &["bisect", "bad"]).await;
+    let root_commit = run_git_command(&repo, &["rev-list", "--max-parents=0", "HEAD"])
+        .await
+        .expect("failed to resolve the root commit");
+    git(&repo, &["bisect", "good", root_commit.trim()]).await;
+
+    assert_eq!(
+        detect_via_generated_shell_command_powershell(&repo).await,
+        Some(GitOperationKind::Bisect)
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn generated_shell_command_reports_merge_during_a_real_conflicting_merge_powershell() {
+    let (_dir, repo) = init_repo().await;
+    git(&repo, &["checkout", "-b", "feature"]).await;
+    std::fs::write(repo.join("file.txt"), "feature\n").unwrap();
+    git(&repo, &["commit", "-am", "feature change"]).await;
+    git(&repo, &["checkout", "main"]).await;
+    std::fs::write(repo.join("file.txt"), "main\n").unwrap();
+    git(&repo, &["commit", "-am", "main change"]).await;
+    git(&repo, &["merge", "feature"]).await;
+
+    assert_eq!(
+        detect_via_generated_shell_command_powershell(&repo).await,
+        Some(GitOperationKind::Merge)
+    );
+}
