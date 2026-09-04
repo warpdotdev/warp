@@ -2915,12 +2915,13 @@ impl LocalDiffStateModel {
                     }
                 }
                 'C' => {
-                    // For copied files: C<score> <null> new_path <null> old_path <null>
-                    // We need to get the old path from the next token
                     if i + 2 < tokens.len() {
-                        let old_path = tokens[i + 2].trim().to_string();
-                        i += 1; // Skip the old path token (we'll increment again at the end)
-                        GitFileStatus::Copied { old_path }
+                        let old_path = file_path;
+                        file_path = tokens[i + 2].trim();
+                        i += 1;
+                        GitFileStatus::Copied {
+                            old_path: old_path.to_string(),
+                        }
                     } else {
                         GitFileStatus::Modified
                     }

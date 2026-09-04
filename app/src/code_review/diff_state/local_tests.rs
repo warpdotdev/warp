@@ -712,7 +712,7 @@ async fn materialize_with_aggregate_cap_preserves_skipped_rename_totals() {
     let repo_dir = tempfile::tempdir().expect("create temp repo dir");
     let repo_path = repo_dir.path();
     let old_path = "old.txt";
-    let new_path = "new => name with spaces.txt";
+    let new_path = "new name with spaces (renamed).txt";
 
     run_git_command(repo_path, &["init", "-b", "main"])
         .await
@@ -770,18 +770,25 @@ async fn materialize_with_aggregate_cap_preserves_skipped_rename_totals() {
 }
 
 #[tokio::test]
-async fn materialize_with_aggregate_cap_preserves_skipped_copy_totals() {
+async fn materialize_with_aggregate_cap_preserves_skipped_copy_totals_from_git_order() {
+    let changed_files =
+        LocalDiffStateModel::parse_git_diff_name_status("C100\0source.txt\0destination.txt\0")
+            .expect("parse copy name-status");
+    assert_eq!(
+        changed_files,
+        vec![(
+            "destination.txt".to_string(),
+            GitFileStatus::Copied {
+                old_path: "source.txt".to_string(),
+            },
+        )]
+    );
     let numstat = LocalDiffStateModel::parse_git_numstat("9\t4\t\0source.txt\0destination.txt\0");
 
     let (_, total_additions, total_deletions) =
         LocalDiffStateModel::materialize_with_aggregate_cap(
             std::path::Path::new("."),
-            vec![(
-                "destination.txt".to_string(),
-                GitFileStatus::Copied {
-                    old_path: "source.txt".to_string(),
-                },
-            )],
+            changed_files,
             &numstat,
             0,
             usize::MAX,
