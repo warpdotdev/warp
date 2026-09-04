@@ -15,7 +15,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 pub(crate) const TITLE: &str = "Cloud agents need a team";
 pub(crate) const BODY_ADMIN: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join or create a team, then try again.";
 pub(crate) const BODY_NON_ADMIN: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join a team, then try again.";
-pub(crate) const PRIMARY_CTA_LABEL: &str = "Open Teams settings";
+pub(crate) const PRIMARY_CTA_LABEL: &str = "Open teams settings";
 pub(crate) const TOAST_ADMIN: &str =
     "Cloud agents need a team. Join or create a team to start cloud runs.";
 pub(crate) const TOAST_NON_ADMIN: &str =
