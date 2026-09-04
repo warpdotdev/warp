@@ -1801,10 +1801,6 @@ impl Workspace {
         (settings_pane, theme_chooser_view)
     }
 
-    /// Creates a new native `SettingsView` for this window and registers it
-    /// with `SettingsPaneManager`. Factored out of `build_settings_views` so
-    /// `replace_native_settings_view` can create a replacement using the
-    /// exact same setup.
     fn build_native_settings_view(ctx: &mut ViewContext<Self>) -> ViewHandle<SettingsView> {
         let settings_pane = ctx.add_typed_action_view(move |ctx| SettingsView::new(None, ctx));
         ctx.subscribe_to_view(&settings_pane, move |me, _, event, ctx| {
@@ -1819,25 +1815,11 @@ impl Workspace {
         settings_pane
     }
 
-    /// Replaces this window's native Settings view (`self.settings_pane`)
-    /// and its `SettingsPaneManager` registration with a freshly created
-    /// one. `SettingsPane::new` always fetches this window's registered
-    /// native view rather than owning a dedicated one, so when a Settings
-    /// pane is dragged into another window, `AppContext::
-    /// transfer_view_tree_to_window` physically relocates that same native
-    /// view along with it -- leaving this window's field/registration
-    /// dangling. Called from `PaneGroup::rehome_pane_event_subscription`
-    /// whenever that happens, so `self.settings_pane` and the manager
-    /// always point at a view that actually lives in this window. See
-    /// APP-5311.
+    /// Replaces the native Settings view after its previous view transfers away.
     pub(crate) fn replace_native_settings_view(&mut self, ctx: &mut ViewContext<Self>) {
         self.settings_pane = Self::build_native_settings_view(ctx);
     }
 
-    /// Creates a new native `AIFactView` (Rules) for this window and
-    /// registers it with `AIFactManager`. Factored out so
-    /// `replace_native_ai_fact_view` can create a replacement using the
-    /// exact same setup.
     fn build_native_ai_fact_view(ctx: &mut ViewContext<Self>) -> ViewHandle<AIFactView> {
         let ai_fact_view = ctx.add_typed_action_view(AIFactView::new);
         ctx.subscribe_to_view(&ai_fact_view, move |me, _, event, ctx| {
@@ -1852,11 +1834,7 @@ impl Workspace {
         ai_fact_view
     }
 
-    /// Replaces this window's native AI-fact (Rules) view
-    /// (`self.ai_fact_view`) and its `AIFactManager` registration with a
-    /// freshly created one. Same reasoning as
-    /// `replace_native_settings_view`, for the Rules pane's per-window
-    /// singleton view. See APP-5311.
+    /// Replaces the native Rules view after its previous view transfers away.
     pub(crate) fn replace_native_ai_fact_view(&mut self, ctx: &mut ViewContext<Self>) {
         self.ai_fact_view = Self::build_native_ai_fact_view(ctx);
     }
@@ -8676,11 +8654,6 @@ impl Workspace {
         }
     }
 
-    /// Resolves `locator` to its live `SettingsPane`'s inner `SettingsView`,
-    /// if the pane group and pane it points at still exist in this
-    /// workspace's tabs. A locator can be registered but no longer resolve
-    /// to a live pane via paths other than the normal detach hook (e.g. see
-    /// APP-5311), so callers must always handle `None`.
     fn live_settings_view_for_locator(
         &self,
         locator: PaneViewLocator,
@@ -8707,12 +8680,6 @@ impl Workspace {
         let settings_pane_manager = SettingsPaneManager::handle(ctx);
         if let Some(locator) = settings_pane_manager.as_ref(ctx).find_pane(ctx.window_id()) {
             if let Some(settings_view) = self.live_settings_view_for_locator(locator, ctx) {
-                // Update the page and/or search query if specified. The search query
-                // must be applied even when no page is given (e.g. `warp://settings?q=`)
-                // so an already-open settings tab reflects the new query. Resolve the
-                // located pane's own view rather than this window's native
-                // `self.settings_pane`, which may be a different, non-rendered
-                // instance if the located pane was dragged in from another window.
                 if page.is_some() || search_query.is_some() {
                     settings_view.update(ctx, |settings_pane, ctx| {
                         if let Some(page) = page {
@@ -8723,15 +8690,11 @@ impl Workspace {
                         }
                     });
                 }
-                // Navigate to and focus existing pane
                 self.focus_pane(locator, ctx);
                 return;
             }
 
-            // The registered locator no longer resolves to a live tab in this
-            // window (e.g. the settings tab was dragged into another window).
-            // Clear it so we fall through to opening a fresh settings tab
-            // below, instead of silently no-op'ing forever. See APP-5311.
+            // Tab transfers bypass pane detach hooks, so clear any stale registration.
             let window_id = ctx.window_id();
             log::warn!("Clearing stale settings pane locator for window {window_id:?}");
             settings_pane_manager.update(ctx, |manager, ctx| {
@@ -9071,11 +9034,6 @@ impl Workspace {
         }
     }
 
-    /// Resolves `locator` to its live `AIFactPane`'s inner `AIFactView`, if
-    /// the pane group and pane it points at still exist in this workspace's
-    /// tabs. A locator can be registered but no longer resolve to a live
-    /// pane via paths other than the normal detach hook (e.g. see
-    /// APP-5311), so callers must always handle `None`.
     fn live_ai_fact_view_for_locator(
         &self,
         locator: PaneViewLocator,
@@ -9105,10 +9063,6 @@ impl Workspace {
         // Navigate to and focus existing pane
         if let Some(locator) = manager.as_ref(ctx).find_pane(ctx.window_id()) {
             if let Some(ai_fact_view) = self.live_ai_fact_view_for_locator(locator, ctx) {
-                // Resolve the located pane's own view rather than this
-                // window's native `self.ai_fact_view`, which may be a
-                // different, non-rendered instance if the located pane was
-                // dragged in from another window.
                 if let Some(page) = page {
                     ai_fact_view.update(ctx, |view, ctx| {
                         view.update_page(page, ctx);
@@ -9118,10 +9072,7 @@ impl Workspace {
                 return;
             }
 
-            // The registered locator no longer resolves to a live tab in this
-            // window (e.g. the pane was dragged into another window as part
-            // of a tab transfer). Clear it so we fall through to opening a
-            // fresh pane below, instead of silently no-op'ing forever.
+            // Tab transfers bypass pane detach hooks, so clear any stale registration.
             let window_id = ctx.window_id();
             log::warn!("Clearing stale AI fact pane locator for window {window_id:?}");
             manager.update(ctx, |manager, ctx| {
@@ -12207,16 +12158,6 @@ impl Workspace {
         true
     }
 
-    /// Reconciles a Settings/AI-fact pane transfer that collided with a pane
-    /// of the same kind already live in this window: Warp enforces at most
-    /// one Settings pane and one Rules pane per window, so the two panes
-    /// cannot coexist. Removes the just-transferred `discard` pane -- closing
-    /// its whole tab if it was the tab's only pane, or just the pane
-    /// otherwise -- and focuses the pre-existing `keep` pane. Invoked via
-    /// `WorkspaceAction::DiscardDuplicateTransferredPane`; see
-    /// `PaneGroup::rehome_pane_event_subscription` and
-    /// `PaneCollisionReconciliation` for why that dispatch is self-targeted
-    /// on this workspace rather than run synchronously.
     fn discard_duplicate_transferred_pane(
         &mut self,
         keep: PaneViewLocator,
@@ -12240,7 +12181,7 @@ impl Workspace {
                 self.remove_tab(index, false, true, ctx);
             } else {
                 pane_group.update(ctx, |pane_group, ctx| {
-                    pane_group.close_pane(discard.pane_id, ctx);
+                    pane_group.discard_pane(discard.pane_id, ctx);
                 });
             }
         }

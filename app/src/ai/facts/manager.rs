@@ -6,10 +6,7 @@ use crate::PaneViewLocator;
 use crate::ai::facts::AIFactView;
 use crate::pane_group::{AIFactPane, PaneContent, PaneId};
 
-/// Singleton model to manage state of AI fact panes across multiple windows.
-/// Specifically:
-/// - Maintains AI fact view handles to preserve state when panes are hidden
-/// - Tracks currently open AI fact panes and their location
+/// Tracks each window's AI fact view and live pane.
 #[derive(Default)]
 pub struct AIFactManager {
     panes: HashMap<WindowId, AIFactPaneData>,
@@ -68,14 +65,7 @@ impl AIFactManager {
         }
     }
 
-    /// Registers `pane` as transferred into `window_id`, preserving the
-    /// invariant that at most one AI fact pane is tracked per window. If
-    /// `window_id` already has a *different* live pane registered, the
-    /// existing registration is left untouched and its locator is returned
-    /// so the caller can reconcile the collision (the transferred pane must
-    /// be discarded and the existing one kept). `None` means there was no
-    /// collision -- the slot was empty, or already pointed at this exact
-    /// pane -- and the transferred pane is now the registered one.
+    /// Registers a transferred pane unless another pane is already registered.
     pub fn register_transferred_pane(
         &mut self,
         pane: &AIFactPane,

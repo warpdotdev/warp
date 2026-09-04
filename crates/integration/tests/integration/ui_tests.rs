@@ -233,10 +233,7 @@ integration_tests! {
     test_attach_tab_to_other_window_and_continue_drag,
     test_single_tab_handoff_continues_drag,
     test_multi_tab_drag_back_to_source_and_out_again,
-    // Manual visual-verification companion for APP-5311: drives the real cross-window
-    // drag gesture and is meant to be run manually with WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1
-    // to capture video/screenshots.
-    #[ignore = "Manual test: requires real display for video capture (APP-5311 visual verification)"]
+    #[ignore = "Manual test: requires real display for video capture"]
     test_settings_and_rules_panes_survive_cross_window_drag,
 
     test_restore_single_closed_pane,

@@ -326,55 +326,34 @@ pub enum PaneGroupAction {
     ToggleMaximizePane,
     HandleFocusChange,
     FocusTerminalView(EntityId),
-    /// Re-homes a transferred Settings/AI-fact pane's workspace-level event
-    /// subscription from the source workspace to the destination workspace.
-    /// Always dispatched via `ViewContext::dispatch_typed_action_deferred`
-    /// from `on_window_transferred` as a *self*-targeted action (i.e. this
-    /// pane group is both the dispatcher and the handler), never run
-    /// synchronously -- see that method's doc comment for why. Self-
-    /// targeting matters, not just deferral: unlike a `WorkspaceAction`
-    /// dispatched from here, it doesn't depend on this pane group's
-    /// render-time parent link being registered in the destination window
-    /// (which isn't established until the next render pass), so it
-    /// reliably reaches this handler regardless of render timing.
+    /// Re-homes a transferred singleton pane's workspace event subscription.
     RehomePaneEventSubscription(PaneEventSubscriptionRehome),
 }
 
-/// Payload for [`PaneGroupAction::RehomePaneEventSubscription`].
+/// Data needed to re-home a transferred singleton pane.
 #[derive(Debug, Clone)]
 pub enum PaneEventSubscriptionRehome {
     Settings {
         old_window_id: WindowId,
         new_window_id: WindowId,
         settings_view: ViewHandle<SettingsView>,
-        /// Set when the destination window already hosted a different, live
-        /// Settings pane at transfer time. Warp enforces at most one
-        /// Settings pane per window (an intentional invariant, not a bug),
-        /// so the transferred pane must be discarded and the pre-existing
-        /// one focused instead of leaving two live panes. See APP-5311.
         collision: Option<PaneCollisionReconciliation>,
     },
     AIFact {
         old_window_id: WindowId,
         new_window_id: WindowId,
         ai_fact_view: ViewHandle<AIFactView>,
-        /// Same as `Settings::collision`, for the AI fact (Rules) pane.
         collision: Option<PaneCollisionReconciliation>,
     },
 }
 
-/// Identifies which of two colliding Settings/AI-fact panes survives after a
-/// transfer, so the one-pane-per-window invariant holds. See
-/// [`PaneEventSubscriptionRehome`].
+/// Identifies the winner and loser of a singleton-pane transfer collision.
 #[derive(Debug, Clone, Copy)]
 pub struct PaneCollisionReconciliation {
-    /// The pane that already existed in the destination window before the
-    /// transfer; the survivor.
     pub keep: PaneViewLocator,
-    /// The just-transferred pane, which lost the collision and must be
-    /// discarded.
     pub discard: PaneViewLocator,
 }
+
 #[derive(PartialEq)]
 enum PaneRemovalReason {
     // This pane is being removed from the pane group because it is being moved to another tab or becoming a tab of its own
@@ -4605,9 +4584,8 @@ impl PaneGroup {
         self.close_pane(pane_id, ctx);
     }
 
-    /// Definitively close the pane. This does not go through the undo close check where we might hide the pane instead of
-    /// discarding it.
-    fn discard_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+    /// Permanently closes a pane without making it available to undo.
+    pub(crate) fn discard_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
         // Skip ownership transfer for child agent panes (their view
         // canonically owns the conversation).
         if !self.is_child_agent_pane(pane_id) {
@@ -8481,22 +8459,6 @@ impl View for PaneGroup {
         new_window_id: WindowId,
         ctx: &mut ViewContext<Self>,
     ) {
-        // `SettingsPaneManager`/`AIFactManager` track at most one live pane
-        // of each kind per window, keyed by `WindowId` -- Warp enforces one
-        // Settings pane and one Rules pane per window as an intentional
-        // invariant. A tab-drag transfer moves the pane's view tree to
-        // `new_window_id` without going through the normal
-        // `PaneContent::detach`/`attach` hooks (see
-        // `Workspace::prepare_for_transferred_tab_attach`), so without this
-        // the source window is left with a locator pointing at a pane that
-        // no longer lives there, and `open_settings_pane`/
-        // `open_ai_fact_collection_pane` silently no-op forever afterwards.
-        // Re-key the registration here instead. If the destination window
-        // already has a live pane of the same kind, `register_transferred_pane`
-        // leaves that existing registration untouched and reports the
-        // collision so it can be reconciled below (the transferred pane is
-        // discarded and the pre-existing one kept), instead of silently
-        // overwriting the destination locator while both panes stay live.
         let pane_group_id = ctx.view_id();
 
         let settings_pane_ids: Vec<PaneId> = self
@@ -8519,36 +8481,8 @@ impl View for PaneGroup {
                         })
                 });
 
-                // `SettingsView`'s `SettingsViewEvent` subscription is
-                // registered once, in `Workspace::build_settings_views`,
-                // against whichever workspace created it, and does not follow
-                // the view when it transfers to another window -- so actions
-                // taken from a transferred Settings pane (e.g. clicking
-                // "Rules") would otherwise execute in the stale, original
-                // window. Re-home the subscription to the workspace that now
-                // hosts the pane (or, on collision, discard the transferred
-                // pane instead -- see `PaneCollisionReconciliation`).
-                //
-                // This MUST be deferred rather than run synchronously here:
-                // a real drag-and-drop transfer runs while the source (and
-                // sometimes destination) `Workspace` view is still mid-update
-                // further up the call stack (e.g.
-                // `Workspace::handle_action(DropTab)` ->
-                // `perform_handoff` -> `CrossWindowTabDrag::
-                // execute_handoff_single_tab_to_other` ->
-                // `AppContext::transfer_view_tree_to_window` -> here), which
-                // means that workspace's view has already been removed from
-                // its window's view map. Calling `ViewHandle::update` on it
-                // again re-entrantly would panic with "Circular view
-                // update". Self-targeted (dispatched as a `PaneGroupAction`
-                // back to this same pane group, not a `WorkspaceAction`)
-                // because ancestor-chain-based dispatch depends on this pane
-                // group's render-time parent link in the destination
-                // window, which isn't registered until the next render pass
-                // -- unreliable right after a transfer. `dispatch_typed_
-                // action_deferred` queues the action to run once the
-                // current update finishes and this pane group's view has
-                // been reinserted. See APP-5311.
+                // Re-homing must wait until the view-tree transfer finishes to avoid a circular
+                // workspace update.
                 ctx.dispatch_typed_action_deferred(PaneGroupAction::RehomePaneEventSubscription(
                     PaneEventSubscriptionRehome::Settings {
                         old_window_id,
@@ -8580,9 +8514,6 @@ impl View for PaneGroup {
                         })
                 });
 
-                // Same re-homing (and collision handling) as above, deferred
-                // for the same reason, for the AI fact (Rules) pane's
-                // `AIFactViewEvent` subscription.
                 ctx.dispatch_typed_action_deferred(PaneGroupAction::RehomePaneEventSubscription(
                     PaneEventSubscriptionRehome::AIFact {
                         old_window_id,
@@ -8597,18 +8528,6 @@ impl View for PaneGroup {
 }
 
 impl PaneGroup {
-    /// Performs the actual work for [`PaneGroupAction::RehomePaneEventSubscription`].
-    /// Invoked as `self`'s own `handle_action`, so `self` (this pane group)
-    /// is mid-update for the duration of this call -- touching it again here
-    /// (e.g. to discard a colliding duplicate) would panic with "Circular
-    /// view update". The non-collision branches only touch the old/new
-    /// *workspace* views, which are safe to update directly. The collision
-    /// branch instead re-homes to a second, self-targeted deferred dispatch
-    /// on the *destination workspace* (`WorkspaceAction::
-    /// DiscardDuplicateTransferredPane`), which reliably reaches `Workspace::
-    /// handle_action` (unlike an ancestor-chain dispatch from here -- see
-    /// `on_window_transferred`) and, by the time it runs, finds this pane
-    /// group's view safely reinserted.
     fn rehome_pane_event_subscription(
         rehome: &PaneEventSubscriptionRehome,
         ctx: &mut ViewContext<Self>,
@@ -8625,19 +8544,6 @@ impl PaneGroup {
                 {
                     old_workspace.update(ctx, |old_workspace, ctx| {
                         ctx.unsubscribe_to_view(settings_view);
-                        // `settings_view` is the source window's native,
-                        // per-window singleton Settings view (see
-                        // `Workspace::settings_pane`), not a view created
-                        // just for this one pane -- `SettingsPane::new`
-                        // always fetches it from `SettingsPaneManager`. The
-                        // low-level view-tree transfer that already ran
-                        // physically relocated it to `new_window_id`
-                        // regardless of the collision outcome above, so the
-                        // source window's own field/registration are now
-                        // dangling handles unless replaced here. Without
-                        // this, the next `open_settings_pane` in this
-                        // window panics dereferencing the relocated (or by
-                        // then torn-down) view. See APP-5311.
                         old_workspace.replace_native_settings_view(ctx);
                     });
                 }
@@ -8673,11 +8579,6 @@ impl PaneGroup {
                 {
                     old_workspace.update(ctx, |old_workspace, ctx| {
                         ctx.unsubscribe_to_view(ai_fact_view);
-                        // Same reasoning as the Settings case above:
-                        // `ai_fact_view` is this window's native, per-window
-                        // singleton Rules view, and it just physically
-                        // relocated to `new_window_id` along with the
-                        // transferred pane. See APP-5311.
                         old_workspace.replace_native_ai_fact_view(ctx);
                     });
                 }

@@ -552,11 +552,7 @@ fn drag_tabs_feature_enabled() -> bool {
     cfg!(feature = "drag_tabs_to_windows")
 }
 
-/// Like the production `assert_num_panes_in_tab` helper, but checks
-/// `visible_pane_count()` instead of `pane_count()`. `UndoClosedPanes` is on
-/// by default, so a closed pane is hidden rather than removed from
-/// `pane_count()` -- this is what a test should check after closing a pane
-/// via the UI, since that's what's actually visible on screen.
+/// Checks rendered panes without counting panes hidden for Undo Close.
 fn assert_num_visible_panes_in_tab(tab_index: usize, num_panes: usize) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let pane_group = pane_group_view(app, window_id, tab_index);
@@ -1523,13 +1519,6 @@ pub fn test_single_tab_handoff_continues_drag() -> Builder {
         .with_step(focus_saved_window(TARGET_WINDOW_KEY).add_assertion(assert_tab_count(1)))
 }
 
-/// Drags the Settings tab (always at index 1: index 0 is the terminal tab) out
-/// of the saved source window via real mouse events, mirroring
-/// `test_detach_tab_to_new_window_with_drag`. Used as the shared "detach"
-/// gesture for the APP-5311 visual verification flows below, since the bug
-/// and its fix are both specifically about the real drag-driven handoff path
-/// (not the internal transfer APIs exercised by the unit tests in
-/// `view_tests.rs`).
 fn detach_settings_tab_step(step_name: &'static str) -> TestStep {
     const SETTINGS_TAB_INDEX: usize = 1;
     TestStep::new(step_name)
@@ -1611,11 +1600,6 @@ fn detach_settings_tab_step(step_name: &'static str) -> TestStep {
         .add_assertion(assert_tab_count(1))
 }
 
-/// Drags the source window's Settings tab (index 1) into the tab bar of the
-/// window saved under `DETACHED_WINDOW_KEY`, mirroring
-/// `test_attach_tab_to_other_window_and_continue_drag`. Used for the
-/// one-pane-per-window collision case, where the destination window already
-/// hosts its own Settings pane.
 fn drag_settings_tab_into_detached_window_step() -> TestStep {
     const SETTINGS_TAB_INDEX: usize = 1;
     TestStep::new(
@@ -1745,35 +1729,20 @@ fn drag_settings_tab_into_detached_window_step() -> TestStep {
     })
 }
 
-/// Dispatches `WorkspaceAction::ShowSettings` on the workspace hosted in the
-/// given saved window -- exactly the action the tab-bar gear icon's `on_click`
-/// dispatches. Used instead of the `cmdorctrl-,` keybinding because keystrokes
-/// depend on keyboard-focus bookkeeping that this test's synthetic window
-/// juggling (detach/close/refocus) does not reliably keep current; the direct
-/// action dispatch is the same real product code path (`show_settings`), not
-/// a bypass of anything under test here.
+/// Opens Settings directly because synthetic window focus makes key events unreliable.
 fn open_settings_step(step_name: &'static str, window_key: &'static str) -> TestStep {
     TestStep::new(step_name).with_action(move |app, _, data| {
         let window_id = *data
             .get::<_, WindowId>(window_key)
             .expect("saved window id should exist");
-        // Deferred rather than a direct `handle_action` call: this can run
-        // immediately after a cross-window transfer/close settles, and a
-        // synchronous call can re-enter a workspace view update still being
-        // flushed from that prior transfer ("Circular view update").
+        // Defer until any preceding cross-window transfer finishes its workspace update.
         workspace_view(app, window_id).update(app, |_, ctx| {
             ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettings);
         });
     })
 }
 
-/// Emits `SettingsViewEvent::OpenAIFactCollection` on the live `SettingsView`
-/// hosted in the given saved window, i.e. exactly the event
-/// `ManageRulesWidget`'s "Manage rules" button dispatches on click. Used
-/// instead of a raw screen click because that button has no cached click
-/// position; the event itself is real product wiring, not a bypass of the
-/// cross-window transfer mechanism under test (which is always exercised via
-/// real mouse drag events in this file).
+/// Emits the Settings view event because the Rules button has no cached test position.
 fn click_rules_button_in_settings_step(
     step_name: &'static str,
     window_key: &'static str,
@@ -1794,13 +1763,7 @@ fn click_rules_button_in_settings_step(
     })
 }
 
-/// Closes the saved window via `TerminationMode::Cancellable` -- the same
-/// path a real click on the window's close button takes (see
-/// `close_window_requested` in `crates/warpui/src/windowing/winit/event_loop/mod.rs`,
-/// which falls through to this same internal close for an approved,
-/// interruptible close). Used instead of the `close_window` production test
-/// helper (which hardcodes `ForceTerminate`) so this test exercises the real
-/// user gesture, not just a forced teardown.
+/// Closes through the cancellable production path rather than forced teardown.
 fn close_window_via_real_close_button(
     step_name: &'static str,
     window_key: &'static str,
@@ -1821,23 +1784,7 @@ fn close_window_via_real_close_button(
         .add_assertion(move |app, _| async_assert_eq!(app.window_ids().len(), expected_num_windows))
 }
 
-/// Manual visual-verification companion for APP-5311. Drives the real
-/// cross-window tab-drag gesture (never the internal transfer APIs used by
-/// the unit tests in `view_tests.rs`) to exercise all three reported
-/// symptoms plus the one-pane-per-window collision reconciliation:
-///
-/// - Flow A: Settings reopens in the original window after being dragged
-///   into a new window and that window is closed.
-/// - Flow B: clicking "Rules" from a Settings pane hosted in another window
-///   opens Rules in that same window, not the original one.
-/// - Flow C: after Settings+Rules are dragged together into a window and
-///   Rules is closed there, clicking "Rules" again reopens it in that window.
-/// - Collision: dragging a Settings tab into a window that already has its
-///   own Settings pane discards the duplicate and keeps a single pane.
-///
-/// Requires `WARPUI_USE_REAL_DISPLAY_IN_INTEGRATION_TESTS=1` to capture
-/// video/screenshots and the `drag_tabs_to_windows` cargo feature to
-/// exercise the drag gesture; skipped otherwise via `drag_tabs_feature_enabled`.
+/// Exercises Settings and Rules cross-window drag, reopen, routing, and collision behavior.
 pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
     new_builder()
         .set_should_run_test(drag_tabs_feature_enabled)

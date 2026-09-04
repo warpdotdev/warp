@@ -11,10 +11,7 @@ struct SettingsPaneData {
     settings_view: ViewHandle<SettingsView>,
 }
 
-/// Singleton model to manage state of settings panes across multiple windows
-/// (where only one settings pane can exist per window). Specifically:
-/// - Maintains settings view handles to preserve state when panes are hidden
-/// - Tracks currently open settings panes and their location
+/// Tracks each window's Settings view and live pane.
 #[derive(Default)]
 pub struct SettingsPaneManager {
     panes: HashMap<WindowId, SettingsPaneData>,
@@ -68,14 +65,7 @@ impl SettingsPaneManager {
         }
     }
 
-    /// Registers `pane` as transferred into `window_id`, preserving the
-    /// invariant that at most one Settings pane is tracked per window. If
-    /// `window_id` already has a *different* live pane registered, the
-    /// existing registration is left untouched and its locator is returned
-    /// so the caller can reconcile the collision (the transferred pane must
-    /// be discarded and the existing one kept). `None` means there was no
-    /// collision -- the slot was empty, or already pointed at this exact
-    /// pane -- and the transferred pane is now the registered one.
+    /// Registers a transferred pane unless another pane is already registered.
     pub fn register_transferred_pane(
         &mut self,
         pane: &SettingsPane,
