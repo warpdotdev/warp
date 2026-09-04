@@ -15,14 +15,15 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use warp::tui_export::{
     AIConversation, AIConversationId, AgentRunDisplayStatus, AmbientAgentTaskId,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
     CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
-    RemoteChildLaunchConfig, RenderableAIError, ResolvedTeamScope, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentRequest, UserWorkspaces, aggregated_orchestrator_status,
+    RemoteChildLaunchConfig, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
+    ServerApiProvider, StartAgentExecutionMode, StartAgentRequest, aggregated_orchestrator_status,
     apply_child_agent_model_override, child_conversations_in_pill_order,
     classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
     descendant_conversations_in_pill_order, finish_local_oz_child_conversation,
@@ -119,6 +120,7 @@ pub(crate) enum TuiOrchestrationEvent {
         working_directory: Option<PathBuf>,
         task_id: warp::tui_export::AmbientAgentTaskId,
         conversation_name: String,
+        team_scope: Rc<ResolvedTeamScope>,
     },
     CreateRemoteChildSession {
         parent_session_id: TuiSessionId,
@@ -157,6 +159,7 @@ pub(crate) struct MaterializedLocalOzChildSession {
     pub(crate) model_id: Option<String>,
     pub(crate) task_id: warp::tui_export::AmbientAgentTaskId,
     pub(crate) conversation_name: String,
+    pub(crate) team_scope: Rc<ResolvedTeamScope>,
 }
 
 impl Entity for TuiOrchestrationModel {
@@ -494,6 +497,7 @@ impl TuiOrchestrationModel {
         parent_session_id: TuiSessionId,
         request: StartAgentRequest,
         working_directory: Option<PathBuf>,
+        team_scope: ResolvedTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
         match request.execution_mode.clone() {
@@ -505,6 +509,7 @@ impl TuiOrchestrationModel {
                 request,
                 model_id,
                 working_directory,
+                team_scope,
                 ctx,
             ),
             StartAgentExecutionMode::Local {
@@ -765,12 +770,16 @@ impl TuiOrchestrationModel {
         request: StartAgentRequest,
         model_id: Option<String>,
         working_directory: Option<PathBuf>,
+        team_scope: ResolvedTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
+        let request_team_scope = RequestTeamScope::from_scope(&team_scope);
+        let team_scope = Rc::new(team_scope);
         let launch = prepare_local_oz_child_launch(
             &request.name,
             &request.prompt,
             request.parent_run_id.as_deref(),
+            request_team_scope,
             ctx,
         );
         ctx.spawn(launch, move |me, result, ctx| match result {
@@ -781,6 +790,7 @@ impl TuiOrchestrationModel {
                 working_directory,
                 task_id: prepared.task_id,
                 conversation_name: prepared.conversation_name,
+                team_scope,
             }),
             Err(error) => me.fail_child_request(
                 &request,
@@ -805,15 +815,23 @@ impl TuiOrchestrationModel {
             model_id,
             task_id,
             conversation_name,
+            team_scope,
         } = child;
         let child_surface_id = session_id.surface_id();
 
         let parent_surface_id = parent_session_id.surface_id();
-        let scope = ResolvedTeamScope::from_scope(
-            &UserWorkspaces::as_ref(ctx).team_context_for_window(session_view.window_id(ctx)),
+        inherit_child_agent_settings(
+            team_scope.as_ref(),
+            parent_surface_id,
+            child_surface_id,
+            ctx,
         );
-        inherit_child_agent_settings(&scope, parent_surface_id, child_surface_id, ctx);
-        apply_child_agent_model_override(&scope, child_surface_id, model_id.as_deref(), ctx);
+        apply_child_agent_model_override(
+            team_scope.as_ref(),
+            child_surface_id,
+            model_id.as_deref(),
+            ctx,
+        );
 
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.start_new_child_conversation(

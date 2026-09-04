@@ -183,6 +183,21 @@ pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
 }
 
 impl UserWorkspaces {
+    /// Replaces a headless window's inherited team with its resolved launch scope.
+    pub(crate) fn set_team_for_window_from_scope(
+        &mut self,
+        window_id: WindowId,
+        scope: &impl TeamScope,
+        ctx: &mut warpui::ModelContext<Self>,
+    ) {
+        let team_uid = scope.team_uid();
+        if self.team_uid_for_window(window_id) == team_uid {
+            return;
+        }
+        self.window_team_uids.insert(window_id, team_uid);
+        ctx.emit(super::UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
+    }
     /// Captures the team selected in `ctx`'s window as an operation's
     /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
     /// succeeds -- a window with no team selected still yields a scope, just one whose

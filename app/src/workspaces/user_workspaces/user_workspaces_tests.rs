@@ -1082,6 +1082,33 @@ fn cli_scope_explicit_team_validates_the_uid_and_membership() {
         });
     })
 }
+
+#[test]
+fn cli_scope_assigns_the_selected_team_to_a_headless_window() {
+    let (first_team, second_team) = two_teams();
+    let first_team_uid = first_team.uid;
+    let second_team_uid = second_team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+        let window_id = WindowId::new();
+
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.register_window(window_id, Some(first_team_uid), ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("the selected team should resolve");
+            workspaces.set_team_for_window_from_scope(window_id, &scope, ctx);
+        });
+
+        assert_eq!(
+            app.read(|ctx| UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id)),
+            Some(second_team_uid)
+        );
+    });
+}
 #[test]
 fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
     let first_team = team_for_test();

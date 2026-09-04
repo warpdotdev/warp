@@ -12,7 +12,7 @@ use crate::environment::EnvironmentCreateArgs;
 use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::share::ShareArgs;
 use crate::skill::SkillSpec;
 
@@ -418,6 +418,8 @@ impl AgentCommand {
 pub struct RunAgentArgs {
     #[command(flatten)]
     pub prompt_arg: PromptArg,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,

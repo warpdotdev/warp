@@ -1,9 +1,11 @@
+use std::rc::Rc;
+
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, StartAgentExecutionMode,
+    OrchestrationEventStreamerEvent, RenderableAIError, ResolvedTeamScope, StartAgentExecutionMode,
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
-    register_tui_session_view_test_singletons,
+    UserWorkspaces, register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -180,10 +182,14 @@ fn add_relayed_executor(
         ctx.subscribe_to_model(&executor, move |_, event, ctx| {
             orchestration.update(ctx, |orchestration, ctx| match event {
                 StartAgentExecutorEvent::CreateAgent(request) => {
+                    let scope = ResolvedTeamScope::from_scope(
+                        &(UserWorkspaces::teamless_context_resolver_for_test())(ctx),
+                    );
                     orchestration.dispatch_create_agent(
                         parent_session_id,
                         (**request).clone(),
                         None,
+                        scope,
                         ctx,
                     );
                 }
@@ -315,6 +321,9 @@ fn local_oz_child_session_indexes_run_id_immediately() {
                         model_id: None,
                         task_id,
                         conversation_name: "verify-child".to_string(),
+                        team_scope: Rc::new(ResolvedTeamScope::from_scope(
+                            &(UserWorkspaces::teamless_context_resolver_for_test())(ctx),
+                        )),
                     },
                     ctx,
                 );

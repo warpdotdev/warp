@@ -73,8 +73,10 @@ use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 mod admin;
 mod agent_config;
@@ -358,6 +360,7 @@ fn build_merged_config_and_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
     prompt: &Option<Prompt>,
+    local_run_team_scope: Option<&ResolvedTeamScope>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
     // Server-side prompt resolution (task_id is set): the task config already lives on the
@@ -439,7 +442,12 @@ fn build_merged_config_and_task(
         .model_id
         .as_deref()
         .filter(|_| args.harness == Harness::Oz)
-        .map(|model_id| common::validate_agent_mode_base_model_id(model_id, ctx))
+        .map(|model_id| match local_run_team_scope {
+            Some(team_scope) => {
+                common::validate_agent_mode_base_model_id_for_team_scope(model_id, team_scope, ctx)
+            }
+            None => common::validate_agent_mode_base_model_id(model_id, ctx),
+        })
         .transpose()?;
 
     // Keep the task config snapshot aligned with the effective model selection.
@@ -659,6 +667,20 @@ impl AgentDriverRunner {
                 Self::refresh_team_metadata(&foreground),
             )
             .await?;
+        let local_run_team_scope = if args.task_id.is_none() {
+            let team_selection = args.team_selection.clone();
+            Some(Arc::new(
+                foreground
+                    .spawn(move |_, ctx| -> anyhow::Result<ResolvedTeamScope> {
+                        common::resolve_team_scope(&team_selection, ctx)
+                            .map(|scope| ResolvedTeamScope::from_scope(&scope))
+                    })
+                    .await?
+                    .map_err(AgentDriverError::ConfigBuildFailed)?,
+            ))
+        } else {
+            None
+        };
 
         // Wait for Warp Drive to sync before building the task config, since
         // prompt resolution (SavedPrompt -> workflow lookup) and environment
@@ -707,8 +729,14 @@ impl AgentDriverRunner {
             // the fetched `AmbientAgentTask` (set by the server when linking the task to an
             // existing conversation, e.g. via `run-cloud --conversation`).
             let (mut driver_options, task, task_conversation_id) =
-                Self::build_driver_options_and_task(&foreground, args, &server_api, &setup_events)
-                    .await?;
+                Self::build_driver_options_and_task(
+                    &foreground,
+                    args,
+                    local_run_team_scope,
+                    &server_api,
+                    &setup_events,
+                )
+                .await?;
 
             // Update the effective task ID so errors are reported correctly.
             // This only matters if we created a task ID locally.
@@ -1014,6 +1042,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
+        local_run_team_scope: Option<Arc<ResolvedTeamScope>>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1036,13 +1065,21 @@ impl AgentDriverRunner {
         let task_id_str = args.task_id.clone();
         let prompt = args.prompt_arg.to_prompt();
         let skill = args.skill.clone();
+        let request_team_scope = local_run_team_scope
+            .as_deref()
+            .map(RequestTeamScope::from_scope);
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
         let (merged_config, mut task, mut driver_options) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
-                let (merged_config, task) =
-                    build_merged_config_and_task(&args, &resolved_skill, &prompt_clone, ctx)?;
+                let (merged_config, task) = build_merged_config_and_task(
+                    &args,
+                    &resolved_skill,
+                    &prompt_clone,
+                    local_run_team_scope.as_deref(),
+                    ctx,
+                )?;
 
                 let task_id = args.task_id.as_ref().and_then(|s| s.parse().ok());
                 let should_share = (args.share.is_shared() || args.task_id.is_some())
@@ -1068,6 +1105,7 @@ impl AgentDriverRunner {
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
+                    team_scope: local_run_team_scope,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
@@ -1123,6 +1161,7 @@ impl AgentDriverRunner {
                 server_api,
                 prompt_for_task_creation,
                 merged_config,
+                request_team_scope.expect("new local runs resolve request team scope"),
                 &mut driver_options,
             )
             .await?;
@@ -1158,6 +1197,7 @@ impl AgentDriverRunner {
         server_api: &Arc<dyn AIClient>,
         prompt: String,
         merged_config: AgentConfigSnapshot,
+        team_scope: RequestTeamScope,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
         let environment = merged_config.environment_id.clone();
@@ -1171,7 +1211,7 @@ impl AgentDriverRunner {
         };
 
         let task_id = match server_api
-            .create_agent_task(prompt, environment, None, task_config)
+            .create_agent_task(prompt, environment, None, task_config, team_scope)
             .await
             .context("Failed to create task")
         {
