@@ -4,6 +4,8 @@
 //! This module provides a singleton model that manages repository metadata across
 //! all repositories tracked by Warp.
 
+#[cfg(feature = "local_fs")]
+use instant::Instant;
 use std::cell::Cell;
 use std::collections::HashMap;
 #[cfg(feature = "local_fs")]
@@ -65,6 +67,8 @@ cfg_if::cfg_if! {
 
         /// Duration between filesystem watch events in seconds
         const FILESYSTEM_WATCHER_DEBOUNCE_SECS: u64 = 1;
+        /// Minimum interval between fallback re-scans of the same failed-watch subtree.
+        const WATCH_FAILURE_RESCAN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(30);
     }
 }
 
@@ -286,6 +290,11 @@ pub struct LocalRepoMetadataModel {
     /// [`RepoWatch`].
     #[cfg(feature = "local_fs")]
     repo_watches: HashMap<StandardizedPath, RepoWatch>,
+    /// Rate-limits fallback re-scans triggered when a per-directory watch fails to
+    /// register (e.g. `fs.inotify.max_user_watches` exhaustion on WSL/Linux), so a
+    /// subtree whose watch quietly died still reflects disk deletions.
+    #[cfg(feature = "local_fs")]
+    watch_failure_rescans: HashMap<StandardizedPath, Instant>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -388,6 +397,8 @@ impl LocalRepoMetadataModel {
             symlink_targets: HashMap::new(),
             #[cfg(feature = "local_fs")]
             repo_watches: HashMap::new(),
+            #[cfg(feature = "local_fs")]
+            watch_failure_rescans: HashMap::new(),
         };
         cfg_if::cfg_if! {
             if #[cfg(feature = "local_fs")] {
@@ -596,16 +607,22 @@ impl LocalRepoMetadataModel {
             }
         }
 
-        // Process deleted files
+        // Deleted paths may be reported under a non-canonical root (e.g. `/tmp`
+        // → `/private/tmp` on macOS); the tree is keyed by canonical paths, so
+        // canonicalize before building the Remove mutation.
         for path in &event.deleted {
-            if let Some(repo_path) =
-                self.find_repository_for_path_string(path.to_string_lossy().as_ref())
-            {
-                let repo_update = repo_updates.entry(repo_path).or_default();
-                repo_update.deleted.push(path.to_path_buf());
-            } else if !symlink_target_paths.contains(path) {
-                log::warn!("Deleted file not found in any repo: {path:?} not found in any repo");
-            }
+            let Some((repo_path, canonical_path)) =
+                self.find_repository_and_canonical_for_deleted_path(path)
+            else {
+                if !symlink_target_paths.contains(path) {
+                    log::warn!(
+                        "Deleted file not found in any repo: {path:?} not found in any repo"
+                    );
+                }
+                continue;
+            };
+            let repo_update = repo_updates.entry(repo_path).or_default();
+            repo_update.deleted.push(canonical_path);
         }
 
         // Process moved files
@@ -715,6 +732,42 @@ impl LocalRepoMetadataModel {
                 self.track_watcher_update_task(task_repo_path, update_handle);
             }
         }
+    }
+
+    #[cfg(feature = "local_fs")]
+    /// Finds the repository for a deleted file and its canonical removal path.
+    ///
+    /// Deleted paths can't be canonicalized directly (the file is gone), so
+    /// canonicalize the closest still-existing ancestor and re-attach the tail
+    /// before matching against the canonicalized repo roots. Returns the
+    /// canonical spelling so the `Remove` mutation lands on the tree's keys.
+    fn find_repository_and_canonical_for_deleted_path(
+        &self,
+        path: &Path,
+    ) -> Option<(StandardizedPath, PathBuf)> {
+        let deleted_src = StandardizedPath::from_local_absolute_unchecked(path);
+        for ancestor_std in deleted_src.ancestors() {
+            let Some(ancestor) = ancestor_std.to_local_path() else {
+                continue;
+            };
+            if !ancestor.exists() {
+                continue;
+            }
+            let Some(canonical) = dunce::canonicalize(&ancestor).ok() else {
+                continue;
+            };
+            let Some(tail) = path.strip_prefix(&ancestor).ok() else {
+                continue;
+            };
+            let canonical_path = canonical.join(tail);
+            let canonical_std = StandardizedPath::from_local_absolute_unchecked(&canonical_path);
+            if let Some(repo_path) = self.find_repository_for_standardized_path(&canonical_std) {
+                return Some((repo_path, canonical_path));
+            }
+        }
+
+        self.find_repository_for_path_string(path.to_string_lossy().as_ref())
+            .map(|repo_path| (repo_path, path.to_path_buf()))
     }
 
     #[cfg(feature = "local_fs")]
@@ -1320,6 +1373,10 @@ impl LocalRepoMetadataModel {
                                         "Directory load target changed while loading: {dir_path}"
                                     )))
                                 } else {
+                                    // Replace the loaded subtree wholesale: `insert_entry_at_path`
+                                    // merges, so without this a re-load would keep entries that
+                                    // no longer exist on disk (e.g. externally deleted files).
+                                    state.entry.remove(&dir_path);
                                     state
                                         .entry
                                         .insert_entry_at_path(Arc::new(dir_path.clone()), entry);
@@ -1413,13 +1470,47 @@ impl LocalRepoMetadataModel {
             repo_watch.extra_dirs.insert(dir_path.clone());
         }
         if let Some(ref watcher) = self.watcher {
-            watcher.update(ctx, |watcher, _ctx| {
-                std::mem::drop(watcher.register_path(
-                    &local_path,
-                    repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
+            let register_dir_local = local_path.clone();
+            let register_future = watcher.update(ctx, |watcher, _ctx| {
+                watcher.register_path(
+                    &register_dir_local,
+                    repo_watch_filter(register_dir_local.clone(), gitignores, force_included_paths),
                     RecursiveMode::NonRecursive,
-                ));
+                )
             });
+            let repo_for_rescan = repo_root.clone();
+            let dir_for_rescan = dir_path.clone();
+            ctx.spawn(register_future, move |model, result, ctx| {
+                if let Err(error) = result {
+                    // Watch registration failed (e.g. inotify limit reached), so this
+                    // subtree will receive no events; fall back to a disk re-scan so
+                    // files deleted externally still drop from the tree.
+                    log::error!("Failed to watch {dir_for_rescan}: {error:#}");
+                    model.schedule_watch_failure_rescan(&repo_for_rescan, &dir_for_rescan, ctx);
+                }
+            });
+        }
+    }
+
+    /// Re-reads a directory whose per-directory watch failed to register, so the
+    /// tree still reflects disk state. Rate-limited per directory to avoid a re-scan
+    /// storm when watch registration keeps failing.
+    #[cfg(feature = "local_fs")]
+    fn schedule_watch_failure_rescan(
+        &mut self,
+        repo_root: &StandardizedPath,
+        dir_path: &StandardizedPath,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let now = Instant::now();
+        if let Some(last) = self.watch_failure_rescans.get(dir_path)
+            && now.duration_since(*last) < WATCH_FAILURE_RESCAN_COOLDOWN
+        {
+            return;
+        }
+        self.watch_failure_rescans.insert(dir_path.clone(), now);
+        if let Err(error) = self.load_directory(repo_root, dir_path, ctx) {
+            log::warn!("Fallback re-scan of {dir_path} failed: {error}");
         }
     }
 
