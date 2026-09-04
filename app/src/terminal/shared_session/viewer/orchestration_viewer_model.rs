@@ -308,7 +308,9 @@ impl OrchestrationViewerModel {
             }
             return;
         }
-        self.metadata_fetches.insert(task_id);
+        if !self.metadata_fetches.insert(task_id) {
+            return;
+        }
         #[cfg(test)]
         {
             self.metadata_fetch_dispatch_count += 1;
