@@ -20,6 +20,10 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::HomeDirectoryWatcherEvent;
 
 use crate::HomeDirectoryWatcher;
+use crate::ai::mcp::initial_global_readiness::plan_initial_global_scan;
+pub(crate) use crate::ai::mcp::initial_global_readiness::{
+    InitialGlobalScanCohort, home_subdir_to_watch,
+};
 use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
 use crate::ai::mcp::{MCPProvider, ParsedTemplatableMCPServerResult, home_config_file_path};
 use crate::warp_managed_paths_watcher::{
@@ -28,24 +32,6 @@ use crate::warp_managed_paths_watcher::{
 
 static ENV_VAR_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("Regex is valid"));
-
-/// Matches home config paths that are exactly one directory deep (e.g. `.codex/config.toml`,
-/// `.warp/.mcp.json`), capturing the parent directory component.
-static HOME_SUBDIR_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^([^/]+)/[^/]+$").expect("Regex is valid"));
-
-/// Returns the subdirectory under the home directory that needs its own [`DirectoryWatcher`],
-/// inferred from the provider's home config path. Matches paths that are exactly one directory
-/// deep (e.g. `.codex/config.toml` → `.codex`, `.warp/.mcp.json` → `.warp`). Returns `None`
-/// when the config file lives directly in the home dir (e.g. `.claude.json`) and is already
-/// covered by `HomeDirectoryWatcher`.
-fn home_subdir_to_watch(provider: MCPProvider) -> Option<PathBuf> {
-    let path_str = provider.home_config_path().to_str()?;
-    HOME_SUBDIR_REGEX
-        .captures(path_str)
-        .and_then(|caps| caps.get(1))
-        .map(|m| PathBuf::from(m.as_str()))
-}
 
 /// Messages sent from `RepositorySubscriber`s to detect file-based MCPs.
 enum FileMCPDetectionMessage {
@@ -119,13 +105,30 @@ impl RepositorySubscriber for FileMCPSubscriber {
     }
 }
 
+/// A single source's currently-scheduled parse. Generation-tagged so a completion callback
+/// can tell whether it is still current or was superseded by a newer parse scheduled for the
+/// same source: `AbortHandle::abort` only takes effect the next time the background future is
+/// polled, so a superseded parse's completion can already be queued on the foreground executor
+/// by the time a replacement is scheduled. See
+/// [`FileMCPWatcher::update_servers_from_config_file`].
+struct InFlightParse {
+    generation: u64,
+    abort_handle: AbortHandle,
+}
+
 /// Model that watches the filesystem for file-based MCP config changes and emits
 /// [`FileMCPWatcherEvent`]s.
 pub struct FileMCPWatcher {
     file_mcp_tx: Sender<FileMCPDetectionMessage>,
-    /// In-flight config parses keyed by source. Starting a replacement aborts
-    /// the previous parse so stale work cannot emit an event.
-    parse_abort_handles: HashMap<(PathBuf, MCPProvider), AbortHandle>,
+    /// The current in-flight parse for each source, if any. Starting a replacement removes
+    /// and aborts the previous record; only a completion callback whose captured generation
+    /// still matches the record here may act on its result. See
+    /// [`Self::update_servers_from_config_file`].
+    in_flight_parses: HashMap<(PathBuf, MCPProvider), InFlightParse>,
+    /// Monotonically increasing counter; each scheduled parse claims the next value as its
+    /// generation. Never reused, even after a source's record is removed, so a long-superseded
+    /// parse's callback can never appear current again by coincidence.
+    next_parse_generation: u64,
     /// Watcher handles for home provider subdirectories (e.g. `~/.codex`), keyed by subdir path.
     /// Used to cleanup watchers when the subdir is deleted at runtime.
     home_provider_watchers: HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
@@ -135,6 +138,9 @@ pub struct FileMCPWatcher {
     /// Tracks how many provider config files remain to be parsed for each cloud environment repo.
     /// When the count reaches zero, a `CloudEnvironmentScanComplete` event is emitted.
     cloud_env_pending: HashMap<PathBuf, usize>,
+    /// Global home-config sources scheduled during construction, pending their first
+    /// terminal parse outcome. Continuous filesystem watching is independent of this set.
+    initial_global_scan: InitialGlobalScanCohort,
 }
 
 impl FileMCPWatcher {
@@ -175,59 +181,93 @@ impl FileMCPWatcher {
             },
         );
 
+        let plan = plan_initial_global_scan(
+            dirs::home_dir(),
+            warp_managed_mcp_config_path().map(|path| (path.config_path, path.root_path)),
+            |path| path.is_dir(),
+        );
         let mut home_provider_watchers = HashMap::new();
-        let mut initial_config_parses = Vec::new();
-        if let Some(mcp_config_path) = warp_managed_mcp_config_path() {
-            initial_config_parses.push((
-                mcp_config_path.config_path,
-                mcp_config_path.root_path,
-                MCPProvider::Warp,
-            ));
-        }
-
-        if let Some(home_dir) = dirs::home_dir() {
-            for provider in MCPProvider::iter() {
-                if provider == MCPProvider::Warp {
-                    continue;
-                }
-                match home_subdir_to_watch(provider) {
-                    None => {
-                        // Initial scan of config files for providers whose config lives directly in
-                        // home (i.e. ~/.claude.json). HomeDirectoryWatcher handles incremental updates.
-                        let Some(config_path) = home_config_file_path(provider) else {
-                            continue;
-                        };
-                        initial_config_parses.push((config_path, home_dir.clone(), provider));
-                    }
-                    Some(subdir) => {
-                        // For providers whose home config lives in a subdir (e.g. ~/.codex for Codex)
-                        // start watching the subdir for file-based MCP servers, if it exists.
-                        let subdir_path = home_dir.join(&subdir);
-                        // Note: this will fail if the subdir doesn't exist yet.
-                        // We register upon creation of the subdir via HomeDirectoryWatcher.
-                        Self::watch_home_provider_dir(
-                            &subdir_path,
-                            home_dir.clone(),
-                            file_mcp_tx.clone(),
-                            &mut home_provider_watchers,
-                            ctx,
-                        );
-                    }
-                }
+        let mut initial_config_parses = plan.direct_parses;
+        for (subdir_path, home_dir) in plan.watch_subdirs {
+            let watching_started = Self::watch_home_provider_dir(
+                &subdir_path,
+                home_dir.clone(),
+                file_mcp_tx.clone(),
+                &mut home_provider_watchers,
+                ctx,
+            );
+            if !watching_started {
+                initial_config_parses.extend(
+                    plan.pending
+                        .iter()
+                        .filter(|(config_path, _)| config_path.starts_with(&subdir_path))
+                        .map(|(config_path, provider)| {
+                            (config_path.clone(), home_dir.clone(), *provider)
+                        }),
+                );
             }
         }
 
         let mut watcher = Self {
             file_mcp_tx,
-            parse_abort_handles: HashMap::new(),
+            in_flight_parses: HashMap::new(),
+            next_parse_generation: 0,
             home_provider_watchers,
             project_repo_watchers: HashSet::new(),
             cloud_env_pending: HashMap::new(),
+            initial_global_scan: InitialGlobalScanCohort::from_pending(plan.pending),
         };
         for (config_path, root_path, provider) in initial_config_parses {
             watcher.update_servers_from_config_file(&config_path, root_path, provider, ctx);
         }
+        // Covers the case where there were no global sources to scan at all (e.g. no home
+        // directory could be resolved and no Warp-managed config exists). Deferred to the next
+        // tick so `FileBasedMCPManager` — registered immediately after this model — has already
+        // subscribed by the time this fires; a synchronous emit here would be missed since
+        // nothing can have subscribed to this model yet.
+        if watcher.initial_global_scan.is_empty() {
+            ctx.spawn(async {}, |me, (), ctx| {
+                me.maybe_emit_initial_global_scan_complete(ctx);
+            });
+        }
         watcher
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_inert() -> Self {
+        Self {
+            file_mcp_tx: async_channel::unbounded().0,
+            in_flight_parses: HashMap::new(),
+            next_parse_generation: 0,
+            home_provider_watchers: HashMap::new(),
+            project_repo_watchers: HashSet::new(),
+            cloud_env_pending: HashMap::new(),
+            initial_global_scan: InitialGlobalScanCohort::default(),
+        }
+    }
+
+    /// Emits `InitialGlobalMcpScanComplete` exactly once, as soon as every source scheduled at
+    /// startup has settled.
+    fn maybe_emit_initial_global_scan_complete(&mut self, ctx: &mut ModelContext<Self>) {
+        if self.initial_global_scan.try_complete() {
+            ctx.emit(FileMCPWatcherEvent::InitialGlobalMcpScanComplete);
+        }
+    }
+
+    /// Aborts any in-flight parse for `(config_path, provider)` because the config was removed
+    /// with no replacement parse scheduled to follow it. Unlike [`Self::abort_config_parse`],
+    /// this also settles the initial-global-scan obligation for the source if it was still
+    /// pending, since no replacement parse will run later to settle it.
+    fn abort_config_parse_for_removal(
+        &mut self,
+        config_path: &Path,
+        provider: MCPProvider,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.abort_config_parse(config_path, provider);
+        self.initial_global_scan
+            .remove(&(config_path.to_path_buf(), provider));
+        self.maybe_emit_initial_global_scan_complete(ctx);
     }
 
     #[cfg(feature = "tui")]
@@ -290,22 +330,36 @@ impl FileMCPWatcher {
 
     /// Register a home provider subdir (e.g. `~/.codex`) for watching via `DirectoryWatcher`,
     /// storing the handle in `home_provider_watchers` for later cleanup.
+    ///
+    /// Returns `true` if the subdir is (now, or already) being watched, meaning a subscriber
+    /// `on_scan` has been (or will be) scheduled for it: `Repository::start_watching` queues
+    /// the scan unconditionally at registration time. Callers must not *also* schedule a
+    /// direct initial parse for the same source in that case. Returns `false` when watching
+    /// could not even be started synchronously (e.g. the subdir doesn't exist yet), so the
+    /// caller must parse directly to settle the source.
+    ///
+    /// A queued scan is not, however, a guarantee of delivery: if the filesystem-watcher
+    /// registration itself fails *asynchronously* (after this returns `true`), the error
+    /// handler spawned below removes the subscription before the queued scan task can
+    /// necessarily find it, so no `on_scan` -- and so no config parse -- ever arrives for any
+    /// provider config under the subdir. That handler settles them directly instead of
+    /// leaving them to block until the caller's timeout.
     fn watch_home_provider_dir(
         subdir_path: &Path,
         home_dir: PathBuf,
         file_mcp_tx: Sender<FileMCPDetectionMessage>,
         home_provider_watchers: &mut HashMap<PathBuf, (ModelHandle<Repository>, SubscriberId)>,
         ctx: &mut ModelContext<Self>,
-    ) {
-        // If the subdir is already being watched, return early.
+    ) -> bool {
+        // If the subdir is already being watched, its on_scan already ran (or is queued).
         if home_provider_watchers.contains_key(subdir_path) {
-            return;
+            return true;
         }
 
         let Ok(std_path) =
             warp_util::standardized_path::StandardizedPath::from_local_canonicalized(subdir_path)
         else {
-            return;
+            return false;
         };
 
         let repo_handle = match DirectoryWatcher::handle(ctx)
@@ -317,10 +371,11 @@ impl FileMCPWatcher {
                     "Failed to register {} for file-based MCP watching: {err}",
                     subdir_path.display(),
                 );
-                return;
+                return false;
             }
         };
 
+        let home_dir_for_error = home_dir.clone();
         let subscriber = Box::new(FileMCPSubscriber {
             stored_dir: home_dir,
             message_tx: file_mcp_tx,
@@ -346,8 +401,44 @@ impl FileMCPWatcher {
                 repo_handle.update(ctx, |repo, ctx| {
                     repo.stop_watching(subscriber_id, ctx);
                 });
+                me.settle_stranded_subdir_configs(&subdir_path_owned, home_dir_for_error, ctx);
             }
         });
+        true
+    }
+
+    /// Directly parses every provider config under `subdir_path` (e.g. `~/.codex/config.toml`
+    /// under `~/.codex`) that is genuinely stranded, because the directory watcher's queued
+    /// initial scan for it will never arrive: [`Self::watch_home_provider_dir`]'s
+    /// registration-failure handler calls this after `stop_watching` has already removed the
+    /// subscription the queued scan needed to find. Without this, any of those sources still
+    /// pending in the initial-global-scan cohort would block until the caller's timeout instead
+    /// of settling.
+    ///
+    /// Only sources still owed by the cohort, with no in-flight parse already covering them,
+    /// are re-read: the queued scan may have already delivered (and settled) a source before
+    /// this handler ran, or another caller may have already scheduled a read for it. Re-reading
+    /// either case would be a second filesystem read and a second `ConfigParsed`/`ConfigRemoved`
+    /// reconciliation (tagged `Other`, since the cohort no longer -- or doesn't yet, for an
+    /// in-flight case -- own it) for no benefit, violating the one-read-per-initial-source
+    /// invariant. Cohort membership is a sound gate for this: `update_servers_from_config_file`
+    /// only ever tests it, its completion callbacks only ever remove it, and nothing re-adds a
+    /// key once scheduling here is done.
+    fn settle_stranded_subdir_configs(
+        &mut self,
+        subdir_path: &Path,
+        home_dir: PathBuf,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        for (provider, config_path) in
+            providers_in_scope(home_dir.clone(), subdir_path.to_path_buf())
+        {
+            let key = (config_path.clone(), provider);
+            if self.initial_global_scan.contains(&key) && !self.in_flight_parses.contains_key(&key)
+            {
+                self.update_servers_from_config_file(&config_path, home_dir.clone(), provider, ctx);
+            }
+        }
     }
 
     /// Handle incoming home directory watcher events.
@@ -420,7 +511,7 @@ impl FileMCPWatcher {
                             repo_handle.update(ctx, |repo, ctx| repo.stop_watching(id, ctx));
                         }
                         let config_path = home_dir.join(provider.home_config_path());
-                        self.abort_config_parse(&config_path, provider);
+                        self.abort_config_parse_for_removal(&config_path, provider, ctx);
                         ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
                             config_path,
                             root_path: home_dir.clone(),
@@ -543,7 +634,7 @@ impl FileMCPWatcher {
         // update. Parse the replacement without transiently removing the
         // last-known-good servers.
         if was_deleted && !was_added {
-            self.abort_config_parse(&config_path, provider);
+            self.abort_config_parse_for_removal(&config_path, provider, ctx);
             ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
                 config_path: config_path.clone(),
                 root_path: root_path.clone(),
@@ -556,16 +647,45 @@ impl FileMCPWatcher {
     }
 
     fn abort_config_parse(&mut self, config_path: &Path, provider: MCPProvider) {
-        if let Some(abort_handle) = self
-            .parse_abort_handles
+        if let Some(in_flight) = self
+            .in_flight_parses
             .remove(&(config_path.to_path_buf(), provider))
         {
-            abort_handle.abort();
+            in_flight.abort_handle.abort();
+        }
+    }
+
+    /// Returns whether the parse identified by `key`/`generation` is still the source's
+    /// current one, removing its record if so. A `false` result means it was superseded by a
+    /// newer parse scheduled for the same source (or already explicitly removed) since it was
+    /// scheduled: `AbortHandle::abort` only takes effect the next time the background future is
+    /// polled, so a superseded parse's completion callback can still run after that. The
+    /// caller must treat a `false` result as fully stale — it may not emit a snapshot or
+    /// settle the startup-cohort obligation, since doing so with this parse's (possibly
+    /// outdated) result would preempt whatever superseded it.
+    fn take_current_in_flight_parse(
+        &mut self,
+        key: &(PathBuf, MCPProvider),
+        generation: u64,
+    ) -> bool {
+        match self.in_flight_parses.get(key) {
+            Some(in_flight) if in_flight.generation == generation => {
+                self.in_flight_parses.remove(key);
+                true
+            }
+            _ => false,
         }
     }
 
     /// Asynchronously reads and parses the MCP configuration file at `config_file_path`,
     /// then emits a [`FileMCPWatcherEvent::ConfigParsed`] event.
+    ///
+    /// Every call for a given `(config_file_path, provider)` source claims a fresh
+    /// generation (see [`Self::take_current_in_flight_parse`]) and aborts any in-flight parse
+    /// for that source. Startup-cohort membership is decided once, right here at schedule
+    /// time — not inferred later by whichever completion callback happens to run first — so a
+    /// replacement parse for a source whose obligation is still pending inherits it
+    /// automatically, since the obligation is only ever cleared by a non-stale callback below.
     fn update_servers_from_config_file(
         &mut self,
         config_file_path: &Path,
@@ -577,10 +697,23 @@ impl FileMCPWatcher {
         let key = (config_file_path.clone(), provider);
         let callback_key = key.clone();
         self.abort_config_parse(&config_file_path, provider);
+
+        let generation = self.next_parse_generation;
+        self.next_parse_generation += 1;
+        let startup_cohort = self.initial_global_scan.contains(&key);
+
         let parse = ctx.spawn(
             async move { parse_mcp_config_file(&config_file_path, provider).await },
             move |me, outcome, ctx| {
-                me.parse_abort_handles.remove(&callback_key);
+                if !me.take_current_in_flight_parse(&callback_key, generation) {
+                    // Superseded: a newer parse for this source already owns the record (or
+                    // an explicit removal already settled it). Do not touch anything else.
+                    return;
+                }
+
+                if startup_cohort {
+                    me.initial_global_scan.remove(&callback_key);
+                }
                 let repo_path_for_countdown = root_path.clone();
                 emit_parse_outcome(outcome, callback_key.0.clone(), root_path, provider, ctx);
                 if let Some(count) = me.cloud_env_pending.get_mut(&repo_path_for_countdown) {
@@ -593,9 +726,18 @@ impl FileMCPWatcher {
                         });
                     }
                 }
+                if startup_cohort {
+                    me.maybe_emit_initial_global_scan_complete(ctx);
+                }
             },
         );
-        self.parse_abort_handles.insert(key, parse.abort_handle());
+        self.in_flight_parses.insert(
+            key,
+            InFlightParse {
+                generation,
+                abort_handle: parse.abort_handle(),
+            },
+        );
     }
 }
 
@@ -845,6 +987,11 @@ pub enum FileMCPWatcherEvent {
     ConfigError { diagnostic: FileMCPConfigDiagnostic },
     /// All provider config files for a cloud environment repo have been parsed.
     CloudEnvMcpScanComplete { repo_path: PathBuf },
+    /// Every global home-config source scheduled in `FileMCPWatcher::new` has produced a
+    /// terminal parse outcome (parsed, missing, read error, parse error, or missing
+    /// environment variable). Emitted exactly once, even when there were no sources to scan
+    /// (e.g. no resolvable home directory).
+    InitialGlobalMcpScanComplete,
 }
 
 impl Entity for FileMCPWatcher {
@@ -856,3 +1003,7 @@ impl SingletonEntity for FileMCPWatcher {}
 #[cfg(test)]
 #[path = "file_mcp_watcher_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "file_mcp_watcher_initial_global_tests.rs"]
+mod initial_global_tests;

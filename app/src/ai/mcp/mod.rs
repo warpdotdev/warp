@@ -44,6 +44,7 @@ cfg_if::cfg_if! {
         pub use file_based_manager::FileBasedMCPManager;
         pub mod file_mcp_watcher;
         pub use file_mcp_watcher::{FileMCPWatcher, FileMCPWatcherEvent};
+        mod initial_global_readiness;
     }
 }
 

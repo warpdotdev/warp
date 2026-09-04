@@ -8,9 +8,9 @@ use repo_metadata::{RepositoryUpdate, TargetFile};
 use settings::SettingsMode;
 
 use super::{
-    FileMCPConfigDiagnosticKind, FileMCPConfigParseOutcome, FileMCPWatcher, config_change_flags,
-    home_subdir_to_watch, parse_mcp_config_file, providers_in_scope, should_watch_repository,
-    substitute_env_vars,
+    FileMCPConfigDiagnosticKind, FileMCPConfigParseOutcome, FileMCPWatcher, InFlightParse,
+    InitialGlobalScanCohort, config_change_flags, home_subdir_to_watch, parse_mcp_config_file,
+    providers_in_scope, should_watch_repository, substitute_env_vars,
 };
 use crate::ai::mcp::MCPProvider;
 
@@ -30,16 +30,24 @@ fn abort_config_parse_cancels_and_removes_inflight_task() {
     let observed_handle = abort_handle.clone();
     let mut watcher = FileMCPWatcher {
         file_mcp_tx,
-        parse_abort_handles: HashMap::from([(key.clone(), abort_handle)]),
+        in_flight_parses: HashMap::from([(
+            key.clone(),
+            InFlightParse {
+                generation: 0,
+                abort_handle,
+            },
+        )]),
+        next_parse_generation: 1,
         home_provider_watchers: HashMap::new(),
         project_repo_watchers: HashSet::new(),
         cloud_env_pending: HashMap::new(),
+        initial_global_scan: InitialGlobalScanCohort::default(),
     };
 
     watcher.abort_config_parse(&config_path, MCPProvider::Warp);
 
     assert!(observed_handle.is_aborted());
-    assert!(!watcher.parse_abort_handles.contains_key(&key));
+    assert!(!watcher.in_flight_parses.contains_key(&key));
 }
 
 #[test]
