@@ -276,8 +276,10 @@ fn render_static_diff_content_element(
 
 /// How to display the diff content section of a comment card.
 enum CommentDiffContent {
-    /// Diff content rendered via a live editor lens. The element is provided at render time.
-    EditorLens,
+    /// Diff content rendered via a live editor lens, with a static fallback while unavailable.
+    EditorLens {
+        fallback: ViewHandle<CodeEditorView>,
+    },
     /// Diff content rendered via a static, read-only `CodeEditorView`.
     StaticEditor(ViewHandle<CodeEditorView>),
 }
@@ -341,7 +343,13 @@ impl CommentViewCard {
                     create_static_diff_content_editor(content, Some(absolute_file_path), ctx),
                 ))
             } else {
-                Some(CommentDiffContent::EditorLens)
+                Some(CommentDiffContent::EditorLens {
+                    fallback: create_static_diff_content_editor(
+                        content,
+                        Some(absolute_file_path),
+                        ctx,
+                    ),
+                })
             }
         } else {
             None
@@ -413,9 +421,11 @@ impl CommentViewCard {
         ));
 
         match &self.diff_content {
-            Some(CommentDiffContent::EditorLens) => {
+            Some(CommentDiffContent::EditorLens { fallback }) => {
                 if let Some(lens) = editor_lens_element {
                     card.add_child(lens);
+                } else {
+                    card.add_child(render_static_diff_content_element(fallback, app));
                 }
             }
             Some(CommentDiffContent::StaticEditor(editor)) => {
@@ -444,13 +454,17 @@ impl CommentViewCard {
 
     pub(crate) fn static_diff_editor(&self) -> Option<&ViewHandle<CodeEditorView>> {
         match &self.diff_content {
+            Some(CommentDiffContent::EditorLens { fallback }) => Some(fallback),
             Some(CommentDiffContent::StaticEditor(editor)) => Some(editor),
             _ => None,
         }
     }
 
     pub(crate) fn uses_editor_lens(&self) -> bool {
-        matches!(self.diff_content, Some(CommentDiffContent::EditorLens))
+        matches!(
+            self.diff_content,
+            Some(CommentDiffContent::EditorLens { .. })
+        )
     }
 
     /// Refreshes the cached `last_updated_duration` to the current time.
