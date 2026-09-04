@@ -840,6 +840,20 @@ impl NotificationsTrigger {
         }
     }
 
+    /// Notifications have the following format
+    /// - title: "'{start_of_command}...' {trigger_specific_details}"
+    /// - body: "{additional_context} ...{end_of_output}"
+    ///
+    /// For the command, we show the prefix (if not the whole command) since the user
+    /// will likely be able to identify the command more easily by its prefix
+    /// e.g. 'ssh user@...' vs '...nux.a.b.com'
+    ///
+    /// For the output, we show the suffix (if not the whole output) since
+    /// the end of the output is what the user likely missed when the terminal
+    /// wasn't focused.
+    ///
+    /// Note: we trim the ends of commands and outputs to remove whitespace
+    /// which cause unpleasing gaps in the MacOS notifications.
     pub fn create_notification_content(
         &self,
         command: String,

@@ -16,6 +16,10 @@ pub(crate) const TITLE: &str = "Cloud agents need a team";
 pub(crate) const BODY_ADMIN: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join or create a team, then try again.";
 pub(crate) const BODY_NON_ADMIN: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join a team, then try again.";
 pub(crate) const PRIMARY_CTA_LABEL: &str = "Open Teams settings";
+pub(crate) const TOAST_ADMIN: &str =
+    "Cloud agents need a team. Join or create a team to start cloud runs.";
+pub(crate) const TOAST_NON_ADMIN: &str =
+    "Cloud agents need a team. Join a team to start cloud runs.";
 
 fn is_current_user_workspace_admin(app: &AppContext) -> bool {
     let Some(email) = AuthStateProvider::as_ref(app).get().user_email() else {
@@ -36,6 +40,16 @@ fn body_text(app: &AppContext) -> &'static str {
 
 pub(crate) fn should_render(team_required: bool, is_in_setup: bool, is_configuring: bool) -> bool {
     team_required && (is_in_setup || is_configuring)
+}
+
+/// Toast copy for submissions blocked by the team requirement, mirroring the
+/// admin/non-admin split of the inline blocker's body text.
+pub(crate) fn toast_message(app: &AppContext) -> &'static str {
+    if is_current_user_workspace_admin(app) {
+        TOAST_ADMIN
+    } else {
+        TOAST_NON_ADMIN
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

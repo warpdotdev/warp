@@ -325,6 +325,7 @@ use crate::terminal::universal_developer_input::AtContextMenuDisabledReason;
 use crate::terminal::view::ambient_agent::{
     AuthSecretFtuxView, AuthSecretFtuxViewEvent, AuthSecretSelector, AuthSecretSelectorEvent,
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
+    cloud_agent_team_required_toast_message,
 };
 use crate::terminal::view::init::{CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY};
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
@@ -14036,23 +14037,23 @@ impl Input {
                 let team_required = UserWorkspaces::as_ref(ctx).cloud_agents_require_team();
                 let has_enabled_harness = !FeatureFlag::AgentHarness.is_enabled()
                     || HarnessAvailabilityModel::as_ref(ctx).has_any_enabled_harness();
-                match cloud_agent_start_blocker(team_required, has_enabled_harness) {
-                    Some(CloudAgentStartBlocker::TeamRequired) => return,
-                    Some(CloudAgentStartBlocker::NoEnabledHarnesses) => {
-                        let window_id = ctx.window_id();
-                        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                            ts.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "No agent harnesses are available. Contact your team admin."
-                                        .to_string(),
-                                ),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                        return;
-                    }
-                    None => {}
+                let blocker_message =
+                    match cloud_agent_start_blocker(team_required, has_enabled_harness) {
+                        Some(CloudAgentStartBlocker::TeamRequired) => {
+                            Some(cloud_agent_team_required_toast_message(ctx).to_string())
+                        }
+                        Some(CloudAgentStartBlocker::NoEnabledHarnesses) => Some(
+                            "No agent harnesses are available. Contact your team admin."
+                                .to_string(),
+                        ),
+                        None => None,
+                    };
+                if let Some(message) = blocker_message {
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                        ts.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+                    });
+                    return;
                 }
 
                 let prompt = command.trim().to_owned();
