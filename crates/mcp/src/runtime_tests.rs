@@ -79,13 +79,14 @@ async fn query_tools_for_skips_listing_when_capability_not_advertised() {
     let calls_clone = calls.clone();
     let no_caps = caps(false, false);
 
-    let result = query_tools_for(Some(&no_caps), "srv", || async move {
+    let (result, error) = query_tools_for(Some(&no_caps), "srv", || async move {
         calls_clone.fetch_add(1, Ordering::SeqCst);
         Ok(vec![test_tool("never")])
     })
     .await;
 
     assert!(result.is_empty());
+    assert!(error.is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -95,13 +96,14 @@ async fn query_tools_for_skips_listing_when_server_info_is_none() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = calls.clone();
 
-    let result = query_tools_for(None, "srv", || async move {
+    let (result, error) = query_tools_for(None, "srv", || async move {
         calls_clone.fetch_add(1, Ordering::SeqCst);
         Ok(vec![test_tool("never")])
     })
     .await;
 
     assert!(result.is_empty());
+    assert!(error.is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -112,9 +114,10 @@ async fn query_tools_for_returns_listed_tools_when_capability_advertised() {
     let expected = vec![test_tool("greet"), test_tool("review")];
     let to_return = expected.clone();
 
-    let result = query_tools_for(Some(&c), "srv", || async move { Ok(to_return) }).await;
+    let (result, error) = query_tools_for(Some(&c), "srv", || async move { Ok(to_return) }).await;
 
     assert_eq!(result, expected);
+    assert!(error.is_none());
 }
 
 /// Returns an empty vector when the server lists no tools.
@@ -124,29 +127,31 @@ async fn query_tools_for_returns_empty_vec_when_server_lists_no_tools() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_clone = calls.clone();
 
-    let result = query_tools_for(Some(&c), "srv", || async move {
+    let (result, error) = query_tools_for(Some(&c), "srv", || async move {
         calls_clone.fetch_add(1, Ordering::SeqCst);
         Ok(Vec::new())
     })
     .await;
 
     assert!(result.is_empty());
+    assert!(error.is_none());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 /// **The fail-soft test the bug ticket implicitly demands.** Transport-
 /// closed errors must not abort server startup; the helper must log and
-/// return an empty vec. This is the regression-protector for #6798's
-/// underlying asymmetry — if anyone re-introduces a `return Err(...)` here,
-/// this test fails.
+/// return an empty vec (plus the captured error for diagnostics). This is
+/// the regression-protector for #6798's underlying asymmetry — if anyone
+/// re-introduces a `return Err(...)` here, this test fails.
 #[tokio::test]
 async fn query_tools_for_returns_empty_on_transport_error() {
     let c = caps(true, false);
-    let result = query_tools_for(Some(&c), "srv", || async {
+    let (result, error) = query_tools_for(Some(&c), "srv", || async {
         Err(rmcp::ServiceError::TransportClosed)
     })
     .await;
     assert!(result.is_empty());
+    assert!(error.is_some());
 }
 
 /// MCP-protocol errors (e.g. METHOD_NOT_FOUND from a misbehaving server
@@ -155,7 +160,7 @@ async fn query_tools_for_returns_empty_on_transport_error() {
 #[tokio::test]
 async fn query_tools_for_returns_empty_on_mcp_error() {
     let c = caps(true, false);
-    let result = query_tools_for(Some(&c), "srv", || async {
+    let (result, error) = query_tools_for(Some(&c), "srv", || async {
         Err(rmcp::ServiceError::McpError(ErrorData {
             code: ErrorCode::METHOD_NOT_FOUND,
             message: "tools/list not implemented".into(),
@@ -164,6 +169,7 @@ async fn query_tools_for_returns_empty_on_mcp_error() {
     })
     .await;
     assert!(result.is_empty());
+    assert!(error.is_some());
 }
 
 /// Calls the `tools/list` function exactly once per query.
@@ -190,7 +196,8 @@ async fn query_tools_for_decision_independent_of_other_capabilities() {
         for has_resources in [false, true] {
             let c = caps(has_tools, has_resources);
             let to_return = tools.clone();
-            let result = query_tools_for(Some(&c), "srv", || async move { Ok(to_return) }).await;
+            let (result, _) =
+                query_tools_for(Some(&c), "srv", || async move { Ok(to_return) }).await;
 
             if has_tools {
                 assert_eq!(result, tools);

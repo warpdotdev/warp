@@ -408,6 +408,7 @@ pub struct AgentRunClientEventRequest {
 #[serde(untagged)]
 pub enum AgentRunClientEventPayload {
     SetupMetric(AgentRunClientSetupMetricPayload),
+    McpAttachResult(AgentRunClientMcpAttachResultPayload),
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -417,6 +418,22 @@ pub struct AgentRunClientSetupMetricPayload {
     pub latency_ms: i64,
     pub is_error: bool,
 }
+
+/// Payload for the `mcp_attach_result` client event: outcome of one
+/// managed/integration MCP attach during run setup.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AgentRunClientMcpAttachResultPayload {
+    /// Config-map name of the server.
+    pub mcp_key: String,
+    /// Managed MCP row UID or integration id (the `warp_id` value).
+    pub mcp_ref: String,
+    /// `"managed"` or `"integration"`.
+    pub mcp_kind: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub struct AgentRunEnvironmentSnapshotRequest {
     pub captured_at: DateTime<Utc>,
@@ -441,6 +458,19 @@ impl AgentRunClientEventRequest {
             event_name: event_name.into(),
             timestamp,
             payload: None,
+        }
+    }
+
+    pub fn mcp_attach_result_event(
+        event_name: impl Into<String>,
+        timestamp: DateTime<Utc>,
+        payload: AgentRunClientMcpAttachResultPayload,
+    ) -> Self {
+        Self {
+            event_uuid: uuid::Uuid::new_v4().to_string(),
+            event_name: event_name.into(),
+            timestamp,
+            payload: Some(AgentRunClientEventPayload::McpAttachResult(payload)),
         }
     }
 

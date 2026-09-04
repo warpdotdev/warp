@@ -58,7 +58,9 @@ use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
 };
 use crate::ai::agent_sdk::retry::{is_transient_graphql_or_http_error, with_bounded_retry_using};
-use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
+use crate::ai::agent_sdk::setup_observability::{
+    McpAttachKind, SetupClientEventReporter, SetupStep,
+};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
     AmbientAgentTaskId, AmbientConversationStatus, conversation_output_status_from_conversation,
@@ -1053,6 +1055,31 @@ register_error!(AgentDriverError);
 struct ResolvedMcpSpecs {
     local_uuids: Vec<Uuid>,
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
+    /// Managed/integration servers whose startup outcomes get
+    /// `mcp_attach_result` events.
+    attach_targets: Vec<McpAttachTarget>,
+    /// Resolution failures that did not fail the run (well-known skips).
+    attach_failures: Vec<McpAttachFailure>,
+}
+
+/// A resolved managed/integration installation pending spawn, tracked for
+/// `mcp_attach_result` reporting.
+#[derive(Debug)]
+struct McpAttachTarget {
+    installation_uuid: Uuid,
+    mcp_key: String,
+    mcp_ref: String,
+    kind: McpAttachKind,
+}
+
+/// A managed/integration server that failed before its installation could
+/// spawn.
+#[derive(Debug)]
+struct McpAttachFailure {
+    mcp_key: String,
+    mcp_ref: String,
+    kind: McpAttachKind,
+    error: String,
 }
 
 impl From<warpui::ModelDropped> for AgentDriverError {
@@ -1939,6 +1966,14 @@ impl AgentDriver {
                             message: err.to_string(),
                         }
                     })?;
+                    resolved
+                        .attach_targets
+                        .extend(installations.iter().map(|installation| McpAttachTarget {
+                            installation_uuid: installation.uuid(),
+                            mcp_key: installation.templatable_mcp_server().name.clone(),
+                            mcp_ref: uuid.to_string(),
+                            kind: McpAttachKind::Managed,
+                        }));
                     resolved.ephemeral_installations.extend(installations);
                 }
                 MCPSpec::WellKnown(id) => {
@@ -1969,6 +2004,12 @@ impl AgentDriver {
                         Ok(client_config) => client_config,
                         Err(err) => {
                             log::warn!("Skipping well-known MCP server '{id}': {err:#}");
+                            resolved.attach_failures.push(McpAttachFailure {
+                                mcp_key: id.clone(),
+                                mcp_ref: id.clone(),
+                                kind: McpAttachKind::Integration,
+                                error: format!("{err:#}"),
+                            });
                             continue;
                         }
                     };
@@ -1978,10 +2019,24 @@ impl AgentDriver {
                         id,
                     ) {
                         Ok(installations) => {
+                            resolved.attach_targets.extend(installations.iter().map(
+                                |installation| McpAttachTarget {
+                                    installation_uuid: installation.uuid(),
+                                    mcp_key: installation.templatable_mcp_server().name.clone(),
+                                    mcp_ref: id.clone(),
+                                    kind: McpAttachKind::Integration,
+                                },
+                            ));
                             resolved.ephemeral_installations.extend(installations);
                         }
                         Err(err) => {
                             log::warn!("Skipping well-known MCP server '{id}': {err}");
+                            resolved.attach_failures.push(McpAttachFailure {
+                                mcp_key: id.clone(),
+                                mcp_ref: id.clone(),
+                                kind: McpAttachKind::Integration,
+                                error: err.to_string(),
+                            });
                         }
                     }
                 }
@@ -2297,6 +2352,75 @@ impl AgentDriver {
                 Ok(())
             }
             Err(other) => Err(other),
+        }
+    }
+
+    /// Post one `mcp_attach_result` event per managed/integration MCP
+    /// attach. `ok` requires `Running` plus a clean startup `tools/list`.
+    /// Best-effort: never affects the run outcome.
+    async fn report_mcp_attach_results(
+        startup_result: &Result<(), AgentDriverError>,
+        attach_targets: Vec<McpAttachTarget>,
+        attach_failures: Vec<McpAttachFailure>,
+        setup_events: &SetupClientEventReporter,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        // A managed resolution failure aborts setup before targets are
+        // collected; report it from the error.
+        if let Err(AgentDriverError::ManagedMcpResolutionFailed { uid, message }) = startup_result {
+            setup_events.post_mcp_attach_result_best_effort(
+                uid.to_string(),
+                uid.to_string(),
+                McpAttachKind::Managed,
+                Some(message.clone()),
+            );
+        }
+
+        for failure in attach_failures {
+            setup_events.post_mcp_attach_result_best_effort(
+                failure.mcp_key,
+                failure.mcp_ref,
+                failure.kind,
+                Some(failure.error),
+            );
+        }
+
+        if attach_targets.is_empty() {
+            return;
+        }
+        let Ok(outcomes) = foreground
+            .spawn(move |_, ctx| {
+                let manager = TemplatableMCPServerManager::as_ref(ctx);
+                attach_targets
+                    .into_iter()
+                    .map(|target| {
+                        let error = match manager.get_server_state(target.installation_uuid) {
+                            Some(MCPServerState::Running) => manager
+                                .get_server_tools_list_error(target.installation_uuid)
+                                .map(|err| format!("tools/list failed: {err}")),
+                            Some(MCPServerState::FailedToStart) => Some(
+                                manager
+                                    .get_server_error_message(target.installation_uuid)
+                                    .map(|message| format!("failed to start: {message}"))
+                                    .unwrap_or_else(|| "failed to start".to_string()),
+                            ),
+                            _ => Some("did not reach running state during setup".to_string()),
+                        };
+                        (target, error)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+        else {
+            return;
+        };
+        for (target, error) in outcomes {
+            setup_events.post_mcp_attach_result_best_effort(
+                target.mcp_key,
+                target.mcp_ref,
+                target.kind,
+                error,
+            );
         }
     }
 
@@ -3045,6 +3169,8 @@ impl AgentDriver {
                 .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
                 .await?;
 
+            let mut mcp_attach_targets: Vec<McpAttachTarget> = Vec::new();
+            let mut mcp_attach_failures: Vec<McpAttachFailure> = Vec::new();
             let mcp_startup_result = setup_events
                 .record_result(SetupStep::McpServerStartup, async {
                     let resolved_mcp_specs =
@@ -3052,6 +3178,8 @@ impl AgentDriver {
                             .await?;
                     let existing_uuids = resolved_mcp_specs.local_uuids;
                     let mut ephemeral_installations = resolved_mcp_specs.ephemeral_installations;
+                    mcp_attach_targets = resolved_mcp_specs.attach_targets;
+                    mcp_attach_failures = resolved_mcp_specs.attach_failures;
 
                     // Attach the built-in Factory MCP server. Interactive
                     // clients attach built-ins via
@@ -3141,6 +3269,14 @@ impl AgentDriver {
                     }
                 })
                 .await;
+            Self::report_mcp_attach_results(
+                &mcp_startup_result,
+                mcp_attach_targets,
+                mcp_attach_failures,
+                &setup_events,
+                &foreground,
+            )
+            .await;
             Self::handle_mcp_startup_result(mcp_startup_result, &foreground).await?;
             let profile = task.profile.clone();
             setup_events

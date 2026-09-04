@@ -409,13 +409,15 @@ pub async fn spawn_server(
 
     let resources =
         query_resources_for(capabilities, &server_name, || service.list_all_resources()).await;
-    let tools = query_tools_for(capabilities, &server_name, || service.list_all_tools()).await;
+    let (tools, tools_list_error) =
+        query_tools_for(capabilities, &server_name, || service.list_all_tools()).await;
 
     Ok(TemplatableMCPServerInfo {
         name: server_name,
         service,
         resources,
         tools,
+        tools_list_error,
         installation_id: uuid,
         description,
         is_authenticated_transport,
@@ -647,24 +649,25 @@ where
 /// error as "no tools" (fail-soft) so a transient `tools/list` failure does
 /// not abort the entire server startup — the user-visible regression #6798
 /// was rooted in the prior asymmetric handling, where a tools-list error on
-/// a server with healthy resources would propagate and fail startup.
+/// a server with healthy resources would propagate and fail startup. The
+/// error is returned alongside the (empty) tool list for diagnostics.
 async fn query_tools_for<F, Fut>(
     capabilities: Option<&rmcp::model::ServerCapabilities>,
     server_name: &str,
     list_tools: F,
-) -> Vec<rmcp::model::Tool>
+) -> (Vec<rmcp::model::Tool>, Option<String>)
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = Result<Vec<rmcp::model::Tool>, rmcp::ServiceError>>,
 {
     if !should_query_tools(capabilities) {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     match list_tools().await {
-        Ok(result) => result,
+        Ok(result) => (result, None),
         Err(err) => {
             log::warn!("Failed to list tools for MCP server '{server_name}': {err}");
-            Vec::new()
+            (Vec::new(), Some(err.to_string()))
         }
     }
 }

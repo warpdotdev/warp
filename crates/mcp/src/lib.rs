@@ -16,6 +16,9 @@ pub struct TemplatableMCPServerInfo {
     >,
     resources: Vec<rmcp::model::Resource>,
     tools: Vec<rmcp::model::Tool>,
+    /// Startup `tools/list` error. Listing fails soft; the server still
+    /// runs with no tools.
+    tools_list_error: Option<String>,
     installation_id: Uuid,
     description: Option<String>,
     /// Whether the underlying transport uses authentication.
@@ -37,6 +40,10 @@ impl TemplatableMCPServerInfo {
 
     pub fn tools(&self) -> &Vec<rmcp::model::Tool> {
         &self.tools
+    }
+
+    pub fn tools_list_error(&self) -> Option<&str> {
+        self.tools_list_error.as_deref()
     }
 
     pub fn installation_id(&self) -> Uuid {
