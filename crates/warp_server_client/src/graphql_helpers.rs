@@ -28,7 +28,8 @@ where
     })
 }
 
-async fn send_graphql_request_with_options<QF, O>(
+/// Sends a GraphQL operation with fully constructed request options.
+pub async fn send_graphql_request_with_options<QF, O>(
     base_client: &BaseClient,
     operation: O,
     options: RequestOptions,

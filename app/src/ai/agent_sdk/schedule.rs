@@ -8,6 +8,7 @@ use warp_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
+use warp_cli::scope::TeamSelection;
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
@@ -21,6 +22,7 @@ use crate::ai::ambient_agents::scheduled::{
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::ids::{ServerId, SyncId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Run a scheduled agent command.
 pub fn run(
@@ -31,7 +33,7 @@ pub fn run(
     let output_format = global_options.output_format;
     match command.into_subcommand() {
         ScheduleSubcommand::Create(args) => create(ctx, args),
-        ScheduleSubcommand::List => list(ctx, output_format),
+        ScheduleSubcommand::List { team_selection } => list(ctx, output_format, team_selection),
         ScheduleSubcommand::Get(args) => get(ctx, output_format, args),
         ScheduleSubcommand::Pause(args) => pause(ctx, args),
         ScheduleSubcommand::Unpause(args) => unpause(ctx, args),
@@ -42,12 +44,9 @@ pub fn run(
 
 fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> {
     ScheduledAgentManager::handle(ctx).update(ctx, move |_manager, ctx| {
-        let refresh_future = super::common::refresh_workspace_metadata(ctx);
-        let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
-        let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
-
-        ctx.spawn(setup_future, move |manager, setup_result, ctx| {
-            if let Err(err) = setup_result {
+        let metadata_refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(metadata_refresh, move |_, result, ctx| {
+            if let Err(err) = result {
                 super::report_fatal_error(err, ctx);
                 return;
             }
@@ -58,122 +57,142 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                     return;
                 }
             };
-
-            let loaded_file = match args.config_file.file.as_deref() {
-                Some(path) => match super::config_file::load_config_file(path) {
-                    Ok(file) => Some(file),
+            let request_team_scope =
+                crate::server::team_scope::RequestTeamScope::from_scope(&team_scope);
+            let drive_refresh =
+                super::common::refresh_warp_drive_for_scope(request_team_scope, ctx);
+            ctx.spawn(drive_refresh, move |manager, result, ctx| {
+                let response = match result {
+                    Ok(response) => response,
                     Err(err) => {
                         super::report_fatal_error(err, ctx);
                         return;
                     }
-                },
-                None => None,
-            };
+                };
+                crate::server::cloud_objects::update_manager::UpdateManager::handle(ctx).update(
+                    ctx,
+                    |update_manager, ctx| {
+                        update_manager.apply_scoped_refresh(response, request_team_scope, ctx)
+                    },
+                );
 
-            let mut environment_args = args.environment;
-            if environment_args.environment.is_none()
-                && !environment_args.no_environment
-                && let Some(environment_id) = loaded_file
-                    .as_ref()
-                    .and_then(|f| f.file.environment_id.clone())
-            {
-                environment_args.environment = Some(environment_id);
-            }
+                let loaded_file = match args.config_file.file.as_deref() {
+                    Some(path) => match super::config_file::load_config_file(path) {
+                        Ok(file) => Some(file),
+                        Err(err) => {
+                            super::report_fatal_error(err, ctx);
+                            return;
+                        }
+                    },
+                    None => None,
+                };
 
-            let environment_id =
-                match EnvironmentChoice::resolve_for_create(environment_args, &team_scope, ctx) {
-                    Ok(EnvironmentChoice::None) => {
-                        eprintln!("Scheduling agent to run without an environment.");
-                        None
-                    }
-                    Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
-                    Err(ResolveConfigurationError::Canceled) => {
-                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                let mut environment_args = args.environment;
+                if environment_args.environment.is_none()
+                    && !environment_args.no_environment
+                    && let Some(environment_id) = loaded_file
+                        .as_ref()
+                        .and_then(|f| f.file.environment_id.clone())
+                {
+                    environment_args.environment = Some(environment_id);
+                }
+
+                let environment_id =
+                    match EnvironmentChoice::resolve_for_create(environment_args, &team_scope, ctx)
+                    {
+                        Ok(EnvironmentChoice::None) => {
+                            eprintln!("Scheduling agent to run without an environment.");
+                            None
+                        }
+                        Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
+                        Err(ResolveConfigurationError::Canceled) => {
+                            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                            return;
+                        }
+                        Err(err) => {
+                            super::report_fatal_error(anyhow::anyhow!(err), ctx);
+                            return;
+                        }
+                    };
+
+                let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                    Ok(owner) => owner,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
                         return;
                     }
+                };
+
+                let cli_mcp_servers =
+                    match super::mcp_config::build_mcp_servers_from_specs(&args.mcp_specs) {
+                        Ok(mcp_servers) => mcp_servers,
+                        Err(err) => {
+                            super::report_fatal_error(err, ctx);
+                            return;
+                        }
+                    };
+
+                let merged_config = super::config_file::merge_with_precedence(
+                    loaded_file.as_ref(),
+                    crate::ai::ambient_agents::AgentConfigSnapshot {
+                        name: None,
+                        environment_id,
+                        // TODO(REMOTE-1936): support --runner for scheduled agents.
+                        runner_id: None,
+                        model_id: args.model.model.clone(),
+                        base_prompt: None,
+                        mcp_servers: cli_mcp_servers,
+                        profile_id: None,
+                        worker_host: args.worker_host,
+                        skill_spec: args.skill.map(|s| s.to_string()),
+                        // TODO(QUALITY-294): Support computer use flag in scheduled agents.
+                        computer_use_enabled: None,
+                        // TODO(REMOTE-1134): Support harness flag for scheduled agents.
+                        harness: None,
+                        harness_auth_secrets: None,
+                        additional_source_repos: None,
+                    },
+                );
+
+                // We must wait until after workspace metadata is refreshed to check available LLMs.
+                let model_id = match merged_config
+                    .model_id
+                    .as_deref()
+                    .map(|model_id| {
+                        super::common::validate_agent_mode_base_model_id_for_scope(
+                            model_id,
+                            &args.scope.team_selection,
+                            ctx,
+                        )
+                    })
+                    .transpose()
+                {
+                    Ok(id) => id.map(|id| id.to_string()),
                     Err(err) => {
                         super::report_fatal_error(anyhow::anyhow!(err), ctx);
                         return;
                     }
                 };
 
-            let owner = match super::common::resolve_owner(&args.scope, ctx) {
-                Ok(owner) => owner,
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                    return;
-                }
-            };
+                let mut agent_config = merged_config;
+                agent_config.model_id = model_id;
 
-            let cli_mcp_servers =
-                match super::mcp_config::build_mcp_servers_from_specs(&args.mcp_specs) {
-                    Ok(mcp_servers) => mcp_servers,
+                let prompt = args.prompt.unwrap_or_default();
+                let mut config = ScheduledAmbientAgent::new(args.name, args.cron, true, prompt);
+                config.agent_config = agent_config;
+
+                // Print something here because scheduling an agent can take a while.
+                println!("Scheduling agent {}...", config.name);
+                let create_future = manager.create_schedule(config, owner, ctx);
+                ctx.spawn(create_future, |_manager, result, ctx| match result {
+                    Ok(sync_id) => {
+                        println!("Scheduled agent: {sync_id}");
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    }
                     Err(err) => {
                         super::report_fatal_error(err, ctx);
-                        return;
                     }
-                };
-
-            let merged_config = super::config_file::merge_with_precedence(
-                loaded_file.as_ref(),
-                crate::ai::ambient_agents::AgentConfigSnapshot {
-                    name: None,
-                    environment_id,
-                    // TODO(REMOTE-1936): support --runner for scheduled agents.
-                    runner_id: None,
-                    model_id: args.model.model.clone(),
-                    base_prompt: None,
-                    mcp_servers: cli_mcp_servers,
-                    profile_id: None,
-                    worker_host: args.worker_host,
-                    skill_spec: args.skill.map(|s| s.to_string()),
-                    // TODO(QUALITY-294): Support computer use flag in scheduled agents.
-                    computer_use_enabled: None,
-                    // TODO(REMOTE-1134): Support harness flag for scheduled agents.
-                    harness: None,
-                    harness_auth_secrets: None,
-                    additional_source_repos: None,
-                },
-            );
-
-            // We must wait until after workspace metadata is refreshed to check available LLMs.
-            let model_id = match merged_config
-                .model_id
-                .as_deref()
-                .map(|model_id| {
-                    super::common::validate_agent_mode_base_model_id_for_scope(
-                        model_id,
-                        &args.scope.team_selection,
-                        ctx,
-                    )
-                })
-                .transpose()
-            {
-                Ok(id) => id.map(|id| id.to_string()),
-                Err(err) => {
-                    super::report_fatal_error(anyhow::anyhow!(err), ctx);
-                    return;
-                }
-            };
-
-            let mut agent_config = merged_config;
-            agent_config.model_id = model_id;
-
-            let prompt = args.prompt.unwrap_or_default();
-            let mut config = ScheduledAmbientAgent::new(args.name, args.cron, true, prompt);
-            config.agent_config = agent_config;
-
-            // Print something here because scheduling an agent can take a while.
-            println!("Scheduling agent {}...", config.name);
-            let create_future = manager.create_schedule(config, owner, ctx);
-            ctx.spawn(create_future, |_manager, result, ctx| match result {
-                Ok(sync_id) => {
-                    println!("Scheduled agent: {sync_id}");
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                }
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                }
+                });
             });
         });
     });
@@ -547,55 +566,100 @@ fn update(ctx: &mut AppContext, args: UpdateScheduleArgs) -> anyhow::Result<()> 
     Ok(())
 }
 
+fn schedule_is_visible_to_scope(
+    schedule: &CloudScheduledAmbientAgent,
+    team_scope: &(impl TeamScope + ?Sized),
+) -> bool {
+    match schedule.permissions().owner {
+        crate::cloud_object::Owner::User { .. } => true,
+        crate::cloud_object::Owner::Team { team_uid } => team_scope.team_uid() == Some(team_uid),
+    }
+}
+
 /// List all scheduled agents available to the current user.
-fn list(ctx: &mut AppContext, output_format: OutputFormat) -> anyhow::Result<()> {
+fn list(
+    ctx: &mut AppContext,
+    output_format: OutputFormat,
+    team_selection: TeamSelection,
+) -> anyhow::Result<()> {
     ScheduledAgentManager::handle(ctx).update(ctx, move |_manager, ctx| {
-        let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
-        ctx.spawn(warp_drive_sync_future, move |manager, result, ctx| {
+        let metadata_refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(metadata_refresh, move |_, result, ctx| {
             if let Err(err) = result {
                 super::report_fatal_error(err, ctx);
                 return;
             }
-
-            let mut schedules = manager.list_schedules(ctx);
-            schedules.sort_by_key(|schedule| schedule.model().string_model.name.clone());
-
-            let futures = schedules.into_iter().map(|schedule| {
-                let config = schedule.model().string_model.clone();
-                let sync_id = schedule.sync_id();
-                let scope = super::common::format_owner(&schedule.permissions().owner).to_string();
-
-                // TODO(ben): Consider a bulk lookup API for scheduled agent history.
-                let history_future = manager.fetch_schedule_history(sync_id, ctx);
-
-                async move {
-                    // Try to fetch the scheduled agent history, but still show output if this fails.
-                    let history = match history_future.await {
-                        Ok(v) => v,
-                        Err(err) => {
-                            log::warn!("Failed to fetch scheduled agent history: {err:#}");
-                            None
-                        }
-                    };
-
-                    let id = match sync_id {
-                        SyncId::ServerId(server_id) => server_id.to_string(),
-                        SyncId::ClientId(_) => "Unsynced".to_string(),
-                    };
-
-                    ScheduleInfo::new(id, scope, config, history.as_ref())
+            let team_scope = match super::common::resolve_team_scope(&team_selection, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
                 }
+            };
+            let request_team_scope =
+                crate::server::team_scope::RequestTeamScope::from_scope(&team_scope);
+            let drive_refresh =
+                super::common::refresh_warp_drive_for_scope(request_team_scope, ctx);
+            ctx.spawn(drive_refresh, move |manager, result, ctx| {
+                let response = match result {
+                    Ok(response) => response,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
+                crate::server::cloud_objects::update_manager::UpdateManager::handle(ctx).update(
+                    ctx,
+                    |update_manager, ctx| {
+                        update_manager.apply_scoped_refresh(response, request_team_scope, ctx)
+                    },
+                );
+
+                let mut schedules: Vec<_> = manager
+                    .list_schedules(ctx)
+                    .into_iter()
+                    .filter(|schedule| schedule_is_visible_to_scope(schedule, &team_scope))
+                    .collect();
+                schedules.sort_by_key(|schedule| schedule.model().string_model.name.clone());
+
+                let futures = schedules.into_iter().map(|schedule| {
+                    let config = schedule.model().string_model.clone();
+                    let sync_id = schedule.sync_id();
+                    let scope =
+                        super::common::format_owner(&schedule.permissions().owner).to_string();
+
+                    // TODO(ben): Consider a bulk lookup API for scheduled agent history.
+                    let history_future = manager.fetch_schedule_history(sync_id, ctx);
+
+                    async move {
+                        // Try to fetch the scheduled agent history, but still show output if this fails.
+                        let history = match history_future.await {
+                            Ok(v) => v,
+                            Err(err) => {
+                                log::warn!("Failed to fetch scheduled agent history: {err:#}");
+                                None
+                            }
+                        };
+
+                        let id = match sync_id {
+                            SyncId::ServerId(server_id) => server_id.to_string(),
+                            SyncId::ClientId(_) => "Unsynced".to_string(),
+                        };
+
+                        ScheduleInfo::new(id, scope, config, history.as_ref())
+                    }
+                });
+
+                let output_format = output_format;
+                ctx.spawn(
+                    futures::future::join_all(futures),
+                    move |_manager, infos, ctx| {
+                        output::print_list(infos, output_format);
+
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    },
+                );
             });
-
-            let output_format = output_format;
-            ctx.spawn(
-                futures::future::join_all(futures),
-                move |_manager, infos, ctx| {
-                    output::print_list(infos, output_format);
-
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                },
-            );
         });
     });
 
@@ -682,3 +746,7 @@ fn delete(ctx: &mut AppContext, args: DeleteScheduleArgs) -> anyhow::Result<()> 
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "schedule_tests.rs"]
+mod tests;

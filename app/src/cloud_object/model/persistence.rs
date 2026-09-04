@@ -27,6 +27,7 @@ use crate::env_vars::{CloudEnvVarCollection, CloudEnvVarCollectionModel, EnvVarC
 use crate::notebooks::CloudNotebook;
 use crate::persistence::ModelEvent;
 use crate::server::ids::{ClientId, HashableId, ObjectUid, ServerId, SyncId, ToServerId};
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::cloud_preferences::{CloudPreference, CloudPreferenceModel};
 use crate::workflows::workflow::Workflow;
 use crate::workflows::workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum};
@@ -1359,6 +1360,30 @@ impl CloudModel {
         for (versions, object_type) in self
             .objects_by_id
             .values()
+            .filter_map(|object| object.versions(app).zip(Some(object.object_type())))
+        {
+            match object_type {
+                ObjectType::Notebook => objects_to_update.notebooks.push(versions),
+                ObjectType::Workflow => objects_to_update.workflows.push(versions),
+                ObjectType::Folder => objects_to_update.folders.push(versions),
+                ObjectType::GenericStringObject(_) => {
+                    objects_to_update.generic_string_objects.push(versions)
+                }
+            }
+        }
+        objects_to_update
+    }
+
+    pub(crate) fn get_versions_for_request_scope(
+        &self,
+        request_scope: RequestTeamScope,
+        app: &AppContext,
+    ) -> ObjectsToUpdate {
+        let mut objects_to_update = ObjectsToUpdate::default();
+        for (versions, object_type) in self
+            .objects_by_id
+            .values()
+            .filter(|object| request_scope.includes_owner_for_sync(object.permissions().owner))
             .filter_map(|object| object.versions(app).zip(Some(object.object_type())))
         {
             match object_type {

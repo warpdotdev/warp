@@ -82,6 +82,7 @@ use crate::server::server_api::object::{GuestIdentifier, ObjectClient};
 use crate::server::sync_queue::{
     CreationFailureReason, GenericStringObjectToCreate, QueueItem, SyncQueue, SyncQueueEvent,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::cloud_preferences::Preference;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::workflow_enum::{CloudWorkflowEnum, CloudWorkflowEnumModel, WorkflowEnum};
@@ -1097,6 +1098,40 @@ impl UpdateManager {
                 updated: updated_preferences,
             });
         }
+    }
+
+    pub(crate) fn apply_scoped_refresh(
+        &mut self,
+        mut response: InitialLoadResponse,
+        request_scope: RequestTeamScope,
+        ctx: &mut ModelContext<UpdateManager>,
+    ) {
+        let cloud_model = CloudModel::as_ref(ctx);
+        Self::retain_scoped_deletions(&mut response.deleted_notebooks, request_scope, cloud_model);
+        Self::retain_scoped_deletions(&mut response.deleted_workflows, request_scope, cloud_model);
+        Self::retain_scoped_deletions(&mut response.deleted_folders, request_scope, cloud_model);
+        Self::retain_scoped_deletions(
+            &mut response.deleted_generic_string_objects,
+            request_scope,
+            cloud_model,
+        );
+        self.on_changed_objects_fetched(response, false, ctx);
+    }
+
+    fn retain_scoped_deletions<K>(
+        deleted_objects: &mut Vec<K>,
+        request_scope: RequestTeamScope,
+        cloud_model: &CloudModel,
+    ) where
+        K: ToServerId,
+    {
+        deleted_objects.retain(|id| {
+            cloud_model
+                .get_by_uid(&id.to_server_id().uid())
+                .is_some_and(|object| {
+                    request_scope.allows_scoped_deletion(object.permissions().owner)
+                })
+        });
     }
 
     fn handle_team_memberships_changed(&mut self, ctx: &mut ModelContext<UpdateManager>) {

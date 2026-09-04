@@ -152,11 +152,249 @@ use crate::server::graphql::{get_request_context, get_user_facing_error_message}
 use crate::server::ids::{ClientId, HashableId, ServerId, ServerIdAndType, SyncId, ToServerId};
 use crate::server::server_api::ServerApi;
 use crate::server::sync_queue::SerializedModel;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::Preference;
 use crate::workflows::WorkflowId;
 use crate::workflows::workflow_enum::WorkflowEnum;
 use crate::workspaces::gql_convert::object_update_message_from_gql;
 use crate::workspaces::user_profiles::UserProfileWithUID;
+
+impl ServerApi {
+    pub(crate) async fn fetch_changed_objects_for_scope(
+        &self,
+        objects_to_update: ObjectsToUpdate,
+        force_refresh: bool,
+        team_scope: RequestTeamScope,
+    ) -> Result<InitialLoadResponse> {
+        self.fetch_changed_objects_with_scope(objects_to_update, force_refresh, Some(team_scope))
+            .await
+    }
+
+    async fn fetch_changed_objects_with_scope(
+        &self,
+        objects_to_update: ObjectsToUpdate,
+        force_refresh: bool,
+        team_scope: Option<RequestTeamScope>,
+    ) -> Result<InitialLoadResponse> {
+        log::info!("fetching updated cloud objects");
+        if force_refresh {
+            log::info!("forcing sync of all objects")
+        }
+
+        let variables = GetUpdatedCloudObjectsVariables {
+            input: UpdatedCloudObjectsInput {
+                folders: Some(objects_to_update.folders),
+                force_refresh,
+                generic_string_objects: Some(objects_to_update.generic_string_objects),
+                notebooks: Some(objects_to_update.notebooks),
+                workflows: Some(objects_to_update.workflows),
+            },
+            request_context: get_request_context(),
+        };
+
+        let operation = GetUpdatedCloudObjects::build(variables);
+        let response_data = match team_scope {
+            Some(team_scope) => {
+                self.send_graphql_request_with_team_scope(operation, None, team_scope)
+                    .await?
+            }
+            None => self.send_graphql_request(operation, None).await?,
+        };
+
+        match response_data.updated_cloud_objects {
+            UpdatedCloudObjectsResult::UpdatedCloudObjectsOutput(output) => {
+                let updated_notebooks = output
+                    .notebooks
+                    .map(|notebooks| {
+                        notebooks
+                            .into_iter()
+                            .filter_map(|notebook| ServerNotebook::try_from_gql(notebook).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let updated_workflows = output
+                    .workflows
+                    .map(|workflows| {
+                        workflows
+                            .into_iter()
+                            .filter_map(|workflow| ServerWorkflow::try_from_gql(workflow).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let updated_folders = output
+                    .folders
+                    .map(|folders| {
+                        folders
+                            .into_iter()
+                            .filter_map(|folder| ServerFolder::try_from_gql(folder).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let mut updated_generic_string_objects = HashMap::new();
+                if let Some(objects) = output.generic_string_objects {
+                    for gso in objects {
+                        match gso.format {
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
+                                parse_server_gso::<EnvVarCollection, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
+                                parse_server_gso::<Preference, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::Preference),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
+                                parse_server_gso::<WorkflowEnum, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::WorkflowEnum),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
+                                parse_server_gso::<AIFact, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::AIFact),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
+                                parse_server_gso::<MCPServer, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::MCPServer),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
+                                parse_server_gso::<AIExecutionProfile, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::AIExecutionProfile),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
+                                parse_server_gso::<TemplatableMCPServer, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::TemplatableMCPServer),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
+                                parse_server_gso::<AmbientAgentEnvironment, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::CloudEnvironment),
+                                    gso,
+                                );
+                            }
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
+                                parse_server_gso::<ScheduledAmbientAgent, JsonSerializer>(
+                                    &mut updated_generic_string_objects,
+                                    GenericStringObjectFormat::Json(JsonObjectType::ScheduledAmbientAgent),
+                                    gso,
+                                );
+                            }
+                            // GSO formats unknown to this client build (e.g. the
+                            // server-only `JsonRunner`) are skipped so syncing of
+                            // known objects still succeeds instead of failing to
+                            // decode the whole response.
+                            warp_graphql::generic_string_object::GenericStringObjectFormat::Unknown => {}
+                        }
+                    }
+                }
+
+                let deleted_notebooks: Vec<NotebookId> = output
+                    .deleted_object_uids
+                    .notebook_uids
+                    .map(|uids| {
+                        uids.into_iter()
+                            .map(|uid| uid.into_inner().into())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let deleted_workflows: Vec<WorkflowId> = output
+                    .deleted_object_uids
+                    .workflow_uids
+                    .map(|uids| {
+                        uids.into_iter()
+                            .map(|uid| uid.into_inner().into())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let deleted_folders: Vec<FolderId> = output
+                    .deleted_object_uids
+                    .folder_uids
+                    .map(|uids| {
+                        uids.into_iter()
+                            .map(|uid| uid.into_inner().into())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let deleted_generic_string_objects: Vec<GenericStringObjectId> = output
+                    .deleted_object_uids
+                    .generic_string_object_uids
+                    .map(|uids| {
+                        uids.into_iter()
+                            .map(|uid| uid.into_inner().into())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let user_profiles: Vec<UserProfileWithUID> = output
+                    .user_profiles
+                    .map(|user_profiles| {
+                        user_profiles
+                            .into_iter()
+                            .map(|profile| profile.into())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let action_histories: Vec<ObjectActionHistory> = output
+                    .action_histories
+                    .map(|histories| {
+                        histories
+                            .into_iter()
+                            .filter_map(|history| object_action_history_from_gql(history).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let mcp_gallery = output.mcp_gallery.unwrap_or_default();
+
+                let response = InitialLoadResponse {
+                    updated_notebooks,
+                    deleted_notebooks,
+                    updated_workflows,
+                    deleted_workflows,
+                    updated_folders,
+                    deleted_folders,
+                    updated_generic_string_objects,
+                    deleted_generic_string_objects,
+                    user_profiles,
+                    action_histories,
+                    mcp_gallery,
+                };
+                Ok(response)
+            }
+            UpdatedCloudObjectsResult::UserFacingError(e) => {
+                Err(anyhow!(get_user_facing_error_message(e)))
+            }
+            UpdatedCloudObjectsResult::Unknown => Err(anyhow!(
+                "Failed to get updated cloud objects due to unknown variant"
+            )),
+        }
+    }
+}
 
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
@@ -714,217 +952,8 @@ impl ObjectClient for ServerApi {
         objects_to_update: ObjectsToUpdate,
         force_refresh: bool,
     ) -> Result<InitialLoadResponse> {
-        log::info!("fetching updated cloud objects");
-        if force_refresh {
-            log::info!("forcing sync of all objects")
-        }
-
-        let variables = GetUpdatedCloudObjectsVariables {
-            input: UpdatedCloudObjectsInput {
-                folders: Some(objects_to_update.folders),
-                force_refresh,
-                generic_string_objects: Some(objects_to_update.generic_string_objects),
-                notebooks: Some(objects_to_update.notebooks),
-                workflows: Some(objects_to_update.workflows),
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = GetUpdatedCloudObjects::build(variables);
-        let response_data = self.send_graphql_request(operation, None).await?;
-
-        match response_data.updated_cloud_objects {
-            UpdatedCloudObjectsResult::UpdatedCloudObjectsOutput(output) => {
-                let updated_notebooks = output
-                    .notebooks
-                    .map(|notebooks| {
-                        notebooks
-                            .into_iter()
-                            .filter_map(|notebook| ServerNotebook::try_from_gql(notebook).ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let updated_workflows = output
-                    .workflows
-                    .map(|workflows| {
-                        workflows
-                            .into_iter()
-                            .filter_map(|workflow| ServerWorkflow::try_from_gql(workflow).ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let updated_folders = output
-                    .folders
-                    .map(|folders| {
-                        folders
-                            .into_iter()
-                            .filter_map(|folder| ServerFolder::try_from_gql(folder).ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let mut updated_generic_string_objects = HashMap::new();
-                if let Some(objects) = output.generic_string_objects {
-                    for gso in objects {
-                        match gso.format {
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonEnvVarCollection => {
-                                parse_server_gso::<EnvVarCollection, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::EnvVarCollection),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonPreference => {
-                                parse_server_gso::<Preference, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::Preference),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonWorkflowEnum => {
-                                parse_server_gso::<WorkflowEnum, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::WorkflowEnum),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIFact => {
-                                parse_server_gso::<AIFact, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::AIFact),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonMCPServer => {
-                                parse_server_gso::<MCPServer, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::MCPServer),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonAIExecutionProfile => {
-                                parse_server_gso::<AIExecutionProfile, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::AIExecutionProfile),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonTemplatableMCPServer => {
-                                parse_server_gso::<TemplatableMCPServer, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::TemplatableMCPServer),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonCloudEnvironment => {
-                                parse_server_gso::<AmbientAgentEnvironment, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::CloudEnvironment),
-                                    gso,
-                                );
-                            }
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-                                parse_server_gso::<ScheduledAmbientAgent, JsonSerializer>(
-                                    &mut updated_generic_string_objects,
-                                    GenericStringObjectFormat::Json(JsonObjectType::ScheduledAmbientAgent),
-                                    gso,
-                                );
-                            }
-                            // GSO formats unknown to this client build (e.g. the
-                            // server-only `JsonRunner`) are skipped so syncing of
-                            // known objects still succeeds instead of failing to
-                            // decode the whole response.
-                            warp_graphql::generic_string_object::GenericStringObjectFormat::Unknown => {}
-                        }
-                    }
-                }
-
-                let deleted_notebooks: Vec<NotebookId> = output
-                    .deleted_object_uids
-                    .notebook_uids
-                    .map(|uids| {
-                        uids.into_iter()
-                            .map(|uid| uid.into_inner().into())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let deleted_workflows: Vec<WorkflowId> = output
-                    .deleted_object_uids
-                    .workflow_uids
-                    .map(|uids| {
-                        uids.into_iter()
-                            .map(|uid| uid.into_inner().into())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let deleted_folders: Vec<FolderId> = output
-                    .deleted_object_uids
-                    .folder_uids
-                    .map(|uids| {
-                        uids.into_iter()
-                            .map(|uid| uid.into_inner().into())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let deleted_generic_string_objects: Vec<GenericStringObjectId> = output
-                    .deleted_object_uids
-                    .generic_string_object_uids
-                    .map(|uids| {
-                        uids.into_iter()
-                            .map(|uid| uid.into_inner().into())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let user_profiles: Vec<UserProfileWithUID> = output
-                    .user_profiles
-                    .map(|user_profiles| {
-                        user_profiles
-                            .into_iter()
-                            .map(|profile| profile.into())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let action_histories: Vec<ObjectActionHistory> = output
-                    .action_histories
-                    .map(|histories| {
-                        histories
-                            .into_iter()
-                            .filter_map(|history| object_action_history_from_gql(history).ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
-                let mcp_gallery = output.mcp_gallery.unwrap_or_default();
-
-                let response = InitialLoadResponse {
-                    updated_notebooks,
-                    deleted_notebooks,
-                    updated_workflows,
-                    deleted_workflows,
-                    updated_folders,
-                    deleted_folders,
-                    updated_generic_string_objects,
-                    deleted_generic_string_objects,
-                    user_profiles,
-                    action_histories,
-                    mcp_gallery,
-                };
-                Ok(response)
-            }
-            UpdatedCloudObjectsResult::UserFacingError(e) => {
-                Err(anyhow!(get_user_facing_error_message(e)))
-            }
-            UpdatedCloudObjectsResult::Unknown => Err(anyhow!(
-                "Failed to get updated cloud objects due to unknown variant"
-            )),
-        }
+        self.fetch_changed_objects_with_scope(objects_to_update, force_refresh, None)
+            .await
     }
 
     async fn fetch_single_cloud_object(&self, id: ServerId) -> Result<GetCloudObjectResponse> {

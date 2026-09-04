@@ -20,11 +20,13 @@ use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
-use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
@@ -265,6 +267,22 @@ pub fn refresh_warp_drive(
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
         .map_err(|_| anyhow::anyhow!("Timed out waiting for Warp Drive to sync"))
+}
+
+pub fn refresh_warp_drive_for_scope(
+    team_scope: RequestTeamScope,
+    ctx: &AppContext,
+) -> impl Future<Output = anyhow::Result<InitialLoadResponse>> + Send + 'static + use<> {
+    let server_api = ServerApiProvider::as_ref(ctx).get();
+    let objects_to_update = CloudModel::as_ref(ctx).get_versions_for_request_scope(team_scope, ctx);
+    async move {
+        server_api
+            .fetch_changed_objects_for_scope(objects_to_update, false, team_scope)
+            .await
+    }
+    .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
+    .map_err(|_| anyhow::anyhow!("Timed out refreshing Warp Drive"))
+    .and_then(|result| async move { result })
 }
 
 /// Fetch the conversation's server metadata and validate that its harness matches the caller's

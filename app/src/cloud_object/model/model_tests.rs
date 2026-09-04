@@ -34,6 +34,7 @@ use crate::server::server_api::object::ObjectClient;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::{Preference, init_and_register_user_preferences};
 use crate::system::SystemStats;
@@ -41,7 +42,9 @@ use crate::workflows::CloudWorkflowModel;
 use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 use crate::{NetworkStatus, UpdateManager};
 
@@ -1251,6 +1254,62 @@ fn test_breadcrumbs() {
                 folders[2].breadcrumbs(ctx)
             );
         });
+    });
+}
+
+#[test]
+fn request_scope_versions_include_only_personal_and_selected_team_objects() {
+    App::test((), |mut app| async move {
+        let selected_team_uid = ServerId::from(7);
+        let objects = mock_server_workflows(1, Owner::mock_current_user(), 1)
+            .into_iter()
+            .chain(mock_server_workflows(
+                2,
+                Owner::Team {
+                    team_uid: selected_team_uid,
+                },
+                1,
+            ))
+            .chain(mock_server_workflows(
+                3,
+                Owner::Team {
+                    team_uid: ServerId::from(8),
+                },
+                1,
+            ))
+            .map(|workflow| {
+                Box::new(CloudWorkflow::new_from_server(workflow)) as Box<dyn CloudObject>
+            })
+            .collect();
+        app.add_singleton_model(|_| ObjectActions::new(Vec::new()));
+        let cloud_model = create_cloud_model(&mut app, objects);
+
+        let selected_scope =
+            RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(selected_team_uid));
+        let mut selected_uids = cloud_model.read(&app, |model, ctx| {
+            model
+                .get_versions_for_request_scope(selected_scope, ctx)
+                .workflows
+                .into_iter()
+                .map(|workflow| workflow.uid.into_inner())
+                .collect::<Vec<_>>()
+        });
+        selected_uids.sort();
+        assert_eq!(
+            selected_uids,
+            vec![ServerId::from(1).uid(), ServerId::from(2).uid()]
+        );
+
+        let personal_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+        let personal_uids = cloud_model.read(&app, |model, ctx| {
+            model
+                .get_versions_for_request_scope(personal_scope, ctx)
+                .workflows
+                .into_iter()
+                .map(|workflow| workflow.uid.into_inner())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(personal_uids, vec![ServerId::from(1).uid()]);
     });
 }
 
