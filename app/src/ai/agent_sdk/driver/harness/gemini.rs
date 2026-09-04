@@ -21,7 +21,7 @@ use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, write_temp_file,
 };
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
@@ -109,7 +109,7 @@ fn gemini_command(cli_name: &str, prompt_path: &str) -> String {
 enum GeminiRunnerState {
     Preexec,
     Running {
-        conversation_id: AIConversationId,
+        conversation_id: ServerConversationToken,
         block_id: BlockId,
     },
 }
@@ -229,7 +229,7 @@ impl HarnessRunner for GeminiHarnessRunner {
             GeminiRunnerState::Running {
                 conversation_id,
                 block_id,
-            } => (*conversation_id, block_id.clone()),
+            } => (conversation_id.clone(), block_id.clone()),
         };
 
         // TODO(REMOTE-1408) Also save the conversation transcript.
@@ -237,7 +237,7 @@ impl HarnessRunner for GeminiHarnessRunner {
             foreground,
             &self.terminal_driver,
             self.client.as_ref(),
-            conversation_id,
+            &conversation_id,
             block_id,
         )
         .await

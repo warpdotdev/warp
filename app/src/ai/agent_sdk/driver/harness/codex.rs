@@ -29,7 +29,7 @@ use super::json_utils::read_json_file_or_default;
 use super::{
     HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
@@ -102,7 +102,7 @@ impl ThirdPartyHarness for CodexHarness {
     /// [`ResumePayload::Codex`].
     async fn fetch_resume_payload(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
         harness_support_client: Arc<dyn HarnessSupportClient>,
     ) -> Result<Option<ResumePayload>, AgentDriverError> {
         let envelope: CodexTranscriptEnvelope =
@@ -110,7 +110,7 @@ impl ThirdPartyHarness for CodexHarness {
                 .await?;
         let session_id = envelope.session_id;
         Ok(Some(ResumePayload::Codex(CodexResumeInfo {
-            conversation_id: *conversation_id,
+            conversation_id: conversation_id.clone(),
             session_id,
             envelope,
         })))
@@ -204,7 +204,7 @@ fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -
 enum CodexRunnerState {
     Preexec,
     Running {
-        conversation_id: AIConversationId,
+        conversation_id: ServerConversationToken,
         block_id: BlockId,
     },
 }
@@ -225,7 +225,7 @@ struct CodexHarnessRunner {
     /// directory walk and read the JSONL file directly.
     transcript_path: OnceLock<PathBuf>,
     /// Optionally supply an existing conversation ID.
-    preexisting_conversation_id: Option<AIConversationId>,
+    preexisting_conversation_id: Option<ServerConversationToken>,
 }
 
 impl CodexHarnessRunner {
@@ -315,10 +315,10 @@ impl HarnessRunner for CodexHarnessRunner {
         setup_events: &SetupClientEventReporter,
     ) -> Result<CommandHandle, AgentDriverError> {
         // Resume runs reuse the prior server conversation id; fresh runs mint a new one.
-        let conversation_id = match self.preexisting_conversation_id {
+        let conversation_id = match &self.preexisting_conversation_id {
             Some(id) => {
                 log::info!("Resuming external conversation {id}");
-                id
+                id.clone()
             }
             None => {
                 let id = setup_events
@@ -441,7 +441,7 @@ impl HarnessRunner for CodexHarnessRunner {
             CodexRunnerState::Running {
                 conversation_id,
                 block_id,
-            } => (*conversation_id, block_id.clone()),
+            } => (conversation_id.clone(), block_id.clone()),
         };
 
         let session_id = self.session_id.get().copied();
@@ -454,10 +454,10 @@ impl HarnessRunner for CodexHarnessRunner {
                 foreground,
                 &self.terminal_driver,
                 client,
-                conversation_id,
+                &conversation_id,
                 block_id,
             ),
-            upload_transcript(client, conversation_id, session_id, rollout_path, is_final),
+            upload_transcript(client, &conversation_id, session_id, rollout_path, is_final),
         )?;
         Ok(())
     }
@@ -467,7 +467,7 @@ impl HarnessRunner for CodexHarnessRunner {
 /// been captured yet or no rollout file is on disk yet.
 async fn upload_transcript(
     client: &dyn HarnessSupportClient,
-    conversation_id: AIConversationId,
+    conversation_id: &ServerConversationToken,
     session_id: Option<Uuid>,
     transcript_path: Option<PathBuf>,
     is_final: bool,
@@ -504,7 +504,7 @@ async fn upload_transcript(
     .context("read_envelope task panicked")??;
 
     let target = client
-        .get_transcript_upload_target(&conversation_id)
+        .get_transcript_upload_target(conversation_id)
         .await
         .with_context(|| format!("Failed to get transcript upload target for {conversation_id}"))?;
     upload_to_target(client.http_client(), &target, body).await?;

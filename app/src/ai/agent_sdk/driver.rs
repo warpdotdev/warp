@@ -65,13 +65,12 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::local_agent_task_sync_model::{
-    LocalAgentTaskSyncModel, LocalAgentTaskSyncModelEvent,
-};
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, BlocklistAIPermissions,
     ConversationStatusUpdate, FinalizeReason, finalize_recording_for_conversation,
@@ -5008,38 +5007,6 @@ impl AgentDriver {
             });
         }
 
-        // Deliver shared-session prompts that were queued (see `send_shared_session_query`)
-        // while this task's CLI-harness session was registered but not yet started. Once the
-        // session starts, `LocalAgentTaskSyncModel` hands them back here so they can be
-        // written into the now-live PTY as genuine follow-ups instead of being dropped or
-        // misrouted into a new native conversation.
-        ctx.subscribe_to_model(
-            &LocalAgentTaskSyncModel::handle(ctx),
-            move |me, _, event, ctx| match event {
-                LocalAgentTaskSyncModelEvent::SharedSessionPromptsReadyForCliHarness {
-                    task_id,
-                    terminal_view_id: event_tid,
-                    prompts,
-                } => {
-                    if *event_tid != terminal_view_id {
-                        return;
-                    }
-                    for queued in prompts {
-                        log::info!(
-                            "Ambient agent CLI lifecycle: event=shared_session_prompt_delivered \
-                             task_id={task_id:?} terminal_view_id={terminal_view_id:?} \
-                             participant_id={:?}",
-                            queued.participant_id
-                        );
-                        let prompt = queued.prompt.clone();
-                        me.terminal_driver.update(ctx, |terminal_driver, ctx| {
-                            terminal_driver.send_text_to_cli(prompt, ctx);
-                        });
-                    }
-                }
-            },
-        );
-
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), move |me, _, event, ctx| match event {
                 CLIAgentSessionsModelEvent::StatusChanged {
                     terminal_view_id: event_tid,
@@ -5123,18 +5090,51 @@ impl AgentDriver {
                         |_, _, _| {},
                     );
                 }
-                CLIAgentSessionsModelEvent::Started { .. }
-                | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+                // Deliver shared-session prompts that were queued (see `accept_agent_prompt` in
+                // `terminal_view_adaptor.rs`) while this task's CLI-harness session was
+                // registered but not yet started, now that it has a live PTY to write into.
+                CLIAgentSessionsModelEvent::Started {
+                    terminal_view_id: event_tid,
+                    ..
+                } => {
+                    if *event_tid != terminal_view_id {
+                        return;
+                    }
+                    let Some(task_id) = me.task_id else {
+                        return;
+                    };
+                    let queued = PendingCliHarnessPromptQueue::handle(ctx)
+                        .update(ctx, |queue, _ctx| queue.drain(task_id));
+                    for prompt in queued {
+                        log::info!(
+                            "Ambient agent CLI lifecycle: event=shared_session_prompt_delivered \
+                             task_id={task_id} terminal_view_id={terminal_view_id:?} \
+                             participant_id={:?}",
+                            prompt.participant_id
+                        );
+                        me.terminal_driver.update(ctx, |terminal_driver, ctx| {
+                            terminal_driver.send_text_to_cli(prompt.prompt, ctx);
+                        });
+                    }
+                }
+                CLIAgentSessionsModelEvent::InputSessionChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. } => {}
             });
     }
 
-    /// Removes the task mapping registered for CLI agent session status updates.
+    /// Removes the task mapping registered for CLI agent session status updates, and drops any
+    /// shared-session prompts still queued for it (its CLI-harness session either never started
+    /// or already ended).
     fn unregister_cli_agent_task_sync(&self, ctx: &mut ModelContext<Self>) {
         let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _| {
             model.unregister_cli_session(terminal_view_id);
         });
+        if let Some(task_id) = self.task_id {
+            PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _ctx| {
+                queue.clear(task_id);
+            });
+        }
     }
 
     /// Handle events re-emitted by the `TerminalDriver`.

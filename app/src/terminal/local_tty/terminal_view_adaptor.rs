@@ -31,6 +31,10 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
+use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::{
+    PendingCliHarnessPromptQueue, QueuedCliHarnessPrompt,
+};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIControllerEvent,
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, InputConfig, SerializedBlockListItem,
@@ -114,9 +118,15 @@ async fn is_setup_failure_debug_prompt_authorized(
         .unwrap_or(false)
 }
 
-/// Honors an already-authorized agent prompt: writes it to the CLI harness PTY when one is
-/// active, or executes it against the Oz harness otherwise. Callers must have already checked
-/// that `participant_id` may submit this prompt.
+/// Honors an already-authorized agent prompt. Callers must have already checked that
+/// `participant_id` may submit this prompt. Routes to exactly one of three destinations:
+/// - A live CLI-harness PTY, when one is already running for this pane.
+/// - `PendingCliHarnessPromptQueue`, when this pane's task is configured for (registered
+///   against) a third-party CLI harness whose session hasn't started a live PTY yet. This must
+///   never fall through to the Oz path below: a 3rd-party-harness task has no local
+///   `AIConversation` representation, so doing so would spawn a wrong, native "canonical"
+///   conversation for the run (see `PendingCliHarnessPromptQueue`'s doc comment).
+/// - The Oz harness, via `BlocklistAIController`, for every other (genuinely native) case.
 fn accept_agent_prompt(
     terminal_view: &ViewHandle<TerminalView>,
     request: AgentPromptRequest,
@@ -137,16 +147,44 @@ fn accept_agent_prompt(
         return;
     }
 
+    // `register_cli_session` runs at harness setup time, before the harness process is
+    // launched (see its call site in `AgentDriver::subscribe_to_cli_agent_session_events`), so
+    // this is true independent of whether the CLI-harness session above has actually started a
+    // live PTY yet.
+    if let Some(task_id) =
+        LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(terminal_view_id)
+    {
+        if !request.attachments.is_empty() {
+            log::warn!(
+                "accept_agent_prompt: dropping {} file attachment(s) from a shared-session \
+                 prompt queued for task {task_id}'s not-yet-started CLI-harness session; \
+                 attachment delivery to a CLI harness PTY is not supported",
+                request.attachments.len()
+            );
+        }
+        PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _ctx| {
+            queue.queue(
+                task_id,
+                QueuedCliHarnessPrompt {
+                    prompt: request.prompt.clone(),
+                    participant_id: participant_id.clone(),
+                },
+            );
+        });
+        return;
+    }
+
     // Execute the agent prompt in the Oz-harness case.
     terminal_view.update(ctx, |view, ctx| {
         // Restore the sharer's frozen visual state. The buffer is cleared by
-        // system_clear_buffer when SentRequest fires from execute_agent_prompt_for_shared_session.
+        // system_clear_buffer when SentRequest fires from
+        // execute_warp_agent_prompt_from_shared_session_injection.
         view.input().update(ctx, |input, ctx| {
             input.unfreeze_agent_input(false, ctx);
         });
 
         view.ai_controller().update(ctx, |ai_controller, ctx| {
-            ai_controller.execute_agent_prompt_for_shared_session(
+            ai_controller.execute_warp_agent_prompt_from_shared_session_injection(
                 request.prompt.clone(),
                 request.server_conversation_token,
                 request.attachments.clone(),

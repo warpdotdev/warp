@@ -1442,8 +1442,7 @@ impl AgentDriverRunner {
                 let harness_support_client = foreground
                     .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_harness_support_client())
                     .await?;
-                let resume_conversation_id = AIConversationId::try_from(conversation_id.clone())
-                    .map_err(|err| AgentDriverError::ConversationLoadFailed(format!("{err:#}")))?;
+                let resume_conversation_id = ServerConversationToken::new(conversation_id.clone());
                 Ok(
                     h.fetch_resume_payload(&resume_conversation_id, harness_support_client)
                         .await?
