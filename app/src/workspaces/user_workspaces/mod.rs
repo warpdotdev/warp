@@ -755,8 +755,14 @@ impl UserWorkspaces {
         !self.workspaces.is_empty()
     }
 
+    /// Cloud agents require a team only in native workspaces: a legacy
+    /// (non-native) workspace's teamless state is resolved by creating a
+    /// team, not by joining an existing one, so it isn't subject to this
+    /// blocker (see `TeamsPageView::page_sections_for`).
     pub fn cloud_agents_require_team(&self) -> bool {
-        self.has_workspaces() && !self.has_teams()
+        self.current_workspace().is_some_and(|workspace| {
+            workspace.is_native_workspaces_enabled() && workspace.teams.is_empty()
+        })
     }
 
     pub fn update_workspaces(&mut self, workspaces: Vec<Workspace>, ctx: &mut ModelContext<Self>) {
