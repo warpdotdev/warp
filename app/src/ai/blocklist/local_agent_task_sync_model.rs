@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use futures::channel::oneshot;
-use session_sharing_protocol::common::SessionId;
+use session_sharing_protocol::common::{ParticipantId, SessionId};
 use update_queue::LocalTaskUpdateQueue;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
@@ -54,9 +54,36 @@ pub struct LocalAgentTaskSyncModel {
     /// acknowledged. Used by the agent driver to decide whether a terminal
     /// state still needs to be reported before the process exits.
     confirmed_terminal_states: HashMap<AmbientAgentTaskId, AgentTaskState>,
+    /// Shared-session-injected prompts queued for a task whose CLI-harness session is
+    /// registered (`register_cli_session`) but hasn't started yet, so there is no live PTY
+    /// to deliver them into. Drained once `CLIAgentSessionsModelEvent::Started` fires for
+    /// the registered terminal view; see `on_cli_session_started`.
+    pending_shared_session_prompts: HashMap<AmbientAgentTaskId, Vec<QueuedSharedSessionPrompt>>,
 }
 
-pub enum LocalAgentTaskSyncModelEvent {}
+pub enum LocalAgentTaskSyncModelEvent {
+    /// A CLI-harness session started for a task that had shared-session prompts queued
+    /// while its session wasn't yet live (see `queue_shared_session_prompt_for_cli_harness`).
+    /// Carries the queued prompts so a subscriber (the agent driver) can deliver them as
+    /// genuine PTY follow-ups to the now-running CLI harness.
+    SharedSessionPromptsReadyForCliHarness {
+        task_id: AmbientAgentTaskId,
+        terminal_view_id: EntityId,
+        prompts: Vec<QueuedSharedSessionPrompt>,
+    },
+}
+
+/// A shared-session-injected prompt captured by `send_shared_session_query` for a task
+/// backed by a registered 3rd-party CLI-harness session that hasn't started yet (see
+/// `LocalAgentTaskSyncModel::is_task_backed_by_cli_harness`). Delivered as a genuine PTY
+/// follow-up once the harness session starts, instead of being dropped or misrouted into a
+/// new native `AIConversation`.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedSharedSessionPrompt {
+    pub(crate) prompt: String,
+    pub(crate) participant_id: ParticipantId,
+}
+
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
 /// which server field.
@@ -106,6 +133,7 @@ impl LocalAgentTaskSyncModel {
             update_queue: LocalTaskUpdateQueue::default(),
             idle_waiters: HashMap::new(),
             confirmed_terminal_states: HashMap::new(),
+            pending_shared_session_prompts: HashMap::new(),
         }
     }
 
@@ -214,6 +242,36 @@ impl LocalAgentTaskSyncModel {
         self.cli_session_task_ids.get(&terminal_view_id).copied()
     }
 
+    /// Returns whether `task_id` is currently backed by a registered CLI-harness
+    /// (third-party) session, i.e. `register_cli_session` has been called for it and
+    /// it hasn't been unregistered since. `send_shared_session_query` uses this to
+    /// avoid ever creating a native `AIConversation` for a task whose canonical
+    /// representation is a CLI-harness session: `BlocklistAIHistoryModel` never has
+    /// one for these tasks, so a fallback-created conversation would silently become
+    /// the run's wrong canonical conversation ID once it reports a server token.
+    pub fn is_task_backed_by_cli_harness(&self, task_id: AmbientAgentTaskId) -> bool {
+        self.cli_session_task_ids.values().any(|&id| id == task_id)
+    }
+
+    /// Queues a shared-session-injected prompt for `task_id` because its CLI-harness
+    /// session is registered but hasn't started yet, so there's no live PTY to deliver
+    /// it into. Drained once the session starts; see `on_cli_session_started`.
+    pub(crate) fn queue_shared_session_prompt_for_cli_harness(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        prompt: QueuedSharedSessionPrompt,
+    ) {
+        log::info!(
+            "LocalAgentTaskSyncModel: queuing shared-session prompt for task {task_id} \
+             pending CLI-harness session start (participant_id={:?})",
+            prompt.participant_id
+        );
+        self.pending_shared_session_prompts
+            .entry(task_id)
+            .or_default()
+            .push(prompt);
+    }
+
     /// Stops reporting CLI agent status changes for a completed driver run.
     /// Task updates accepted before unregistration remain queued until delivery
     /// finishes.
@@ -221,6 +279,7 @@ impl LocalAgentTaskSyncModel {
     pub fn unregister_cli_session(&mut self, terminal_view_id: EntityId) {
         if let Some(task_id) = self.cli_session_task_ids.remove(&terminal_view_id) {
             self.update_queue.remove_task(&task_id);
+            self.pending_shared_session_prompts.remove(&task_id);
         }
     }
 
@@ -276,6 +335,11 @@ impl LocalAgentTaskSyncModel {
         ctx: &mut ModelContext<Self>,
     ) {
         match event {
+            CLIAgentSessionsModelEvent::Started {
+                terminal_view_id, ..
+            } => {
+                self.on_cli_session_started(*terminal_view_id, ctx);
+            }
             CLIAgentSessionsModelEvent::StatusChanged {
                 terminal_view_id,
                 status,
@@ -285,11 +349,35 @@ impl LocalAgentTaskSyncModel {
             }
             // Pane-scoped CLI agent sessions can end between preflight, the
             // harness, and follow-ups, but the mapping belongs to the driver run.
-            CLIAgentSessionsModelEvent::Started { .. }
-            | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+            CLIAgentSessionsModelEvent::InputSessionChanged { .. }
             | CLIAgentSessionsModelEvent::Ended { .. }
             | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
         }
+    }
+
+    /// Drains and re-emits any shared-session prompts queued for this task while its
+    /// CLI-harness session was registered but not yet started (see
+    /// `queue_shared_session_prompt_for_cli_harness`), so a subscriber can deliver them
+    /// as genuine PTY follow-ups now that the session is live.
+    fn on_cli_session_started(&mut self, terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) {
+        let Some(&task_id) = self.cli_session_task_ids.get(&terminal_view_id) else {
+            return;
+        };
+        let Some(prompts) = self.pending_shared_session_prompts.remove(&task_id) else {
+            return;
+        };
+        log::info!(
+            "LocalAgentTaskSyncModel: CLI harness session started for task {task_id}; \
+             delivering {} queued shared-session prompt(s)",
+            prompts.len()
+        );
+        ctx.emit(
+            LocalAgentTaskSyncModelEvent::SharedSessionPromptsReadyForCliHarness {
+                task_id,
+                terminal_view_id,
+                prompts,
+            },
+        );
     }
 
     fn on_conversation_status_updated(

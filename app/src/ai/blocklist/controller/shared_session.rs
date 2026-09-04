@@ -22,6 +22,9 @@ use crate::ai::attachment_utils::{
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::local_agent_task_sync_model::{
+    LocalAgentTaskSyncModel, QueuedSharedSessionPrompt,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::BlockId;
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
@@ -845,6 +848,18 @@ impl BlocklistAIController {
         })
     }
 
+    /// Whether this controller's ambient task is already backed by a registered
+    /// CLI-harness (third-party) session. When true, `send_shared_session_query` must
+    /// not create a native `AIConversation` for a no-token prompt: CLI-harness runs are
+    /// represented by `LocalAgentTaskSyncModel`/`CLIAgentSessionsModel`, never by
+    /// `BlocklistAIHistoryModel`, so a fallback-created conversation would silently
+    /// become the run's wrong canonical conversation ID once it reports a server token.
+    fn is_ambient_task_backed_by_cli_harness(&self, ctx: &AppContext) -> bool {
+        self.ambient_agent_task_id.is_some_and(|task_id| {
+            LocalAgentTaskSyncModel::as_ref(ctx).is_task_backed_by_cli_harness(task_id)
+        })
+    }
+
     /// Tags `conversation_id` as a setup-failure debug bootstrap so `LocalAgentTaskSyncModel`
     /// stops deriving task lifecycle updates from it. Must run before the first exchange can
     /// report a server token, which would otherwise trigger an erroneous `IN_PROGRESS` report.
@@ -899,6 +914,35 @@ impl BlocklistAIController {
             // update can fire (REMOTE-2661).
             let bootstraps_setup_failure_debug =
                 self.is_open_for_setup_failure_debug_bootstrap(ctx);
+
+            if !bootstraps_setup_failure_debug
+                && let Some(task_id) = self.ambient_agent_task_id
+                && self.is_ambient_task_backed_by_cli_harness(ctx)
+            {
+                log::info!(
+                    "send_shared_session_query: task {task_id} is backed by a registered CLI \
+                     harness session with no live PTY yet; queuing prompt instead of creating \
+                     a native conversation (participant_id={participant_id:?})"
+                );
+                if !file_attachments.is_empty() {
+                    log::warn!(
+                        "send_shared_session_query: dropping {} file attachment(s) from a \
+                         queued CLI-harness shared-session prompt for task {task_id}; \
+                         attachment delivery to a CLI harness PTY is not supported",
+                        file_attachments.len()
+                    );
+                }
+                LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _ctx| {
+                    model.queue_shared_session_prompt_for_cli_harness(
+                        task_id,
+                        QueuedSharedSessionPrompt {
+                            prompt,
+                            participant_id,
+                        },
+                    );
+                });
+                return;
+            }
 
             if FeatureFlag::AgentView.is_enabled() {
                 // If we're already in an empty agent view conversation, reuse it

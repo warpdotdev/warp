@@ -65,7 +65,9 @@ use crate::ai::ambient_agents::{
 };
 use crate::ai::bedrock_credentials;
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
+use crate::ai::blocklist::local_agent_task_sync_model::{
+    LocalAgentTaskSyncModel, LocalAgentTaskSyncModelEvent,
+};
 use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
@@ -5005,6 +5007,37 @@ impl AgentDriver {
                 model.register_cli_session(terminal_view_id, task_id, ctx);
             });
         }
+
+        // Deliver shared-session prompts that were queued (see `send_shared_session_query`)
+        // while this task's CLI-harness session was registered but not yet started. Once the
+        // session starts, `LocalAgentTaskSyncModel` hands them back here so they can be
+        // written into the now-live PTY as genuine follow-ups instead of being dropped or
+        // misrouted into a new native conversation.
+        ctx.subscribe_to_model(
+            &LocalAgentTaskSyncModel::handle(ctx),
+            move |me, _, event, ctx| match event {
+                LocalAgentTaskSyncModelEvent::SharedSessionPromptsReadyForCliHarness {
+                    terminal_view_id: event_tid,
+                    prompts,
+                    ..
+                } => {
+                    if *event_tid != terminal_view_id {
+                        return;
+                    }
+                    for queued in prompts {
+                        log::info!(
+                            "Ambient agent CLI lifecycle: event=shared_session_prompt_delivered \
+                             terminal_view_id={terminal_view_id:?} participant_id={:?}",
+                            queued.participant_id
+                        );
+                        let prompt = queued.prompt.clone();
+                        me.terminal_driver.update(ctx, |terminal_driver, ctx| {
+                            terminal_driver.send_text_to_cli(prompt, ctx);
+                        });
+                    }
+                }
+            },
+        );
 
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), move |me, _, event, ctx| match event {
                 CLIAgentSessionsModelEvent::StatusChanged {

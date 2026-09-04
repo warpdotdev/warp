@@ -3,15 +3,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::anyhow;
-use session_sharing_protocol::common::SessionId;
+use session_sharing_protocol::common::{ParticipantId, SessionId};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::App;
 use warpui::r#async::FutureExt as _;
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::{
-    LocalAgentTaskSyncModel, classify_renderable_error, map_cli_session_status,
-    map_conversation_status,
+    LocalAgentTaskSyncModel, LocalAgentTaskSyncModelEvent, QueuedSharedSessionPrompt,
+    classify_renderable_error, map_cli_session_status, map_conversation_status,
 };
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, TaskSyncMode,
@@ -625,6 +625,181 @@ fn emit_cli_status(
             status,
             session_context: Box::default(),
         });
+    });
+}
+
+fn emit_cli_started(
+    cli_sessions_model: &warpui::ModelHandle<CLIAgentSessionsModel>,
+    app: &mut App,
+    terminal_view_id: warpui::EntityId,
+) {
+    cli_sessions_model.update(app, |_, ctx| {
+        ctx.emit(CLIAgentSessionsModelEvent::Started {
+            terminal_view_id,
+            agent: CLIAgent::Claude,
+        });
+    });
+}
+
+// --- CLI-harness detection and shared-session prompt queueing ---
+
+/// `send_shared_session_query` relies on this to decide it must never create a native
+/// conversation for a task whose canonical representation is a CLI-harness session.
+#[test]
+fn is_task_backed_by_cli_harness_reflects_registration_lifecycle() {
+    App::test((), |mut app| async move {
+        let (model, _counter) = install_model_with_call_counter(&mut app);
+        let terminal_view_id = warpui::EntityId::new();
+        let task_id = fixed_task_id();
+
+        let backed_before_registration = model.update(&mut app, |model, _| {
+            model.is_task_backed_by_cli_harness(task_id)
+        });
+        assert!(
+            !backed_before_registration,
+            "an unregistered task must not be considered CLI-harness-backed"
+        );
+
+        model.update(&mut app, |model, ctx| {
+            model.register_cli_session(terminal_view_id, task_id, ctx);
+        });
+        let backed_after_registration = model.update(&mut app, |model, _| {
+            model.is_task_backed_by_cli_harness(task_id)
+        });
+        assert!(
+            backed_after_registration,
+            "a registered CLI-harness session must mark its task as backed"
+        );
+
+        model.update(&mut app, |model, _| {
+            model.unregister_cli_session(terminal_view_id);
+        });
+        let backed_after_unregister = model.update(&mut app, |model, _| {
+            model.is_task_backed_by_cli_harness(task_id)
+        });
+        assert!(
+            !backed_after_unregister,
+            "unregistering the CLI-harness session must clear the backed status"
+        );
+
+        pump_spawned_tasks().await;
+    });
+}
+
+/// A shared-session prompt queued while a task's CLI-harness session is registered but not
+/// yet started must not be dropped: it stays queued until the session starts, at which point
+/// it is drained and re-emitted (for the agent driver to deliver as a genuine PTY follow-up).
+#[test]
+fn queued_shared_session_prompt_is_delivered_once_cli_session_starts() {
+    App::test((), |mut app| async move {
+        let (model, _counter) = install_model_with_call_counter(&mut app);
+        let cli_sessions_model = CLIAgentSessionsModel::handle(&app);
+        let terminal_view_id = warpui::EntityId::new();
+        let task_id = fixed_task_id();
+        let participant_id = ParticipantId::new();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_cli_session(terminal_view_id, task_id, ctx);
+        });
+
+        model.update(&mut app, |model, _| {
+            model.queue_shared_session_prompt_for_cli_harness(
+                task_id,
+                QueuedSharedSessionPrompt {
+                    prompt: "do the thing".to_string(),
+                    participant_id: participant_id.clone(),
+                },
+            );
+        });
+
+        let delivered = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let delivered_for_sub = delivered.clone();
+        let model_for_subscription = model.clone();
+        model.update(&mut app, move |_, ctx| {
+            ctx.subscribe_to_model(&model_for_subscription, move |_, _, event, _| {
+                let LocalAgentTaskSyncModelEvent::SharedSessionPromptsReadyForCliHarness {
+                    task_id: event_task_id,
+                    terminal_view_id: event_terminal_view_id,
+                    prompts,
+                } = event;
+                delivered_for_sub.borrow_mut().push((
+                    *event_task_id,
+                    *event_terminal_view_id,
+                    prompts.clone(),
+                ));
+            });
+        });
+
+        // Not started yet: the prompt must remain queued, not be delivered or dropped.
+        pump_spawned_tasks().await;
+        assert!(
+            delivered.borrow().is_empty(),
+            "prompt must not be delivered before the CLI-harness session starts"
+        );
+
+        emit_cli_started(&cli_sessions_model, &mut app, terminal_view_id);
+        pump_spawned_tasks().await;
+
+        let delivered = delivered.borrow();
+        assert_eq!(
+            delivered.len(),
+            1,
+            "exactly one delivery event must fire once the session starts"
+        );
+        let (event_task_id, event_terminal_view_id, prompts) = &delivered[0];
+        assert_eq!(*event_task_id, task_id);
+        assert_eq!(*event_terminal_view_id, terminal_view_id);
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].prompt, "do the thing");
+        assert_eq!(prompts[0].participant_id, participant_id);
+    });
+}
+
+/// Once delivered, a queued prompt must not be delivered again on a later session start
+/// (e.g. after a resumed/second CLI-harness session for the same task).
+#[test]
+fn queued_shared_session_prompt_is_only_delivered_once() {
+    App::test((), |mut app| async move {
+        let (model, _counter) = install_model_with_call_counter(&mut app);
+        let cli_sessions_model = CLIAgentSessionsModel::handle(&app);
+        let terminal_view_id = warpui::EntityId::new();
+        let task_id = fixed_task_id();
+
+        model.update(&mut app, |model, ctx| {
+            model.register_cli_session(terminal_view_id, task_id, ctx);
+        });
+        model.update(&mut app, |model, _| {
+            model.queue_shared_session_prompt_for_cli_harness(
+                task_id,
+                QueuedSharedSessionPrompt {
+                    prompt: "only once".to_string(),
+                    participant_id: ParticipantId::new(),
+                },
+            );
+        });
+
+        let delivery_count = Arc::new(AtomicUsize::new(0));
+        let delivery_count_for_sub = delivery_count.clone();
+        let model_for_subscription = model.clone();
+        model.update(&mut app, move |_, ctx| {
+            ctx.subscribe_to_model(&model_for_subscription, move |_, _, _event, _| {
+                delivery_count_for_sub.fetch_add(1, Ordering::SeqCst);
+            });
+        });
+
+        emit_cli_started(&cli_sessions_model, &mut app, terminal_view_id);
+        pump_spawned_tasks().await;
+        assert_eq!(delivery_count.load(Ordering::SeqCst), 1);
+
+        // A second Started event for the same terminal view (e.g. a resumed session) must not
+        // redeliver an already-drained queue.
+        emit_cli_started(&cli_sessions_model, &mut app, terminal_view_id);
+        pump_spawned_tasks().await;
+        assert_eq!(
+            delivery_count.load(Ordering::SeqCst),
+            1,
+            "an already-drained queue must not be redelivered"
+        );
     });
 }
 
