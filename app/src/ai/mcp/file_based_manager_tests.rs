@@ -32,6 +32,31 @@ fn setup_app(app: &mut App) -> warpui::ModelHandle<FileBasedMCPManager> {
     app.add_singleton_model(FileBasedMCPManager::new)
 }
 
+#[test]
+fn initial_global_scan_result_is_cached_and_emitted_once() {
+    let wait_server_uuids = vec![Uuid::new_v4(), Uuid::new_v4()];
+
+    App::test((), |mut app| async move {
+        let manager = setup_app(&mut app);
+        let events = subscribe_events(&mut app, &manager);
+
+        manager.update(&mut app, |manager, ctx| {
+            manager.initial_global_scan_state =
+                super::InitialGlobalMcpScanState::Pending(wait_server_uuids.clone());
+            manager.complete_initial_global_scan(ctx);
+            manager.complete_initial_global_scan(ctx);
+            assert_eq!(
+                manager.initial_global_scan_result(),
+                Some(wait_server_uuids.clone())
+            );
+        });
+
+        events.read(&app, |events, _| {
+            assert_eq!(events.initial_global_wait_sets, vec![wait_server_uuids]);
+        });
+    });
+}
+
 /// Parses an MCP JSON string directly into server results, bypassing file I/O.
 /// Used in tests to exercise `apply_parsed_servers` without needing files on disk.
 fn parse_mcp_json(json: &str) -> Vec<ParsedTemplatableMCPServerResult> {
@@ -44,6 +69,7 @@ struct ManagerEvents {
     spawned_uuids: Vec<Uuid>,
     despawned_uuids: Vec<Uuid>,
     scan_completions: Vec<ScanCompletion>,
+    initial_global_wait_sets: Vec<Vec<Uuid>>,
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +109,9 @@ fn subscribe_events(
                     detected_servers: detected_servers.clone(),
                     wait_server_uuids: wait_server_uuids.clone(),
                 });
+            }
+            FileBasedMCPManagerEvent::InitialGlobalMcpScanComplete { wait_server_uuids } => {
+                me.initial_global_wait_sets.push(wait_server_uuids.clone());
             }
         });
     });
@@ -487,11 +516,13 @@ fn test_auto_started_cloud_scan_uuids_are_in_wait_set() {
         manager.update(&mut app, |m, ctx| {
             m.apply_parsed_servers(root_path.clone(), MCPProvider::Warp, parsed, ctx);
             m.handle_cloud_environment_scan_complete(&root_path, ctx);
+            m.complete_initial_global_scan(ctx);
         });
 
         events.update(&mut app, |e, _| {
             assert_eq!(e.spawned_uuids.len(), 1);
             assert_eq!(e.scan_completions.len(), 1);
+            assert_eq!(e.initial_global_wait_sets, vec![e.spawned_uuids.clone()]);
             let scan = &e.scan_completions[0];
             assert_eq!(scan.detected_servers.len(), 1);
             assert_eq!(scan.wait_server_uuids, e.spawned_uuids);

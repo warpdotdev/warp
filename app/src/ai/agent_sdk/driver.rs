@@ -15,6 +15,7 @@ use anyhow::{anyhow, Context as _};
 use futures::channel::oneshot;
 use futures::future::{self, join_all, Either};
 use futures::FutureExt as _;
+use instant::Instant;
 use itertools::Itertools as _;
 use oneshot::{Canceled, Receiver, Sender};
 use repo_metadata::local_model::IndexedRepoState;
@@ -1226,6 +1227,84 @@ impl AgentDriver {
         rx
     }
 
+    fn setup_initial_global_file_based_mcp_scan(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> Receiver<Vec<Uuid>> {
+        let (tx, rx) = oneshot::channel::<Vec<Uuid>>();
+        let file_based_mcp_manager = FileBasedMCPManager::handle(ctx);
+        if let Some(wait_uuids) = file_based_mcp_manager
+            .as_ref(ctx)
+            .initial_global_scan_result()
+        {
+            let _ = tx.send(wait_uuids);
+            return rx;
+        }
+
+        let manager_clone = file_based_mcp_manager.clone();
+        let mut tx = Some(tx);
+        ctx.subscribe_to_model(&file_based_mcp_manager, move |_me, event, ctx| {
+            if let FileBasedMCPManagerEvent::InitialGlobalMcpScanComplete { wait_server_uuids } =
+                event
+            {
+                if let Some(sender) = tx.take() {
+                    let _ = sender.send(wait_server_uuids.clone());
+                    ctx.unsubscribe_from_model(&manager_clone);
+                }
+            }
+        });
+        rx
+    }
+
+    async fn await_file_based_mcp_startup(
+        scan_step: SetupStep,
+        readiness_step: SetupStep,
+        scan: Receiver<Vec<Uuid>>,
+        setup_events: &SetupClientEventReporter,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        let deadline = Instant::now() + MCP_SERVER_STARTUP_TIMEOUT;
+        let wait_uuids = setup_events
+            .record_value(scan_step, async {
+                match scan.with_timeout(MCP_SERVER_STARTUP_TIMEOUT).await {
+                    Ok(Ok(uuids)) => uuids,
+                    Ok(Err(Canceled)) => {
+                        log::warn!(
+                            "File-based MCP discovery subscription dropped early; proceeding without"
+                        );
+                        vec![]
+                    }
+                    Err(TimeoutError) => {
+                        log::warn!(
+                            "Timed out waiting for file-based MCP servers to be parsed; proceeding without"
+                        );
+                        vec![]
+                    }
+                }
+            })
+            .await;
+        if wait_uuids.is_empty() {
+            return Ok(());
+        }
+
+        log::info!(
+            "Checking readiness for {} auto-started file-based MCP server(s)",
+            wait_uuids.len()
+        );
+        setup_events
+            .record_result(readiness_step, async {
+                foreground
+                    .spawn(move |me, ctx| {
+                        let timeout = deadline.saturating_duration_since(Instant::now());
+                        me.wait_for_file_based_mcps_running(wait_uuids, timeout, ctx)
+                    })
+                    .await?
+                    .await;
+                Ok::<(), AgentDriverError>(())
+            })
+            .await
+    }
+
     /// Wait for auto-start-requested file-based MCP servers to reach a terminal state
     /// (`Running` or `FailedToStart`). Non-fatal: always completes without returning an error.
     ///
@@ -1236,6 +1315,7 @@ impl AgentDriver {
     fn wait_for_file_based_mcps_running(
         &self,
         uuids: Vec<Uuid>,
+        timeout: Duration,
         ctx: &mut ModelContext<Self>,
     ) -> impl Future<Output = ()> {
         // Filter out UUIDs that have already reached a terminal state.
@@ -1344,7 +1424,7 @@ impl AgentDriver {
         });
 
         Either::Left(async move {
-            match rx.with_timeout(MCP_SERVER_STARTUP_TIMEOUT).await {
+            match rx.with_timeout(timeout).await {
                 Ok(Ok(())) => {}
                 Ok(Err(Canceled)) => {
                     log::warn!(
@@ -1817,49 +1897,14 @@ impl AgentDriver {
                 .map_err(AgentDriverError::from)?;
 
             if let Some(file_based_discovery_rx) = file_based_discovery_rx {
-                // Await discovery: collect UUIDs of file-based MCP servers that were auto-started
-                // while scanning cloned repos.
-                let wait_uuids = setup_events
-                    .record_value(SetupStep::FileBasedMcpDiscovery, async {
-                        match file_based_discovery_rx
-                            .with_timeout(MCP_SERVER_STARTUP_TIMEOUT)
-                            .await
-                        {
-                            Ok(Ok(uuids)) => uuids,
-                            Ok(Err(Canceled)) => {
-                                log::warn!(
-                                    "File-based MCP discovery subscription dropped early; proceeding without"
-                                );
-                                vec![]
-                            }
-                            Err(TimeoutError) => {
-                                log::warn!(
-                                    "Timed out waiting for file-based MCP servers to be parsed; proceeding without"
-                                );
-                                vec![]
-                            }
-                        }
-                    })
-                    .await;
-
-                // Wait for auto-started servers to reach Running (non-fatal: always unblocks).
-                if !wait_uuids.is_empty() {
-                    log::info!(
-                        "Checking readiness for {} auto-started file-based MCP server(s)",
-                        wait_uuids.len()
-                    );
-                    setup_events
-                        .record_result(SetupStep::FileBasedMcpReadiness, async {
-                            foreground
-                                .spawn(move |me, ctx| {
-                                    me.wait_for_file_based_mcps_running(wait_uuids, ctx)
-                                })
-                                .await?
-                                .await;
-                            Ok::<(), AgentDriverError>(())
-                        })
-                        .await?;
-                }
+                Self::await_file_based_mcp_startup(
+                    SetupStep::FileBasedMcpDiscovery,
+                    SetupStep::FileBasedMcpReadiness,
+                    file_based_discovery_rx,
+                    &setup_events,
+                    &foreground,
+                )
+                .await?;
             }
         }
 
@@ -1902,6 +1947,17 @@ impl AgentDriver {
         // automatically when `select!` resolves on the harness result.
         match task.harness {
             HarnessKind::Oz => {
+                let initial_global_scan = foreground
+                    .spawn(|me, ctx| me.setup_initial_global_file_based_mcp_scan(ctx))
+                    .await?;
+                Self::await_file_based_mcp_startup(
+                    SetupStep::InitialGlobalMcpScan,
+                    SetupStep::InitialGlobalMcpReadiness,
+                    initial_global_scan,
+                    &setup_events,
+                    &foreground,
+                )
+                .await?;
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
                     .await?;
