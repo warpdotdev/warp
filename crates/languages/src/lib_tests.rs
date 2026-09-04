@@ -2,7 +2,10 @@ use std::path::Path;
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::{SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, load_language};
+use crate::{
+    SUPPORTED_LANGUAGES, language_by_filename, language_by_local_filename, language_by_name,
+    load_language,
+};
 
 /// Validate that every supported language can be loaded successfully.
 /// This catches invalid node types, syntax errors, and other issues in .scm query files
@@ -92,6 +95,71 @@ fn markdown_extensions_resolve_to_markdown() {
             language.display_name(),
             "Markdown",
             "{filename} should resolve to Markdown",
+        );
+    }
+}
+
+/// Pascal is the one language whose grammar does not come from arborium — it is vendored
+/// in `tree_sitter_pascal` and its highlight query is loaded from
+/// `grammars/pascal/highlights.scm` instead. Cover the whole spread of unit, program and
+/// package extensions, since each one reaches the editor through this table.
+#[test]
+fn pascal_extensions_resolve_to_pascal() {
+    for filename in [
+        "unit1.pas",
+        "unit1.pp",
+        "project1.dpr",
+        "package1.dpk",
+        "project1.lpr",
+        "package1.lpk",
+    ] {
+        let path = StandardizedPath::try_new(&format!("/tmp/{filename}"))
+            .expect("test path should be absolute");
+        let language = language_by_filename(&path)
+            .unwrap_or_else(|| panic!("expected {filename} to resolve to a language"));
+        assert_eq!(
+            language.display_name(),
+            "Pascal",
+            "{filename} should resolve to Pascal",
+        );
+    }
+}
+
+/// Markdown fences and agent output spell Pascal several different ways.
+#[test]
+fn pascal_aliases_resolve_to_pascal() {
+    for alias in [
+        "pascal",
+        "pas",
+        "delphi",
+        "objectpascal",
+        "object-pascal",
+        "objpas",
+        "freepascal",
+        "fpc",
+    ] {
+        let language = language_by_name(alias)
+            .unwrap_or_else(|| panic!("expected {alias} to resolve to a language"));
+        assert_eq!(
+            language.display_name(),
+            "Pascal",
+            "{alias} should resolve to Pascal",
+        );
+    }
+}
+
+/// Pascal's highlight query is Warp's own rather than arborium's, so assert the captures the
+/// editor actually colors are present. `convert_capture_name_to_color` keys off the segment
+/// before the first `.`, and a query that silently lost these would still load.
+#[test]
+fn pascal_highlight_query_covers_the_colored_captures() {
+    let language = language_by_name("pascal").expect("Pascal should load");
+    let captures = language.highlight_query.capture_names();
+
+    for expected in ["keyword", "string", "number", "comment", "type", "function"] {
+        assert!(
+            captures.contains(&expected),
+            "Pascal highlights.scm should capture @{expected}, got {captures:?}",
         );
     }
 }

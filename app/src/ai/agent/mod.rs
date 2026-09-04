@@ -990,6 +990,8 @@ impl ProgrammingLanguage {
                 "vue" => Some("vue"),
                 "dockerfile" | "docker" | "containerfile" => Some("dockerfile"),
                 "markdown" | "md" => Some("md"),
+                "pascal" | "pas" | "delphi" | "objectpascal" | "object-pascal" | "objpas"
+                | "freepascal" | "fpc" => Some("pas"),
                 _ => None,
             },
             Self::Shell(ShellType::PowerShell) => Some("ps1"),

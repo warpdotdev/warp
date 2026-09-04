@@ -75,6 +75,7 @@ simple_logger = { path = "crates/simple_logger" }
 string-offset = { path = "crates/string-offset" }
 sum_tree = { path = "crates/sum_tree" }
 syntax_tree = { path = "crates/syntax_tree" }
+tree_sitter_pascal = { path = "crates/tree_sitter_pascal" }
 ui_components = { path = "crates/ui_components" }
 vim = { path = "crates/vim" }
 virtual-fs = { path = "crates/virtual_fs" }

@@ -278,6 +278,7 @@ fn test_programming_language_to_extension() {
         ("starlark", "bzl"),
         ("objective-c", "m"),
         ("objc", "m"),
+        ("pascal", "pas"),
         // Common markdown code-fence aliases.
         ("rs", "rs"),
         ("golang", "go"),
@@ -294,6 +295,10 @@ fn test_programming_language_to_extension() {
         ("containerfile", "dockerfile"),
         ("markdown", "md"),
         ("md", "md"),
+        ("delphi", "pas"),
+        ("objectpascal", "pas"),
+        ("freepascal", "pas"),
+        ("pas", "pas"),
     ];
     for (token, expected_extension) in cases {
         let language = ProgrammingLanguage::from((*token).to_string());

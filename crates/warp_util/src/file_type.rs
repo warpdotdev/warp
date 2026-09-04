@@ -232,6 +232,7 @@ fn is_development_text_extension(extension: &str) -> bool {
         "exs" | "erl" | "hrl" | "elm" | "nim" | "cr" | "zig" | "v" |
         "jl" | "rkt" | "scm" | "lisp" | "cl" | "coffee" | "purs" |
         "reason" | "re" | "res" | "resi" |
+        "pas" | "pp" | "dpr" | "dpk" | "lpr" | "lpk" |
         // Web technologies
         "html" | "htm" | "css" | "scss" | "sass" | "less" | "vue" |
         "svelte" | "astro" | "blade" | "twig" | "mustache" | "hbs" |

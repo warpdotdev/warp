@@ -7576,6 +7576,7 @@ dependencies = [
  "rust-embed 8.7.2",
  "serde",
  "serde_yaml 0.8.26",
+ "tree_sitter_pascal",
  "warp_editor",
  "warp_util",
 ]
@@ -14505,6 +14506,15 @@ dependencies = [
  "memchr",
  "nom 8.0.0",
  "petgraph",
+]
+
+[[package]]
+name = "tree_sitter_pascal"
+version = "0.1.0"
+dependencies = [
+ "arborium-sysroot",
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]
