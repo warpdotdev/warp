@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use ai::skills::{
-    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, parse_skills_dirs_env, read_skills_for_skills_dirs,
-    resolve_skills_dirs,
+    ParsedSkill, SKILL_PROVIDER_DEFINITIONS, SkillProvider, SkillScope, parse_skills_dirs_env,
+    read_skills_for_skills_dirs, resolve_skills_dirs,
 };
 use anyhow::{Context as _, anyhow};
 use chrono::{DateTime, Utc};
@@ -664,6 +664,15 @@ pub struct AgentDriverOptions {
     /// Additional per-task repositories supplied by the server, such as a webhook's
     /// originating repository. Empty for local runs.
     pub additional_source_repos: Vec<SourceRepo>,
+    /// Authoritative run-scoped eager repository plan for a Factory-owned run.
+    /// `Some(list)`, including an empty list, is used exactly as-is instead of merging the
+    /// environment's repositories with `additional_source_repos`. `None` retains the legacy
+    /// merge behavior.
+    pub source_repos_to_clone: Option<Vec<SourceRepo>>,
+    /// Repositories attached to the run's Factory that remain deferred after the eager
+    /// repository list is resolved. Used only to build the on-demand-clone hidden
+    /// instruction.
+    pub deferred_source_repos: Vec<SourceRepo>,
     /// Overrides for repository HEADs in the agent's session.
     pub repository_head_overrides: Vec<RepositoryHeadOverride>,
     /// Whether origin remotes should be removed from environment repositories.
@@ -755,6 +764,12 @@ pub struct AgentDriver {
     environment: Option<AmbientAgentEnvironment>,
     /// Additional per-task repositories supplied by the server.
     additional_source_repos: Vec<SourceRepo>,
+    /// Authoritative run-scoped eager repository plan for a Factory-owned run. See
+    /// [`AgentDriverOptions::source_repos_to_clone`].
+    source_repos_to_clone: Option<Vec<SourceRepo>>,
+    /// Repositories attached to the run's Factory that remain deferred. See
+    /// [`AgentDriverOptions::deferred_source_repos`].
+    deferred_source_repos: Vec<SourceRepo>,
     repository_head_overrides: Vec<RepositoryHeadOverride>,
     remove_repository_origins: bool,
 
@@ -856,6 +871,40 @@ pub enum AgentRunPrompt {
         /// Directory where task attachments were downloaded.
         attachments_dir: Option<String>,
     },
+}
+
+/// Injects the deferred-repositories hidden instruction into `prompt` so every harness
+/// receives it before the first model turn, without mutating any user-authored Agent or
+/// Automation source.
+///
+/// For a `Local` prompt, the instruction is prepended directly since there is no separate
+/// hidden channel. For a `ServerSide` prompt, it rides the existing `skill` slot: `runtime_skill`
+/// is already documented as content sent to the LLM but hidden from the UI query bubble, and the
+/// same skill content is what `prepare_harness` forwards to `resolve_prompt` to build a
+/// third-party harness's system prompt. When a real skill was also requested, the instruction is
+/// prepended to its content rather than replacing it.
+fn inject_deferred_repos_instruction(prompt: &mut AgentRunPrompt, instruction: String) {
+    match prompt {
+        AgentRunPrompt::Local(text) => *text = format!("{instruction}\n\n{text}"),
+        AgentRunPrompt::ServerSide { skill, .. } => {
+            *skill = Some(match skill.take() {
+                Some(mut existing) => {
+                    existing.content = format!("{instruction}\n\n{}", existing.content);
+                    existing
+                }
+                None => ParsedSkill {
+                    path: LocalOrRemotePath::Local(PathBuf::from("deferred-repositories")),
+                    name: "deferred-repositories".to_string(),
+                    description: "Instructions for dealing with repositories attached to this factory that are not cloned yet."
+                        .to_string(),
+                    content: instruction,
+                    line_range: None,
+                    provider: SkillProvider::Warp,
+                    scope: SkillScope::Bundled,
+                },
+            });
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1094,6 +1143,8 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
+            source_repos_to_clone,
+            deferred_source_repos,
             repository_head_overrides,
             remove_repository_origins,
             selected_harness,
@@ -1258,6 +1309,8 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
+            source_repos_to_clone,
+            deferred_source_repos,
             repository_head_overrides,
             remove_repository_origins,
             snapshot_disabled: snapshot_disabled_value,
@@ -1310,6 +1363,8 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             environment: None,
             additional_source_repos: Vec::new(),
+            source_repos_to_clone: None,
+            deferred_source_repos: Vec::new(),
             repository_head_overrides: Vec::new(),
             remove_repository_origins: false,
             snapshot_disabled: false,
@@ -2959,7 +3014,7 @@ impl AgentDriver {
     /// series of callbacks and state machine updates.
     #[tracing::instrument(name = "AgentDriver::run_internal", skip_all, err, fields(tags.cloud_agent = true))]
     async fn run_internal(
-        task: Task,
+        mut task: Task,
         foreground: ModelSpawner<Self>,
     ) -> Result<(), AgentDriverError> {
         safe_debug!(
@@ -3202,6 +3257,8 @@ impl AgentDriver {
         let (
             environment_opt,
             additional_source_repos,
+            source_repos_to_clone,
+            deferred_source_repos,
             repository_head_overrides,
             remove_repository_origins,
         ) = foreground
@@ -3209,6 +3266,8 @@ impl AgentDriver {
                 (
                     me.environment.clone(),
                     me.additional_source_repos.clone(),
+                    me.source_repos_to_clone.clone(),
+                    me.deferred_source_repos.clone(),
                     me.repository_head_overrides.clone(),
                     me.remove_repository_origins,
                 )
@@ -3222,13 +3281,23 @@ impl AgentDriver {
         // whether this run gets one by attaching the clone variables,
         // independent of which environment the run executes in.
         environment::prepend_factory_definition_clone(&mut setup_commands);
-        let source_repos = environment::merge_repos_deduped(
-            environment_opt
-                .as_ref()
-                .map(AmbientAgentEnvironment::effective_repos)
-                .unwrap_or_default(),
+        let source_repos = environment::resolve_eager_source_repos(
+            environment_opt.as_ref(),
+            source_repos_to_clone,
             additional_source_repos,
         )?;
+        // Built once, before the eager list can be moved into repository preparation below,
+        // so it is available whichever harness the run dispatches to. `prepare_environment`
+        // auto-`cd`s into a single eager repository, so the instruction must target absolute
+        // paths under the run's working directory rather than bare repository names.
+        let working_dir_for_instruction = foreground.spawn(|me, _| me.working_dir.clone()).await?;
+        if let Some(instruction) = environment::build_deferred_repos_instruction(
+            &working_dir_for_instruction,
+            &source_repos,
+            &deferred_source_repos,
+        ) {
+            inject_deferred_repos_instruction(&mut task.prompt, instruction);
+        }
 
         if environment_opt.is_some() || !source_repos.is_empty() || !setup_commands.is_empty() {
             log::info!("Loading environment...");

@@ -8,13 +8,15 @@ use warp_cli::agent::{RepositoryForge, RepositoryHeadOverride, RepositoryHeadRef
 use warp_core::command::ExitCode;
 
 use super::{
-    PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
-    build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
-    checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
+    PrepareEnvironmentError, RepositoryCloneRequest, build_deferred_repos_instruction,
+    build_parallel_clone_command, build_remove_repository_origins_command,
+    build_resolved_head_command, checkout_command_for, checkout_result, environment_snapshot,
+    is_valid_git_object_id, merge_repos_deduped, parse_resolved_head_sha, parse_resolved_head_shas,
+    repository_clone_requests, resolve_eager_source_repos, single_repo_name,
     validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
+use crate::terminal::model::session::command_executor::shell_quote_arg;
 use crate::terminal::shell::ShellType;
 
 fn commit_head_override(
@@ -165,6 +167,7 @@ fn environment_snapshot_omits_unresolved_heads() {
     assert_eq!(snapshot.repositories.len(), 1);
     assert_eq!(snapshot.repositories[0].repo_name, "second");
 }
+
 fn branch_head_override(
     code_forge: RepositoryForge,
     owner: &str,
@@ -270,6 +273,254 @@ fn merge_repos_supports_additional_only_and_empty_inputs() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[test]
+fn source_repos_to_clone_none_retains_legacy_merge_behavior() {
+    // Pins today's behavior so a regression in the branching logic is caught: `None`
+    // must merge the environment's repos with `additional_source_repos` exactly as
+    // `merge_repos_deduped` already does.
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "WarpDotDev", "Warp")]);
+    let additional = vec![repo(CodeForge::GitHub, "warpdotdev", "warp-server")];
+
+    assert_eq!(
+        resolve_eager_source_repos(Some(&environment), None, additional).unwrap(),
+        vec![
+            repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
+            repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
+        ]
+    );
+}
+
+#[test]
+fn source_repos_to_clone_some_empty_clones_nothing() {
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "acme", "monolith")]);
+    let additional = vec![repo(CodeForge::GitHub, "acme", "webhook-origin")];
+
+    let eager = resolve_eager_source_repos(Some(&environment), Some(vec![]), additional).unwrap();
+    assert!(eager.is_empty());
+}
+
+#[test]
+fn source_repos_to_clone_some_ignores_environment_and_additional() {
+    let environment = environment_with_repos(vec![repo(CodeForge::GitHub, "acme", "monolith")]);
+    let additional = vec![repo(CodeForge::GitHub, "acme", "webhook-origin")];
+    let plan = vec![repo(CodeForge::GitHub, "acme", "billing")];
+
+    let eager =
+        resolve_eager_source_repos(Some(&environment), Some(plan.clone()), additional).unwrap();
+    assert_eq!(eager, plan);
+}
+
+#[test]
+fn source_repos_to_clone_some_still_applies_collision_check() {
+    let error = resolve_eager_source_repos(
+        None,
+        Some(vec![
+            repo(CodeForge::GitHub, "a", "widget"),
+            repo(CodeForge::GitLab, "b", "widget"),
+        ]),
+        Vec::new(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        PrepareEnvironmentError::CloneDirectoryCollision { repo_name, .. } if repo_name == "widget"
+    ));
+}
+
+#[test]
+fn single_eager_repo_with_deferred_repos_still_selects_for_auto_cd() {
+    let eager = resolve_eager_source_repos(
+        None,
+        Some(vec![repo(CodeForge::GitHub, "acme", "eager-repo")]),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(single_repo_name(&eager), Some("eager-repo".to_string()));
+}
+
+#[test]
+fn zero_eager_repos_leaves_no_repo_to_auto_cd_into() {
+    let eager = resolve_eager_source_repos(None, Some(vec![]), Vec::new()).unwrap();
+    assert_eq!(single_repo_name(&eager), None);
+}
+
+fn test_working_dir() -> PathBuf {
+    PathBuf::from("/home/agent")
+}
+
+#[test]
+fn deferred_instruction_absent_when_nothing_deferred() {
+    let eager = vec![repo(CodeForge::GitHub, "acme", "monolith")];
+    assert!(build_deferred_repos_instruction(&test_working_dir(), &eager, &[]).is_none());
+}
+
+#[test]
+fn deferred_instruction_lists_github_and_nested_gitlab_repos_in_order() {
+    let deferred = vec![
+        repo(CodeForge::GitLab, "platform/backend", "api"),
+        repo(CodeForge::GitHub, "acme", "billing"),
+    ];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    let github_pos = instruction.find("GitHub acme/billing").unwrap();
+    let gitlab_pos = instruction.find("GitLab platform/backend/api").unwrap();
+    assert!(
+        github_pos < gitlab_pos,
+        "repos must be sorted by forge, then owner, then name: {instruction}"
+    );
+    assert!(instruction.contains("https://github.com/acme/billing.git"));
+    assert!(instruction.contains("https://gitlab.com/platform/backend/api.git"));
+    assert!(instruction.contains("test ! -e '/home/agent/billing' && git clone --filter=tree:0"));
+    assert!(instruction.contains("test ! -e '/home/agent/api' && git clone --filter=tree:0"));
+}
+
+#[test]
+fn deferred_instruction_targets_absolute_paths_under_the_single_eager_repo_auto_cd_state() {
+    // `prepare_environment` auto-`cd`s into the sole eager repository before this
+    // instruction is dispatched, so a relative target like 'billing' would clone into
+    // `{working_dir}/{eager_repo}/billing` instead of alongside it. The generated command
+    // must anchor the target at the run's working directory regardless of the shell's cwd.
+    let working_dir = test_working_dir();
+    let eager = vec![repo(CodeForge::GitHub, "acme", "eager-repo")];
+    let deferred = vec![repo(CodeForge::GitHub, "acme", "billing")];
+    let instruction = build_deferred_repos_instruction(&working_dir, &eager, &deferred).unwrap();
+
+    assert!(instruction.contains("Preferred target: /home/agent/billing"));
+    assert!(instruction.contains("test ! -e '/home/agent/billing' && git clone --filter=tree:0"));
+    assert!(
+        !instruction.contains("'billing'"),
+        "must not emit a bare relative target: {instruction}"
+    );
+}
+
+#[test]
+fn deferred_instruction_is_deterministic_regardless_of_input_order() {
+    let a = vec![
+        repo(CodeForge::GitHub, "acme", "billing"),
+        repo(CodeForge::GitHub, "acme", "monolith"),
+    ];
+    let b = vec![
+        repo(CodeForge::GitHub, "acme", "monolith"),
+        repo(CodeForge::GitHub, "acme", "billing"),
+    ];
+
+    assert_eq!(
+        build_deferred_repos_instruction(&test_working_dir(), &[], &a),
+        build_deferred_repos_instruction(&test_working_dir(), &[], &b)
+    );
+}
+
+#[test]
+fn deferred_instruction_flags_conflict_with_shared_target_name_and_never_emits_it() {
+    let deferred = vec![
+        repo(CodeForge::GitHub, "acme", "widget"),
+        repo(CodeForge::GitLab, "other", "widget"),
+    ];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    assert!(!instruction.contains("'/home/agent/widget'"));
+    assert!(instruction.contains("Target conflict"));
+    // The conflicting identities must be named explicitly, not "another attached repository".
+    assert!(instruction.contains("GitHub acme/widget already uses 'widget'"));
+    assert!(instruction.contains("GitLab other/widget already uses 'widget'"));
+    assert!(
+        instruction
+            .contains("test ! -e '/home/agent/<unused-target>' && git clone --filter=tree:0")
+    );
+}
+
+#[test]
+fn deferred_instruction_flags_conflict_with_an_eager_repo_target() {
+    let eager = vec![repo(CodeForge::GitHub, "acme", "widget")];
+    let deferred = vec![repo(CodeForge::GitLab, "other", "widget")];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &eager, &deferred).unwrap();
+
+    assert!(!instruction.contains("'/home/agent/widget'"));
+    assert!(instruction.contains("Target conflict"));
+    assert!(instruction.contains("GitHub acme/widget already uses 'widget'"));
+}
+
+#[test]
+fn deferred_instruction_every_command_guards_target_existence() {
+    let deferred = vec![
+        repo(CodeForge::GitHub, "acme", "billing"),
+        repo(CodeForge::GitHub, "acme", "widget"),
+        repo(CodeForge::GitLab, "other", "widget"),
+    ];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    for line in instruction
+        .lines()
+        .filter(|line| line.contains("git clone"))
+    {
+        assert!(
+            line.trim_start().starts_with("test ! -e"),
+            "every clone command must guard target existence: {line}"
+        );
+    }
+}
+
+#[test]
+fn deferred_instruction_quotes_a_shell_metacharacter_bearing_clone_url() {
+    // `owner`/`repo` (and therefore the clone URL built from them) come from
+    // server-supplied repository identifiers and must not be trusted as
+    // shell-safe. A metacharacter-bearing owner must not let the generated
+    // command execute anything beyond the intended `git clone`.
+    let malicious = repo(CodeForge::GitHub, "acme'; touch pwned #", "billing");
+    let clone_url = malicious.https_clone_url();
+    let deferred = vec![malicious];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    // The fixture must actually contain a shell metacharacter, or this test would pass
+    // vacuously.
+    assert_ne!(
+        shell_quote_arg(&clone_url, ShellType::Bash),
+        format!("'{clone_url}'")
+    );
+    assert!(
+        !instruction.contains(&format!("git clone --filter=tree:0 '{clone_url}'")),
+        "the clone URL must never reach `git clone` unescaped: {instruction}"
+    );
+    assert!(
+        instruction.contains(&format!(
+            "git clone --filter=tree:0 {}",
+            shell_quote_arg(&clone_url, ShellType::Bash)
+        )),
+        "the clone URL must be quoted the same way as the clone target: {instruction}"
+    );
+}
+
+#[test]
+fn deferred_instruction_never_contains_secret_bearing_content() {
+    // The instruction legitimately warns about tokens in prose (e.g. "never put an
+    // access token in a..."); what must never appear is an actual credential value, a
+    // userinfo-bearing URL, or the definition-checkout clone-URL variable.
+    let deferred = vec![repo(CodeForge::GitHub, "acme", "billing")];
+    let instruction =
+        build_deferred_repos_instruction(&test_working_dir(), &[], &deferred).unwrap();
+
+    assert!(!instruction.contains("WARP_FACTORY_REPO_CLONE_URL"));
+    assert!(
+        !instruction.contains("://") || !instruction.contains('@'),
+        "must not contain a user:pass@ URL: {instruction}"
+    );
+    for url in instruction.split_whitespace().filter(|s| s.contains("://")) {
+        // The `git clone` argument is shell-quoted (see the metacharacter test above), so
+        // strip any surrounding quote before checking its shape.
+        let url = url.trim_matches('\'');
+        assert!(
+            url.starts_with("https://github.com/") || url.starts_with("https://gitlab.com/"),
+            "unexpected URL shape (must be a plain forge HTTPS clone URL): {url}"
+        );
+    }
 }
 
 #[test]

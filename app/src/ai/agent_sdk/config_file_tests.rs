@@ -111,6 +111,8 @@ fn merge_precedence_cli_over_file_and_merges_mcp() {
         harness: None,
         harness_auth_secrets: None,
         additional_source_repos: None,
+        source_repos_to_clone: None,
+        deferred_source_repos: Vec::new(),
     };
 
     let merged = super::merge_with_precedence(Some(&loaded), cli);

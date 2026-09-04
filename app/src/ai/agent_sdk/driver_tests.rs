@@ -40,7 +40,8 @@ use super::{
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
     PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
     build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
-    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
+    idle_window_for_terminal_status, inject_deferred_repos_instruction,
+    setup_failure_status_update, terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -2852,6 +2853,62 @@ fn ambient_driver_resumed_conversation_elapsed_idle_window_commits_exiting() {
             .send(())
             .expect("background timer thread should still be waiting at the post-commit gate");
     });
+}
+
+#[test]
+fn inject_deferred_repos_instruction_prepends_to_local_prompt() {
+    let mut prompt = AgentRunPrompt::Local("do the task".to_string());
+    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
+
+    let AgentRunPrompt::Local(text) = prompt else {
+        panic!("expected a Local prompt");
+    };
+    assert_eq!(text, "clone acme/billing first\n\ndo the task");
+}
+
+#[test]
+fn inject_deferred_repos_instruction_synthesizes_hidden_skill_when_none_requested() {
+    let mut prompt = AgentRunPrompt::ServerSide {
+        skill: None,
+        attachments_dir: None,
+    };
+    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
+
+    let AgentRunPrompt::ServerSide { skill, .. } = prompt else {
+        panic!("expected a ServerSide prompt");
+    };
+    let skill = skill.expect("a synthetic skill should carry the hidden instruction");
+    assert_eq!(skill.content, "clone acme/billing first");
+}
+
+#[test]
+fn inject_deferred_repos_instruction_prepends_to_requested_skill_content() {
+    let requested_skill = ai::skills::ParsedSkill {
+        path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(std::path::PathBuf::from(
+            "/skills/reviewer/SKILL.md",
+        )),
+        name: "reviewer".to_string(),
+        description: "Reviews billing changes.".to_string(),
+        content: "Review the diff carefully.".to_string(),
+        line_range: None,
+        provider: ai::skills::SkillProvider::Agents,
+        scope: ai::skills::SkillScope::Project,
+    };
+    let mut prompt = AgentRunPrompt::ServerSide {
+        skill: Some(requested_skill),
+        attachments_dir: None,
+    };
+    inject_deferred_repos_instruction(&mut prompt, "clone acme/billing first".to_string());
+
+    let AgentRunPrompt::ServerSide { skill, .. } = prompt else {
+        panic!("expected a ServerSide prompt");
+    };
+    let skill = skill.expect("the requested skill must be preserved");
+    assert_eq!(skill.name, "reviewer");
+    assert_eq!(
+        skill.content,
+        "clone acme/billing first\n\nReview the diff carefully."
+    );
 }
 
 #[test]
