@@ -3,6 +3,7 @@ use mockito::Server;
 
 use super::*;
 use crate::server::retry_strategies::is_transient_http_error;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 /// Sends a GET request to a mock endpoint returning `status`/`headers`/`body`, then feeds the
 /// resulting response through [`ServerApi::error_from_response`].
@@ -107,4 +108,24 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
             user_display_message: Some(message)
         } if message == "You're out of credits"
     ));
+}
+
+#[test]
+fn graphql_request_options_include_only_resolved_team_scope() {
+    let team_uid = 7.into();
+    let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let team_options = ServerApi::graphql_request_options_for_team(
+        warp_graphql::client::RequestOptions::default(),
+        team_scope,
+    );
+    let teamless_options = ServerApi::graphql_request_options_for_team(
+        warp_graphql::client::RequestOptions::default(),
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
+    );
+
+    assert_eq!(
+        team_options.headers.get(TEAM_UID_HEADER),
+        Some(&team_uid.uid().to_string())
+    );
+    assert!(!teamless_options.headers.contains_key(TEAM_UID_HEADER));
 }

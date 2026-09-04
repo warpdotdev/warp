@@ -633,6 +633,25 @@ impl warpui::Entity for AgentDriverRunner {
 
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
+struct LocalRunTeamScopes {
+    request: RequestTeamScope,
+    resolved: Arc<ResolvedTeamScope>,
+}
+
+fn resolve_local_run_team_scopes(
+    args: &RunAgentArgs,
+    ctx: &AppContext,
+) -> anyhow::Result<Option<LocalRunTeamScopes>> {
+    if args.task_id.is_some() {
+        return Ok(None);
+    }
+    let scope = common::resolve_team_scope(&args.team_selection, ctx)?;
+    Ok(Some(LocalRunTeamScopes {
+        request: RequestTeamScope::from_scope(&scope),
+        resolved: Arc::new(ResolvedTeamScope::from_scope(&scope)),
+    }))
+}
+
 impl AgentDriverRunner {
     #[tracing::instrument(skip_all, err, fields(
         tags.cloud_agent = true,
@@ -667,20 +686,11 @@ impl AgentDriverRunner {
                 Self::refresh_team_metadata(&foreground),
             )
             .await?;
-        let local_run_team_scope = if args.task_id.is_none() {
-            let team_selection = args.team_selection.clone();
-            Some(Arc::new(
-                foreground
-                    .spawn(move |_, ctx| -> anyhow::Result<ResolvedTeamScope> {
-                        common::resolve_team_scope(&team_selection, ctx)
-                            .map(|scope| ResolvedTeamScope::from_scope(&scope))
-                    })
-                    .await?
-                    .map_err(AgentDriverError::ConfigBuildFailed)?,
-            ))
-        } else {
-            None
-        };
+        let args_for_team_scope = args.clone();
+        let local_run_team_scopes = foreground
+            .spawn(move |_, ctx| resolve_local_run_team_scopes(&args_for_team_scope, ctx))
+            .await?
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
 
         // Wait for Warp Drive to sync before building the task config, since
         // prompt resolution (SavedPrompt -> workflow lookup) and environment
@@ -732,7 +742,7 @@ impl AgentDriverRunner {
                 Self::build_driver_options_and_task(
                     &foreground,
                     args,
-                    local_run_team_scope,
+                    local_run_team_scopes,
                     &server_api,
                     &setup_events,
                 )
@@ -1042,7 +1052,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        local_run_team_scope: Option<Arc<ResolvedTeamScope>>,
+        local_run_team_scopes: Option<LocalRunTeamScopes>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1065,9 +1075,9 @@ impl AgentDriverRunner {
         let task_id_str = args.task_id.clone();
         let prompt = args.prompt_arg.to_prompt();
         let skill = args.skill.clone();
-        let request_team_scope = local_run_team_scope
-            .as_deref()
-            .map(RequestTeamScope::from_scope);
+        let local_run_team_scope = local_run_team_scopes
+            .as_ref()
+            .map(|team_scopes| team_scopes.resolved.clone());
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
@@ -1105,7 +1115,7 @@ impl AgentDriverRunner {
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
-                    team_scope: local_run_team_scope,
+                    team_scope: None,
                     snapshot_disabled: args.snapshot.no_snapshot.then_some(true),
                     snapshot_upload_timeout: args
                         .snapshot
@@ -1161,7 +1171,7 @@ impl AgentDriverRunner {
                 server_api,
                 prompt_for_task_creation,
                 merged_config,
-                request_team_scope.expect("new local runs resolve request team scope"),
+                local_run_team_scopes.expect("new local runs resolve team scopes"),
                 &mut driver_options,
             )
             .await?;
@@ -1197,9 +1207,10 @@ impl AgentDriverRunner {
         server_api: &Arc<dyn AIClient>,
         prompt: String,
         merged_config: AgentConfigSnapshot,
-        team_scope: RequestTeamScope,
+        team_scopes: LocalRunTeamScopes,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
+        driver_options.team_scope = Some(team_scopes.resolved);
         let environment = merged_config.environment_id.clone();
         let task_config = if merged_config.is_empty() {
             None
@@ -1211,7 +1222,7 @@ impl AgentDriverRunner {
         };
 
         let task_id = match server_api
-            .create_agent_task(prompt, environment, None, task_config, team_scope)
+            .create_agent_task(prompt, environment, None, task_config, team_scopes.request)
             .await
             .context("Failed to create task")
         {
