@@ -1,6 +1,8 @@
+use pathfinder_color::ColorU;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Container, CrossAxisAlignment, Expanded, Flex, MainAxisSize, ParentElement, Text,
+    Container, CornerRadius, Flex, MainAxisSize, ParentElement, Radius, RowBackground, Table,
+    TableColumnWidth, TableConfig, TableHeader, TableStateHandle, TableVerticalSizing, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, Element, Entity, SingletonEntity, View, ViewContext};
@@ -17,6 +19,7 @@ use crate::terminal::model::terminal_model::BlockIndex;
 
 const MAX_COLUMNS: usize = 64;
 const MAX_ROWS_PER_TABLE: usize = 10_000;
+const TABLE_CORNER_RADIUS: f32 = 8.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PowerShellTableData {
@@ -105,11 +108,15 @@ impl PowerShellTableStream {
 
 pub(super) struct PowerShellRichTable {
     data: PowerShellTableData,
+    table_state: TableStateHandle,
 }
 
 impl PowerShellRichTable {
     pub fn new(data: PowerShellTableData) -> Self {
-        Self { data }
+        Self {
+            data,
+            table_state: TableStateHandle::default(),
+        }
     }
 }
 impl Entity for PowerShellRichTable {
@@ -127,75 +134,73 @@ impl View for PowerShellRichTable {
         let font_size = appearance.monospace_font_size();
         let font_family = appearance.monospace_font_family();
         let foreground = theme.foreground().into_solid();
+        let header_color = theme.ansi_fg_green();
         let muted = internal_colors::neutral_5(theme);
-
-        let mut header = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-        for column in &self.data.columns {
-            let text = Flex::column()
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_child(
-                    Text::new(column.name.clone(), font_family, font_size)
-                        .with_color(foreground)
-                        .with_style(Properties::default().weight(Weight::Bold))
-                        .finish(),
-                )
-                .with_child(
-                    Text::new(column.type_name.clone(), font_family, font_size - 2.)
-                        .soft_wrap(true)
-                        .with_color(muted)
-                        .finish(),
-                )
-                .finish();
-            header = header.with_child(
-                Expanded::new(
-                    1.,
-                    Container::new(text)
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(6.)
-                        .finish(),
-                )
-                .finish(),
-            );
-        }
-
-        let mut table = Flex::column()
-            .with_main_axis_size(MainAxisSize::Min)
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_child(
-                Container::new(header.finish())
-                    .with_background(internal_colors::fg_overlay_2(theme))
-                    .finish(),
-            );
-
-        for (row_index, row) in self.data.rows.iter().enumerate() {
-            let mut row_view = Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
-            for value in row {
-                row_view = row_view.with_child(
-                    Expanded::new(
-                        1.,
-                        Container::new(
-                            Text::new(value.clone(), font_family, font_size)
-                                .soft_wrap(true)
-                                .with_color(foreground)
+        let headers = self
+            .data
+            .columns
+            .iter()
+            .map(|column| {
+                TableHeader::new(
+                    Flex::column()
+                        .with_main_axis_size(MainAxisSize::Min)
+                        .with_child(
+                            Text::new(column.name.clone(), font_family, font_size)
+                                .with_color(header_color)
+                                .with_style(Properties::default().weight(Weight::Bold))
                                 .finish(),
                         )
-                        .with_horizontal_padding(8.)
-                        .with_vertical_padding(5.)
+                        .with_child(
+                            Text::new(column.type_name.clone(), font_family, font_size - 2.)
+                                .soft_wrap(true)
+                                .with_color(muted)
+                                .finish(),
+                        )
                         .finish(),
-                    )
-                    .finish(),
-                );
-            }
-            let mut container = Container::new(row_view.finish());
-            if row_index % 2 == 1 {
-                container = container.with_background(internal_colors::fg_overlay_1(theme));
-            }
-            table = table.with_child(container.finish());
-        }
+                )
+                .with_width(TableColumnWidth::Intrinsic)
+            })
+            .collect();
+        let rows = self.data.rows.clone();
+        let row_count = rows.len();
+        let column_count = self.data.columns.len();
+        let table = Table::new(self.table_state.clone(), 0.0, 0.0)
+            .with_headers(headers)
+            .with_row_count(row_count)
+            .with_row_render_fn(move |row_index, _| {
+                (0..column_count)
+                    .map(|column_index| {
+                        Text::new(
+                            rows.get(row_index)
+                                .and_then(|row| row.get(column_index))
+                                .cloned()
+                                .unwrap_or_default(),
+                            font_family,
+                            font_size,
+                        )
+                        .soft_wrap(true)
+                        .with_color(foreground)
+                        .finish()
+                    })
+                    .collect()
+            })
+            .with_config(TableConfig {
+                border_width: 1.0,
+                border_color: theme.outline().into_solid(),
+                outer_border: true,
+                column_dividers: false,
+                row_dividers: false,
+                cell_padding: 8.0,
+                header_background: internal_colors::fg_overlay_2(theme).into(),
+                row_background: RowBackground::striped(
+                    ColorU::transparent_black(),
+                    internal_colors::fg_overlay_1(theme).into(),
+                ),
+                fixed_header: false,
+                vertical_sizing: TableVerticalSizing::ExpandToContent,
+                measure_body_cells_for_intrinsic_widths: true,
+            })
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(TABLE_CORNER_RADIUS)));
 
         Container::new(table.finish())
             .with_uniform_margin(8.)

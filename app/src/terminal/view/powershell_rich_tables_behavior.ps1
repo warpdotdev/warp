@@ -52,6 +52,22 @@ function Get-EncodedMessageByteCount {
     $json = ConvertTo-Json -InputObject $Message -Compress -Depth 8
     (2 * [System.Text.Encoding]::UTF8.GetByteCount($json)) + 10
 }
+function Assert-RichTableHooks {
+    param([string]$Description)
+
+    $hooks = Get-HookNames
+    Assert-True ($hooks[0] -eq 'PowerShellTableBegin') "$Description should begin a table"
+    Assert-True ($hooks -contains 'PowerShellTableRows') "$Description should send rows"
+    Assert-True ($hooks[-1] -eq 'PowerShellTableEnd') "$Description should end the table"
+}
+
+function New-CustomTableObject {
+    param([string]$TypeName, [string]$Value)
+
+    $object = [pscustomobject]@{ Value = $Value }
+    $object.PSObject.TypeNames.Insert(0, $TypeName)
+    $object
+}
 
 $simple = [pscustomobject]@{ Name = 'alpha'; Id = 1 }
 $columns = Warp-Get-PowerShellTableColumns $simple
@@ -82,15 +98,142 @@ Assert-True ($null -eq (Warp-Get-PowerShellTableColumns $wide)) `
 
 $script:warpMessages.Clear()
 $simple, ([pscustomobject]@{ Name = 'beta'; Id = 2 }) | Warp-Out-Default
-$hooks = Get-HookNames
-Assert-True ($hooks[0] -eq 'PowerShellTableBegin') 'implicit output should begin a table'
-Assert-True ($hooks -contains 'PowerShellTableRows') 'implicit output should send rows'
-Assert-True ($hooks[-1] -eq 'PowerShellTableEnd') 'implicit output should end the table'
+Assert-RichTableHooks 'implicit output'
 Assert-True ((Get-RowCount) -eq 2) 'implicit output should keep object order'
 
 $script:warpMessages.Clear()
 [pscustomobject]@{ Name = 'alpha'; Id = 1 } | Format-Table | Warp-Out-Default
 Assert-True ((Get-HookNames).Count -eq 0) 'explicit Format-Table must not emit table OSC'
+$script:warpMessages.Clear()
+Get-Alias | Select-Object -First 2 | Warp-Out-Default
+Assert-RichTableHooks 'Get-Alias output'
+$aliasBegin = $script:warpMessages |
+    Where-Object { $_.hook -eq 'PowerShellTableBegin' } |
+    Select-Object -First 1
+$computedAliasColumn = $aliasBegin.value.columns |
+    Where-Object { $_.name -eq 'Name' } |
+    Select-Object -First 1
+Assert-True ($null -ne $computedAliasColumn) 'Get-Alias should retain its computed Name column'
+Assert-True ([string]::IsNullOrEmpty($computedAliasColumn.property_name)) `
+    'computed columns should not declare a source property'
+Assert-True ([string]::IsNullOrEmpty($computedAliasColumn.type_name)) `
+    'computed columns should not declare a type'
+Assert-True (-not $computedAliasColumn.ContainsKey('expression')) `
+    'computed expressions must not be included in OSC metadata'
+
+$script:warpMessages.Clear()
+Get-Command Get-Item | Warp-Out-Default
+Assert-RichTableHooks 'Get-Command output'
+
+$script:warpMessages.Clear()
+Get-ChildItem -LiteralPath $PSScriptRoot | Select-Object -First 2 | Warp-Out-Default
+Assert-RichTableHooks 'Get-ChildItem output'
+
+$customFormatPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+    "warp-rich-table-$([Guid]::NewGuid().ToString('N')).ps1xml"
+)
+$customFormat = @'
+<Configuration>
+  <ViewDefinitions>
+    <View>
+      <Name>WarpComputed</Name>
+      <ViewSelectedBy><TypeName>Warp.Test.Computed</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Computed</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem>
+                <ScriptBlock>$global:warpComputedEvaluations++; $_.Value.ToUpperInvariant()</ScriptBlock>
+              </TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>WarpComputedFailure</Name>
+      <ViewSelectedBy><TypeName>Warp.Test.ComputedFailure</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Computed</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem>
+                <ScriptBlock>if ($_.Value -eq 'fail') { throw 'computed failure' }; $_.Value</ScriptBlock>
+              </TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+    <View>
+      <Name>WarpComputedCollection</Name>
+      <ViewSelectedBy><TypeName>Warp.Test.ComputedCollection</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Computed</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><ScriptBlock>1, 2</ScriptBlock></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
+  </ViewDefinitions>
+</Configuration>
+'@
+try {
+    [System.IO.File]::WriteAllText($customFormatPath, $customFormat)
+    Update-FormatData -PrependPath $customFormatPath
+
+    $global:warpComputedEvaluations = 0
+    $script:warpMessages.Clear()
+    @(
+        New-CustomTableObject -TypeName 'Warp.Test.Computed' -Value 'alpha'
+        New-CustomTableObject -TypeName 'Warp.Test.Computed' -Value 'beta'
+    ) | Warp-Out-Default
+    Assert-RichTableHooks 'custom computed view'
+    Assert-True ($global:warpComputedEvaluations -eq 2) `
+        'a computed column should be evaluated exactly once per object'
+    $computedRows = @(
+        $script:warpMessages |
+            Where-Object { $_.hook -eq 'PowerShellTableRows' } |
+            ForEach-Object { $_.value.rows }
+    )
+    Assert-True ($computedRows[0][0] -eq 'ALPHA') `
+        'custom computed views should preserve their scalar display value'
+    Assert-True ($computedRows[1][0] -eq 'BETA') `
+        'custom computed views should preserve row order'
+    $script:warpMessages.Clear()
+    New-CustomTableObject -TypeName 'Warp.Test.Computed' -Value ('x' * 33000) |
+        Warp-Out-Default
+    Assert-True ((Get-HookNames).Count -eq 0) `
+        'an oversized computed value must fall back before any OSC'
+
+    $script:warpMessages.Clear()
+    @(
+        New-CustomTableObject -TypeName 'Warp.Test.ComputedFailure' -Value 'kept'
+        New-CustomTableObject -TypeName 'Warp.Test.ComputedFailure' -Value 'fail'
+    ) | Warp-Out-Default
+    Assert-True ((Get-HookNames).Count -eq 0) `
+        'a computed expression failure must fall back the buffered table before any OSC'
+
+    $script:warpMessages.Clear()
+    New-CustomTableObject -TypeName 'Warp.Test.ComputedCollection' -Value 'ignored' |
+        Warp-Out-Default
+    Assert-True ((Get-HookNames).Count -eq 0) `
+        'a non-scalar computed expression must fall back before any OSC'
+} finally {
+    Remove-Item -LiteralPath $customFormatPath -ErrorAction Ignore
+}
 
 $script:warpMessages.Clear()
 $simple, 'plain text' | Warp-Out-Default

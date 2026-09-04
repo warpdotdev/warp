@@ -1043,15 +1043,13 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             return $null
         }
 
-        $propertyNames = $null
+        $displayEntries = $null
         $labels = $null
 
-        # PowerShell picks the first matching view from the first matching PSTypeName. Only proxy a
-        # table whose columns are direct property references; calculated/custom expressions remain
-        # under the built-in formatter.
+        # Get-FormatData returns effective selection-set views before narrower named views, even
+        # when the returned definition reports a different TypeName.
         foreach ($typeName in $InputObject.PSObject.TypeNames) {
             $formatData = Get-FormatData -TypeName $typeName -ErrorAction Ignore |
-                Where-Object { $_.TypeName -eq $typeName } |
                 Select-Object -First 1
             if ($null -eq $formatData) {
                 continue
@@ -1068,18 +1066,22 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 return $null
             }
 
-            $propertyNames = @($row.Columns | ForEach-Object { $_.DisplayEntry.Value })
+            $displayEntries = @($row.Columns | ForEach-Object { $_.DisplayEntry })
             $labels = @($defaultView.Control.Headers | ForEach-Object { $_.Label })
             break
         }
-
-        if ($null -eq $propertyNames) {
+        if ($null -eq $displayEntries) {
             $defaultPropertySet =
                 $InputObject.PSStandardMembers.DefaultDisplayPropertySet.ReferencedPropertyNames
             if ($null -ne $defaultPropertySet) {
-                $propertyNames = @($defaultPropertySet)
+                $displayEntries = @($defaultPropertySet | ForEach-Object {
+                    @{
+                        Value = $_
+                        ValueType = 'Property'
+                    }
+                })
             } else {
-                $propertyNames = @(
+                $displayEntries = @(
                     $InputObject.PSObject.Properties |
                         Where-Object {
                             $_.MemberType -in @(
@@ -1090,11 +1092,16 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                                 'ScriptProperty'
                             )
                         } |
-                        Select-Object -ExpandProperty Name
+                        ForEach-Object {
+                            @{
+                                Value = $_.Name
+                                ValueType = 'Property'
+                            }
+                        }
                 )
                 # PowerShell's default formatter uses a list once an unconfigured object has more
                 # than four display properties.
-                if ($propertyNames.Count -eq 0 -or $propertyNames.Count -gt 4) {
+                if ($displayEntries.Count -eq 0 -or $displayEntries.Count -gt 4) {
                     return $null
                 }
             }
@@ -1103,19 +1110,39 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
         # PowerShell's default table view is unbounded, but Warp's prototype renderer
         # cannot lay out an arbitrary number of columns. Fall back before any OSC.
-        if ($propertyNames.Count -gt 64) {
+        if ($displayEntries.Count -gt 64) {
             return $null
         }
 
         $columns = @()
-        for ($index = 0; $index -lt $propertyNames.Count; $index++) {
-            $propertyName = [string]$propertyNames[$index]
-            if ([string]::IsNullOrEmpty($propertyName)) {
+        for ($index = 0; $index -lt $displayEntries.Count; $index++) {
+            $displayEntry = $displayEntries[$index]
+            $displayValue = [string]$displayEntry.Value
+            if ([string]::IsNullOrEmpty($displayValue)) {
                 return $null
             }
-            $property = $InputObject.PSObject.Properties[$propertyName]
-            if ($null -eq $property) {
-                # A missing property usually indicates a calculated formatting expression.
+
+            $propertyName = ''
+            $typeName = ''
+            $expression = $null
+            if ([string]$displayEntry.ValueType -eq 'Property') {
+                $propertyName = $displayValue
+                $property = $InputObject.PSObject.Properties[$propertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+                $typeName = if ([string]::IsNullOrEmpty($property.TypeNameOfValue)) {
+                    'System.Object'
+                } else {
+                    $property.TypeNameOfValue
+                }
+            } elseif ([string]$displayEntry.ValueType -eq 'ScriptBlock') {
+                try {
+                    $expression = [ScriptBlock]::Create($displayValue)
+                } catch {
+                    return $null
+                }
+            } else {
                 return $null
             }
 
@@ -1123,23 +1150,47 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 -not [string]::IsNullOrEmpty([string]$labels[$index])) {
                 [string]$labels[$index]
             } else {
-                $propertyName
-            }
-            $typeName = if ([string]::IsNullOrEmpty($property.TypeNameOfValue)) {
-                'System.Object'
-            } else {
-                $property.TypeNameOfValue
+                $displayValue
             }
             $columns += @{
                 name = $label
                 property_name = $propertyName
                 type_name = $typeName
+                expression = $expression
             }
         }
 
         return ,$columns
     }
 
+    function Warp-Get-PowerShellTableWireColumns {
+        param([array]$Columns)
+
+        @($Columns | ForEach-Object {
+            @{
+                name = $_.name
+                property_name = $_.property_name
+                type_name = $_.type_name
+            }
+        })
+    }
+
+    function Warp-Get-PowerShellTableColumnSchema {
+        param([array]$Columns)
+
+        @($Columns | ForEach-Object {
+            @{
+                name = $_.name
+                property_name = $_.property_name
+                type_name = $_.type_name
+                expression = if ($null -eq $_.expression) {
+                    ''
+                } else {
+                    $_.expression.ToString()
+                }
+            }
+        })
+    }
     function Warp-Get-PowerShellTableRow {
         param(
             [psobject]$InputObject,
@@ -1149,7 +1200,40 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         $row = @()
         foreach ($column in $Columns) {
             try {
-                $value = $InputObject.PSObject.Properties[$column.property_name].Value
+                if ($null -eq $column.expression) {
+                    $value = $InputObject.PSObject.Properties[$column.property_name].Value
+                } else {
+                    $variables =
+                        [System.Collections.Generic.List[System.Management.Automation.PSVariable]]::new()
+                    $variables.Add(
+                        [System.Management.Automation.PSVariable]::new('_', $InputObject)
+                    )
+                    $variables.Add(
+                        [System.Management.Automation.PSVariable]::new('PSItem', $InputObject)
+                    )
+                    $variables.Add(
+                        [System.Management.Automation.PSVariable]::new(
+                            'ErrorActionPreference',
+                            [System.Management.Automation.ActionPreference]::Stop
+                        )
+                    )
+                    $expressionValues = @(
+                        $column.expression.InvokeWithContext($null, $variables, @())
+                    )
+                    if ($expressionValues.Count -gt 1) {
+                        return $null
+                    }
+                    $value = if ($expressionValues.Count -eq 0) {
+                        $null
+                    } else {
+                        $expressionValues[0]
+                    }
+                    if ($null -ne $value -and
+                        $value -isnot [string] -and
+                        $value -is [System.Collections.IEnumerable]) {
+                        return $null
+                    }
+                }
                 if ($null -eq $value) {
                     $row += ''
                 } elseif ($value -is [System.Array]) {
@@ -1286,12 +1370,30 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
             $nextSchema = $null
             if ($null -ne $nextColumns) {
-                $nextSchema = ($nextColumns | ConvertTo-Json -Compress -Depth 4)
+                $nextSchema = (
+                    Warp-Get-PowerShellTableColumnSchema $nextColumns |
+                        ConvertTo-Json -Compress -Depth 4
+                )
             }
 
             $schemaChanged = ($null -ne $schema -and $null -ne $nextSchema -and $schema -ne $nextSchema)
             $unsupported = ($null -eq $nextColumns -or $null -eq $nextRow)
             $overRowCap = (-not $schemaChanged -and $acceptedRows -ge $maxTableRows)
+            if ($null -ne $nextColumns -and $null -eq $nextRow) {
+                $fallback = $true
+                $fallbackPipeline = {
+                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
+                }.GetSteppablePipeline($MyInvocation.CommandOrigin)
+                $fallbackPipeline.Begin($PSCmdlet)
+                foreach ($bufferedInput in $inputBuffer) {
+                    $fallbackPipeline.Process($bufferedInput)
+                }
+                $fallbackPipeline.Process($InputObject)
+                $inputBuffer.Clear()
+                $rowBuffer.Clear()
+                $tableId = $null
+                return
+            }
 
             if ($unsupported -or $overRowCap) {
                 Warp-Complete-PowerShellTable -TableId $tableId -Columns $columns -Rows $rowBuffer
@@ -1315,7 +1417,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
             if ([string]::IsNullOrEmpty($tableId)) {
                 $tableId = [Guid]::NewGuid().ToString('N')
-                $columns = $nextColumns
+                $columns = Warp-Get-PowerShellTableWireColumns $nextColumns
                 $schema = $nextSchema
                 $beginMessage = @{
                     hook = 'PowerShellTableBegin'
