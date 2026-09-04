@@ -111,7 +111,9 @@ impl Iterator for RowIterator<'_> {
             // first seen on the ANSI-input path, so a warning here would
             // be redundant and would fire every time a row is
             // rematerialized (e.g. on scroll or resize).
-            chars.for_each(|c| cell.push_zerowidth(c, /* log_long_grapheme_warnings */ false));
+            chars.for_each(|c| {
+                cell.push_zerowidth(c, /* log_long_grapheme_warnings */ false);
+            });
 
             cell.fg = fg;
             cell.bg = bg;

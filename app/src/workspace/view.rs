@@ -26309,22 +26309,34 @@ impl TypedActionView for Workspace {
                 TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
                     std::mem::drop(manager.refresh_workspace_metadata(ctx));
                 });
-                let existing_window_id = ctx
-                    .windows()
-                    .ordered_window_ids()
-                    .into_iter()
-                    .chain(ctx.window_ids())
-                    .find(|window_id| {
-                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
-                            == Some(team_uid)
+                #[cfg(target_family = "wasm")]
+                {
+                    // WASM hosts a single window; creating another replaces #wasm-container
+                    // and orphans the live session.
+                    UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                        user_workspaces.switch_window_to_team(self.window_id, team_uid, ctx);
                     });
-                if let Some(window_id) = existing_window_id {
-                    ctx.windows().show_window_and_focus_app(window_id);
-                } else {
-                    crate::root_view::open_new_with_workspace_source(
-                        NewWorkspaceSource::TeamSwitched { team_uid },
-                        ctx,
-                    );
+                    ctx.notify();
+                }
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let existing_window_id = ctx
+                        .windows()
+                        .ordered_window_ids()
+                        .into_iter()
+                        .chain(ctx.window_ids())
+                        .find(|window_id| {
+                            UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                                == Some(team_uid)
+                        });
+                    if let Some(window_id) = existing_window_id {
+                        ctx.windows().show_window_and_focus_app(window_id);
+                    } else {
+                        crate::root_view::open_new_with_workspace_source(
+                            NewWorkspaceSource::TeamSwitched { team_uid },
+                            ctx,
+                        );
+                    }
                 }
             }
             ShowTeamSwitcherMenu => {

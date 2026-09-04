@@ -624,7 +624,10 @@ pub struct AgentDriverOptions {
 /// Its primary responsibility is to configure a headless terminal pane and execute an AI query within it.
 pub struct AgentDriver {
     terminal_driver: ModelHandle<terminal::TerminalDriver>,
+    /// Root directory for workspace-wide environment and snapshot operations.
     working_dir: PathBuf,
+    /// Directory where the selected harness runs.
+    harness_working_dir: PathBuf,
 
     /// Secrets available to the running agent.
     /// - Secrets are injected as environment variables when the terminal session is created.
@@ -1160,6 +1163,7 @@ impl AgentDriver {
 
         Ok(Self {
             terminal_driver,
+            harness_working_dir: working_dir.clone(),
             working_dir,
             secrets: Arc::new(secrets),
             resolved_env_vars,
@@ -1211,6 +1215,7 @@ impl AgentDriver {
         });
         Self {
             terminal_driver,
+            harness_working_dir: working_dir.clone(),
             working_dir,
             secrets: Arc::new(HashMap::new()),
             resolved_env_vars: Arc::new(HashMap::new()),
@@ -2254,12 +2259,19 @@ impl AgentDriver {
                         .await?
                         .await
                         .map_err(AgentDriverError::from);
-                    if let Err(error) = prepare_outcome {
-                        // A broken environment is the case post-failure retention exists for, so this
-                        // failure must not take the session down with it on the way out.
-                        Self::linger_after_failure(&foreground, "environment_setup", &error).await;
-                        return Err(error);
-                    }
+                    let harness_working_dir = match prepare_outcome {
+                        Ok(harness_working_dir) => harness_working_dir,
+                        Err(error) => {
+                            // A broken environment is the case post-failure retention exists for, so this
+                            // failure must not take the session down with it on the way out.
+                            Self::linger_after_failure(&foreground, "environment_setup", &error)
+                                .await;
+                            return Err(error);
+                        }
+                    };
+                    foreground
+                        .spawn(move |me, _| me.harness_working_dir = harness_working_dir)
+                        .await?;
 
                     if let Some(scan) = cloud_env_mcp_scan {
                         Self::await_file_based_mcp_startup(
@@ -2968,7 +2980,14 @@ impl AgentDriver {
         harness: &dyn ThirdPartyHarness,
         foreground: &ModelSpawner<Self>,
     ) -> Result<Arc<dyn harness::HarnessRunner>, AgentDriverError> {
-        let (working_dir, task_id, server_api, managed_mcp_client, terminal_driver) = foreground
+        let (
+            workspace_root,
+            harness_working_dir,
+            task_id,
+            server_api,
+            managed_mcp_client,
+            terminal_driver,
+        ) = foreground
             .spawn(|me, ctx| {
                 if me.harness.is_some() {
                     log::error!(
@@ -2979,6 +2998,7 @@ impl AgentDriver {
 
                 Ok((
                     me.working_dir.clone(),
+                    me.harness_working_dir.clone(),
                     me.task_id,
                     ServerApiProvider::as_ref(ctx).get(),
                     ServerApiProvider::as_ref(ctx).get_managed_mcp_client(),
@@ -3065,7 +3085,8 @@ impl AgentDriver {
                 system_prompt.as_deref(),
                 resumption_prompt.as_deref(),
                 server_context.as_deref(),
-                &working_dir,
+                &workspace_root,
+                &harness_working_dir,
                 task_id,
                 server_api,
                 terminal_driver,

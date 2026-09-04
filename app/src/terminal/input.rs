@@ -324,9 +324,11 @@ use crate::terminal::view::ambient_agent::{
     AuthSecretFtuxView, AuthSecretFtuxViewEvent, AuthSecretSelector, AuthSecretSelectorEvent,
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
 };
+use crate::terminal::view::init::{CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY};
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
 use crate::terminal::view::{
-    AIQueryRouting, CodeDiffAction, resolve_ai_query_routing, resolve_ambient_agent_task_id,
+    AIQueryRouting, CodeDiffAction, file_attach_allowed_for_shared_session,
+    resolve_ai_query_routing, resolve_ambient_agent_task_id,
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -7000,6 +7002,12 @@ impl Input {
         if did_start_listening {
             self.focus_input_box(ctx);
         }
+    }
+
+    pub(crate) fn attach_file(&mut self, ctx: &mut ViewContext<Self>) {
+        self.agent_input_footer.update(ctx, |footer, ctx| {
+            footer.select_file(ctx);
+        });
     }
 
     fn select_image(&mut self, ctx: &mut ViewContext<Self>) {
@@ -16851,6 +16859,13 @@ impl View for Input {
             }
         }
 
+        if CLIAgentSessionsModel::as_ref(app)
+            .session(self.terminal_view_id)
+            .is_some()
+        {
+            ctx.set.insert(CLI_AGENT_SESSION_ACTIVE_KEY);
+        }
+
         if self.buffer_text(app).is_empty() {
             ctx.set.insert(flags::EMPTY_INPUT_BUFFER);
         }
@@ -16961,6 +16976,13 @@ impl View for Input {
         let model_lock = self.model.lock();
         ctx.set
             .insert(model_lock.shared_session_status().as_keymap_context());
+        if file_attach_allowed_for_shared_session(
+            model_lock.shared_session_status(),
+            self.ambient_agent_view_model(),
+            app,
+        ) {
+            ctx.set.insert(CAN_ATTACH_FILE_KEY);
+        }
 
         if model_lock
             .block_list()
