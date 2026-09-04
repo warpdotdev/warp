@@ -1,7 +1,10 @@
 //! The "legacy" implementation of internal command parsing logic that depends on the legacy:
 //! command signature struct (`warp_command_signatures::Signature`).
 use itertools::Itertools;
-use warp_command_signatures::{DynamicCompletionData, IsArgumentOptional, Opt, Signature};
+use warp_command_signatures::{
+    AnnotatedFlag, DynamicCompletionData, FlagStyle, IsArgumentOptional, Opt, ParserDirectives,
+    Signature,
+};
 
 use super::hir::{Command, Expression, ShellCommand};
 use super::{LiteCommand, ParseError, parse_unclassified_command};
@@ -14,12 +17,19 @@ use crate::parsers::{
 };
 use crate::signatures::CommandRegistry;
 
+const MAX_LOAD_SPEC_DEPTH: usize = 4;
+
 #[derive(Clone, Copy)]
 /// A `Signature` (and its corresponding generator) contained at a given index.
 pub struct SignatureAtTokenIndex<'a> {
     pub signature: &'a Signature,
     pub dynamic_completion_data: Option<&'a DynamicCompletionData>,
     pub token_index: usize,
+    loaded_targets: [Option<&'a Signature>; MAX_LOAD_SPEC_DEPTH],
+    loaded_target_count: u8,
+    inherited_options: [Option<&'a [Opt]>; MAX_LOAD_SPEC_DEPTH],
+    inherited_options_count: u8,
+    target_dynamic_completion_data: Option<&'a DynamicCompletionData>,
 }
 
 impl<'a> SignatureAtTokenIndex<'a> {
@@ -28,11 +38,130 @@ impl<'a> SignatureAtTokenIndex<'a> {
         dynamic_completion_data: Option<&'a DynamicCompletionData>,
         index: usize,
     ) -> Self {
+        Self::with_load_spec(signature, dynamic_completion_data, index, &[], &[], None)
+    }
+
+    pub fn with_load_spec(
+        signature: &'a Signature,
+        dynamic_completion_data: Option<&'a DynamicCompletionData>,
+        index: usize,
+        loaded_targets: &[&'a Signature],
+        inherited_options: &[&'a [Opt]],
+        target_dynamic_completion_data: Option<&'a DynamicCompletionData>,
+    ) -> Self {
+        let mut targets = [None; MAX_LOAD_SPEC_DEPTH];
+        let target_count = loaded_targets.len().min(MAX_LOAD_SPEC_DEPTH);
+        for (slot, target) in targets
+            .iter_mut()
+            .zip(loaded_targets.iter().take(target_count))
+        {
+            *slot = Some(*target);
+        }
+        let mut inherited = [None; MAX_LOAD_SPEC_DEPTH];
+        let inherited_count = inherited_options.len().min(MAX_LOAD_SPEC_DEPTH);
+        for (slot, options) in inherited
+            .iter_mut()
+            .zip(inherited_options.iter().take(inherited_count))
+        {
+            *slot = Some(*options);
+        }
         SignatureAtTokenIndex {
             signature,
             dynamic_completion_data,
             token_index: index,
+            loaded_targets: targets,
+            loaded_target_count: target_count as u8,
+            inherited_options: inherited,
+            inherited_options_count: inherited_count as u8,
+            target_dynamic_completion_data,
         }
+    }
+
+    pub fn arguments(&self) -> &'a [warp_command_signatures::Argument] {
+        if !self.signature.arguments().is_empty() {
+            return self.signature.arguments();
+        }
+        for target in self.loaded_targets() {
+            if !target.arguments().is_empty() {
+                return target.arguments();
+            }
+        }
+        &[]
+    }
+
+    pub fn options(&self) -> impl Iterator<Item = &'a Opt> + '_ {
+        self.inherited_options
+            .iter()
+            .take(self.inherited_options_count as usize)
+            .filter_map(|options| *options)
+            .flatten()
+            .chain(self.signature.options())
+            .chain(self.loaded_targets().flat_map(Signature::options))
+    }
+
+    pub fn subcommands(&self) -> impl Iterator<Item = &'a Signature> + '_ {
+        self.signature
+            .subcommands()
+            .iter()
+            .chain(self.loaded_targets().flat_map(Signature::subcommands))
+    }
+
+    pub fn parser_directives(&self) -> &ParserDirectives {
+        &self.signature.parser_directives
+    }
+
+    pub fn generator_completion_data(&self) -> Option<&'a DynamicCompletionData> {
+        self.target_dynamic_completion_data
+            .or(self.dynamic_completion_data)
+    }
+
+    fn loaded_targets(&self) -> impl Iterator<Item = &'a Signature> + '_ {
+        self.loaded_targets
+            .iter()
+            .take(self.loaded_target_count as usize)
+            .filter_map(|target| *target)
+    }
+
+    pub fn short_hand_flags(&self) -> impl Iterator<Item = AnnotatedFlag<'a>> + '_ {
+        self.options().flat_map(|option| {
+            option
+                .exact_string
+                .iter()
+                .filter(|name| is_short_hand_flag(name))
+                .map(|name| annotated_flag(option, name))
+        })
+    }
+
+    pub fn long_hand_flags(&self) -> impl Iterator<Item = AnnotatedFlag<'a>> + '_ {
+        self.options().flat_map(|option| {
+            option
+                .exact_string
+                .iter()
+                .filter(|name| is_long_hand_flag(name))
+                .map(|name| annotated_flag(option, name))
+        })
+    }
+}
+
+fn is_short_hand_flag(name: &str) -> bool {
+    name.len() == 2 && name.starts_with('-') && name != "--"
+}
+
+fn is_long_hand_flag(name: &str) -> bool {
+    name.starts_with('-') && !is_short_hand_flag(name)
+}
+
+fn annotated_flag<'a>(opt: &'a Opt, name: &'a str) -> AnnotatedFlag<'a> {
+    let (style, name) = if let Some(name) = name.strip_prefix("--") {
+        (FlagStyle::DoubleDash, name)
+    } else {
+        (FlagStyle::SingleDash, &name[1..])
+    };
+    AnnotatedFlag {
+        name,
+        description: opt.description.as_deref(),
+        priority: opt.priority,
+        style,
     }
 }
 
@@ -52,11 +181,7 @@ pub(super) fn parse_command(
         lite_cmd.post_whitespace.is_some(),
         command_case_sensitivity,
     ) {
-        let (internal_command, err) = parse_internal_command(
-            lite_cmd,
-            found_signature.signature,
-            found_signature.token_index,
-        );
+        let (internal_command, err) = parse_internal_command(lite_cmd, found_signature);
 
         error = error.or(err);
         (Some(Command::Classified(internal_command)), error)
@@ -72,10 +197,11 @@ pub(super) fn parse_command(
 /// requirements in terms of number of each were met.
 fn parse_internal_command(
     lite_cmd: &LiteCommand,
-    signature: &Signature,
-    mut idx: usize,
+    found_signature: SignatureAtTokenIndex<'_>,
 ) -> (ShellCommand, Option<ParseError>) {
     log::debug!("parsing internal command {lite_cmd:?}");
+    let mut idx = found_signature.token_index;
+    let arguments = found_signature.arguments();
 
     // This is a known internal command, so we need to work with the arguments and parse them according to the expected types
     let (name, name_span) = (
@@ -103,7 +229,7 @@ fn parse_internal_command(
     while idx < lite_cmd.parts.len() {
         if lite_cmd.parts[idx].item.starts_with('-') && lite_cmd.parts[idx].item.len() > 1 {
             let (named_types, err) =
-                get_flag_signature_spec(signature, &internal_command, &lite_cmd.parts[idx]);
+                get_flag_signature_spec(found_signature, &internal_command, &lite_cmd.parts[idx]);
 
             if err.is_none() {
                 for FlagSignature {
@@ -225,11 +351,9 @@ fn parse_internal_command(
 
                 error = error.or(err);
             }
-        } else if !signature.arguments().is_empty()
-            && signature.arguments().len() > current_positional
-        {
+        } else if !arguments.is_empty() && arguments.len() > current_positional {
             let arg = {
-                let arg_signature = &signature.arguments()[current_positional];
+                let arg_signature = &arguments[current_positional];
                 let (expr, err) = parse_arg(&lite_cmd.parts[idx], Some(arg_signature));
 
                 error = error.or(err);
@@ -238,8 +362,7 @@ fn parse_internal_command(
 
             positional.push(arg);
             current_positional += 1;
-        } else if let Some(arg_signature) = signature.arguments().iter().rfind(|a| a.is_variadic())
-        {
+        } else if let Some(arg_signature) = arguments.iter().rfind(|a| a.is_variadic()) {
             let (arg, err) = parse_arg(&lite_cmd.parts[idx], Some(arg_signature));
             error = error.or(err);
 
@@ -269,7 +392,7 @@ fn parse_internal_command(
         idx += 1;
     }
 
-    if let Some(arguments) = &signature.arguments {
+    if !arguments.is_empty() {
         // Count the required positional arguments and ensure these have been met
         let mut required_arg_count = 0;
         for positional_arg in arguments {
@@ -320,7 +443,7 @@ impl From<&Opt> for FlagArgumentsCardinality {
 }
 
 fn get_flag_signature_spec<'a>(
-    signature: &'a Signature,
+    found_signature: SignatureAtTokenIndex<'a>,
     cmd: &'a ShellCommand,
     arg: &'a Spanned<String>,
 ) -> (Vec<FlagSignature<'a>>, Option<ParseError>) {
@@ -329,21 +452,27 @@ fn get_flag_signature_spec<'a>(
         return (vec![], None);
     }
 
-    let case_insensitive_flags = signature.parser_directives.always_case_insensitive;
+    let case_insensitive_flags = found_signature.parser_directives().always_case_insensitive;
 
     let mut flag = arg.item.as_str();
     let mut output = vec![];
     let mut error = None;
 
-    if signature.parser_directives.flags_are_posix_noncompliant || flag.starts_with("--") {
+    if found_signature
+        .parser_directives()
+        .flags_are_posix_noncompliant
+        || flag.starts_with("--")
+    {
         if let Some((flag_name, _value)) = flag.split_once('=') {
             flag = flag_name;
         }
 
-        if signature.parser_directives.flags_match_unique_prefix {
-            let all_prefix_matches = signature
+        if found_signature
+            .parser_directives()
+            .flags_match_unique_prefix
+        {
+            let all_prefix_matches = found_signature
                 .options()
-                .iter()
                 .filter_map(|opt| {
                     opt.names()
                         .find(|name| {
@@ -371,7 +500,7 @@ fn get_flag_signature_spec<'a>(
                     ));
                 }
             }
-        } else if let Some(option) = signature.options().iter().find(|option| {
+        } else if let Some(option) = found_signature.options().find(|option| {
             if case_insensitive_flags {
                 option
                     .names()
@@ -401,7 +530,7 @@ fn get_flag_signature_spec<'a>(
         for c in flag.trim_start_matches('-').chars() {
             let ungrouped_flag = format!("-{c}");
 
-            if let Some(option) = signature.options().iter().find(|option| {
+            if let Some(option) = found_signature.options().find(|option| {
                 if case_insensitive_flags {
                     option
                         .names()

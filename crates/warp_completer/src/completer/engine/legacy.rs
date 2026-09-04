@@ -11,7 +11,7 @@ pub(super) fn argument_name_at_index_for_command(
     command_registry
         .signature_from_line(command, command_case_sensitivity)
         .and_then(|found_signature| {
-            let arguments = found_signature.signature.arguments();
+            let arguments = found_signature.arguments();
             arguments
                 .get(idx)
                 .map(|arg| arg.name().unwrap_or_default().to_string())
