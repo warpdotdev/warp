@@ -585,7 +585,7 @@ fn run_task(
     command: TaskCommand,
 ) -> anyhow::Result<()> {
     match command {
-        TaskCommand::List(args) => ambient::list_ambient_agent_tasks(ctx, global_options, args),
+        TaskCommand::List(args) => ambient::list_ambient_agent_tasks(ctx, global_options, *args),
         TaskCommand::Get(args) => {
             if args.conversation {
                 if !FeatureFlag::ConversationApi.is_enabled() {

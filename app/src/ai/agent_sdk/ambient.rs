@@ -46,6 +46,7 @@ use crate::server::server_api::ai::{
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -74,11 +75,20 @@ pub fn list_ambient_agent_tasks(
     args: ListTasksArgs,
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| AmbientAgentRunner);
+    let cli_scope = UserWorkspaces::as_ref(ctx).team_scope_for_cli(&args.team_selection)?;
+    let request_team_scope = RequestTeamScope::from_scope(&cli_scope);
     let filter = filter_from_args(&args);
     let json_output = args.json_output.clone();
     let output_format = global_options.output_format;
     runner.update(ctx, |runner, ctx| {
-        runner.list_tasks(args.limit, filter, output_format, json_output, ctx)
+        runner.list_tasks(
+            args.limit,
+            filter,
+            request_team_scope,
+            output_format,
+            json_output,
+            ctx,
+        )
     })
 }
 
@@ -195,6 +205,31 @@ fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     }
 }
 
+enum ListTasksOutput {
+    Raw(serde_json::Value),
+    Tasks(Vec<AmbientAgentTask>),
+}
+
+async fn load_tasks_for_output(
+    ai_client: &dyn AIClient,
+    limit: i32,
+    filter: TaskListFilter,
+    request_team_scope: RequestTeamScope,
+    output_format: OutputFormat,
+    json_output: &JsonOutput,
+) -> anyhow::Result<ListTasksOutput> {
+    if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
+        let response = ai_client
+            .list_agent_runs_raw(limit, filter, Some(request_team_scope))
+            .await?;
+        Ok(ListTasksOutput::Raw(response))
+    } else {
+        let tasks = ai_client
+            .list_ambient_agent_tasks(limit, filter, Some(request_team_scope))
+            .await?;
+        Ok(ListTasksOutput::Tasks(tasks))
+    }
+}
 /// Run a message-related CLI command.
 pub fn run_message(
     ctx: &mut AppContext,
@@ -642,6 +677,7 @@ impl AmbientAgentRunner {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: RequestTeamScope,
         output_format: OutputFormat,
         json_output: JsonOutput,
         ctx: &mut ModelContext<Self>,
@@ -649,17 +685,27 @@ impl AmbientAgentRunner {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
 
         let list_future = async move {
-            if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
-                let response = ai_client.list_agent_runs_raw(limit, filter).await?;
-                super::output::print_raw_json(response, &json_output)?;
-            } else if matches!(output_format, OutputFormat::Ndjson) {
-                let tasks = ai_client.list_ambient_agent_tasks(limit, filter).await?;
-                for task in tasks {
-                    super::output::write_json_line(&task, std::io::stdout())?;
+            match load_tasks_for_output(
+                ai_client.as_ref(),
+                limit,
+                filter,
+                request_team_scope,
+                output_format,
+                &json_output,
+            )
+            .await?
+            {
+                ListTasksOutput::Raw(response) => {
+                    super::output::print_raw_json(response, &json_output)?;
                 }
-            } else {
-                let tasks = ai_client.list_ambient_agent_tasks(limit, filter).await?;
-                Self::print_tasks_table(&tasks);
+                ListTasksOutput::Tasks(tasks) if matches!(output_format, OutputFormat::Ndjson) => {
+                    for task in tasks {
+                        super::output::write_json_line(&task, std::io::stdout())?;
+                    }
+                }
+                ListTasksOutput::Tasks(tasks) => {
+                    Self::print_tasks_table(&tasks);
+                }
             }
             Ok(())
         };

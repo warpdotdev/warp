@@ -3,6 +3,7 @@ use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use warp_cli::SortOrderArg;
 use warp_cli::json_filter::JsonOutput;
+use warp_cli::scope::TeamSelection;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSourceArg, RunStateArg,
 };
@@ -12,6 +13,8 @@ use super::*;
 use crate::server::server_api::ai::{
     ArtifactType, ExecutionLocation, MockAIClient, RunSortBy, RunSortOrder,
 };
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
@@ -19,6 +22,7 @@ const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
 /// A `ListTasksArgs` whose fields are all at their defaults.
 fn empty_args() -> ListTasksArgs {
     ListTasksArgs {
+        team_selection: TeamSelection { team: None },
         limit: 10,
         state: vec![],
         source: None,
@@ -40,6 +44,10 @@ fn empty_args() -> ListTasksArgs {
         cursor: None,
         json_output: JsonOutput::default(),
     }
+}
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
 }
 
 #[test]
@@ -125,6 +133,7 @@ fn every_field_maps_through() {
     let updated_after = Utc.with_ymd_and_hms(2026, 4, 3, 12, 30, 0).unwrap();
 
     let args = ListTasksArgs {
+        team_selection: TeamSelection { team: None },
         limit: 20,
         state: vec![RunStateArg::InProgress],
         source: Some(RunSourceArg::Api),
@@ -170,6 +179,84 @@ fn every_field_maps_through() {
     assert_eq!(filter.sort_by, Some(RunSortBy::CreatedAt));
     assert_eq!(filter.sort_order, Some(RunSortOrder::Asc));
     assert_eq!(filter.cursor.as_deref(), Some("abcd=="));
+}
+
+#[tokio::test]
+async fn table_run_listing_supplies_cli_scope() {
+    let mut mock = MockAIClient::new();
+    mock.expect_list_ambient_agent_tasks()
+        .withf(|limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.is_some()
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(Vec::new()));
+    mock.expect_list_agent_runs_raw().times(0);
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_team_scope(),
+        OutputFormat::Text,
+        &JsonOutput::default(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn ndjson_run_listing_supplies_cli_scope() {
+    let mut mock = MockAIClient::new();
+    mock.expect_list_ambient_agent_tasks()
+        .withf(|limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.is_some()
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(Vec::new()));
+    mock.expect_list_agent_runs_raw().times(0);
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_team_scope(),
+        OutputFormat::Ndjson,
+        &JsonOutput::default(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn raw_json_run_listing_supplies_cli_scope() {
+    let mut mock = MockAIClient::new();
+    mock.expect_list_agent_runs_raw()
+        .withf(|limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.is_some()
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(serde_json::json!({ "runs": [] })));
+    mock.expect_list_ambient_agent_tasks().times(0);
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_team_scope(),
+        OutputFormat::Json,
+        &JsonOutput::default(),
+    )
+    .await
+    .unwrap();
 }
 
 #[test]
