@@ -9,6 +9,7 @@ use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
+use crate::runner::RunnerCommand;
 use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
@@ -21,6 +22,48 @@ fn identifies_worker_subcommands() {
     #[cfg(feature = "plugin_host")]
     assert!(is_worker_invocation("--plugin-host"));
     assert!(!is_worker_invocation("--prompt"));
+}
+
+#[test]
+fn runner_list_accepts_team_uid() {
+    let args =
+        Args::try_parse_from(["warp", "runner", "list", "--team=team_uid00000000000123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp runner list` command");
+    };
+    let CliCommand::Runner(RunnerCommand::List(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp runner list` command");
+    };
+
+    assert_eq!(
+        args.team_selection.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
+}
+
+#[test]
+fn runner_name_update_accepts_bare_team_selection() {
+    let args = Args::try_parse_from([
+        "warp",
+        "runner",
+        "update",
+        "--name",
+        "runner-name",
+        "--team",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp runner update` command");
+    };
+    let CliCommand::Runner(RunnerCommand::Update(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp runner update` command");
+    };
+
+    assert!(args.id.is_none());
+    assert!(args.team_selection.is_team());
+    assert!(args.team_selection.requested_team_uid().is_none());
 }
 
 /// Pins that each pair of constants names the same variable under both prefixes. A typo in

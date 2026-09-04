@@ -63,6 +63,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AmbientAgentTask;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
@@ -79,6 +80,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -861,8 +863,11 @@ impl ConversationDetailsPanel {
 
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         ctx.spawn(
-            async move { client.get_runners(None).await },
+            async move { client.get_runners(None, team_scope).await },
             |me, result: anyhow::Result<Vec<Runner>>, ctx| {
                 me.runners_loading = false;
                 match result {
