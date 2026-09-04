@@ -4825,6 +4825,7 @@ type Workspace {
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
   name: String!
+  openTeams: [DiscoverableTeamData!]!
   pendingEmailInvites: [EmailInvite!]!
 
   """

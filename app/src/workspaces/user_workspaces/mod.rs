@@ -1628,6 +1628,7 @@ impl UserWorkspaces {
                 has_billing_history: false,
                 visibility: TeamVisibility::Open,
             }],
+            open_teams: vec![],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
                 email: "test@example.com".to_string(),
