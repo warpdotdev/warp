@@ -37,6 +37,7 @@ use crate::search_bar::SearchBar;
 use crate::server::ids::ApiKeyUid;
 use crate::ui_components::icons::Icon;
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 const MODAL_WIDTH: f32 = 460.;
 const MODAL_HEIGHT: f32 = 320.;
@@ -91,6 +92,13 @@ fn compute_api_key_name_column_max_width(
     (available_table_width - min_non_resizable_columns_width).max(min_width)
 }
 
+fn api_key_team_uid<T: Entity>(ctx: &ViewContext<T>) -> Option<String> {
+    UserWorkspaces::as_ref(ctx)
+        .team_context_for_operation(ctx)
+        .team_uid()
+        .map(|uid| uid.uid())
+}
+
 #[derive(Clone, Copy)]
 pub enum PlatformPageViewEvent {
     ShowCreateApiKeyModal,
@@ -127,9 +135,10 @@ impl PlatformPageView {
         // Build and send the GraphQL query
         let auth_client =
             crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
+        let team_uid = api_key_team_uid(ctx);
 
         ctx.spawn(
-            async move { auth_client.list_api_keys().await },
+            async move { auth_client.list_api_keys(team_uid).await },
             |me, res, ctx| {
                 me.is_loading = false;
                 match res {

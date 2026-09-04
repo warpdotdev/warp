@@ -1,12 +1,18 @@
 use chrono::Utc;
+use warpui::elements::Empty;
+use warpui::platform::WindowStyle;
+use warpui::{App, AppContext, Element, Entity, SingletonEntity, TypedActionView, View};
 
 use super::{
     API_KEY_KEY_COLUMN_WIDTH, API_KEY_NAME_COLUMN_MIN_WIDTH, API_KEY_TABLE_LAYOUT_SAFETY_PADDING,
     API_KEY_TABLE_MIN_SCOPE_COLUMN_WIDTH, APIKeyProperties, ApiKeyScope,
     SETTINGS_PAGE_HORIZONTAL_PADDING, SETTINGS_PAGE_MAX_CONTENT_WIDTH,
     SETTINGS_SECTION_BORDER_WIDTH, SETTINGS_SIDEBAR_WIDTH_DEFAULT,
-    api_key_table_min_non_resizable_columns_width, compute_api_key_name_column_max_width,
+    api_key_table_min_non_resizable_columns_width, api_key_team_uid,
+    compute_api_key_name_column_max_width,
 };
+use crate::server::ids::ServerId;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn table_width_chrome() -> f32 {
     SETTINGS_SIDEBAR_WIDTH_DEFAULT
@@ -115,4 +121,62 @@ fn api_key_search_treats_empty_query_as_match() {
 
     assert!(key.matches_search_query("", false));
     assert!(key.matches_search_query("   ", true));
+}
+
+#[derive(Default)]
+struct TestView;
+
+impl Entity for TestView {
+    type Event = ();
+}
+
+impl View for TestView {
+    fn ui_name() -> &'static str {
+        "PlatformPageTestView"
+    }
+
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        Empty::new().finish()
+    }
+}
+
+impl TypedActionView for TestView {
+    type Action = ();
+}
+
+#[test]
+fn api_key_team_uid_uses_requesting_views_window() {
+    let first_team: ServerId = 123.into();
+    let second_team: ServerId = 456.into();
+    App::test((), |mut app| async move {
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let (first_window, first_view) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        let (second_window, second_view) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.register_window(first_window, Some(first_team), ctx);
+            workspaces.register_window(second_window, Some(second_team), ctx);
+        });
+
+        assert_eq!(
+            first_view.update(&mut app, |_, ctx| api_key_team_uid(ctx)),
+            Some(first_team.uid())
+        );
+        assert_eq!(
+            second_view.update(&mut app, |_, ctx| api_key_team_uid(ctx)),
+            Some(second_team.uid())
+        );
+    })
+}
+
+#[test]
+fn api_key_team_uid_is_absent_for_teamless_window() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let (window, view) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.register_window(window, None, ctx);
+        });
+
+        assert_eq!(view.update(&mut app, |_, ctx| api_key_team_uid(ctx)), None);
+    })
 }

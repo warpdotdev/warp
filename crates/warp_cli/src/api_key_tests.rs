@@ -36,6 +36,16 @@ fn parse_create_err(argv: &[&str]) -> clap::Error {
 }
 
 #[test]
+fn list_accepts_explicit_team_selection() {
+    let command = parse_command(&["list", "--team=team-uid"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+
+    assert_eq!(args.team_selection.team, Some(Some("team-uid".to_string())));
+}
+
+#[test]
 fn create_requires_expiration_decision() {
     let err = parse_create_err(&["ci-key"]);
     assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
@@ -77,11 +87,12 @@ fn create_accepts_rfc3339_expiration() {
 
 #[test]
 fn delete_is_alias_for_expire() {
-    let command = parse_command(&["delete", "deploy-key", "--force"]);
+    let command = parse_command(&["delete", "deploy-key", "--team=team-uid", "--force"]);
     let ApiKeyCommand::Expire(args) = command else {
         panic!("Expected expire command");
     };
 
     assert_eq!(args.key_uid, "deploy-key");
+    assert_eq!(args.team_selection.team, Some(Some("team-uid".to_string())));
     assert!(args.force);
 }
