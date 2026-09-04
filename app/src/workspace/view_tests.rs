@@ -1590,6 +1590,62 @@ fn test_tab_renaming_editor_selections() {
 }
 
 #[test]
+fn test_commit_active_rename_commits_tab_rename() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.rename_tab_internal(0, "old title", ctx);
+            workspace.tab_rename_editor.update(ctx, |editor, ctx| {
+                editor.insert_selected_text("new title", ctx);
+            });
+
+            workspace.handle_action(&WorkspaceAction::CommitActiveRename, ctx);
+
+            assert!(!workspace.current_workspace_state.is_tab_being_renamed());
+            assert_eq!(
+                workspace.tabs[0]
+                    .pane_group
+                    .as_ref(ctx)
+                    .custom_title(ctx)
+                    .as_deref(),
+                Some("new title")
+            );
+        });
+    });
+}
+
+#[test]
+fn test_cancel_active_rename_discards_tab_rename() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.rename_tab_internal(0, "old title", ctx);
+            workspace.tab_rename_editor.update(ctx, |editor, ctx| {
+                editor.insert_selected_text("new title", ctx);
+            });
+
+            workspace.handle_action(&WorkspaceAction::CancelActiveRename, ctx);
+
+            assert!(!workspace.current_workspace_state.is_tab_being_renamed());
+            assert_ne!(
+                workspace.tabs[0]
+                    .pane_group
+                    .as_ref(ctx)
+                    .custom_title(ctx)
+                    .as_deref(),
+                Some("new title")
+            );
+        });
+    });
+}
+
+#[test]
 fn test_tab_renaming_editor_reset() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -4602,6 +4658,41 @@ fn test_toggle_tab_group_collapsed_flips_state() {
 
             workspace.handle_action(&WorkspaceAction::ToggleTabGroupCollapsed(group_id), ctx);
             assert!(!workspace.tab_groups[&group_id].collapsed);
+        });
+    });
+}
+
+#[test]
+fn test_commit_active_rename_commits_tab_group_rename() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.rename_tab_group(group_id, ctx);
+            workspace
+                .tab_group_rename_editor
+                .update(ctx, |editor, ctx| {
+                    editor.insert_selected_text("renamed group", ctx);
+                });
+
+            workspace.handle_action(&WorkspaceAction::CommitActiveRename, ctx);
+
+            assert!(
+                !workspace
+                    .current_workspace_state
+                    .is_any_tab_group_being_renamed()
+            );
+            assert_eq!(
+                workspace.tab_groups[&group_id].name.as_deref(),
+                Some("renamed group")
+            );
         });
     });
 }
