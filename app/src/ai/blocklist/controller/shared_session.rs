@@ -17,6 +17,7 @@ use super::{BlocklistAIController, RequestInput, SessionContext};
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskSyncMode};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
+use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::{
     DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
 };
@@ -854,6 +855,26 @@ impl BlocklistAIController {
         })
     }
 
+    /// The task ID a no-token prompt landing right now must not spawn a native `AIConversation`
+    /// for, because it is (or is configured to be) backed by a third-party CLI-harness session.
+    /// Two independent signals are checked, since either can be true without the other:
+    /// - `LocalAgentTaskSyncModel::task_id_for_terminal_view`: the harness session has been
+    ///   registered for this pane (true from harness setup time, before its process launches).
+    /// - `AmbientAgentTask::is_third_party_harness`: the task's stored config says it runs on a
+    ///   third-party harness, independent of whether a session has registered for this pane yet
+    ///   (e.g. very early in setup, or if registration is ever skipped by a bug).
+    fn cli_harness_backed_task_id(&self, ctx: &AppContext) -> Option<AmbientAgentTaskId> {
+        LocalAgentTaskSyncModel::as_ref(ctx)
+            .task_id_for_terminal_view(self.terminal_surface_id)
+            .or_else(|| {
+                self.ambient_agent_task_id.filter(|task_id| {
+                    AgentConversationsModel::as_ref(ctx)
+                        .get_task_data(task_id)
+                        .is_some_and(|task| task.is_third_party_harness())
+                })
+            })
+    }
+
     /// Tags `conversation_id` as a setup-failure debug bootstrap so `LocalAgentTaskSyncModel`
     /// stops deriving task lifecycle updates from it. Must run before the first exchange can
     /// report a server token, which would otherwise trigger an erroneous `IN_PROGRESS` report.
@@ -920,8 +941,7 @@ impl BlocklistAIController {
             // these prompts to `PendingCliHarnessPromptQueue` before they ever reach this
             // method; reaching here for such a task means that gate was bypassed by a bug.
             if !bootstraps_setup_failure_debug
-                && let Some(task_id) = LocalAgentTaskSyncModel::as_ref(ctx)
-                    .task_id_for_terminal_view(self.terminal_surface_id)
+                && let Some(task_id) = self.cli_harness_backed_task_id(ctx)
             {
                 report_error!(
                     "Refused to create a native conversation for a task backed by a registered \
