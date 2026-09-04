@@ -184,6 +184,7 @@ pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
 
 impl UserWorkspaces {
     /// Replaces a headless window's inherited team with its resolved launch scope.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_team_for_window_from_scope(
         &mut self,
         window_id: WindowId,
