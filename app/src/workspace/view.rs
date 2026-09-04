@@ -499,6 +499,7 @@ use crate::workspace::cross_window_tab_drag::{
 };
 use crate::workspace::header_toolbar_editor::{HeaderToolbarEditorEvent, HeaderToolbarEditorModal};
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
+use crate::workspace::inline_rename_state::InlineRenameState;
 use crate::workspace::one_time_modal_model::OneTimeModalModel;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
@@ -1516,10 +1517,15 @@ impl Workspace {
             .is_any_tab_group_being_renamed()
         {
             match event {
-                EditorEvent::Blurred | EditorEvent::Enter => {
+                EditorEvent::Enter => {
                     self.finish_tab_group_rename(ctx);
                 }
-                EditorEvent::Escape => {
+                // Blur discards rather than commits. Focus can leave this editor without
+                // the user ever ending the rename — #14241 is one such case — and
+                // committing then writes a half-typed fragment as the group's real,
+                // persisted name. Discarding loses nothing the user cannot retype, and
+                // Enter remains the way to confirm.
+                EditorEvent::Blurred | EditorEvent::Escape => {
                     self.cancel_tab_group_rename(ctx);
                 }
                 _ => {}
@@ -1595,6 +1601,7 @@ impl Workspace {
             group.name = Some(trimmed.to_string());
         }
         self.clear_tab_group_name_editor(ctx);
+        InlineRenameState::set_editor_has_focus(false, ctx);
         self.focus_active_tab(ctx);
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -1607,6 +1614,7 @@ impl Workspace {
         {
             self.current_workspace_state.clear_tab_group_being_renamed();
             self.clear_tab_group_name_editor(ctx);
+            InlineRenameState::set_editor_has_focus(false, ctx);
             self.focus_active_tab(ctx);
             ctx.notify();
         }
@@ -7383,6 +7391,9 @@ impl Workspace {
                 editor.insert_selected_text(&seed_text, ctx);
             });
         ctx.focus(&self.tab_group_rename_editor);
+        // Tell the terminal side that an inline editor owns focus, so a terminal that
+        // finishes bootstrapping a moment from now does not steal it (#14241).
+        InlineRenameState::set_editor_has_focus(true, ctx);
         ctx.notify();
     }
 

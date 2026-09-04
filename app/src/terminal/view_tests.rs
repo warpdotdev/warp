@@ -10217,3 +10217,59 @@ fn back_button_label_resolves_token_only_parent_linkage() {
         });
     });
 }
+
+/// `VisibleBootstrapBlock` now consults the `InlineRenameState` singleton, so the
+/// shared terminal test initializer has to register it. Without that registration
+/// every terminal-view test that reaches this path panics on an unregistered
+/// singleton (#14241).
+#[test]
+fn visible_bootstrap_block_focuses_terminal_under_shared_test_setup() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        // Move focus off the terminal so the event has something to undo.
+        terminal.update(&mut app, |view, ctx| {
+            let find_bar = view.find_bar.clone();
+            ctx.focus(&find_bar);
+        });
+        assert_ne!(app.focused_view_id(window), Some(terminal.id()));
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::VisibleBootstrapBlock, ctx);
+        });
+
+        assert_eq!(app.focused_view_id(window), Some(terminal.id()));
+    });
+}
+
+/// The other half of the same path: while an inline rename editor owns focus, a
+/// bootstrapping terminal must not take it back, or the user loses the name they
+/// were halfway through typing (#14241).
+#[test]
+fn visible_bootstrap_block_leaves_focus_alone_during_inline_rename() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (window, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            let find_bar = view.find_bar.clone();
+            ctx.focus(&find_bar);
+        });
+        let focused_before = app.focused_view_id(window);
+        assert_ne!(focused_before, Some(terminal.id()));
+
+        app.update(|ctx| {
+            InlineRenameState::set_editor_has_focus(true, ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(&ModelEvent::VisibleBootstrapBlock, ctx);
+        });
+
+        assert_eq!(
+            app.focused_view_id(window),
+            focused_before,
+            "a bootstrapping terminal must not steal focus from an inline rename"
+        );
+    });
+}

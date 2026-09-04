@@ -30,6 +30,7 @@ use warp_util::standardized_path::StandardizedPath;
 
 use crate::ai::block_context::BlockContext;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
+use crate::workspace::inline_rename_state::InlineRenameState;
 pub(crate) mod docker_sandbox;
 mod link_detection;
 mod open_in_warp;
@@ -12165,7 +12166,13 @@ impl TerminalView {
                 // case, we want the block to be focused because otherwise,
                 // users get stuck as they'd otherwise need to click into the
                 // box to respond to whether or not they want to update oh my zsh.
-                self.focus_terminal(ctx);
+                //
+                // Skipped while an inline rename editor is waiting for keystrokes: taking
+                // focus would blur it, and a blur ends the rename, so the user would lose
+                // the name they were halfway through typing (#14241).
+                if !InlineRenameState::editor_has_focus(ctx) {
+                    self.focus_terminal(ctx);
+                }
             }
             ModelEvent::AfterBlockStarted {
                 command,
