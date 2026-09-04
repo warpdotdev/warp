@@ -714,11 +714,13 @@ fn queued_shared_session_prompt_is_delivered_once_cli_session_starts() {
             );
         });
 
+        // Subscribe via `AppContext` (not `LocalAgentTaskSyncModel`'s own `ModelContext`):
+        // a model may not subscribe to its own events.
         let delivered = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let delivered_for_sub = delivered.clone();
         let model_for_subscription = model.clone();
-        model.update(&mut app, move |_, ctx| {
-            ctx.subscribe_to_model(&model_for_subscription, move |_, _, event, _| {
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model_for_subscription, move |_, event, _ctx| {
                 let LocalAgentTaskSyncModelEvent::SharedSessionPromptsReadyForCliHarness {
                     task_id: event_task_id,
                     terminal_view_id: event_terminal_view_id,
@@ -781,11 +783,13 @@ fn queued_shared_session_prompt_is_only_delivered_once() {
             );
         });
 
+        // Subscribe via `AppContext` (not `LocalAgentTaskSyncModel`'s own `ModelContext`):
+        // a model may not subscribe to its own events.
         let delivery_count = Arc::new(AtomicUsize::new(0));
         let delivery_count_for_sub = delivery_count.clone();
         let model_for_subscription = model.clone();
-        model.update(&mut app, move |_, ctx| {
-            ctx.subscribe_to_model(&model_for_subscription, move |_, _, _event, _| {
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model_for_subscription, move |_, _event, _ctx| {
                 delivery_count_for_sub.fetch_add(1, Ordering::SeqCst);
             });
         });
