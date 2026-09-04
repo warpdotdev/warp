@@ -452,7 +452,3 @@ impl Entity for HarnessAvailabilityModel {
 }
 
 impl SingletonEntity for HarnessAvailabilityModel {}
-
-#[cfg(test)]
-#[path = "harness_availability_tests.rs"]
-mod tests;

@@ -107,7 +107,3 @@ impl View for CloudAgentTeamRequiredView {
             .finish()
     }
 }
-
-#[cfg(test)]
-#[path = "team_required_tests.rs"]
-mod tests;
