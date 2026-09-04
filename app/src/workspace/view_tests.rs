@@ -5445,6 +5445,89 @@ fn test_settings_pane_transfer_via_real_handoff_path_does_not_panic() {
 }
 
 #[test]
+fn test_hidden_settings_pane_is_not_registered_after_cross_window_transfer() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace_a = mock_workspace(&mut app);
+        let window_a = workspace_a.update(&mut app, |_, ctx| ctx.window_id());
+        let workspace_b = mock_workspace(&mut app);
+        let window_b = workspace_b.update(&mut app, |_, ctx| ctx.window_id());
+
+        workspace_a.update(&mut app, |ws, ctx| {
+            ws.open_settings_pane(None, None, ctx);
+            ws.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.add_terminal_pane(Direction::Right, None, ctx);
+            });
+        });
+        let locator = app
+            .read(|ctx| SettingsPaneManager::as_ref(ctx).find_pane(window_a))
+            .expect("settings pane should be registered for window A");
+        workspace_a.update(&mut app, |ws, ctx| {
+            ws.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.close_pane(locator.pane_id, ctx);
+            });
+        });
+        assert_eq!(
+            app.read(|ctx| SettingsPaneManager::as_ref(ctx).find_pane(window_a)),
+            None
+        );
+
+        let transferred_pane_group =
+            transfer_tab_to_new_window(&mut app, &workspace_a, window_a, &workspace_b, window_b, 1);
+
+        app.read(|ctx| {
+            assert_eq!(SettingsPaneManager::as_ref(ctx).find_pane(window_a), None);
+            assert_eq!(SettingsPaneManager::as_ref(ctx).find_pane(window_b), None);
+        });
+        assert!(transferred_pane_group.read(&app, |pane_group, _| {
+            pane_group.is_pane_hidden_for_close(locator.pane_id)
+        }));
+    });
+}
+
+#[test]
+fn test_hidden_ai_fact_pane_is_not_registered_after_cross_window_transfer() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace_a = mock_workspace(&mut app);
+        let window_a = workspace_a.update(&mut app, |_, ctx| ctx.window_id());
+        let workspace_b = mock_workspace(&mut app);
+        let window_b = workspace_b.update(&mut app, |_, ctx| ctx.window_id());
+
+        workspace_a.update(&mut app, |ws, ctx| {
+            ws.add_terminal_tab(false, ctx);
+            ws.open_ai_fact_collection_pane(Some(Direction::Right), None, ctx);
+        });
+        let locator = app
+            .read(|ctx| AIFactManager::as_ref(ctx).find_pane(window_a))
+            .expect("AI fact pane should be registered for window A");
+        workspace_a.update(&mut app, |ws, ctx| {
+            ws.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.close_pane(locator.pane_id, ctx);
+            });
+        });
+        assert_eq!(
+            app.read(|ctx| AIFactManager::as_ref(ctx).find_pane(window_a)),
+            None
+        );
+
+        let transferred_pane_group =
+            transfer_tab_to_new_window(&mut app, &workspace_a, window_a, &workspace_b, window_b, 1);
+
+        app.read(|ctx| {
+            assert_eq!(AIFactManager::as_ref(ctx).find_pane(window_a), None);
+            assert_eq!(AIFactManager::as_ref(ctx).find_pane(window_b), None);
+        });
+        assert!(transferred_pane_group.read(&app, |pane_group, _| {
+            pane_group.is_pane_hidden_for_close(locator.pane_id)
+        }));
+    });
+}
+#[test]
 fn test_settings_pane_page_navigation_after_transfer_updates_transferred_view() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

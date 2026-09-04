@@ -222,6 +222,24 @@ pub fn keybindings_view(app: &App, window_id: WindowId) -> ViewHandle<Keybinding
 pub fn settings_view(app: &App, window_id: WindowId) -> ViewHandle<SettingsView> {
     singleton_view_of_type(app, window_id)
 }
+/// Panics if there isn't a Settings view at the given tab and pane index.
+pub fn settings_view_in_pane(
+    app: &App,
+    window_id: WindowId,
+    tab_index: usize,
+    pane_index: usize,
+) -> ViewHandle<SettingsView> {
+    pane_group_view(app, window_id, tab_index).read(app, |pane_group, ctx| {
+        pane_group
+            .settings_view_at_pane_index(pane_index, ctx)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Settings view should exist for window_id={window_id}, \
+                     tab_index={tab_index}, pane_index={pane_index}"
+                )
+            })
+    })
+}
 
 /// Panics if there isn't a single workflows view in the view hierarchy.
 pub fn workflow_categories_view(app: &App, window_id: WindowId) -> ViewHandle<CategoriesView> {
