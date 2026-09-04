@@ -1798,7 +1798,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
             open_settings_step("Open Settings", SOURCE_WINDOW_KEY)
                 .add_assertion(assert_tab_count(2)),
         )
-        // ---- Flow A: reopen Settings after detach + close ----
         .with_step(detach_settings_tab_step(
             "Flow A: drag Settings into a new window",
         ))
@@ -1823,7 +1822,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
             )
             .add_assertion(assert_tab_count(2)),
         )
-        // ---- Flow B: Rules opens in the window hosting the transferred Settings pane ----
         .with_step(detach_settings_tab_step(
             "Flow B: drag Settings into a new window",
         ))
@@ -1853,7 +1851,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
                     },
                 ),
         )
-        // ---- Flow C: Rules reopens after being closed in the transferred window ----
         // `UndoClosedPanes` is on by default (see `undo_closed_panes` in the default
         // feature list), so closing a pane hides it for undo rather than removing it
         // from `pane_count()`; check `visible_pane_count()` instead.
@@ -1865,7 +1862,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
             )
             .add_assertion(assert_num_visible_panes_in_tab(0, 2)),
         )
-        // ---- Collision: dragging Settings into a window that already has one keeps a single pane ----
         .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
         .with_step(
             open_settings_step(

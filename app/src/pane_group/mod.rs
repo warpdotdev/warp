@@ -4585,7 +4585,7 @@ impl PaneGroup {
     }
 
     /// Permanently closes a pane without making it available to undo.
-    pub(crate) fn discard_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
+    fn discard_pane(&mut self, pane_id: PaneId, ctx: &mut ViewContext<Self>) {
         // Skip ownership transfer for child agent panes (their view
         // canonically owns the conversation).
         if !self.is_child_agent_pane(pane_id) {
@@ -4605,6 +4605,21 @@ impl PaneGroup {
         }
 
         self.cleanup_closed_pane(pane_id, ctx);
+    }
+
+    /// Permanently discards a transferred pane without adding it to undo-close history.
+    pub(crate) fn discard_transferred_pane(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.pane_contents.contains_key(&pane_id) {
+            return;
+        }
+
+        self.focus_next_terminal_pane_and_activate_session(pane_id, PaneRemovalReason::Close, ctx);
+        self.discard_pane(pane_id, ctx);
+        self.handle_pane_count_change(ctx);
     }
 
     /// Best-effort: re-bind each live child agent conversation on the

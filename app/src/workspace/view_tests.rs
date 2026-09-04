@@ -5523,6 +5523,13 @@ fn test_settings_pane_transfer_into_window_with_existing_pane_discards_duplicate
         workspace_a.update(&mut app, |ws, ctx| {
             ws.remove_tab_without_undo(0, ctx);
         });
+        assert_eq!(
+            workspace_a.read(&app, |ws, ctx| ws
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .pane_count()),
+            2
+        );
         let locator_a = app
             .read(|ctx| SettingsPaneManager::as_ref(ctx).find_pane(window_a))
             .expect("settings pane should be registered for window A");

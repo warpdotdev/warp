@@ -12181,7 +12181,7 @@ impl Workspace {
                 self.remove_tab(index, false, true, ctx);
             } else {
                 pane_group.update(ctx, |pane_group, ctx| {
-                    pane_group.discard_pane(discard.pane_id, ctx);
+                    pane_group.discard_transferred_pane(discard.pane_id, ctx);
                 });
             }
         }
