@@ -757,7 +757,13 @@ fn test_expanding_collapsed_file_constructs_and_renders_loaded_editor() {
 #[test]
 fn test_auto_expanded_file_constructs_editor_eagerly() {
     App::test((), |mut app| async move {
-        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        let repo = tempfile::tempdir().expect("create temp repo");
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
         let diff_data = Arc::new(GitDiffWithBaseContent {
             files: vec![code_review_file("source.rs", "fn source() {}\n", false)],
             total_additions: 0,
