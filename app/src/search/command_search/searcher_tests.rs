@@ -498,6 +498,9 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
 
 #[test]
 fn disabled_fuzzy_matching_does_not_tokenize_the_query() {
+    // V2 is the path with AND-tokenization; without this override the test would run against
+    // the legacy default and prove nothing about V2 being short-circuited.
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         let mixer = app.add_model(|_| CommandSearchMixer::new());
@@ -529,14 +532,14 @@ fn disabled_fuzzy_matching_does_not_tokenize_the_query() {
             assert!(
                 mixer.as_ref(app).results().is_empty(),
                 "disabled fuzzy matching shouldn't AND-tokenize a multi-word query into \
-                 separately-matched terms, unlike the enabled path"
+                 separately-matched terms, the way V2's enabled tokenization would"
             );
         });
     });
 }
 
 #[test]
-fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_enabled() {
+fn disabled_fuzzy_matching_short_circuits_the_v2_ranking_path() {
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -555,7 +558,9 @@ fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_enabled() {
                 },
                 ctx,
             );
-            mixer.run_query("git status".into(), ctx);
+            // "gts" is a fuzzy subsequence of "git status" (g...t...s), which V2's Skim matching
+            // would find; a literal-substring match would not, since it isn't contiguous.
+            mixer.run_query("gts".into(), ctx);
         });
 
         assert_eventually!(
@@ -564,17 +569,17 @@ fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_enabled() {
         );
 
         app.read(|app| {
-            assert_eq!(
-                mixer.as_ref(app).results().len(),
-                1,
-                "the disabled setting must short-circuit the V2 ranking path"
+            assert!(
+                mixer.as_ref(app).results().is_empty(),
+                "the disabled setting must short-circuit the V2 ranking path, not just leave a \
+                 fuzzy subsequence match in place"
             );
         });
     });
 }
 
 #[test]
-fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_disabled() {
+fn disabled_fuzzy_matching_short_circuits_the_legacy_ranking_path() {
     let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -593,7 +598,9 @@ fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_disabled() {
                 },
                 ctx,
             );
-            mixer.run_query("git status".into(), ctx);
+            // "gts" is a fuzzy subsequence of "git status" (g...t...s), which the legacy raw-Skim
+            // path would find; a literal-substring match would not, since it isn't contiguous.
+            mixer.run_query("gts".into(), ctx);
         });
 
         assert_eventually!(
@@ -602,10 +609,10 @@ fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_disabled() {
         );
 
         app.read(|app| {
-            assert_eq!(
-                mixer.as_ref(app).results().len(),
-                1,
-                "the disabled setting must short-circuit the legacy raw-Skim path too, not just V2"
+            assert!(
+                mixer.as_ref(app).results().is_empty(),
+                "the disabled setting must short-circuit the legacy raw-Skim path too, not just \
+                 leave a fuzzy subsequence match in place"
             );
         });
     });
