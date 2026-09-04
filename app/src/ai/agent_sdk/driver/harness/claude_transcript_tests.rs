@@ -167,6 +167,101 @@ fn write_envelope_round_trip() {
 }
 
 #[test]
+#[serial_test::serial]
+fn rehydrate_claude_transcript_fails_on_cwd_mismatch() {
+    let config_dir = TempDir::new().unwrap();
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    // SAFETY: `#[serial_test::serial]` ensures no other thread reads or writes the process
+    // environment concurrently with this test.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", config_dir.path()) };
+
+    let uuid = Uuid::new_v4();
+    let mut envelope = ClaudeTranscriptEnvelope {
+        cwd: Path::new("/original/cwd").to_path_buf(),
+        uuid,
+        claude_version: None,
+        entries: vec![serde_json::json!({"type": "user"})],
+        subagents: HashMap::new(),
+        todos: HashMap::new(),
+    };
+
+    let err = rehydrate_claude_transcript(&mut envelope, Path::new("/different/cwd")).unwrap_err();
+    assert!(
+        err.to_string().contains("Unable to resume Claude session"),
+        "unexpected error message: {err:#}"
+    );
+    // Nothing should have been written when the cwd doesn't match.
+    assert!(!config_dir.path().join("projects").exists());
+    assert!(!config_dir.path().join(SESSIONS_INDEX_FILENAME).exists());
+
+    match old_config_dir {
+        // SAFETY: `#[serial_test::serial]` ensures no other thread reads or writes the process
+        // environment concurrently with this test.
+        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
+        // SAFETY: See above.
+        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+    }
+}
+
+#[test]
+#[serial_test::serial]
+fn rehydrate_claude_transcript_succeeds_when_cwd_matches() {
+    let config_dir = TempDir::new().unwrap();
+    let old_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+    // SAFETY: `#[serial_test::serial]` ensures no other thread reads or writes the process
+    // environment concurrently with this test.
+    unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", config_dir.path()) };
+
+    let cwd = Path::new("/matching/cwd");
+    let uuid = Uuid::new_v4();
+    let mut envelope = ClaudeTranscriptEnvelope {
+        cwd: cwd.to_path_buf(),
+        uuid,
+        claude_version: None,
+        entries: vec![serde_json::json!({"type": "user"})],
+        subagents: HashMap::new(),
+        todos: HashMap::new(),
+    };
+
+    let continuation = rehydrate_claude_transcript(&mut envelope, cwd).unwrap();
+    assert_eq!(continuation.command, format!("claude --resume {uuid}"));
+
+    let session_file = config_dir
+        .path()
+        .join("projects")
+        .join(encode_cwd(cwd))
+        .join(format!("{uuid}.jsonl"));
+    assert!(session_file.exists(), "session JSONL missing");
+
+    let index: serde_json::Value = serde_json::from_slice(
+        &fs::read(config_dir.path().join(SESSIONS_INDEX_FILENAME)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(index[uuid.to_string()]["sessionId"], uuid.to_string());
+
+    match old_config_dir {
+        // SAFETY: `#[serial_test::serial]` ensures no other thread reads or writes the process
+        // environment concurrently with this test.
+        Some(dir) => unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", dir) },
+        // SAFETY: See above.
+        None => unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") },
+    }
+}
+
+#[test]
+fn write_session_index_entry_fails_when_index_path_is_a_directory() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir_all(tmp.path().join(SESSIONS_INDEX_FILENAME)).unwrap();
+
+    let uuid = Uuid::new_v4();
+    let err = write_session_index_entry(uuid, Path::new("/my/project"), tmp.path()).unwrap_err();
+    assert!(
+        err.to_string().contains(SESSIONS_INDEX_FILENAME),
+        "unexpected error message: {err:#}"
+    );
+}
+
+#[test]
 fn write_session_index_entry_creates_missing_file() {
     let tmp = TempDir::new().unwrap();
     let uuid = Uuid::new_v4();
