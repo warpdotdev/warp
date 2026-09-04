@@ -1,6 +1,5 @@
 //! WASM-only view functions for the Workspace.
 
-use warp_core::channel::ChannelState;
 use warpui::elements::{ChildView, Element};
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
@@ -10,22 +9,16 @@ use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::conversation_details_panel::{
     ConversationDetailsData, ConversationDetailsPanel, ConversationDetailsPanelEvent,
 };
+use crate::server::server_api::ServerApiProvider;
 use crate::terminal::TerminalView;
 use crate::ui_components::icons;
 use crate::uri::browser_url_handler::parse_current_url;
-use crate::view_components::action_button::{
-    ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
-};
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
 use crate::wasm_nux_dialog::{WasmNUXDialog, WasmNUXDialogEvent};
 use crate::workspace::action::WorkspaceAction;
 use crate::workspace::view::{NotebookSource, OpenWarpDriveObjectSettings, Workspace};
 
 const TRANSCRIPT_PANEL_WIDTH: f32 = 280.0;
-
-/// Builds the OZ runs URL for viewing all cloud runs.
-fn build_oz_runs_url() -> String {
-    format!("{}/runs", ChannelState::oz_root_url())
-}
 
 impl Workspace {
     pub(super) fn build_wasm_nux_dialog(ctx: &mut ViewContext<Self>) -> ViewHandle<WasmNUXDialog> {
@@ -54,15 +47,9 @@ impl Workspace {
         })
     }
 
-    pub(super) fn build_view_cloud_runs_button(
-        ctx: &mut ViewContext<Self>,
-    ) -> ViewHandle<ActionButton> {
-        let url = build_oz_runs_url();
-        ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("View all cloud runs", SecondaryTheme).on_click(move |ctx| {
-                ctx.dispatch_typed_action(WorkspaceAction::OpenLink(url.clone()));
-            })
-        })
+    pub(super) fn fetch_factory_access(&mut self, ctx: &mut ViewContext<Self>) {
+        let factory_client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        self.fetch_factory_access_with_client(factory_client, ctx);
     }
 
     pub(super) fn build_transcript_info_button(

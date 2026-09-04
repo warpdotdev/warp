@@ -336,6 +336,8 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
+#[cfg(any(target_family = "wasm", test))]
+use crate::server::server_api::factory::FactoryClient;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
@@ -473,8 +475,8 @@ use crate::util::openable_file_type::{
 };
 use crate::util::traffic_lights::{TrafficLightMouseStates, TrafficLightSide, traffic_light_data};
 use crate::util::truncation::truncate_from_end;
-#[cfg(target_family = "wasm")]
-use crate::view_components::action_button::ActionButton;
+#[cfg(any(target_family = "wasm", test))]
+use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::view_components::callout_bubble::{
     CalloutArrowDirection, CalloutArrowPosition, CalloutBubbleConfig, render_callout_bubble,
 };
@@ -863,6 +865,34 @@ enum SimplifiedWasmTabBarContent {
     ConversationTranscript { task_id: Option<AmbientAgentTaskId> },
 }
 
+#[cfg(any(target_family = "wasm", test))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SimplifiedWasmProductNavigation {
+    action_label: &'static str,
+    destination: String,
+}
+
+#[cfg(any(target_family = "wasm", test))]
+impl SimplifiedWasmProductNavigation {
+    fn from_factory_access(allowed: bool) -> Self {
+        if allowed {
+            Self {
+                action_label: "View Factory",
+                destination: ChannelState::server_root_url().into_owned(),
+            }
+        } else {
+            Self {
+                action_label: "View in Oz",
+                destination: format!("{}/runs", ChannelState::oz_root_url()),
+            }
+        }
+    }
+
+    fn open_action(&self) -> WorkspaceAction {
+        WorkspaceAction::OpenLink(self.destination.clone())
+    }
+}
+
 type RemoteUploadId = (TerminalPaneId, FileUploadId);
 type WorkspaceMenuHandles = (
     ViewHandle<Menu<WorkspaceAction>>,
@@ -1157,8 +1187,10 @@ pub struct Workspace {
     wasm_nux_dialog: ViewHandle<WasmNUXDialog>,
     #[cfg(target_family = "wasm")]
     open_in_warp_button: ViewHandle<ActionButton>,
-    #[cfg(target_family = "wasm")]
-    view_cloud_runs_button: ViewHandle<ActionButton>,
+    #[cfg(any(target_family = "wasm", test))]
+    view_product_button: ViewHandle<ActionButton>,
+    #[cfg(any(target_family = "wasm", test))]
+    simplified_wasm_product_navigation: SimplifiedWasmProductNavigation,
     #[cfg(target_family = "wasm")]
     transcript_info_button: ViewHandle<ActionButton>,
     #[cfg(target_family = "wasm")]
@@ -1221,6 +1253,45 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    #[cfg(any(target_family = "wasm", test))]
+    fn build_view_product_button(
+        navigation: SimplifiedWasmProductNavigation,
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<ActionButton> {
+        let label = navigation.action_label;
+        let action = navigation.open_action();
+        ctx.add_typed_action_view(|_| {
+            ActionButton::new(label, SecondaryTheme).on_click(move |ctx| {
+                let action = action.clone();
+                ctx.dispatch_typed_action(action);
+            })
+        })
+    }
+
+    #[cfg(any(target_family = "wasm", test))]
+    fn fetch_factory_access_with_client(
+        &mut self,
+        factory_client: Arc<dyn FactoryClient>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        ctx.spawn(
+            async move { factory_client.has_factory_access().await },
+            |workspace, result, ctx| match result {
+                Ok(allowed) => {
+                    let navigation = SimplifiedWasmProductNavigation::from_factory_access(allowed);
+                    workspace.view_product_button =
+                        Self::build_view_product_button(navigation.clone(), ctx);
+                    workspace.simplified_wasm_product_navigation = navigation;
+                    ctx.notify();
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Failed to check Factory access; keeping legacy Oz navigation: {error:#}"
+                    );
+                }
+            },
+        );
+    }
     /// Whether this workspace was opened directly against a shared session, cloud
     /// conversation, or similar deep-linked content.
     pub(crate) fn opened_from_content_deep_link(&self) -> bool {
@@ -3260,8 +3331,13 @@ impl Workspace {
         #[cfg(target_family = "wasm")]
         let transcript_info_button = Self::build_transcript_info_button(ctx);
 
-        #[cfg(target_family = "wasm")]
-        let view_cloud_runs_button = Self::build_view_cloud_runs_button(ctx);
+        #[cfg(any(target_family = "wasm", test))]
+        let simplified_wasm_product_navigation =
+            SimplifiedWasmProductNavigation::from_factory_access(false);
+
+        #[cfg(any(target_family = "wasm", test))]
+        let view_product_button =
+            Self::build_view_product_button(simplified_wasm_product_navigation.clone(), ctx);
 
         #[cfg(target_family = "wasm")]
         let transcript_details_panel = Self::build_transcript_details_panel(ctx);
@@ -3516,8 +3592,10 @@ impl Workspace {
             open_in_warp_button,
             #[cfg(target_family = "wasm")]
             transcript_info_button,
-            #[cfg(target_family = "wasm")]
-            view_cloud_runs_button,
+            #[cfg(any(target_family = "wasm", test))]
+            view_product_button,
+            #[cfg(any(target_family = "wasm", test))]
+            simplified_wasm_product_navigation,
             #[cfg(target_family = "wasm")]
             transcript_details_panel,
             tab_fixed_width: None,
@@ -3570,6 +3648,8 @@ impl Workspace {
         // any) read from `GlobalResourceHandles`. Subsequent updates are
         // pushed by `subscribe_to_settings_errors` and `dismiss_workspace_banner`.
         ws.sync_settings_error_state_into_settings_pane(ctx);
+        #[cfg(target_family = "wasm")]
+        ws.fetch_factory_access(ctx);
 
         let weak_handle = ctx.handle();
         WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
@@ -20866,7 +20946,7 @@ impl Workspace {
                 .with_main_axis_size(MainAxisSize::Max);
             let bg_color = blended_colors::neutral_1(appearance.theme());
 
-            // Left: Warp logo - clickable to link to warp.dev
+            let open_product_action = self.simplified_wasm_product_navigation.open_action();
             let warp_logo = Hoverable::new(self.mouse_states.warp_logo.clone(), |_state| {
                 ConstrainedBox::new(
                     warp_core::ui::Icon::Warp
@@ -20877,24 +20957,17 @@ impl Workspace {
                 .with_width(24.)
                 .finish()
             })
-            .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::OpenLink("https://warp.dev".to_owned()));
+            .on_click(move |ctx, _, _| {
+                let open_product_action = open_product_action.clone();
+                ctx.dispatch_typed_action(open_product_action);
             })
             .with_cursor(Cursor::PointingHand)
             .finish();
             tab_bar.add_child(warp_logo);
 
-            // Right: Info button + "View all cloud runs" button (for ambient agent sessions) + "Open in Warp" button
             let mut right_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
-
-            // Extract task_id from conversation transcripts and shared sessions
-            let task_id = match content_type {
-                SimplifiedWasmTabBarContent::ConversationTranscript { task_id }
-                | SimplifiedWasmTabBarContent::SharedSession { task_id } => task_id,
-                SimplifiedWasmTabBarContent::WarpDriveObject => None,
-            };
 
             // Show info button for conversation transcripts and shared sessions (if there's content to display)
             let should_show_info_button =
@@ -20913,15 +20986,14 @@ impl Workspace {
                         .with_margin_right(8.)
                         .finish(),
                 );
+            }
 
-                // Add "View all cloud runs" button when task_id exists (with 4px gap)
-                if task_id.is_some() {
-                    right_row.add_child(
-                        Container::new(ChildView::new(&self.view_cloud_runs_button).finish())
-                            .with_margin_right(4.)
-                            .finish(),
-                    );
-                }
+            if !matches!(content_type, SimplifiedWasmTabBarContent::WarpDriveObject) {
+                right_row.add_child(
+                    Container::new(ChildView::new(&self.view_product_button).finish())
+                        .with_margin_right(4.)
+                        .finish(),
+                );
             }
 
             // Hide "Open in Warp" button on mobile devices
