@@ -29,6 +29,7 @@ use crate::terminal::shared_session::permissions_manager::SessionPermissionsMana
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
+use crate::workspaces::team::DiscoverableTeam;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -332,15 +333,11 @@ fn workspace_with_native_policy(enabled: bool) -> Workspace {
     workspace
 }
 
-// Covers the teamless Drive sidebar section matrix from REV-2380: whether a user with
-// no team membership sees the "Create a team" and/or "Join a team" CTAs depends on
-// their current workspace's native-workspace policy and whether they have any
-// joinable/open teams.
 #[test]
 fn teamless_sections_for_native_workspace_with_joinable_teams_shows_only_join() {
     let workspace = workspace_with_native_policy(true);
     assert_eq!(
-        DriveIndex::teamless_drive_sections(Some(&workspace), 1),
+        DriveIndex::team_cta_sections(false, Some(&workspace), 1),
         vec![DriveIndexSection::JoinTeam]
     );
 }
@@ -349,7 +346,7 @@ fn teamless_sections_for_native_workspace_with_joinable_teams_shows_only_join() 
 fn teamless_sections_for_native_workspace_with_no_joinable_teams_shows_neither() {
     let workspace = workspace_with_native_policy(true);
     assert_eq!(
-        DriveIndex::teamless_drive_sections(Some(&workspace), 0),
+        DriveIndex::team_cta_sections(false, Some(&workspace), 0),
         Vec::<DriveIndexSection>::new()
     );
 }
@@ -358,7 +355,7 @@ fn teamless_sections_for_native_workspace_with_no_joinable_teams_shows_neither()
 fn teamless_sections_for_non_native_workspace_with_joinable_teams_shows_join_and_create() {
     let workspace = workspace_with_native_policy(false);
     assert_eq!(
-        DriveIndex::teamless_drive_sections(Some(&workspace), 1),
+        DriveIndex::team_cta_sections(false, Some(&workspace), 1),
         vec![DriveIndexSection::JoinTeam, DriveIndexSection::CreateATeam]
     );
 }
@@ -367,18 +364,64 @@ fn teamless_sections_for_non_native_workspace_with_joinable_teams_shows_join_and
 fn teamless_sections_for_non_native_workspace_with_no_joinable_teams_shows_create_only() {
     let workspace = workspace_with_native_policy(false);
     assert_eq!(
-        DriveIndex::teamless_drive_sections(Some(&workspace), 0),
+        DriveIndex::team_cta_sections(false, Some(&workspace), 0),
         vec![DriveIndexSection::CreateATeam]
     );
 }
 
 #[test]
-fn teamless_sections_for_unresolved_workspace_keeps_create_team_cta() {
-    // A missing (unresolved) workspace is treated as non-native, matching the
-    // `TeamsWidget::page_sections_for` precedent, so the CTA isn't hidden while
-    // workspace metadata is still loading.
+fn team_members_do_not_get_team_ctas() {
+    let workspace = workspace_with_native_policy(false);
     assert_eq!(
-        DriveIndex::teamless_drive_sections(None, 0),
+        DriveIndex::team_cta_sections(true, Some(&workspace), 1),
+        Vec::<DriveIndexSection>::new()
+    );
+}
+
+#[test]
+fn open_team_with_zero_members_is_joinable() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_app(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_joinable_teams(
+                vec![DiscoverableTeam {
+                    team_uid: "joinable-team".to_string(),
+                    num_members: 0,
+                    name: "Joinable Team".to_string(),
+                    team_accepting_invites: true,
+                }],
+                ctx,
+            );
+        });
+        let index = create_index(&mut app);
+
+        index.update(&mut app, DriveIndex::initialize_section_states);
+
+        index.read(&app, |index, _| {
+            assert_eq!(
+                index.sections(),
+                &[
+                    DriveIndexSection::JoinTeam,
+                    DriveIndexSection::CreateATeam,
+                    DriveIndexSection::Space(Space::Personal),
+                ]
+            );
+        });
+    });
+}
+
+#[test]
+fn teamless_sections_for_unresolved_workspace_with_joinable_teams_shows_join_and_create() {
+    assert_eq!(
+        DriveIndex::team_cta_sections(false, None, 1),
+        vec![DriveIndexSection::JoinTeam, DriveIndexSection::CreateATeam]
+    );
+}
+
+#[test]
+fn teamless_sections_for_unresolved_workspace_with_no_joinable_teams_shows_create_only() {
+    assert_eq!(
+        DriveIndex::team_cta_sections(false, None, 0),
         vec![DriveIndexSection::CreateATeam]
     );
 }
