@@ -13,7 +13,7 @@ use crate::workspaces::user_workspaces::TeamScope;
 /// scope cannot be stashed where it outlives its window. A resolved snapshot has no such hazard,
 /// so `ResponseStream` can reuse one capture across every retry rather than re-resolving to
 /// whatever team its window switched to since.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RequestTeamScope(Option<ServerId>);
 
 impl RequestTeamScope {

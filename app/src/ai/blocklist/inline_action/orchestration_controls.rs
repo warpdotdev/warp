@@ -48,6 +48,7 @@ pub use crate::ai::orchestration::{
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::server::experiments::{ServerExperiment, ServerExperiments};
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::FilterableDropdown;
@@ -602,6 +603,11 @@ pub fn populate_host_picker<V: View>(
 
 // ── Auth secret helpers ──────────────────────────────────
 
+pub fn request_team_scope<V: View>(ctx: &ViewContext<V>) -> RequestTeamScope {
+    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    RequestTeamScope::from_scope(&team_context)
+}
+
 /// Trigger label for the auth-secret dropdown. `Unset` falls back to
 /// "+ New API key…" rather than auto-picking the first loaded key.
 fn auth_secret_trigger_label(selection: &AuthSecretSelection, supports_create_new: bool) -> String {
@@ -632,9 +638,10 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     if harness == Harness::Oz {
         return;
     }
+    let team_scope = request_team_scope(ctx);
     // Trigger lazy fetch so the next paint shows real entries.
     HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-        model.ensure_auth_secrets_fetched(harness, ctx);
+        model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
     });
 
     let mut state = OrchestrationConfigState::from_run_agents_fields(
@@ -644,7 +651,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     );
     state.auth_secret_selection = selection.clone();
     dropdown.update(ctx, |dropdown, ctx_dropdown| {
-        let snapshot = api_key_snapshot(&state, ctx_dropdown);
+        let snapshot = api_key_snapshot(&state, team_scope, ctx_dropdown);
         let supports_create_new =
             matches!(snapshot.footer, Some(OptionFooter::CreateNewAuthSecret));
         let mut items: Vec<MenuItem<DropdownAction>> = snapshot
@@ -738,7 +745,12 @@ pub fn apply_harness_change<A: OrchestrationControlAction, V: View>(
     fallback_base_model_id: Option<String>,
     ctx: &mut ViewContext<V>,
 ) {
-    orchestration_edit_state.apply_harness_change(new_harness_type, fallback_base_model_id, ctx);
+    orchestration_edit_state.apply_harness_change(
+        request_team_scope(ctx),
+        new_harness_type,
+        fallback_base_model_id,
+        ctx,
+    );
     let state = &orchestration_edit_state.orchestration_config_state;
     let is_local = !state.execution_mode.is_remote();
     if is_local
@@ -808,7 +820,7 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
     handles: &OrchestrationPickerHandles<A>,
     ctx: &mut ViewContext<V>,
 ) {
-    state.revalidate_after_catalog_change(ctx);
+    state.revalidate_after_catalog_change(request_team_scope(ctx), ctx);
     let is_local = !state.execution_mode.is_remote();
     if let Some(handle) = &handles.harness_picker {
         populate_harness_picker(handle, &state.harness_type, is_local, ctx);
@@ -876,8 +888,9 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         });
     }
     if let Some(auth_secret_picker) = handles.auth_secret_picker.clone() {
+        let team_scope = request_team_scope(ctx);
         let supports_create_new = matches!(
-            api_key_snapshot(state, ctx).footer,
+            api_key_snapshot(state, team_scope, ctx).footer,
             Some(OptionFooter::CreateNewAuthSecret)
         );
         let label = auth_secret_trigger_label(&state.auth_secret_selection, supports_create_new);

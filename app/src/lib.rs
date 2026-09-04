@@ -258,6 +258,7 @@ use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::LLMPreferences;
+use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::ai::mcp::{MCPGalleryManager, TemplatableMCPServerManager};
 use crate::ai::outline::RepoOutlines;
 use crate::ai::restored_conversations::RestoredAgentConversations;
@@ -1852,6 +1853,7 @@ pub(crate) fn initialize_app(
             auth_state.clone(),
         )
     });
+    ctx.add_singleton_model(|_| ManagedSecretsFacade::new(server_api.clone(), auth_state.clone()));
 
     #[cfg(target_os = "macos")]
     if !launch_mode.is_headless() {

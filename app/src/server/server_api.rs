@@ -442,6 +442,16 @@ pub struct ServerApi {
     telemetry_api: TelemetryApi,
     last_server_time: Arc<Mutex<Option<ServerTime>>>,
 }
+fn apply_request_team_scope(
+    options: &mut warp_graphql::client::RequestOptions,
+    team_scope: RequestTeamScope,
+) {
+    if let Some(team_uid) = team_scope.team_uid() {
+        options
+            .headers
+            .insert(TEAM_UID_HEADER.to_string(), team_uid.uid());
+    }
+}
 
 impl ServerApi {
     fn new(
@@ -470,6 +480,27 @@ impl ServerApi {
             iap_token_provider,
             telemetry_api,
         )
+    }
+
+    fn send_graphql_request_for_team<'a, QF, O: warp_graphql::client::Operation<QF> + Send + 'a>(
+        &'a self,
+        operation: O,
+        team_scope: RequestTeamScope,
+        timeout: Option<Duration>,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        Box::pin(async move {
+            let mut options = self.base_client.graphql_request_options(timeout).await?;
+            apply_request_team_scope(&mut options, team_scope);
+            warp_server_client::graphql_helpers::send_graphql_request_with_options(
+                &self.base_client,
+                operation,
+                options,
+            )
+            .await
+        })
     }
 
     fn new_with_parts(

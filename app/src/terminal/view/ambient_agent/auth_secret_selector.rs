@@ -24,6 +24,7 @@ use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::view::ambient_agent::delete_auth_secret_confirmation_dialog::{
     DeleteAuthSecretConfirmationDialog, DeleteAuthSecretConfirmationDialogEvent,
@@ -35,6 +36,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
 use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const HEADER_FONT_SIZE: f32 = 12.;
 
@@ -90,6 +92,7 @@ pub struct AuthSecretSelector {
     is_new_type_sidecar_open: bool,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
     ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
+    team_scope: RequestTeamScope,
     /// Secrets with an in-flight delete request, keyed by harness, name,
     /// and owner. This disables only the matching X affordance while that
     /// exact request is pending.
@@ -102,6 +105,8 @@ impl AuthSecretSelector {
         ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let team_scope = RequestTeamScope::from_scope(&team_context);
         let button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new(NO_SECRET_LABEL, NakedHeaderButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
@@ -166,36 +171,46 @@ impl AuthSecretSelector {
 
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
-            |me, _, event, ctx| match event {
-                HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretCreated { .. }
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed => {
-                    me.refresh_menu(ctx);
-                    me.refresh_button(ctx);
+            |me, _, event, ctx| {
+                if event
+                    .team_scope()
+                    .is_some_and(|team_scope| team_scope != me.team_scope)
+                {
+                    return;
                 }
-                HarnessAvailabilityEvent::AuthSecretDeleted {
-                    harness,
-                    name,
-                    owner,
-                } => {
-                    me.handle_secret_deleted(*harness, name.clone(), owner.clone(), ctx);
+                match event {
+                    HarnessAvailabilityEvent::AuthSecretsLoaded { .. }
+                    | HarnessAvailabilityEvent::AuthSecretCreated { .. }
+                    | HarnessAvailabilityEvent::AuthSecretsFetchFailed { .. } => {
+                        me.refresh_menu(ctx);
+                        me.refresh_button(ctx);
+                    }
+                    HarnessAvailabilityEvent::AuthSecretDeleted {
+                        harness,
+                        name,
+                        owner,
+                        ..
+                    } => {
+                        me.handle_secret_deleted(*harness, name.clone(), owner.clone(), ctx);
+                    }
+                    HarnessAvailabilityEvent::AuthSecretDeletionFailed {
+                        harness,
+                        name,
+                        owner,
+                        error,
+                        ..
+                    } => {
+                        me.handle_secret_deletion_failed(
+                            *harness,
+                            name.clone(),
+                            owner.clone(),
+                            error.clone(),
+                            ctx,
+                        );
+                    }
+                    HarnessAvailabilityEvent::Changed
+                    | HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
                 }
-                HarnessAvailabilityEvent::AuthSecretDeletionFailed {
-                    harness,
-                    name,
-                    owner,
-                    error,
-                } => {
-                    me.handle_secret_deletion_failed(
-                        *harness,
-                        name.clone(),
-                        owner.clone(),
-                        error.clone(),
-                        ctx,
-                    );
-                }
-                HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretCreationFailed { .. } => {}
             },
         );
 
@@ -213,6 +228,7 @@ impl AuthSecretSelector {
             is_new_type_sidecar_open: false,
             menu_positioning_provider,
             ambient_agent_model,
+            team_scope,
             pending_deletes: HashSet::new(),
         };
         me.maybe_restore_auth_secret_from_settings(ctx);
@@ -266,8 +282,9 @@ impl AuthSecretSelector {
         self.is_menu_open = is_open;
         if is_open {
             let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+            let team_scope = self.team_scope;
             HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-                model.ensure_auth_secrets_fetched(harness, ctx);
+                model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
             });
             let selected_action = self
                 .ambient_agent_model
@@ -352,7 +369,7 @@ impl AuthSecretSelector {
         let availability = HarnessAvailabilityModel::as_ref(ctx);
         let items = build_main_menu_items(
             harness,
-            availability.auth_secrets_for(harness),
+            availability.auth_secrets_for(self.team_scope, harness),
             &self.pending_deletes,
             hover_background,
             header_text_color,
@@ -481,8 +498,9 @@ impl AuthSecretSelector {
             return;
         }
 
+        let team_scope = self.team_scope;
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-            model.delete_auth_secret(harness, name, owner, ctx);
+            model.delete_auth_secret(team_scope, harness, name, owner, ctx);
         });
         // Re-render so the X for the pending row becomes
         // disabled.

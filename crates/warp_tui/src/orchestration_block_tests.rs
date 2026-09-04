@@ -7,7 +7,7 @@ use ai::agent::orchestration_config::{
 use warp::tui_export::{
     AIActionStatus, AIAgentAction, AIAgentActionId, AIAgentActionType, AIConversationId,
     Appearance, AuthSecretSelection, OptionRow, OptionSnapshot, OptionSourceStatus,
-    OrchestrationConfigState, OrchestrationEditState, RunAgentsAgentRunConfig,
+    OrchestrationConfigState, OrchestrationEditState, RequestTeamScope, RunAgentsAgentRunConfig,
     RunAgentsExecutionMode, RunAgentsRequest, ServerApiProvider, TaskId, TeamContext,
     UserWorkspaces, register_tui_session_view_test_singletons,
 };
@@ -297,6 +297,7 @@ impl OrchestrationBlockController for TestController {
         id: &str,
         edit_state: &mut OrchestrationEditState,
         _fallback_base_model_id: Option<String>,
+        _team_scope: RequestTeamScope,
         _ctx: &mut warpui::AppContext,
     ) {
         let state = &mut edit_state.orchestration_config_state;

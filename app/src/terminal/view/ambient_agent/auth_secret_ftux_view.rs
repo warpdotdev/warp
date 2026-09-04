@@ -28,6 +28,7 @@ use crate::editor::{
     SingleLineEditorOptions, TextOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ambient_agent::auth_secret_ftux_dropdown::{
     AuthSecretFtuxDropdown, FtuxDropdownEvent,
 };
@@ -121,6 +122,7 @@ struct ValidatedForm {
 pub struct AuthSecretFtuxView {
     view_handle: WeakViewHandle<Self>,
     harness: Harness,
+    team_scope: RequestTeamScope,
     ftux_dropdown: ViewHandle<AuthSecretFtuxDropdown>,
     name_editor: ViewHandle<EditorView>,
     field_editors: Vec<ViewHandle<EditorView>>,
@@ -145,6 +147,8 @@ pub struct AuthSecretFtuxView {
 
 impl AuthSecretFtuxView {
     pub fn new(harness: Harness, ctx: &mut ViewContext<Self>) -> Self {
+        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let team_scope = RequestTeamScope::from_scope(&team_context);
         let name_editor = make_single_line_editor(Some("e.g. My API Key"), false, ctx);
 
         ctx.subscribe_to_view(&name_editor, |me, _, event, ctx| {
@@ -157,8 +161,9 @@ impl AuthSecretFtuxView {
         ctx.subscribe_to_view(&ftux_dropdown, |me, _, event, ctx| {
             if matches!(event, FtuxDropdownEvent::Opened) {
                 let harness = me.harness;
+                let team_scope = me.team_scope;
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.ensure_auth_secrets_fetched(harness, ctx);
+                    model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
                 });
             }
         });
@@ -195,7 +200,14 @@ impl AuthSecretFtuxView {
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
-                HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
+                HarnessAvailabilityEvent::AuthSecretCreated {
+                    team_scope,
+                    harness,
+                    name,
+                } => {
+                    if *team_scope != me.team_scope {
+                        return;
+                    }
                     // Only consume the event when it matches the request
                     // *this* view actually fired. Without the harness/name
                     // match a concurrent FTUX view's success would close
@@ -210,7 +222,10 @@ impl AuthSecretFtuxView {
                         me.handle_secret_created(*harness, name.clone(), ctx);
                     }
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { error } => {
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { team_scope, error } => {
+                    if *team_scope != me.team_scope {
+                        return;
+                    }
                     // Only react if *we* are mid-save; otherwise this
                     // failure belongs to another FTUX view's request.
                     if let Some(state) = me.creation_state.as_mut() {
@@ -235,8 +250,8 @@ impl AuthSecretFtuxView {
                     }
                 }
                 HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretsLoaded { .. }
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
@@ -245,6 +260,7 @@ impl AuthSecretFtuxView {
         Self {
             view_handle: ctx.handle(),
             harness,
+            team_scope,
             ftux_dropdown,
             name_editor,
             field_editors: Vec::new(),
@@ -666,8 +682,12 @@ impl AuthSecretFtuxView {
                 // Defensive: `validated_form_snapshot` already enforces
                 // the same required-field rules.
                 let msg = err.to_string();
+                let team_scope = self.team_scope;
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |_model, ctx| {
-                    ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed { error: msg });
+                    ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed {
+                        team_scope,
+                        error: msg,
+                    });
                 });
                 return;
             }
@@ -680,8 +700,9 @@ impl AuthSecretFtuxView {
         ctx.notify();
 
         let owner = self.resolve_secret_owner(ctx);
+        let team_scope = self.team_scope;
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-            model.create_auth_secret(harness, name, value, owner, ctx);
+            model.create_auth_secret(team_scope, harness, name, value, owner, ctx);
         });
     }
 

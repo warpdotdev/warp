@@ -15,6 +15,7 @@ use crate::ai::connected_self_hosted_workers::WARP_WORKER_HOST;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::llms::LLMInfo;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Env var override for the workspace default host (developer testing).
@@ -185,6 +186,7 @@ pub fn persist_environment_selection(environment_id: &str, ctx: &mut AppContext)
 /// loaded secret. Validates against the loaded secrets list when present,
 /// returning `None` if the persisted name has been deleted server-side.
 pub fn resolve_default_auth_secret_for_harness(
+    team_scope: RequestTeamScope,
     harness_type: &str,
     ctx: &AppContext,
 ) -> Option<String> {
@@ -200,7 +202,7 @@ pub fn resolve_default_auth_secret_for_harness(
         .filter(|name| !name.trim().is_empty());
 
     let availability = HarnessAvailabilityModel::as_ref(ctx);
-    match availability.auth_secrets_for(harness) {
+    match availability.auth_secrets_for(team_scope, harness) {
         AuthSecretFetchState::Loaded(secrets) => {
             // Drop the persisted name if the secret was deleted server-side.
             persisted.filter(|name| secrets.iter().any(|s| s.name == *name))
@@ -218,6 +220,7 @@ pub fn resolve_default_auth_secret_for_harness(
 /// fallback so the plan card's "Inherit" survives across the RunAgents
 /// handoff (the `OrchestrationConfig` proto doesn't carry auth state).
 pub fn resolve_auth_secret_selection_for_harness(
+    team_scope: RequestTeamScope,
     harness_type: &str,
     ctx: &AppContext,
 ) -> AuthSecretSelection {
@@ -237,7 +240,7 @@ pub fn resolve_auth_secret_selection_for_harness(
     if inherit_chosen {
         return AuthSecretSelection::Inherit;
     }
-    match resolve_default_auth_secret_for_harness(harness_type, ctx) {
+    match resolve_default_auth_secret_for_harness(team_scope, harness_type, ctx) {
         Some(name) => AuthSecretSelection::Named(name),
         None => AuthSecretSelection::Unset,
     }

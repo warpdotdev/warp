@@ -21,6 +21,7 @@ use super::providers::{
     resolve_default_environment_id,
 };
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
+use crate::server::team_scope::RequestTeamScope;
 
 impl OrchestrationConfigState {
     /// Toggles Local ↔ Cloud, pre-fills the default environment when
@@ -62,11 +63,15 @@ impl OrchestrationConfigState {
     /// secret, and re-seeds an `Unset` selection from persisted settings.
     /// This is the frontend-neutral core of the GUI's
     /// `repopulate_all_pickers`.
-    pub fn revalidate_after_catalog_change(&mut self, ctx: &AppContext) {
+    pub fn revalidate_after_catalog_change(
+        &mut self,
+        team_scope: RequestTeamScope,
+        ctx: &AppContext,
+    ) {
         let loaded_secret_names = Harness::parse_orchestration_harness(&self.harness_type)
             .filter(|harness| *harness != Harness::Oz)
             .and_then(|harness| {
-                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness) {
+                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(team_scope, harness) {
                     AuthSecretFetchState::Loaded(secrets) => {
                         Some(secrets.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
                     }
@@ -75,7 +80,8 @@ impl OrchestrationConfigState {
                     | AuthSecretFetchState::Failed(_) => None,
                 }
             });
-        let reseeded_selection = resolve_auth_secret_selection_for_harness(&self.harness_type, ctx);
+        let reseeded_selection =
+            resolve_auth_secret_selection_for_harness(team_scope, &self.harness_type, ctx);
         self.revalidate_after_catalog_change_core(
             loaded_secret_names.as_deref(),
             reseeded_selection,
@@ -199,11 +205,13 @@ impl OrchestrationEditState {
     /// secret selection for the new harness.
     pub fn apply_harness_change(
         &mut self,
+        team_scope: RequestTeamScope,
         new_harness_type: &str,
         fallback_base_model_id: Option<String>,
         ctx: &mut AppContext,
     ) {
-        let resolved_auth = resolve_auth_secret_selection_for_harness(new_harness_type, ctx);
+        let resolved_auth =
+            resolve_auth_secret_selection_for_harness(team_scope, new_harness_type, ctx);
         let ctx: &AppContext = ctx;
         self.apply_harness_change_core(
             new_harness_type,
