@@ -6,10 +6,11 @@ use warp_cli::artifact::{
 };
 use warp_cli::task::{MessageCommand, MessageSendArgs, MessageWatchArgs, TaskCommand};
 use warp_core::telemetry::TelemetryEvent;
+use warp_isolation_platform::IsolationPlatformError;
 
 use super::{
-    CommandAuthentication, command_authentication, command_requires_auth,
-    command_to_telemetry_event, reconcile_task_harness,
+    AgentDriverError, AgentDriverRunner, CommandAuthentication, command_authentication,
+    command_requires_auth, command_to_telemetry_event, reconcile_task_harness,
 };
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -215,4 +216,93 @@ fn run_message_watch_telemetry_defaults_to_unknown_harness() {
     )));
 
     assert_eq!(event.payload(), Some(json!({ "harness": "unknown" })));
+}
+
+// ── apply_fetched_git_credentials ───────────────────────────────────────────
+
+fn workload_token_missing_error() -> anyhow::Error {
+    IsolationPlatformError::NoIsolationPlatformDetected.into()
+}
+
+#[test]
+fn missing_workload_token_skips_on_the_isolation_platform_path() {
+    let result = AgentDriverRunner::apply_fetched_git_credentials(
+        Err(workload_token_missing_error()),
+        false,
+    );
+
+    assert!(
+        result.is_ok(),
+        "a missing workload token must be skipped gracefully, not treated as a failure"
+    );
+}
+
+#[test]
+fn missing_workload_token_skips_on_the_gh_configured_path() {
+    let result =
+        AgentDriverRunner::apply_fetched_git_credentials(Err(workload_token_missing_error()), true);
+
+    assert!(
+        result.is_ok(),
+        "a missing workload token must be skipped gracefully on the gh-configured path too"
+    );
+}
+
+#[test]
+fn empty_credential_response_is_a_no_op_success() {
+    let result = AgentDriverRunner::apply_fetched_git_credentials(Ok(Vec::new()), false);
+
+    assert!(
+        result.is_ok(),
+        "an empty credential response from the server should be a no-op success"
+    );
+}
+
+#[test]
+fn gh_configured_host_tolerates_a_credentials_fetch_failure() {
+    let result = AgentDriverRunner::apply_fetched_git_credentials(
+        Err(anyhow::anyhow!("server rejected workload token")),
+        true,
+    );
+
+    assert!(
+        result.is_ok(),
+        "a fetch failure must be tolerated when gh credentials are already configured"
+    );
+}
+
+#[test]
+fn isolation_platform_host_still_fails_hard_on_a_credentials_fetch_failure() {
+    let result = AgentDriverRunner::apply_fetched_git_credentials(
+        Err(anyhow::anyhow!("server rejected workload token")),
+        false,
+    );
+
+    match result {
+        Err(AgentDriverError::SkillResolutionFailed(message)) => {
+            assert!(message.contains("server rejected workload token"));
+        }
+        other => panic!("expected a fatal SkillResolutionFailed error, got {other:?}"),
+    }
+}
+
+// ── gh_credentials_are_configured ─────────────────────────────────────────
+
+#[test]
+fn gh_credentials_are_configured_when_setup_attempted_and_succeeded() {
+    assert!(AgentDriverRunner::gh_credentials_are_configured(true, true));
+}
+
+#[test]
+fn gh_credentials_are_not_configured_when_setup_attempted_but_failed() {
+    assert!(!AgentDriverRunner::gh_credentials_are_configured(
+        true, false
+    ));
+}
+
+#[test]
+fn gh_credentials_are_not_configured_when_setup_was_not_attempted() {
+    assert!(!AgentDriverRunner::gh_credentials_are_configured(
+        false, false
+    ));
 }
