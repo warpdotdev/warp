@@ -965,7 +965,8 @@ pub enum FeatureFlag {
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
-    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    /// `--no-snapshot` is set. Enabled for dogfood and preview builds while the
+    /// coordinator bakes ahead of a stable rollout.
     PeriodicHandoffCheckpoints,
 
     /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
@@ -1068,7 +1069,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::PricingTransparency,
-    FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
@@ -1081,6 +1081,7 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::NativeShellCompletions,
     FeatureFlag::ShellWidgetHandoff,
     FeatureFlag::HistorySearchRankingV2,
+    FeatureFlag::PeriodicHandoffCheckpoints,
 ];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
