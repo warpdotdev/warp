@@ -4,11 +4,14 @@ use std::sync::Arc;
 use ai::agent::action::InsertReviewComment;
 use chrono::Local;
 use lsp::LspManagerModel;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::LineCount;
+use warp_files::FileModel;
 use warpui::elements::{Empty, MouseStateHandle};
 use warpui::platform::WindowStyle;
 use warpui::{App, ViewHandle};
@@ -21,6 +24,7 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
+use crate::code::global_buffer_model::GlobalBufferModel;
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::code_review::comments::{
@@ -75,9 +79,9 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| SyncedInputState::mock());
     app.add_singleton_model(|_| VimRegisters::new());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+    app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| DetectedRepositories::default());
     app.add_singleton_model(|_| GitRepoModels::new());
-    app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| LocalShellState::NotLoaded);
     app.add_singleton_model(PersistedWorkspace::new_for_test);
     app.add_singleton_model(|_| GlobalCodeReviewModel);
@@ -453,7 +457,44 @@ fn test_collapsed_file_does_not_construct_editor() {
 }
 
 #[test]
-fn test_expanding_collapsed_file_constructs_loaded_editor() {
+fn test_comment_for_deferred_file_is_not_marked_outdated() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file("generated.rs", "fn generated() {}", true)],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let comment = create_line_comment(
+            "/repo/generated.rs",
+            0,
+            "fn generated() {}",
+            "Review generated code",
+        );
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+
+            let result = CodeReviewView::relocate_comments(
+                vec![comment],
+                state,
+                &LocalOrRemotePath::Local(PathBuf::from("/repo")),
+                ctx,
+            );
+
+            assert_eq!(result.comments.len(), 1);
+            assert!(!result.comments[0].outdated);
+            assert_eq!(result.fallback_count, 0);
+        });
+    });
+}
+
+#[test]
+fn test_expanding_collapsed_file_constructs_and_renders_loaded_editor() {
     App::test((), |mut app| async move {
         let test = TestContext::new(&mut app, "existing.txt", "existing");
         let diff_data = Arc::new(GitDiffWithBaseContent {
@@ -497,6 +538,13 @@ fn test_expanding_collapsed_file_constructs_loaded_editor() {
                 "fn generated() {}\n"
             );
             assert_eq!(view.editor_handles().count(), 1);
+            assert_eq!(
+                view.active_repo
+                    .as_ref()
+                    .and_then(|repo| repo.file_expanded.get("generated.rs")),
+                Some(&true)
+            );
+            let _rendered_diff = view.render_diff_at_index(0, ScrollOffset::default(), ctx);
         });
     });
 }
@@ -559,6 +607,65 @@ fn test_jump_to_comment_expands_collapsed_file_and_constructs_editor() {
             let file = &state.file_states["generated.rs"];
             assert!(file.is_expanded);
             assert!(file.editor_state.is_some());
+            assert!(view.pending_jump_to_comment.is_none());
+            assert_eq!(view.viewported_list_state.get_scroll_index(), 0);
+            assert!(
+                !view
+                    .active_repo
+                    .as_ref()
+                    .unwrap()
+                    .file_expanded
+                    .contains_key("generated.rs")
+            );
+        });
+    });
+}
+
+#[test]
+fn test_jump_to_comment_waits_for_deferred_editor_to_load() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(FileModel::new);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let mut file = code_review_file("generated.rs", "first\nsecond\n", true);
+        file.file_diff.status = GitFileStatus::Modified;
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let comment =
+            create_line_comment("/repo/generated.rs", 1, "second", "Review generated code");
+        let comment_id = comment.id;
+        let file_location = LocalOrRemotePath::Local(PathBuf::from("/repo/generated.rs"));
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            view.active_comment_model
+                .clone()
+                .unwrap()
+                .update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+
+            view.handle_jump_to_comment_location(&comment_id, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(file.is_expanded);
+            assert!(file.editor_state.is_some());
+            assert!(
+                file.editor_state
+                    .as_ref()
+                    .is_some_and(|editor| !editor.is_loaded())
+            );
+            assert_eq!(view.pending_jump_to_comment, Some(comment_id));
+
+            view.mark_editor_loaded_for_file(&file_location, ctx);
+
             assert!(view.pending_jump_to_comment.is_none());
             assert_eq!(view.viewported_list_state.get_scroll_index(), 0);
         });

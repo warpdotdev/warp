@@ -1829,7 +1829,7 @@ impl CodeReviewView {
                     );
                     return;
                 };
-                self.set_file_expanded(editor_index, true, ctx);
+                self.set_file_expanded(editor_index, true, false, ctx);
 
                 let CodeReviewViewState::Loaded(state) = self.state() else {
                     return;
@@ -1911,7 +1911,7 @@ impl CodeReviewView {
                     );
                     return;
                 };
-                self.set_file_expanded(editor_index, true, ctx);
+                self.set_file_expanded(editor_index, true, false, ctx);
 
                 if let AttachedReviewCommentTarget::Line { line, .. } = &comment.target {
                     let is_loaded = match self.state() {
@@ -2799,7 +2799,7 @@ impl CodeReviewView {
             return false;
         };
         let editor_state = self.create_code_review_editor(source.file(), ctx);
-        let was_created = {
+        {
             let Some(repo) = self.active_repo.as_mut() else {
                 return false;
             };
@@ -2817,15 +2817,14 @@ impl CodeReviewView {
                 file.deferred_editor_source = Some(source);
                 false
             }
-        };
-
-        was_created
+        }
     }
 
     fn set_file_expanded(
         &mut self,
         file_index: usize,
         is_expanded: bool,
+        persist_preference: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Option<bool> {
         let was_expanded = match self.state() {
@@ -2844,8 +2843,10 @@ impl CodeReviewView {
             };
             let (_, file) = state.file_states.get_index_mut(file_index)?;
             file.is_expanded = is_expanded;
-            let file_path = file.file_diff.file_path.clone();
-            repo.file_expanded.insert(file_path.clone(), is_expanded);
+            if persist_preference {
+                repo.file_expanded
+                    .insert(file.file_diff.file_path.clone(), is_expanded);
+            }
             file.chevron_button.clone()
         };
 
@@ -2871,8 +2872,7 @@ impl CodeReviewView {
             self.viewported_list_state.scroll_to(file_index);
         }
 
-        if !was_expanded
-            && is_expanded
+        if was_expanded != is_expanded
             && self.find_model.as_ref(ctx).is_find_bar_open()
             && FeatureFlag::CodeReviewFind.is_enabled()
         {
@@ -7391,7 +7391,7 @@ impl TypedActionView for CodeReviewView {
                 })() else {
                     return;
                 };
-                self.set_file_expanded(file_index, now_expanded, ctx);
+                self.set_file_expanded(file_index, now_expanded, true, ctx);
             }
             CodeReviewAction::SetDiffMode(mode) => {
                 self.apply_diff_mode(mode.clone(), ctx);
@@ -7411,7 +7411,10 @@ impl TypedActionView for CodeReviewView {
                 ctx.notify();
             }
             CodeReviewAction::FileSelected(file_index) => {
-                if self.set_file_expanded(*file_index, true, ctx).is_none() {
+                if self
+                    .set_file_expanded(*file_index, true, false, ctx)
+                    .is_none()
+                {
                     return;
                 }
 
