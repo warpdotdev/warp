@@ -552,7 +552,6 @@ fn drag_tabs_feature_enabled() -> bool {
     cfg!(feature = "drag_tabs_to_windows")
 }
 
-/// Checks rendered panes without counting panes hidden for Undo Close.
 fn assert_num_visible_panes_in_tab(tab_index: usize, num_panes: usize) -> AssertionCallback {
     Box::new(move |app, window_id| {
         let pane_group = pane_group_view(app, window_id, tab_index);
