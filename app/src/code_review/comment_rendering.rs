@@ -9,13 +9,9 @@ use chrono::{Duration, Local};
 use pathfinder_color::ColorU;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors::{neutral_1, neutral_2, text_sub};
-use warp_editor::content::buffer::InitialBufferState;
-use warp_editor::render::element::VerticalExpansionBehavior;
-use warpui::elements::new_scrollable::ScrollableAppearance;
 use warpui::elements::{
     Border, ChildView, Container, CornerRadius, CrossAxisAlignment, Flex, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth,
-    Shrinkable, Text,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable, Text,
 };
 use warpui::platform::Cursor;
 use warpui::text_layout::ClipConfig;
@@ -25,11 +21,7 @@ use warpui::{AppContext, Element, EventContext, SingletonEntity, View, ViewConte
 use crate::appearance::Appearance;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
-use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
-use crate::code_review::comments::{
-    AttachedReviewComment, AttachedReviewCommentTarget, LineDiffContent,
-};
-use crate::editor::InteractionState;
+use crate::code_review::comments::{AttachedReviewComment, AttachedReviewCommentTarget};
 use crate::notebooks::editor::view::RichTextEditorView;
 use crate::util::time_format::human_readable_approx_duration;
 
@@ -222,73 +214,36 @@ fn render_comment_text_section(
         .finish()
 }
 
-/// Creates a read-only, syntax-highlighted code editor for displaying static diff content.
-///
-/// The editor is configured with infinite height, no diff UI, no line numbers, and selectable
-/// interaction state. The buffer is populated with the diff's original text and syntax
-/// highlighting is set based on the file path.
-fn create_static_diff_content_editor<V: View>(
-    content: &LineDiffContent,
-    file_path: Option<&LocalOrRemotePath>,
-    ctx: &mut ViewContext<V>,
-) -> ViewHandle<CodeEditorView> {
-    let editor = ctx.add_typed_action_view(|ctx| {
-        CodeEditorView::new(
-            None,
-            None,
-            CodeEditorRenderOptions::new(VerticalExpansionBehavior::InfiniteHeight),
-            ctx,
-        )
-        .with_can_show_diff_ui(false)
-        .with_show_line_numbers(false)
-        .with_horizontal_scrollbar_appearance(ScrollableAppearance::new(
-            ScrollbarWidth::Auto,
-            false,
-        ))
-    });
-    editor.update(ctx, |view, ctx| {
-        view.set_show_current_line_highlights(false, ctx);
-        view.set_interaction_state(InteractionState::Selectable, ctx);
-        let original_text = content.original_text();
-        let state = InitialBufferState::plain_text(original_text.trim());
-        view.reset(state, ctx);
-        if let Some(file_path) = file_path {
-            let language_path = file_path.path_component();
-            view.set_language_with_path(&language_path, ctx);
-        }
-    });
-    editor
-}
-
-fn render_static_diff_content_element(
-    editor: &ViewHandle<CodeEditorView>,
-    app: &AppContext,
-) -> Box<dyn Element> {
+fn render_static_diff_content_element(content: &str, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-
-    Container::new(ChildView::new(editor).finish())
-        .with_background(theme.background())
-        .with_horizontal_padding(8.)
-        .with_vertical_padding(4.)
-        .finish()
+    Container::new(
+        Text::new(
+            content.trim().to_owned(),
+            appearance.monospace_font_family(),
+            appearance.monospace_font_size(),
+        )
+        .with_color(theme.main_text_color(theme.background()).into())
+        .with_selectable(true)
+        .finish(),
+    )
+    .with_background(theme.background())
+    .with_horizontal_padding(8.)
+    .with_vertical_padding(4.)
+    .finish()
 }
 
 /// How to display the diff content section of a comment card.
+#[derive(Clone, Copy)]
 enum CommentDiffContent {
-    /// Diff content rendered via a live editor lens, with a static fallback while unavailable.
-    EditorLens {
-        fallback: ViewHandle<CodeEditorView>,
-    },
-    /// Diff content rendered via a static, read-only `CodeEditorView`.
-    StaticEditor(ViewHandle<CodeEditorView>),
+    EditorLens,
+    StaticText,
 }
 
 /// A shared UI component for a single code review comment card.
 ///
 /// Used by both `CommentListView` (code review panel) and the blocklist's
-/// imported comments. Owns the view handles for the comment body editor and
-/// (optionally) a static diff editor, plus the underlying comment data.
+/// imported comments. Owns the comment body editor and underlying comment data.
 pub(crate) struct CommentViewCard {
     comment_editor: ViewHandle<RichTextEditorView>,
     diff_content: Option<CommentDiffContent>,
@@ -313,7 +268,7 @@ impl CommentViewCard {
             max_width,
             ctx,
         );
-        let diff_content = Self::diff_content_for_comment(&source, always_use_static_diff, ctx);
+        let diff_content = Self::diff_content_for_comment(&source, always_use_static_diff);
         let title = Self::compute_title(&source, repo_path);
         let last_updated_duration = Local::now() - source.last_update_time;
         Self {
@@ -326,30 +281,15 @@ impl CommentViewCard {
         }
     }
 
-    fn diff_content_for_comment<V: View>(
+    fn diff_content_for_comment(
         comment: &AttachedReviewComment,
         always_use_static_diff: bool,
-        ctx: &mut ViewContext<V>,
     ) -> Option<CommentDiffContent> {
-        if let AttachedReviewCommentTarget::Line {
-            absolute_file_path,
-            content,
-            ..
-        } = &comment.target
-        {
+        if matches!(comment.target, AttachedReviewCommentTarget::Line { .. }) {
             if always_use_static_diff || comment.outdated {
-                Some(CommentDiffContent::StaticEditor(
-                    // Language detection only needs the path component (extension).
-                    create_static_diff_content_editor(content, Some(absolute_file_path), ctx),
-                ))
+                Some(CommentDiffContent::StaticText)
             } else {
-                Some(CommentDiffContent::EditorLens {
-                    fallback: create_static_diff_content_editor(
-                        content,
-                        Some(absolute_file_path),
-                        ctx,
-                    ),
-                })
+                Some(CommentDiffContent::EditorLens)
             }
         } else {
             None
@@ -384,8 +324,8 @@ impl CommentViewCard {
     /// element are shown. When expanded, the full card with diff content and
     /// comment text is rendered.
     ///
-    /// When `diff_content` is `EditorLens`, the caller must supply the live element via
-    /// `editor_lens_element`. For `StaticEditor` or `None` it is ignored.
+    /// When `diff_content` is `EditorLens`, the caller supplies the live element via
+    /// `editor_lens_element`; the lightweight fallback is rendered only when no lens exists.
     ///
     /// When `on_header_click` is provided, the entire header area becomes clickable.
     pub(crate) fn render(
@@ -420,16 +360,22 @@ impl CommentViewCard {
             appearance,
         ));
 
-        match &self.diff_content {
-            Some(CommentDiffContent::EditorLens { fallback }) => {
+        let fallback = match &self.source.target {
+            AttachedReviewCommentTarget::Line { content, .. } => Some(content.original_text()),
+            AttachedReviewCommentTarget::File { .. } | AttachedReviewCommentTarget::General => None,
+        };
+        match self.diff_content {
+            Some(CommentDiffContent::EditorLens) => {
                 if let Some(lens) = editor_lens_element {
                     card.add_child(lens);
-                } else {
-                    card.add_child(render_static_diff_content_element(fallback, app));
+                } else if let Some(fallback) = fallback {
+                    card.add_child(render_static_diff_content_element(&fallback, app));
                 }
             }
-            Some(CommentDiffContent::StaticEditor(editor)) => {
-                card.add_child(render_static_diff_content_element(editor, app));
+            Some(CommentDiffContent::StaticText) => {
+                if let Some(fallback) = fallback {
+                    card.add_child(render_static_diff_content_element(&fallback, app));
+                }
             }
             None => {}
         }
@@ -452,19 +398,8 @@ impl CommentViewCard {
         &self.comment_editor
     }
 
-    pub(crate) fn static_diff_editor(&self) -> Option<&ViewHandle<CodeEditorView>> {
-        match &self.diff_content {
-            Some(CommentDiffContent::EditorLens { fallback }) => Some(fallback),
-            Some(CommentDiffContent::StaticEditor(editor)) => Some(editor),
-            _ => None,
-        }
-    }
-
     pub(crate) fn uses_editor_lens(&self) -> bool {
-        matches!(
-            self.diff_content,
-            Some(CommentDiffContent::EditorLens { .. })
-        )
+        matches!(self.diff_content, Some(CommentDiffContent::EditorLens))
     }
 
     /// Refreshes the cached `last_updated_duration` to the current time.

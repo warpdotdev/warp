@@ -2645,7 +2645,7 @@ impl LocalDiffStateModel {
                 let new_count = header.new_line_count;
 
                 // Collect hunk lines
-                let mut hunk_lines = Vec::new();
+                let mut hunk_lines: Vec<DiffLine> = Vec::new();
                 i += 1;
 
                 let mut old_line = old_start;
@@ -2656,6 +2656,13 @@ impl LocalDiffStateModel {
                     && !lines[i].starts_with("diff ")
                 {
                     let content_line = lines[i];
+                    if content_line == "\\ No newline at end of file" {
+                        if let Some(previous_line) = hunk_lines.last_mut() {
+                            previous_line.no_trailing_newline = true;
+                        }
+                        i += 1;
+                        continue;
+                    }
 
                     if content_line.is_empty() {
                         i += 1;
@@ -2688,15 +2695,12 @@ impl LocalDiffStateModel {
                         String::new()
                     };
 
-                    // Check for no trailing newline
-                    let no_trailing_newline = content_line.ends_with("\\No newline at end of file");
-
                     hunk_lines.push(DiffLine {
                         line_type,
                         old_line_number: old_num,
                         new_line_number: new_num,
                         text,
-                        no_trailing_newline,
+                        no_trailing_newline: false,
                     });
 
                     i += 1;

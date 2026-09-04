@@ -39,7 +39,6 @@ use crate::ai::request_usage_model::{AIRequestUsageModel, AIRequestUsageModelEve
 use crate::appearance::Appearance;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::comment_editor::DEFAULT_COMMENT_MAX_WIDTH;
-use crate::code::editor::view::{CodeEditorEvent, CodeEditorView};
 use crate::code_review::code_review_view::CodeReviewView;
 use crate::code_review::comment_rendering::CommentViewCard;
 use crate::code_review::comments::{
@@ -414,12 +413,6 @@ impl CommentListView {
                         card.comment_editor(),
                         Self::handle_comment_editor_selection_events,
                     );
-                    if let Some(diff_editor) = card.static_diff_editor() {
-                        ctx.subscribe_to_view(
-                            diff_editor,
-                            Self::handle_static_diff_editor_selection_events,
-                        );
-                    }
 
                     let comment_id = id;
                     let action_button = ActionButton::new("", NakedTheme)
@@ -535,25 +528,6 @@ impl CommentListView {
         }
     }
 
-    fn handle_static_diff_editor_selection_events(
-        &mut self,
-        view: ViewHandle<CodeEditorView>,
-        event: &CodeEditorEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            CodeEditorEvent::SelectionChanged => {
-                if view.as_ref(ctx).selected_text(ctx).is_some() {
-                    self.clear_other_comment_selections(Some(view.id()), ctx);
-                }
-            }
-            CodeEditorEvent::Focused => {
-                self.clear_other_comment_selections(Some(view.id()), ctx);
-            }
-            _ => {}
-        }
-    }
-
     fn clear_other_comment_selections(
         &mut self,
         source_view_id: Option<EntityId>,
@@ -564,11 +538,6 @@ impl CommentListView {
             if source_view_id.is_none_or(|id| card.comment_editor().id() != id) {
                 card.comment_editor()
                     .update(ctx, |view, ctx| view.clear_text_selection(ctx));
-            }
-            if let Some(diff_editor) = card.static_diff_editor()
-                && source_view_id.is_none_or(|id| diff_editor.id() != id)
-            {
-                diff_editor.update(ctx, |view, ctx| view.clear_selection(ctx));
             }
         }
     }
