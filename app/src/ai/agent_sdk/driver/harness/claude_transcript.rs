@@ -114,26 +114,9 @@ pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
 /// - `<config_root>/projects/<encoded_cwd>/<session_uuid>/subagents/*.jsonl` - subagents
 /// - `<config_root>/todos/<session_uuid>-agent-*.json` - per-agent todo lists
 ///
-/// If the main JSONL does not exist yet (e.g. during an early periodic save)
-/// the envelope is returned with an empty `entries` list rather than an error.
+/// If the main JSONL does not exist, `require_main_transcript` controls whether
+/// this returns an error or an envelope with an empty `entries` list.
 pub(crate) fn read_envelope(
-    session_uuid: Uuid,
-    cwd: &Path,
-    config_root: &Path,
-) -> Result<ClaudeTranscriptEnvelope> {
-    read_envelope_impl(session_uuid, cwd, config_root, false)
-}
-
-/// Assemble a [`ClaudeTranscriptEnvelope`], returning an error if the main transcript is absent.
-pub(crate) fn read_envelope_requiring_main_transcript(
-    session_uuid: Uuid,
-    cwd: &Path,
-    config_root: &Path,
-) -> Result<ClaudeTranscriptEnvelope> {
-    read_envelope_impl(session_uuid, cwd, config_root, true)
-}
-
-fn read_envelope_impl(
     session_uuid: Uuid,
     cwd: &Path,
     config_root: &Path,

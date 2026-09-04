@@ -860,7 +860,7 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
     assert!(!parent_bridge_hook_output_file(&state_dir).exists());
 
     let restored_envelope =
-        read_envelope(session_id, &working_dir, claude_config_dir.path()).unwrap();
+        read_envelope(session_id, &working_dir, claude_config_dir.path(), false).unwrap();
     assert_eq!(restored_envelope.cwd, working_dir);
     assert_eq!(
         restored_envelope.entries,

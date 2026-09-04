@@ -20,7 +20,7 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::{
     ClaudeResumeInfo, ClaudeTranscriptEnvelope, claude_config_dir, home_dir_for_claude_config,
-    read_envelope, read_envelope_requiring_main_transcript, rehydrate_claude_transcript,
+    read_envelope, rehydrate_claude_transcript,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
@@ -629,11 +629,12 @@ async fn upload_transcript(
     let config_dir = claude_config_dir().context("Failed to resolve Claude config dir")?;
     let harness_working_dir = harness_working_dir.to_path_buf();
     let body = tokio::task::spawn_blocking(move || {
-        let mut envelope = if require_main_transcript {
-            read_envelope_requiring_main_transcript(session_id, &harness_working_dir, &config_dir)
-        } else {
-            read_envelope(session_id, &harness_working_dir, &config_dir)
-        }
+        let mut envelope = read_envelope(
+            session_id,
+            &harness_working_dir,
+            &config_dir,
+            require_main_transcript,
+        )
         .with_context(|| format!("Failed to read transcript for session {session_id}"))?;
         envelope.claude_version = claude_version;
         serde_json::to_vec(&envelope).context("Failed to serialize transcript envelope")
