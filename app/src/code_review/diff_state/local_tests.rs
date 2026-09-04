@@ -283,6 +283,53 @@ fn test_parse_git_status_file_without_spaces_still_works() {
 }
 
 #[test]
+fn parse_git_diff_name_status_preserves_ordinary_path_whitespace() {
+    let files = LocalDiffStateModel::parse_git_diff_name_status("M\0  ordinary.txt  \0")
+        .expect("parse modified name-status");
+
+    assert_eq!(
+        files,
+        vec![("  ordinary.txt  ".to_string(), GitFileStatus::Modified)]
+    );
+}
+
+#[test]
+fn parse_git_diff_name_status_preserves_rename_path_whitespace() {
+    let files = LocalDiffStateModel::parse_git_diff_name_status(
+        "R100\0  rename source.txt  \0  rename destination.txt  \0",
+    )
+    .expect("parse rename name-status");
+
+    assert_eq!(
+        files,
+        vec![(
+            "  rename destination.txt  ".to_string(),
+            GitFileStatus::Renamed {
+                old_path: "  rename source.txt  ".to_string(),
+            },
+        )]
+    );
+}
+
+#[test]
+fn parse_git_diff_name_status_preserves_copy_path_whitespace() {
+    let files = LocalDiffStateModel::parse_git_diff_name_status(
+        "C100\0  copy source.txt  \0  copy destination.txt  \0",
+    )
+    .expect("parse copy name-status");
+
+    assert_eq!(
+        files,
+        vec![(
+            "  copy destination.txt  ".to_string(),
+            GitFileStatus::Copied {
+                old_path: "  copy source.txt  ".to_string(),
+            },
+        )]
+    );
+}
+
+#[test]
 fn parse_git_numstat_preserves_ordinary_paths_and_special_characters() {
     let output = concat!(
         "3\t1\tordinary.txt\0",

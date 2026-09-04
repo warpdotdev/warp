@@ -2890,7 +2890,7 @@ impl LocalDiffStateModel {
                 continue;
             }
 
-            let mut file_path = tokens[i + 1].trim();
+            let mut file_path = tokens[i + 1];
             if file_path.is_empty() {
                 i += 2;
                 continue;
@@ -2901,12 +2901,10 @@ impl LocalDiffStateModel {
                 'M' => GitFileStatus::Modified,
                 'D' => GitFileStatus::Deleted,
                 'R' => {
-                    // For renamed files: R<score> <null> old_path <null> new_path <null>
-                    // We need to get the old path from the next token
-                    if i + 2 < tokens.len() {
+                    if i + 2 < tokens.len() && !tokens[i + 2].is_empty() {
                         let old_path = file_path;
-                        file_path = tokens[i + 2].trim();
-                        i += 1; // Skip the new path token (we'll increment again at the end)
+                        file_path = tokens[i + 2];
+                        i += 1;
                         GitFileStatus::Renamed {
                             old_path: old_path.to_string(),
                         }
@@ -2915,9 +2913,9 @@ impl LocalDiffStateModel {
                     }
                 }
                 'C' => {
-                    if i + 2 < tokens.len() {
+                    if i + 2 < tokens.len() && !tokens[i + 2].is_empty() {
                         let old_path = file_path;
-                        file_path = tokens[i + 2].trim();
+                        file_path = tokens[i + 2];
                         i += 1;
                         GitFileStatus::Copied {
                             old_path: old_path.to_string(),
