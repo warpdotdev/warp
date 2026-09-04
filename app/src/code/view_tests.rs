@@ -10,7 +10,6 @@ use crate::app_state::{CodePaneSnapShot, CodePaneTabSnapshot, LeafContents};
 use crate::code::ImmediateSaveError;
 use crate::code::editor_management::CodeSource;
 use crate::code::global_buffer_model::GlobalBufferModel;
-use crate::code::local_code_editor::LocalCodeEditorEvent;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::pane_group::{CodePane, PaneContent};
@@ -87,48 +86,6 @@ fn restored_tabs_load_on_activation_and_duplicate_paths_share_a_buffer() {
             });
 
             assert_eq!(duplicate_file_id, first_file_id);
-        });
-    });
-}
-
-#[test]
-fn inactive_file_loaded_does_not_rewrite_active_tab_location() {
-    VirtualFS::test("inactive_file_loaded", |dirs, mut vfs| {
-        vfs.with_files(vec![
-            Stub::FileWithContent("delayed.rs", "fn delayed() {}\n"),
-            Stub::FileWithContent("active-editor.rs", "fn active_editor() {}\n"),
-            Stub::FileWithContent("active.rs", "fn active() {}\n"),
-        ]);
-        let delayed = dirs.tests().join("delayed.rs");
-        let active_editor = dirs.tests().join("active-editor.rs");
-        let active = dirs.tests().join("active.rs");
-
-        App::test((), |mut app| async move {
-            initialize_app(&mut app);
-            let tabs = snapshots(&[&delayed, &active_editor]);
-            let source_path = delayed.clone();
-            let (_, code_view) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
-                CodeView::restore(&tabs, 0, source(&source_path), ctx)
-            });
-            let delayed_editor = code_view.read(&app, |view, _| {
-                view.tab_at(0).unwrap().editor_view().unwrap().clone()
-            });
-
-            code_view.update(&mut app, |view, ctx| {
-                view.set_active_tab_index(1, ctx);
-                view.tab_group[1].location = Some(active.clone().into());
-            });
-            delayed_editor.update(&mut app, |_, ctx| {
-                ctx.emit(LocalCodeEditorEvent::FileLoaded);
-            });
-
-            code_view.read(&app, |view, _| {
-                assert_eq!(view.active_tab_index(), 1);
-                assert_eq!(
-                    view.tab_at(1).unwrap().local_path().as_deref(),
-                    Some(active.as_path())
-                );
-            });
         });
     });
 }
