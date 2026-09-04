@@ -2,8 +2,36 @@ use std::collections::HashMap;
 
 use warp_graphql::queries::get_runners::{RunnerArch, RunnerMacOsVersion, RunnerOs};
 
-use super::{RunPlatform, RunnerPlatform, resolve_run_platform};
+use super::{RunPlatform, RunnerFetchCache, RunnerPlatform, resolve_run_platform};
 use crate::ui_components::icons::Icon;
+#[test]
+fn runner_fetch_cache_clears_completed_data_on_team_switch() {
+    let mut cache = RunnerFetchCache::default();
+    let team_a_generation = cache.begin_fetch().unwrap();
+    assert!(cache.complete_fetch(team_a_generation, vec!["team-a-runner"]));
+
+    cache.invalidate();
+
+    assert!(cache.entries().is_empty());
+    assert!(!cache.is_loading());
+    assert!(cache.begin_fetch().is_some());
+}
+
+#[test]
+fn runner_fetch_cache_rejects_in_flight_results_from_the_previous_team() {
+    let mut cache = RunnerFetchCache::default();
+    let team_a_generation = cache.begin_fetch().unwrap();
+
+    cache.invalidate();
+    let team_b_generation = cache.begin_fetch().unwrap();
+
+    assert!(!cache.complete_fetch(team_a_generation, vec!["team-a-runner"]));
+    assert!(cache.entries().is_empty());
+    assert!(cache.is_loading());
+    assert!(cache.complete_fetch(team_b_generation, vec!["team-b-runner"]));
+    assert_eq!(cache.entries(), &["team-b-runner"]);
+    assert!(!cache.is_loading());
+}
 
 fn linux_runner() -> RunnerPlatform {
     RunnerPlatform {
