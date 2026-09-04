@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::executor::block_on;
+use warp_graphql::client::RequestOptions;
 use warp_server_auth::auth_state::AuthState;
 
 use super::{
     AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_HEADER, AmbientHeaderPolicy,
     AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
-    HeaderOverride,
+    HeaderOverride, TEAM_UID_HEADER,
 };
 
 struct StaticIapTokenProvider;
@@ -136,6 +137,21 @@ fn authenticated_graphql_options_include_configured_and_ambient_headers() {
         options.headers.get(AGENT_SOURCE_HEADER).map(String::as_str),
         Some("cloud_mode")
     );
+}
+
+#[test]
+fn team_scoped_graphql_options_include_only_an_explicit_team_header() {
+    let team_options =
+        BaseClient::with_team_header(RequestOptions::default(), Some("team-123".to_string()));
+    let personal_options = BaseClient::with_team_header(RequestOptions::default(), None);
+    assert_eq!(
+        team_options
+            .headers
+            .get(TEAM_UID_HEADER)
+            .map(String::as_str),
+        Some("team-123")
+    );
+    assert!(!personal_options.headers.contains_key(TEAM_UID_HEADER));
 }
 
 #[test]

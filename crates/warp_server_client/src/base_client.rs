@@ -345,6 +345,25 @@ impl BaseClient {
         Ok(options)
     }
 
+    /// Returns GraphQL options for a session-authenticated operation scoped to a team.
+    pub async fn graphql_request_options_with_team(
+        &self,
+        timeout: Option<Duration>,
+        team_uid: Option<String>,
+    ) -> Result<RequestOptions> {
+        let options = self.graphql_request_options(timeout).await?;
+        Ok(Self::with_team_header(options, team_uid))
+    }
+
+    fn with_team_header(mut options: RequestOptions, team_uid: Option<String>) -> RequestOptions {
+        if let Some(team_uid) = team_uid {
+            options
+                .headers
+                .insert(TEAM_UID_HEADER.to_string(), team_uid);
+        }
+        options
+    }
+
     /// Notifies the application when an enabled IAP-backed request receives an IAP challenge.
     pub fn observe_iap_challenge(&self, response: &http_client::Response) -> bool {
         if self.iap_token_provider.is_none()
