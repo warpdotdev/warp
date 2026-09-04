@@ -1525,11 +1525,7 @@ pub fn test_single_tab_handoff_continues_drag() -> Builder {
 
 /// Drags the Settings tab (always at index 1: index 0 is the terminal tab) out
 /// of the saved source window via real mouse events, mirroring
-/// `test_detach_tab_to_new_window_with_drag`. Used as the shared "detach"
-/// gesture for the APP-5311 visual verification flows below, since the bug
-/// and its fix are both specifically about the real drag-driven handoff path
-/// (not the internal transfer APIs exercised by the unit tests in
-/// `view_tests.rs`).
+/// `test_detach_tab_to_new_window_with_drag`.
 fn detach_settings_tab_step(step_name: &'static str) -> TestStep {
     const SETTINGS_TAB_INDEX: usize = 1;
     TestStep::new(step_name)
@@ -1821,10 +1817,7 @@ fn close_window_via_real_close_button(
         .add_assertion(move |app, _| async_assert_eq!(app.window_ids().len(), expected_num_windows))
 }
 
-/// Manual visual-verification companion for APP-5311. Drives the real
-/// cross-window tab-drag gesture (never the internal transfer APIs used by
-/// the unit tests in `view_tests.rs`) to exercise all three reported
-/// symptoms plus the one-pane-per-window collision reconciliation:
+/// Drives the real cross-window tab-drag gesture to exercise transferred singleton panes:
 ///
 /// - Flow A: Settings reopens in the original window after being dragged
 ///   into a new window and that window is closed.
@@ -1851,7 +1844,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
             open_settings_step("Open Settings", SOURCE_WINDOW_KEY)
                 .add_assertion(assert_tab_count(2)),
         )
-        // ---- Flow A: reopen Settings after detach + close ----
         .with_step(detach_settings_tab_step(
             "Flow A: drag Settings into a new window",
         ))
@@ -1876,7 +1868,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
             )
             .add_assertion(assert_tab_count(2)),
         )
-        // ---- Flow B: Rules opens in the window hosting the transferred Settings pane ----
         .with_step(detach_settings_tab_step(
             "Flow B: drag Settings into a new window",
         ))
@@ -1906,7 +1897,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
                     },
                 ),
         )
-        // ---- Flow C: Rules reopens after being closed in the transferred window ----
         // `UndoClosedPanes` is on by default (see `undo_closed_panes` in the default
         // feature list), so closing a pane hides it for undo rather than removing it
         // from `pane_count()`; check `visible_pane_count()` instead.
@@ -1918,7 +1908,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
             )
             .add_assertion(assert_num_visible_panes_in_tab(0, 2)),
         )
-        // ---- Collision: dragging Settings into a window that already has one keeps a single pane ----
         .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
         .with_step(
             open_settings_step(

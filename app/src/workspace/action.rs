@@ -127,17 +127,7 @@ pub enum AutoCloudHandoffTrigger {
 
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
-    /// Reconciles a Settings/AI-fact pane transfer that collided with a live
-    /// pane of the same kind already in this window (Warp enforces at most
-    /// one of each per window): discards the just-transferred `discard`
-    /// pane and focuses the pre-existing `keep` pane. Always dispatched, as
-    /// a *self*-targeted deferred action, from
-    /// `PaneGroup::rehome_pane_event_subscription`; see that method's doc
-    /// comment for why. Self-targeting (rather than reaching this from an
-    /// ancestor-chain dispatch) is what lets the handler safely touch the
-    /// just-transferred pane group -- it no longer depends on that pane
-    /// group's render-time parent link in this window, which isn't
-    /// registered until the next render pass.
+    /// Discards a transferred singleton pane when its destination already hosts one.
     DiscardDuplicateTransferredPane {
         keep: PaneViewLocator,
         discard: PaneViewLocator,
@@ -1256,8 +1246,6 @@ impl WorkspaceAction {
             #[cfg(feature = "local_fs")]
             FileDeleted { .. } => false, // File deletion doesn't change workspace state
             OpenEnvironmentManagementPane => false,
-            // Internal bookkeeping dispatched by `PaneGroup::rehome_pane_event_subscription`,
-            // not a user action; doesn't reflect a change worth persisting.
             DiscardDuplicateTransferredPane { .. } => false,
             #[cfg(target_os = "linux")]
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
