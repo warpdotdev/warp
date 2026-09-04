@@ -8,6 +8,7 @@ use chrono::{DateTime, Local};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
+use warp_multi_agent_api::StoredScreenshotRef;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
@@ -879,7 +880,7 @@ impl AIAgentActionResultType {
                 ReadShellCommandOutputResult::CommandFinished { .. }
                 | ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. },
             )
-            | Self::UseComputer(UseComputerResult::Success(_))
+            | Self::UseComputer(UseComputerResult::Success { .. })
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
             | Self::StartRecording(StartRecordingResult::Success(_))
@@ -1206,16 +1207,57 @@ impl Display for ReadSkillResult {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseComputerResult {
-    /// Computer use succeeded, with one result per requested action.
-    Success(computer_use::ActionResult),
+    /// Computer use succeeded. Mirrors the wire `Success` message.
+    Success {
+        screenshot: Option<ScreenshotSource>,
+        cursor_position: Option<computer_use::Vector2I>,
+        /// The on-screen windows, refreshed after the actions ran, so the caller always has a
+        /// fresh list to target next. Empty on platforms without window enumeration.
+        windows: Vec<computer_use::WindowInfo>,
+        /// Metadata about the captured window, populated only when a window target was
+        /// screenshotted, so window-local coordinates map onto the screenshot image.
+        captured_window: Option<computer_use::CapturedWindow>,
+    },
     Error(String),
     Cancelled,
+}
+
+/// Where a computer-use screenshot's bytes live, mirroring the wire's
+/// `RawImage.source` oneof.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenshotSource {
+    /// The bytes are inline on the client.
+    Inline(computer_use::Screenshot),
+    /// The bytes live in Warp-managed object storage and must be fetched via a
+    /// signed URL.
+    Stored {
+        stored_ref: StoredScreenshotRef,
+        /// MIME type of the stored image (e.g. "image/png").
+        mime_type: String,
+        /// The width of the stored image, in pixels.
+        width: i32,
+        /// The height of the stored image, in pixels.
+        height: i32,
+    },
+}
+
+impl UseComputerResult {
+    /// Builds a success result from a locally captured action result, whose
+    /// screenshot bytes (if any) are inline.
+    pub fn success(result: computer_use::ActionResult) -> Self {
+        Self::Success {
+            screenshot: result.screenshot.map(ScreenshotSource::Inline),
+            cursor_position: result.cursor_position,
+            windows: result.windows,
+            captured_window: result.captured_window,
+        }
+    }
 }
 
 impl Display for UseComputerResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UseComputerResult::Success(_) => write!(f, "Use computer completed"),
+            UseComputerResult::Success { .. } => write!(f, "Use computer completed"),
             UseComputerResult::Error(error) => write!(f, "Use computer error: {error}"),
             UseComputerResult::Cancelled => write!(f, "Use computer cancelled"),
         }

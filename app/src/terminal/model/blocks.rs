@@ -1420,6 +1420,18 @@ impl BlockList {
         }
     }
 
+    pub fn hide_block(&mut self, block_id: &BlockId) {
+        if let Some(block) = self.mut_block_from_id(block_id) {
+            block.hide();
+        } else {
+            return;
+        }
+        self.update_blocks_and_sumtree(None, None, |_| {}, |_| {});
+
+        // Force a re-draw since the blocklist has changed.
+        self.event_proxy.send_wakeup_event();
+    }
+
     pub fn is_executing_oz_environment_startup_commands(&self) -> bool {
         self.is_executing_oz_environment_startup_commands
     }

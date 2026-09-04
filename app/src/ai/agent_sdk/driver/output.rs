@@ -279,7 +279,7 @@ pub mod text {
                 AIAgentActionResultType::TransferShellCommandControlToUser { .. } => Ok(()),
                 AIAgentActionResultType::UseComputer(result) => match result {
                     // TODO(AGENT-2281): implement
-                    UseComputerResult::Success(_result) => Ok(()),
+                    UseComputerResult::Success { .. } => Ok(()),
                     UseComputerResult::Error(error) => writeln!(w, "Use computer error: {error}"),
                     UseComputerResult::Cancelled => writeln!(w, "{CANCELLED_MESSAGE}"),
                 },

@@ -386,7 +386,9 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
-            if let Err(err) = super::common::validate_team_scope(&args.scope, ctx) {
+            if let Err(err) =
+                super::common::validate_team_scope(&args.scope.team_selection, ctx)
+            {
                 super::report_fatal_error(err, ctx);
                 return;
             }
@@ -488,7 +490,7 @@ impl AmbientAgentRunner {
                     .map(|model_id| {
                         super::common::validate_agent_mode_base_model_id_for_scope(
                             model_id,
-                            &args.scope,
+                            &args.scope.team_selection,
                             ctx,
                         )
                     })

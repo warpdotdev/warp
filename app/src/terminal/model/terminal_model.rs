@@ -65,9 +65,10 @@ use crate::terminal::event_listener::ChannelEventListener;
 pub use crate::terminal::history::HistoryEntry;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
-    ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue, Handler, InitShellValue,
-    InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata,
-    SSHValue, SourcedRcFileForWarpValue,
+    ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue,
+    ExternalShellWidgetSelectionValue, Handler, InitShellValue, InitSubshellValue,
+    PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata, SSHValue,
+    SourcedRcFileForWarpValue,
 };
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::completions::{ShellCompletion, ShellCompletionUpdate};
@@ -3201,6 +3202,11 @@ impl ansi::Handler for TerminalModel {
         delegate!(self.input_buffer(data));
     }
 
+    fn external_shell_widget_selection(&mut self, data: ExternalShellWidgetSelectionValue) {
+        self.event_proxy
+            .send_app_event(Event::ExternalShellWidgetSelection(data));
+    }
+
     fn init_subshell(&mut self, data: InitSubshellValue) {
         match ShellType::from_name(data.shell.as_str()) {
             Some(shell_type) => {
@@ -3287,11 +3293,12 @@ impl ansi::Handler for TerminalModel {
                 };
                 self.is_receiving_in_band_command_output = IsReceivingInBandCommandOutput::No;
             }
-            IsReceivingInBandCommandOutput::No => {
+            IsReceivingInBandCommandOutput::No if from_osc_sequence => {
                 log::warn!(
-                    "Received 'end_in_band_command_output' while not expecting to read in-band command output."
+                    "Received an in-band command output end OSC while not expecting in-band command output."
                 );
             }
+            IsReceivingInBandCommandOutput::No => {}
         }
 
         #[cfg(windows)]

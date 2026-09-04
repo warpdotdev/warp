@@ -10,8 +10,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartRecordingResult, StopRecordingResult, UseComputerResult,
+    RecordingStarted, RecordingStopped, RequestComputerUseResult, ScreenshotSource,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -1371,15 +1371,32 @@ pub(crate) fn convert_tool_call_result_to_input(
                 match &result.result {
                     Some(api::use_computer_result::Result::Success(success)) => {
                         let screenshot = success.screenshot.as_ref().map(|s| {
-                            // The original dimensions are not preserved through the API, so we use
-                            // the current dimensions for both.
-                            computer_use::Screenshot {
-                                width: s.width as usize,
-                                height: s.height as usize,
-                                original_width: s.width as usize,
-                                original_height: s.height as usize,
-                                data: s.data.clone(),
-                                mime_type: s.mime_type.clone().into(),
+                            // The original dimensions are not preserved through the API, so
+                            // we use the current dimensions for both.
+                            let inline = |data| {
+                                ScreenshotSource::Inline(computer_use::Screenshot {
+                                    width: s.width as usize,
+                                    height: s.height as usize,
+                                    original_width: s.width as usize,
+                                    original_height: s.height as usize,
+                                    data,
+                                    mime_type: s.mime_type.clone().into(),
+                                })
+                            };
+                            match &s.source {
+                                Some(api::raw_image::Source::Data(data)) => inline(data.clone()),
+                                // A screenshot whose bytes were offloaded to object storage
+                                // arrives with the `StoredRef` source variant; the ref is
+                                // carried for on-demand fetching.
+                                Some(api::raw_image::Source::StoredRef(stored_ref)) => {
+                                    ScreenshotSource::Stored {
+                                        stored_ref: stored_ref.clone(),
+                                        mime_type: s.mime_type.clone(),
+                                        width: s.width,
+                                        height: s.height,
+                                    }
+                                }
+                                None => inline(Vec::new()),
                             }
                         });
                         let cursor_position = success
@@ -1401,12 +1418,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 height_px: c.height_px,
                             }
                         });
-                        UseComputerResult::Success(computer_use::ActionResult {
+                        UseComputerResult::Success {
                             screenshot,
                             cursor_position,
                             windows,
                             captured_window,
-                        })
+                        }
                     }
                     Some(api::use_computer_result::Result::Error(error)) => {
                         UseComputerResult::Error(error.message.clone())
@@ -1441,7 +1458,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 height: initial_screenshot.height as usize,
                                 original_width: screen_dimensions.width_px as usize,
                                 original_height: screen_dimensions.height_px as usize,
-                                data: initial_screenshot.data.clone(),
+                                // Initial screenshots are never offloaded, so any non-inline
+                                // source defensively converts to an empty image.
+                                data: match &initial_screenshot.source {
+                                    Some(api::raw_image::Source::Data(data)) => data.clone(),
+                                    Some(api::raw_image::Source::StoredRef(_)) | None => Vec::new(),
+                                },
                                 mime_type: initial_screenshot.mime_type.clone().into(),
                             },
                             platform,

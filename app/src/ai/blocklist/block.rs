@@ -53,7 +53,7 @@ use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
-use warpui::assets::asset_cache::AssetCache;
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
@@ -98,9 +98,9 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
     CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
     MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, ServerOutputId,
-    SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult, SuggestedLoggingId,
-    SummarizationType, TodoOperation,
+    RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource, SearchCodebaseResult,
+    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
+    SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -154,6 +154,7 @@ use crate::ai::get_relevant_files::controller::{
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::SkillOpenOrigin;
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
+use crate::ai::stored_screenshots::stored_screenshot_asset_source;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -6457,6 +6458,30 @@ fn open_code_action_event(
     }
 }
 
+/// The raw-asset cache ID under which a UseComputer action's screenshot bytes are stored.
+fn screenshot_asset_id(action_id: &AIAgentActionId) -> String {
+    format!("screenshot-{action_id}")
+}
+
+/// Opens the lightbox over the given screenshot asset sources.
+fn open_screenshot_lightbox(
+    sources: Vec<AssetSource>,
+    initial_index: usize,
+    ctx: &mut ViewContext<AIBlock>,
+) {
+    let images = sources
+        .into_iter()
+        .map(|asset_source| ui_components::lightbox::LightboxImage {
+            source: ui_components::lightbox::LightboxImageSource::Resolved { asset_source },
+            description: None,
+        })
+        .collect();
+    ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+        images,
+        initial_index,
+    });
+}
+
 impl TypedActionView for AIBlock {
     type Action = AIBlockAction;
 
@@ -7098,12 +7123,12 @@ impl TypedActionView for AIBlock {
                         .flat_map(|c| c.use_computer_action_ids())
                         .collect();
 
-                // Build lightbox images for each action that has a screenshot result.
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+
                 // We Arc::clone the result each iteration to release the immutable
                 // borrow on ctx, allowing the mutable AssetCache update in the same
                 // loop body. Arc::clone is just a refcount bump (no data copied).
-                let mut screenshot_action_ids: Vec<&AIAgentActionId> = Vec::new();
-                let mut images: Vec<ui_components::lightbox::LightboxImage> = Vec::new();
+                let mut screenshot_sources: Vec<(AIAgentActionId, AssetSource)> = Vec::new();
                 for action_id in &use_computer_action_ids {
                     let Some(result) = self
                         .action_model
@@ -7114,46 +7139,50 @@ impl TypedActionView for AIBlock {
                         continue;
                     };
                     let AIAgentActionResultType::UseComputer(
-                        crate::ai::agent::UseComputerResult::Success(computer_use::ActionResult {
-                            screenshot: Some(screenshot),
-                            ..
-                        }),
+                        crate::ai::agent::UseComputerResult::Success { screenshot, .. },
                     ) = &result.result
                     else {
                         continue;
                     };
-                    let asset_id = format!("screenshot-{action_id}");
-                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                        asset_cache.insert_raw_asset_bytes::<ImageType>(
-                            asset_id.clone(),
-                            &screenshot.data,
-                            ctx,
-                        );
-                    });
-                    images.push(ui_components::lightbox::LightboxImage {
-                        source: ui_components::lightbox::LightboxImageSource::Resolved {
-                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
-                                id: asset_id,
-                            },
-                        },
-                        description: None,
-                    });
-                    screenshot_action_ids.push(action_id);
+                    match screenshot {
+                        Some(ScreenshotSource::Inline(screenshot)) => {
+                            let asset_id = screenshot_asset_id(action_id);
+                            AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                                asset_cache.insert_raw_asset_bytes::<ImageType>(
+                                    asset_id.clone(),
+                                    &screenshot.data,
+                                    ctx,
+                                );
+                            });
+                            screenshot_sources
+                                .push((action_id.clone(), AssetSource::Raw { id: asset_id }));
+                        }
+                        Some(ScreenshotSource::Stored { stored_ref, .. }) => {
+                            screenshot_sources.push((
+                                action_id.clone(),
+                                stored_screenshot_asset_source(
+                                    stored_ref.clone(),
+                                    ai_client.clone(),
+                                ),
+                            ));
+                        }
+                        None => {}
+                    }
                 }
 
-                if images.is_empty() {
+                if screenshot_sources.is_empty() {
                     return;
                 }
 
-                let initial_index = screenshot_action_ids
+                let initial_index = screenshot_sources
                     .iter()
-                    .position(|id| *id == action_id)
+                    .position(|(id, _)| id == action_id)
                     .unwrap_or(0);
-
-                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
-                    images,
-                    initial_index,
-                });
+                let sources = screenshot_sources
+                    .into_iter()
+                    .map(|(_, source)| source)
+                    .collect();
+                open_screenshot_lightbox(sources, initial_index, ctx);
             }
             AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
                 let decoded_images = self

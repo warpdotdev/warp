@@ -977,10 +977,24 @@ pub enum FeatureFlag {
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
 
+    /// Uses fzf or atuin for history search instead of Warp's command search.
+    ShellWidgetHandoff,
+
     /// Attaches process-tree liveness signals to long-running command
     /// snapshots, giving the agent evidence that a silent command is still
     /// doing work before it decides to cancel.
     LrcActivitySignal,
+
+    /// Gates Ctrl+R / Command Search history ranking on match quality and usage priors (recency,
+    /// session, exit status) plus whitespace space-AND tokenization, instead of Skim's raw
+    /// fuzzy-match score against the whole query as a single pattern. Disabling this is a full
+    /// return to the pre-APP-5650 history search behavior, not an approximation of it.
+    HistorySearchRankingV2,
+
+    /// Advertises client support for server-issued task-message updates that
+    /// replace inline computer-use screenshot bytes with references to
+    /// Warp-managed object storage.
+    StoredScreenshots,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1058,11 +1072,16 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
+    FeatureFlag::StoredScreenshots,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::NativeShellCompletions];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::NativeShellCompletions,
+    FeatureFlag::ShellWidgetHandoff,
+    FeatureFlag::HistorySearchRankingV2,
+];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

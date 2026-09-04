@@ -42,8 +42,10 @@ pub(crate) mod claude_code;
 pub(crate) mod claude_transcript;
 mod codex;
 pub(crate) mod codex_transcript;
+pub(crate) mod exit_escalation;
 mod gemini;
 mod json_utils;
+pub(crate) mod process_control;
 mod skill_dirs_publish;
 mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
@@ -197,6 +199,9 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// `resolved_secrets` provides the raw typed managed secrets so harnesses
     /// can read structured fields (e.g. `base_url`) without relying on env vars.
     ///
+    /// `workspace_root` is the root used for workspace-level inputs, while
+    /// `harness_working_dir` is the directory from which the CLI starts.
+    ///
     /// If `resume` is `Some`, the harness matches on its own [`ResumePayload`]
     /// variant and reuses stored session/conversation ids.
     #[allow(clippy::too_many_arguments)]
@@ -206,7 +211,8 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        workspace_root: &Path,
+        harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -533,6 +539,16 @@ pub(crate) trait HarnessRunner: Send + Sync {
 
     /// Gracefully ask the harness to exit.
     async fn exit(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()>;
+
+    /// Sends a follow-up input shortly after [`Self::exit`], without waiting
+    /// to see whether it's needed, to retry a dropped write or dismiss a
+    /// confirmation the harness may have opened (e.g. Claude Code's
+    /// background-task exit confirmation). No-op by default; override for
+    /// harnesses with a known follow-up worth sending blind.
+    async fn exit_followup(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        Ok(())
+    }
+
     /// Handle a CLI session update such as a prompt submit or completed tool use.
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         Ok(())

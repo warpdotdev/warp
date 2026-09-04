@@ -40,6 +40,8 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
@@ -64,7 +66,7 @@ pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
 
 /// Publish every skill found under `source_dirs` into `skill_root` as a
 /// symlink under the skill's own name, pointing at the real skill folder.
-/// Returns the number of skills published. See [`publish_skill`] for the
+/// Returns the paths of the published symlinks. See [`publish_skill`] for the
 /// conflict-resolution behavior `is_sandbox` selects.
 ///
 /// `source_dirs` is most-specific-first: when two directories contain a skill
@@ -82,13 +84,13 @@ pub(super) fn publish_skill_dirs(
     skill_root: &Path,
     source_dirs: &[PathBuf],
     is_sandbox: bool,
-) -> usize {
+) -> Vec<PathBuf> {
     if source_dirs.is_empty() {
-        return 0;
+        return Vec::new();
     }
 
     let mut published_names = HashSet::new();
-    let mut published = 0usize;
+    let mut published = Vec::new();
     for source_dir in source_dirs {
         let entries = match fs::read_dir(source_dir) {
             Ok(entries) => entries,
@@ -127,7 +129,7 @@ pub(super) fn publish_skill_dirs(
                 continue;
             }
             match publish_skill(skill_root, name, &source_path, is_sandbox) {
-                Ok(Some(_)) => published += 1,
+                Ok(Some(path)) => published.push(path),
                 Ok(None) => {
                     // Deliberately skipped (a real conflict outside a sandbox whose
                     // alternate name also conflicts) — already logged by publish_skill.
@@ -144,6 +146,123 @@ pub(super) fn publish_skill_dirs(
     published
 }
 
+/// Add the published skill symlinks to the repository-local Git exclude file.
+///
+/// Each pattern names one generated path relative to the repository root. This
+/// avoids hiding unrelated files elsewhere under the harness's skill root.
+/// Does nothing when `working_dir` is not in a Git worktree.
+pub(super) fn exclude_published_skill_paths_from_git(
+    working_dir: &Path,
+    published_paths: &[PathBuf],
+) {
+    if published_paths.is_empty() {
+        return;
+    }
+    if let Err(err) = write_published_skill_paths_to_git_exclude(working_dir, published_paths) {
+        safe_warn!(
+            safe: ("WARP_SKILL_DIRS publish: failed to exclude generated skill links from Git"),
+            full: (
+                "WARP_SKILL_DIRS publish: failed to exclude generated skill links under '{}': {err:#}",
+                working_dir.display()
+            )
+        );
+    }
+}
+
+fn write_published_skill_paths_to_git_exclude(
+    working_dir: &Path,
+    published_paths: &[PathBuf],
+) -> Result<()> {
+    let Ok(repository) = git2::Repository::discover(working_dir) else {
+        return Ok(());
+    };
+    let Some(repository_root) = repository.workdir() else {
+        return Ok(());
+    };
+    let exclude_path = repository.commondir().join("info").join("exclude");
+    let existing = match fs::read_to_string(&exclude_path) {
+        Ok(existing) => existing,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("failed to read Git exclude file {}", exclude_path.display())
+            });
+        }
+    };
+    let existing_patterns = existing.lines().collect::<HashSet<_>>();
+    let mut additions = Vec::new();
+    for path in published_paths {
+        let relative_path = path.strip_prefix(repository_root).with_context(|| {
+            format!(
+                "published skill path {} is outside repository {}",
+                path.display(),
+                repository_root.display()
+            )
+        })?;
+        let pattern = git_exclude_pattern(relative_path)?;
+        if !existing_patterns.contains(pattern.as_str()) {
+            additions.push(pattern);
+        }
+    }
+    if additions.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(parent) = exclude_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create Git exclude directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    let mut appended = String::new();
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        appended.push('\n');
+    }
+    for pattern in additions {
+        appended.push_str(&pattern);
+        appended.push('\n');
+    }
+    let mut exclude = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&exclude_path)
+        .with_context(|| format!("failed to open Git exclude file {}", exclude_path.display()))?;
+    exclude.write_all(appended.as_bytes()).with_context(|| {
+        format!(
+            "failed to update Git exclude file {}",
+            exclude_path.display()
+        )
+    })
+}
+
+fn git_exclude_pattern(relative_path: &Path) -> Result<String> {
+    let relative_path = relative_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!(
+            "published skill path {} is not valid UTF-8",
+            relative_path.display()
+        )
+    })?;
+    if relative_path
+        .chars()
+        .any(|character| matches!(character, '\n' | '\r'))
+    {
+        anyhow::bail!("published skill path contains a line separator");
+    }
+    let mut pattern = String::from("/");
+    for character in relative_path.chars() {
+        if character == std::path::MAIN_SEPARATOR {
+            pattern.push('/');
+        } else if matches!(character, '\\' | ' ' | '*' | '?' | '[' | ']') {
+            pattern.push('\\');
+            pattern.push(character);
+        } else {
+            pattern.push(character);
+        }
+    }
+    Ok(pattern)
+}
 /// Whether a publish target is already ours, missing, or occupied by
 /// something foreign to us.
 enum TargetOutcome {

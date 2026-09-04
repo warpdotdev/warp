@@ -3204,7 +3204,8 @@ fn render_use_computer(
             renderable_action.with_footer(render_recording_footer(recording_span.status, app));
     }
 
-    // Add a "View screenshot" button if the action result contains a screenshot.
+    // Add a "View screenshot" button if the action result contains a screenshot,
+    // either inline or offloaded to object storage.
     let has_screenshot = props
         .action_model
         .as_ref(app)
@@ -3213,8 +3214,11 @@ fn render_use_computer(
             matches!(
                 &result.result,
                 AIAgentActionResultType::UseComputer(
-                    crate::ai::agent::UseComputerResult::Success(action_result)
-                ) if action_result.screenshot.is_some()
+                    crate::ai::agent::UseComputerResult::Success {
+                        screenshot: Some(_),
+                        ..
+                    }
+                )
             )
         });
 
@@ -4025,7 +4029,6 @@ fn render_collapsible_text_block_section(
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let text_color = blended_colors::text_disabled(theme, theme.surface_2());
-    let selectable = false;
     let is_streaming = props.model.status(app).is_streaming();
 
     let mut container = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -4058,7 +4061,7 @@ fn render_collapsible_text_block_section(
             starting_image_section_index: &mut image_section_index,
             sections,
             text_color,
-            selectable,
+            selectable: true,
             find_context: props.find_context,
             current_working_directory: props.current_working_directory,
             shell_launch_data: props.shell_launch_data,

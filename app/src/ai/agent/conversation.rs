@@ -75,6 +75,28 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
+/// How a conversation's status should synchronize to the server `ai_tasks` row via
+/// `LocalAgentTaskSyncModel` (REMOTE-2661).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskSyncMode {
+    /// Ordinary conversation: its status drives the task's state and status message.
+    #[default]
+    Normal,
+    /// A debug conversation bootstrapped into a retained setup-failure session. Its
+    /// conversation ID is still reported, but its status must never construct a new task
+    /// status message — the original failure record is preserved. Defense in depth: the
+    /// server independently guards this by comparing the active execution ID.
+    PreserveTerminalSetupFailure,
+}
+
+impl TaskSyncMode {
+    /// Whether conversation status updates should be suppressed from constructing a new task
+    /// state or status message for this conversation.
+    pub fn suppresses_task_lifecycle_updates(self) -> bool {
+        matches!(self, TaskSyncMode::PreserveTerminalSetupFailure)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
     Pending,
@@ -416,9 +438,14 @@ pub struct AIConversation {
     /// Keyed by `plan_id`; snapshots with empty `plan_id` are ignored.
     orchestration_configs: HashMap<String, (OrchestrationConfig, OrchestrationConfigStatus)>,
 
-    /// Whether the user has pinned this child agent in the orchestration
-    /// pill bar. Persisted via `AgentConversationData.pinned`.
+    /// Whether the user has pinned this child agent in the
+    /// orchestration pill bar. Persisted via `AgentConversationData.pinned`.
     pinned: bool,
+
+    /// How this conversation's status synchronizes to the server task row. Not persisted: it
+    /// only matters for the live process that bootstrapped the conversation, and a restored
+    /// conversation resumes ordinary synchronization.
+    task_sync_mode: TaskSyncMode,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -475,6 +502,7 @@ impl AIConversation {
             last_event_sequence: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
+            task_sync_mode: TaskSyncMode::default(),
         }
     }
 
@@ -727,6 +755,7 @@ impl AIConversation {
             last_event_sequence,
             orchestration_configs: HashMap::new(),
             pinned,
+            task_sync_mode: TaskSyncMode::default(),
         })
     }
 
@@ -1306,6 +1335,17 @@ impl AIConversation {
     /// Marks this conversation as a remote child placeholder.
     pub fn mark_as_remote_child(&mut self) {
         self.is_remote_child = true;
+    }
+
+    /// Returns how this conversation's status synchronizes to the server task row.
+    pub fn task_sync_mode(&self) -> TaskSyncMode {
+        self.task_sync_mode
+    }
+
+    /// Sets how this conversation's status synchronizes to the server task row. Called once,
+    /// right after creating a debug-turn bootstrap conversation with no prior token.
+    pub fn set_task_sync_mode(&mut self, mode: TaskSyncMode) {
+        self.task_sync_mode = mode;
     }
 
     /// Returns the orchestration config and status for a specific plan,
@@ -3273,15 +3313,19 @@ impl AIConversation {
                 }
 
                 let task_id = TaskId::new(task_id);
-                let exchange_id = self
+                // Updates may target messages from exchanges added by earlier response
+                // streams (e.g. the server swapping computer-use screenshot bytes for a
+                // stored ref), so the current stream is not required to have added an
+                // exchange for this task. `Task::upsert_message` resolves the exchange
+                // that owns the message and only needs this one for new messages.
+                let current_stream_exchange_id = self
                     .added_exchanges_by_response
                     .get(response_stream_id)
                     .ok_or(UpdateConversationError::NoPendingRequest)?
                     .iter()
                     .find_map(|new_exchange| {
                         (new_exchange.task_id == task_id).then_some(new_exchange.exchange_id)
-                    })
-                    .ok_or(UpdateConversationError::ExchangeNotFound)?;
+                    });
 
                 let current_todo_list = self.todo_lists.last().cloned();
                 let current_comment_state = self.code_review.as_ref().cloned();
@@ -3291,12 +3335,12 @@ impl AIConversation {
                 // sent on this client). Once we reconstruct these inputs, we will insert them
                 // to mimic the normal conversation flow. (If this is not a shared session, the
                 // exchange inputs will already be populated).
-                let todos_op = self
+                let (exchange_id, todos_op) = self
                     .task_store
                     .modify_task(&task_id, |task| {
                         task.upsert_message(
                             message,
-                            exchange_id,
+                            current_stream_exchange_id,
                             TaskMessageContext {
                                 current_todo_list: current_todo_list.as_ref(),
                                 active_code_review: current_comment_state.as_ref(),
@@ -3305,7 +3349,7 @@ impl AIConversation {
                             mask,
                             is_viewing_shared_session,
                         )
-                        .map(|msg| msg.todos_op().cloned())
+                        .map(|(exchange_id, msg)| (exchange_id, msg.todos_op().cloned()))
                     })
                     .ok_or(UpdateConversationError::TaskNotFound)??;
                 // Update todo list if needed

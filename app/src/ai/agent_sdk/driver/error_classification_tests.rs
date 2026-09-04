@@ -325,6 +325,19 @@ fn harness_runtime_failure_detected_is_failed_with_auth_required() {
     assert!(update.message.contains("Your credit balance is too low"));
 }
 
+// --- Harness exit escalation ---
+
+#[test]
+fn harness_exit_timed_out_is_failed_with_internal_and_names_harness() {
+    let (state, update) = classify_driver_error(&AgentDriverError::HarnessExitTimedOut {
+        harness: "claude".into(),
+    });
+    assert_eq!(state, AgentTaskState::Failed);
+    assert_eq!(update.error_code, Some(PlatformErrorCode::InternalError));
+    assert!(update.message.contains("claude"));
+    assert!(update.message.contains("forcibly terminated"));
+}
+
 // --- Sandbox runtime limit (QUALITY-1759) ---
 
 #[test]

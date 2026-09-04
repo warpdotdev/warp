@@ -528,7 +528,6 @@ pub enum CommandSearchResultType {
     Workflow,
     OpenWarpAI,
     TranslateUsingWarpAI,
-    Notebook,
     EnvVarCollection,
     ViewInWarpDrive,
     AIQuery,
@@ -541,7 +540,6 @@ impl From<&CommandSearchItemAction> for CommandSearchResultType {
         match action {
             AcceptHistory(_) | ExecuteHistory(_) => Self::History,
             AcceptWorkflow(_) => Self::Workflow,
-            AcceptNotebook(_) => Self::Notebook,
             AcceptEnvVarCollection(_) => Self::EnvVarCollection,
             OpenWarpAI => Self::OpenWarpAI,
             TranslateUsingWarpAI => Self::TranslateUsingWarpAI,

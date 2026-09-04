@@ -261,6 +261,36 @@ fn test_apply_formatted_text_delta_append() {
 }
 
 #[test]
+fn test_apply_formatted_text_delta_replaces_content_with_empty_document() {
+    App::test((), |mut app| async move {
+        let old_markdown = "hello world\n";
+        let (buffer, selection) = Buffer::mock_from_markdown(
+            old_markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+
+        let old_formatted = app.read_model(&buffer, |buffer, _| {
+            buffer.range_to_formatted_text(
+                CharOffset::from(1)..buffer.max_charoffset(),
+                StyledBlockBoundaryBehavior::Inclusive,
+            )
+        });
+        let delta = compute_formatted_text_delta(old_formatted, parse_markdown("").unwrap());
+
+        buffer.update(&mut app, |buffer, ctx| {
+            buffer.apply_formatted_text_delta(&delta, selection, ctx);
+        });
+
+        assert_eq!(
+            app.read_model(&buffer, |buffer, _| buffer.markdown_unescaped()),
+            ""
+        );
+    });
+}
+
+#[test]
 fn test_image_html_serialization() {
     App::test((), |mut app| async move {
         let markdown = "![Alt text](image.png)\n";

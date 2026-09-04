@@ -225,6 +225,8 @@ pub(crate) fn validate_repository_head_overrides(
 /// 3. Run any setup commands.
 /// 4. If there is only one repository, navigate into it.
 ///
+/// Returns the directory where the harness will run.
+///
 /// `is_sandbox` tells the preparer that `working_dir` only exists inside a
 /// Docker sandbox container and therefore the host filesystem can't be used
 /// for repo detection or indexing. This is an explicit signal from the
@@ -239,7 +241,7 @@ pub(crate) fn prepare_environment(
     setup_events: SetupClientEventReporter,
     environment_snapshot_reporter: EnvironmentSnapshotReporter,
     ctx: &mut ModelContext<TerminalDriver>,
-) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
+) -> impl Future<Output = Result<PathBuf, PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
         let RepositoryPreparationOptions {
@@ -380,7 +382,7 @@ async fn prepare_environment_impl(
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
     setup_events: SetupClientEventReporter,
     environment_snapshot_reporter: EnvironmentSnapshotReporter,
-) -> Result<(), PrepareEnvironmentError> {
+) -> Result<PathBuf, PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
     // Position the session in `working_dir` before running any probes / clones.
@@ -524,7 +526,7 @@ async fn prepare_environment_impl(
 
     // If there's only one repo in the environment, start the agent in that repo.
     // This way, it doesn't have to locate the correct repo to work on.
-    if let Some(repo_name) = single_repo_name(source_repos) {
+    let harness_working_dir = if let Some(repo_name) = single_repo_name(source_repos) {
         safe_info!(
             safe: ("Changing directory into single repository"),
             full: ("Changing directory into single repository: {repo_name}")
@@ -533,8 +535,11 @@ async fn prepare_environment_impl(
         if exit_code != 0.into() {
             return Err(PrepareEnvironmentError::ChangeDirectory { repo_name });
         }
-    }
-    Ok(())
+        working_dir.join(repo_name)
+    } else {
+        working_dir.to_path_buf()
+    };
+    Ok(harness_working_dir)
 }
 
 fn record_codebase_indexing(
