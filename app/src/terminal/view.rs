@@ -5016,18 +5016,6 @@ impl TerminalView {
             ambient_agent::CloudAgentTeamRequiredViewEvent::OpenTeamsSettings => {
                 ctx.emit(Event::OpenSettings(SettingsSection::Teams));
             }
-            ambient_agent::CloudAgentTeamRequiredViewEvent::BackToTerminal => {
-                if let Some(pane_stack) = self
-                    .pane_stack
-                    .as_ref()
-                    .and_then(|handle| handle.upgrade(ctx))
-                    .filter(|stack| stack.as_ref(ctx).depth() > 1)
-                {
-                    pane_stack.update(ctx, |stack, ctx| {
-                        stack.pop(ctx);
-                    });
-                }
-            }
         }
     }
 

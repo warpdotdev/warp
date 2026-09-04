@@ -1,6 +1,6 @@
 use warpui::elements::{
-    Align, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex,
-    MainAxisAlignment, MainAxisSize, ParentElement, Text,
+    Align, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Expanded, Flex, ParentElement,
+    Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::{
@@ -8,7 +8,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
+use crate::view_components::action_button::{ActionButton, PrimaryTheme};
 
 pub(crate) const TITLE: &str = "Cloud agents need a team";
 pub(crate) const BODY: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join or create a team, then try again.";
@@ -21,18 +21,15 @@ pub(crate) fn should_render(team_required: bool, is_in_setup: bool, is_configuri
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloudAgentTeamRequiredViewEvent {
     OpenTeamsSettings,
-    BackToTerminal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloudAgentTeamRequiredViewAction {
     OpenTeamsSettings,
-    BackToTerminal,
 }
 
 pub struct CloudAgentTeamRequiredView {
     open_teams_settings_button: ViewHandle<ActionButton>,
-    back_to_terminal_button: ViewHandle<ActionButton>,
 }
 
 impl CloudAgentTeamRequiredView {
@@ -42,15 +39,9 @@ impl CloudAgentTeamRequiredView {
                 ctx.dispatch_typed_action(CloudAgentTeamRequiredViewAction::OpenTeamsSettings);
             })
         });
-        let back_to_terminal_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Back to terminal", SecondaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(CloudAgentTeamRequiredViewAction::BackToTerminal);
-            })
-        });
 
         Self {
             open_teams_settings_button,
-            back_to_terminal_button,
         }
     }
 }
@@ -66,9 +57,6 @@ impl TypedActionView for CloudAgentTeamRequiredView {
         let event = match action {
             CloudAgentTeamRequiredViewAction::OpenTeamsSettings => {
                 CloudAgentTeamRequiredViewEvent::OpenTeamsSettings
-            }
-            CloudAgentTeamRequiredViewAction::BackToTerminal => {
-                CloudAgentTeamRequiredViewEvent::BackToTerminal
             }
         };
         ctx.emit(event);
@@ -99,16 +87,7 @@ impl View for CloudAgentTeamRequiredView {
                     .soft_wrap(true)
                     .finish(),
             )
-            .with_child(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::Start)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(8.)
-                    .with_child(ChildView::new(&self.open_teams_settings_button).finish())
-                    .with_child(ChildView::new(&self.back_to_terminal_button).finish())
-                    .finish(),
-            )
+            .with_child(ChildView::new(&self.open_teams_settings_button).finish())
             .finish();
 
         Flex::column()
