@@ -50,6 +50,7 @@ use crate::server::ids::{
     ClientId, HashableId, ObjectUid, ServerId, ServerIdAndType, SyncId, ToServerId,
 };
 use crate::server::sync_queue::SyncQueue;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::{CloudPreferenceModel, Preference};
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::workflows::workflow_enum::{
@@ -57,6 +58,7 @@ use crate::workflows::workflow_enum::{
 };
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel, WorkflowId};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn create_object<K, M>(
     app: &mut App,
@@ -5783,6 +5785,89 @@ fn test_move_object_personal_to_team_failure() {
 
         // There's no database update to roll back.
         assert!(db_events(&update_manager_struct).is_empty());
+    });
+}
+
+#[test]
+fn scoped_refresh_deletes_only_selected_team_objects() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_app(&mut app);
+        let update_manager_struct =
+            create_update_manager_struct(&mut app, Arc::new(mock_server_api()));
+        let selected_team_uid = ServerId::from(7);
+        let personal_id: WorkflowId = 1.into();
+        let selected_team_id: WorkflowId = 2.into();
+        let other_team_id: WorkflowId = 3.into();
+
+        CloudModel::handle(&app).update(&mut app, |cloud_model, _| {
+            for (id, owner) in [
+                (personal_id, Owner::mock_current_user()),
+                (
+                    selected_team_id,
+                    Owner::Team {
+                        team_uid: selected_team_uid,
+                    },
+                ),
+                (
+                    other_team_id,
+                    Owner::Team {
+                        team_uid: ServerId::from(8),
+                    },
+                ),
+            ] {
+                cloud_model.add_object(
+                    SyncId::from_object_id(id),
+                    CloudWorkflow::new_from_server(mock_server_workflow(
+                        id,
+                        owner,
+                        ServerMetadata {
+                            uid: id.into(),
+                            revision: Revision::now(),
+                            metadata_last_updated_ts: Utc::now().into(),
+                            trashed_ts: None,
+                            folder_id: None,
+                            is_welcome_object: false,
+                            creator_uid: None,
+                            last_editor_uid: None,
+                            current_editor_uid: None,
+                        },
+                    )),
+                );
+            }
+        });
+
+        let request_scope =
+            RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(selected_team_uid));
+        update_manager_struct
+            .update_manager
+            .update(&mut app, |update_manager, ctx| {
+                update_manager.apply_scoped_refresh(
+                    InitialLoadResponse {
+                        deleted_workflows: vec![personal_id, selected_team_id, other_team_id],
+                        ..Default::default()
+                    },
+                    request_scope,
+                    ctx,
+                );
+            });
+
+        CloudModel::handle(&app).read(&app, |cloud_model, _| {
+            assert!(
+                cloud_model
+                    .get_workflow(&SyncId::from_object_id(personal_id))
+                    .is_some()
+            );
+            assert!(
+                cloud_model
+                    .get_workflow(&SyncId::from_object_id(selected_team_id))
+                    .is_none()
+            );
+            assert!(
+                cloud_model
+                    .get_workflow(&SyncId::from_object_id(other_team_id))
+                    .is_some()
+            );
+        });
     });
 }
 
