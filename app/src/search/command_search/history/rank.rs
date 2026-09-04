@@ -225,6 +225,48 @@ fn age_days(start_ts: DateTime<Local>, now: DateTime<Local>) -> f64 {
     ((now - start_ts).num_seconds() as f64 / seconds_per_day).max(0.0)
 }
 
+/// Matches `query` against `command` as a literal, contiguous, ASCII-case-insensitive substring
+/// rather than as a fuzzy subsequence -- the semantics of bash/zsh's reverse history search. An
+/// empty `query` matches everything at the start, the same as `str::contains("")`.
+pub(crate) fn match_literal_substring(command: &str, query: &str) -> Option<FuzzyMatchResult> {
+    let command_chars: Vec<char> = command.chars().collect();
+    let query_chars: Vec<char> = query.chars().collect();
+    if query_chars.is_empty() {
+        return Some(FuzzyMatchResult {
+            score: 0,
+            matched_indices: vec![],
+        });
+    }
+    if query_chars.len() > command_chars.len() {
+        return None;
+    }
+
+    let start = (0..=command_chars.len() - query_chars.len()).find(|&start| {
+        command_chars[start..start + query_chars.len()]
+            .iter()
+            .zip(&query_chars)
+            .all(|(command_char, query_char)| command_char.eq_ignore_ascii_case(query_char))
+    })?;
+
+    Some(FuzzyMatchResult {
+        score: 0,
+        matched_indices: (start..start + query_chars.len()).collect(),
+    })
+}
+
+/// Score shared by every literal-substring match for a given `query`: the raw Skim score of
+/// matching `query` against itself, i.e. the maximum a query of that length could ever score.
+/// Every candidate that passes [`match_literal_substring`] gets this identical, genuinely
+/// raw-Skim-scale score, so ties break via the mixer's stable sort, which preserves
+/// `History::commands_shared`'s already-chronological candidate order -- ordering results
+/// most-recent-first, the way bash/zsh's non-ranking reverse search does, while staying
+/// comparable to every other Command Search source's own Skim-based score.
+pub(crate) fn literal_match_score(query: &str) -> OrderedFloat<f64> {
+    let score =
+        fuzzy_match::match_indices_case_insensitive(query, query).map_or(0, |result| result.score);
+    OrderedFloat(score as f64)
+}
+
 #[cfg(test)]
 #[path = "rank_tests.rs"]
 mod tests;

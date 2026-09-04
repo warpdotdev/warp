@@ -19,7 +19,7 @@ use crate::auth::auth_manager::AuthManager;
 use crate::search::ai_queries::fuzzy_match::FuzzyMatchAIQueryResults;
 use crate::search::command_search::ai_queries::AIQuerySearchResultItem;
 use crate::search::command_search::history::{
-    history_data_source, history_data_source_for_session,
+    history_data_source, history_data_source_for_session, history_data_source_with_fuzzy_matching,
 };
 use crate::search::command_search::searcher::CommandSearchMixer;
 use crate::search::command_search::workflows::{WorkflowIdentity, WorkflowSearchItem};
@@ -491,6 +491,314 @@ fn test_history_score_stays_comparable_to_other_sources_raw_skim_scale() {
                     command,
                     ..
                 })) if command == history_command
+            ));
+        });
+    });
+}
+
+#[test]
+fn disabled_fuzzy_matching_does_not_tokenize_the_query() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_with_fuzzy_matching(
+                    vec![HistoryEntry::command_only(
+                        "cd ~/projects/history_orm".to_owned(),
+                    )],
+                    false,
+                ),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("cd hi orm".into(), ctx);
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            assert!(
+                mixer.as_ref(app).results().is_empty(),
+                "disabled fuzzy matching shouldn't AND-tokenize a multi-word query into \
+                 separately-matched terms, unlike the enabled path"
+            );
+        });
+    });
+}
+
+#[test]
+fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_enabled() {
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_with_fuzzy_matching(
+                    vec![HistoryEntry::command_only("git status".to_owned())],
+                    false,
+                ),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("git status".into(), ctx);
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            assert_eq!(
+                mixer.as_ref(app).results().len(),
+                1,
+                "the disabled setting must short-circuit the V2 ranking path"
+            );
+        });
+    });
+}
+
+#[test]
+fn disabled_fuzzy_matching_matches_literally_when_v2_ranking_is_disabled() {
+    let _flag = FeatureFlag::HistorySearchRankingV2.override_enabled(false);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_with_fuzzy_matching(
+                    vec![HistoryEntry::command_only("git status".to_owned())],
+                    false,
+                ),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("git status".into(), ctx);
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            assert_eq!(
+                mixer.as_ref(app).results().len(),
+                1,
+                "the disabled setting must short-circuit the legacy raw-Skim path too, not just V2"
+            );
+        });
+    });
+}
+
+#[test]
+fn disabled_fuzzy_matching_orders_results_most_recent_first() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                // "git status" is a whole-line exact match while "sudo git status" merely
+                // contains it; the fuzzy-enabled path would score the exact match higher via
+                // EXACT_WHOLE_LINE_BONUS. The literal path assigns both the same score, so this
+                // only orders correctly if it's actually falling back to insertion order.
+                history_data_source_with_fuzzy_matching(
+                    vec![
+                        HistoryEntry::command_only("git status".to_owned()),
+                        HistoryEntry::command_only("sudo git status".to_owned()),
+                    ],
+                    false,
+                ),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("git status".into(), ctx);
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 2);
+            assert!(
+                matches!(
+                    results.last().map(|result| result.accept_result()),
+                    Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                        command,
+                        ..
+                    })) if command == "sudo git status"
+                ),
+                "the more recently-run command should rank highest despite scoring no higher, \
+                 the way bash/zsh's reverse search orders purely by recency"
+            );
+        });
+    });
+}
+
+#[test]
+fn disabled_fuzzy_matching_score_stays_comparable_to_other_sources_raw_skim_scale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let history_command = "npm test -- widgets".to_owned();
+        let weak_match_text = "archive old logs then send email summary tonight";
+
+        let literal_score = fuzzy_match::match_indices_case_insensitive("test", "test")
+            .expect("a query should fuzzy-match itself")
+            .score;
+        let weak_raw_score = fuzzy_match::match_indices_case_insensitive(weak_match_text, "test")
+            .expect("the weak match text should fuzzy-match \"test\"")
+            .score;
+        assert!(
+            weak_raw_score < literal_score,
+            "fixture premise: the competitor's raw Skim score must be lower than a query's \
+             self-match score (weak={weak_raw_score}, literal={literal_score})"
+        );
+
+        let weak_workflow = Workflow::Command {
+            name: "Unrelated maintenance task".to_owned(),
+            command: weak_match_text.to_owned(),
+            tags: vec![],
+            description: None,
+            arguments: vec![],
+            source_url: None,
+            author: None,
+            author_url: None,
+            shells: vec![],
+            environment_variables: None,
+        };
+        let fuzzy_matched_workflow =
+            FuzzyMatchWorkflowResult::try_match("test", &weak_workflow, "")
+                .expect("the workflow's command should fuzzy-match \"test\"");
+        let workflow_item = WorkflowSearchItem {
+            identity: WorkflowIdentity::Local(Box::new(WorkflowType::Local(weak_workflow))),
+            source: WorkflowSource::Local,
+            fuzzy_matched_workflow,
+        };
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_sync_source(
+                FixedResults(vec![workflow_item]),
+                HashSet::from([QueryFilter::Workflows]),
+            );
+            mixer.add_async_source(
+                history_data_source_with_fuzzy_matching(
+                    vec![HistoryEntry::command_only(history_command.clone())],
+                    false,
+                ),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("test".into(), ctx);
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 2);
+            assert!(
+                matches!(
+                    results.last().map(|result| result.accept_result()),
+                    Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                        command,
+                        ..
+                    })) if command == history_command
+                ),
+                "a literal-substring history match should still outrank a weaker fuzzy match \
+                 from another source, proving its score stays on the same raw-Skim scale rather \
+                 than e.g. being pinned to a fixed low value"
+            );
+        });
+    });
+}
+
+#[test]
+fn disabled_fuzzy_matching_still_populates_the_zero_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let same_ts = Local::now();
+        let mut older = HistoryEntry::command_only("git status".to_owned());
+        older.start_ts = Some(same_ts);
+        let mut newer = HistoryEntry::command_only("git log".to_owned());
+        newer.start_ts = Some(same_ts);
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_async_source(
+                history_data_source_with_fuzzy_matching(vec![older, newer], false),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: true,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query(
+                Query {
+                    text: "".to_owned(),
+                    filters: HashSet::new(),
+                },
+                ctx,
+            );
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the history query should finish loading"
+        );
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(
+                results.len(),
+                2,
+                "history should still populate the zero state when fuzzy matching is disabled"
+            );
+            assert!(matches!(
+                results.last().map(|result| result.accept_result()),
+                Some(CommandSearchItemAction::AcceptHistory(AcceptedHistoryItem {
+                    command,
+                    ..
+                })) if command == "git log"
             ));
         });
     });

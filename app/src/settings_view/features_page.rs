@@ -67,17 +67,17 @@ use crate::settings::{
     AISettingsChangedEvent, AliasExpansionEnabled, AliasExpansionSettings, AppEditorSettings,
     AtContextMenuInTerminalMode, AutocompleteSymbols, AutosuggestionKeybindingHint,
     ChangelogSettings, CloudPreferencesSettings, CodeSettings, CommandCorrections,
-    CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
-    DefaultSessionMode, EnableSlashCommandsInTerminal, ErrorUnderliningEnabled, ExtraMetaKeys,
-    GPUSettings, GlobalHotkeyMode, InputSettings, InputSettingsChangedEvent,
-    LinuxSelectionClipboard, MiddleClickPasteEnabled, MouseScrollMultiplier,
-    NativeShellCompletionsEnabled, OutlineCodebaseSymbolsForAtContextMenu, PreferLowPowerGPU,
-    PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED, QuakeModeSettings,
-    RightClickBehavior, RightClickBehaviorSetting, ScrollSettings, ScrollSettingsChangedEvent,
-    SelectionSettings, SelectionSettingsChangedEvent, ShowAutosuggestionIgnoreButton,
-    ShowChangelogAfterUpdate, ShowTerminalInputMessageBar, SshSettings, SyntaxHighlighting,
-    TabBehavior, UserNativeRedirectPreference, VimModeEnabled, VimStatusBar,
-    VimUnnamedSystemClipboard, WarpCompletionsEnabled,
+    CommandSearchFuzzyMatchingEnabled, CompletionsOpenWhileTyping, CopyOnSelect, CtrlTabBehavior,
+    DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES, DefaultSessionMode, EnableSlashCommandsInTerminal,
+    ErrorUnderliningEnabled, ExtraMetaKeys, GPUSettings, GlobalHotkeyMode, InputSettings,
+    InputSettingsChangedEvent, LinuxSelectionClipboard, MiddleClickPasteEnabled,
+    MouseScrollMultiplier, NativeShellCompletionsEnabled, OutlineCodebaseSymbolsForAtContextMenu,
+    PreferLowPowerGPU, PreferredGraphicsBackend, QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
+    QuakeModeSettings, RightClickBehavior, RightClickBehaviorSetting, ScrollSettings,
+    ScrollSettingsChangedEvent, SelectionSettings, SelectionSettingsChangedEvent,
+    ShowAutosuggestionIgnoreButton, ShowChangelogAfterUpdate, ShowTerminalInputMessageBar,
+    SshSettings, SyntaxHighlighting, TabBehavior, UserNativeRedirectPreference, VimModeEnabled,
+    VimStatusBar, VimUnnamedSystemClipboard, WarpCompletionsEnabled,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -255,6 +255,19 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         .is_supported_on_current_platform(
             InputSettings::as_ref(app)
                 .command_corrections
+                .is_supported_on_current_platform(),
+        ),
+        ToggleSettingActionPair::new(
+            "fuzzy matching in command search",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleCommandSearchFuzzyMatching,
+            )),
+            context,
+            flags::COMMAND_SEARCH_FUZZY_MATCHING_FLAG,
+        )
+        .is_supported_on_current_platform(
+            InputSettings::as_ref(app)
+                .command_search_fuzzy_matching_enabled
                 .is_supported_on_current_platform(),
         ),
         ToggleSettingActionPair::new(
@@ -760,6 +773,7 @@ pub enum FeaturesPageAction {
     ToggleWarpCompletions,
     ToggleNativeShellCompletions,
     ToggleCommandCorrections,
+    ToggleCommandSearchFuzzyMatching,
     ToggleErrorUnderlining,
     ToggleSyntaxHighlighting,
     ToggleAliasExpansion,
@@ -975,6 +989,10 @@ impl FeaturesPageAction {
             Self::ToggleCommandCorrections => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleCommandCorrections".to_string(),
                 value: to_string(*input_settings.command_corrections.value()),
+            },
+            Self::ToggleCommandSearchFuzzyMatching => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleCommandSearchFuzzyMatching".to_string(),
+                value: to_string(*input_settings.command_search_fuzzy_matching_enabled.value()),
             },
             Self::ToggleErrorUnderlining => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleErrorUnderlining".to_string(),
@@ -1891,6 +1909,15 @@ impl TypedActionView for FeaturesPageView {
                     report_if_error!(
                         input_settings
                             .command_corrections
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+            }
+            ToggleCommandSearchFuzzyMatching => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(
+                        input_settings
+                            .command_search_fuzzy_matching_enabled
                             .toggle_and_save_value(ctx)
                     );
                 });
@@ -2947,6 +2974,13 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             editor_widgets.push(Box::new(CommandCorrectionsWidget::default()));
+        }
+
+        if input_settings
+            .command_search_fuzzy_matching_enabled
+            .is_supported_on_current_platform()
+        {
+            editor_widgets.push(Box::new(CommandSearchFuzzyMatchingWidget::default()));
         }
 
         let alias_expansion_settings = AliasExpansionSettings::as_ref(ctx);
@@ -6137,6 +6171,56 @@ impl SettingsWidget for CommandCorrectionsWidget {
                 })
                 .finish(),
             None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct CommandSearchFuzzyMatchingWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for CommandSearchFuzzyMatchingWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "command search fuzzy matching ctrl+r bash zsh literal substring history"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Fuzzy match in Command Search".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                CommandSearchFuzzyMatchingEnabled::storage_key(),
+                CommandSearchFuzzyMatchingEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*InputSettings::as_ref(app).command_search_fuzzy_matching_enabled)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleCommandSearchFuzzyMatching);
+                })
+                .finish(),
+            Some(
+                "When disabled, Command Search falls back to a literal substring search, like \
+                 bash and zsh's history search."
+                    .to_owned(),
+            ),
         )
     }
 }
