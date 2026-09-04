@@ -1628,6 +1628,16 @@ fn into_file_artifact_record(
     }
 }
 
+fn with_request_team_scope(
+    mut request: http_client::RequestBuilder<'_>,
+    request_team_scope: Option<RequestTeamScope>,
+) -> http_client::RequestBuilder<'_> {
+    if let Some(team_uid) = request_team_scope.and_then(RequestTeamScope::team_uid) {
+        request = request.header(TEAM_UID_HEADER, team_uid.uid());
+    }
+    request
+}
+
 impl ServerApi {
     async fn get_public_api_with_team_scope<R>(
         &self,
@@ -1649,9 +1659,7 @@ impl ServerApi {
         for (name, value) in self.ambient_agent_headers().await? {
             request = request.header(name, value);
         }
-        if let Some(team_uid) = request_team_scope.and_then(RequestTeamScope::team_uid) {
-            request = request.header(TEAM_UID_HEADER, team_uid.uid());
-        }
+        let request = with_request_team_scope(request, request_team_scope);
         let response = request
             .send()
             .await
