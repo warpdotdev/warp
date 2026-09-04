@@ -20,6 +20,7 @@
     "brace-expansion": "^2.1.2",
     "js-yaml": "^4.3.1",
     "shell-quote": "^1.9.0",
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "browserslist": "^4.28.7"
   }
 }
