@@ -2161,6 +2161,34 @@ fn schedule_create_accepts_personal_scope() {
     assert!(!create_args.scope.is_team());
     assert!(create_args.scope.personal);
 }
+#[test]
+fn schedule_create_defaults_to_implicit_team_selection() {
+    let args = Args::try_parse_from([
+        "warp",
+        "schedule",
+        "create",
+        "--name",
+        "test",
+        "--cron",
+        "0 9 * * 1",
+        "--prompt",
+        "hello",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp schedule create` command");
+    };
+    let CliCommand::Schedule(schedule_cmd) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp schedule create` command");
+    };
+    let Some(ScheduleSubcommand::Create(create_args)) = schedule_cmd.subcommand() else {
+        panic!("Expected `warp schedule create` subcommand");
+    };
+
+    assert_eq!(create_args.scope.team_selection.team, None);
+    assert!(!create_args.scope.personal);
+}
 
 #[test]
 fn schedule_create_rejects_multiple_scopes() {
@@ -2179,6 +2207,49 @@ fn schedule_create_rejects_multiple_scopes() {
             "--personal",
         ])
         .is_err()
+    );
+}
+
+fn parse_schedule_list(args: &[&str]) -> crate::scope::TeamSelection {
+    let full_args = std::iter::once("warp")
+        .chain(["schedule", "list"])
+        .chain(args.iter().copied());
+    let args = Args::try_parse_from(full_args).expect("schedule list args should parse");
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp schedule list` command");
+    };
+    let CliCommand::Schedule(schedule_cmd) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp schedule list` command");
+    };
+    let Some(ScheduleSubcommand::List { team_selection }) = schedule_cmd.subcommand() else {
+        panic!("Expected `warp schedule list` subcommand");
+    };
+
+    team_selection.clone()
+}
+
+#[test]
+fn schedule_list_defaults_to_implicit_team_selection() {
+    let team_selection = parse_schedule_list(&[]);
+
+    assert_eq!(team_selection.team, None);
+}
+
+#[test]
+fn schedule_list_accepts_bare_team_selection() {
+    let team_selection = parse_schedule_list(&["--team"]);
+
+    assert_eq!(team_selection.team, Some(None));
+}
+
+#[test]
+fn schedule_list_accepts_explicit_team_selection() {
+    let team_selection = parse_schedule_list(&["--team=team_uid00000000000123"]);
+
+    assert_eq!(
+        team_selection.team,
+        Some(Some("team_uid00000000000123".to_string()))
     );
 }
 

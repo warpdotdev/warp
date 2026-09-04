@@ -1880,7 +1880,7 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
         },
         CliCommand::Schedule(c) => match c.subcommand() {
             None | Some(ScheduleSubcommand::Create(_)) => CliTelemetryEvent::ScheduleCreate,
-            Some(ScheduleSubcommand::List) => CliTelemetryEvent::ScheduleList,
+            Some(ScheduleSubcommand::List { .. }) => CliTelemetryEvent::ScheduleList,
             Some(ScheduleSubcommand::Get(_)) => CliTelemetryEvent::ScheduleGet,
             Some(ScheduleSubcommand::Pause(_)) => CliTelemetryEvent::SchedulePause,
             Some(ScheduleSubcommand::Unpause(_)) => CliTelemetryEvent::ScheduleUnpause,
