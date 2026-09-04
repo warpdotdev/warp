@@ -892,23 +892,19 @@ impl BlocklistAIHistoryModel {
         self.persist_conversation_state(conversation_id, ctx);
     }
 
-    /// Updates the persisted `last_event_sequence` for a conversation and
-    /// writes the updated conversation state to SQLite. Used by the
-    /// orchestration event poller after draining an event batch to keep the
-    /// cursor durable across restarts.
+    /// Updates the persisted `last_event_sequence` for a conversation without
+    /// materializing its task tree.
     pub fn update_event_sequence(
         &mut self,
         conversation_id: AIConversationId,
         sequence: i64,
         ctx: &mut ModelContext<Self>,
     ) {
-        {
-            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-                return;
-            };
-            conversation.set_last_event_sequence(sequence);
-        }
-        self.persist_conversation_state(conversation_id, ctx);
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            return;
+        };
+        conversation.set_last_event_sequence(sequence);
+        conversation.write_updated_event_sequence(ctx);
     }
 
     /// Updates the persisted `pinned` state for a conversation and writes

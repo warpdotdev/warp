@@ -55,6 +55,62 @@ fn last_modified_column(conn: &mut SqliteConnection, conversation: &str) -> Naiv
 }
 
 #[test]
+fn cursor_and_full_writes_preserve_latest_sequence_and_task_snapshot() {
+    let mut conn = test_connection();
+
+    update_agent_conversation_event_sequence(&mut conn, "conv-1", 42)
+        .expect("cursor-only write should create conversation metadata");
+
+    let first_task = task_with_user_query("task-1", "First query", "First title");
+    let mut first_data = empty_conversation_data();
+    first_data.server_conversation_token = Some("server-token".to_string());
+    first_data.last_event_sequence = Some(17);
+    upsert_agent_conversation(&mut conn, "conv-1", [&first_task], first_data)
+        .expect("full snapshot should succeed");
+    let summary_before_cursor = summary_column(&mut conn, "conv-1");
+
+    update_agent_conversation_event_sequence(&mut conn, "conv-1", 50)
+        .expect("cursor-only write should update existing metadata");
+    let after_cursor = read_agent_conversation_by_id(&mut conn, "conv-1")
+        .expect("conversation read should succeed")
+        .expect("conversation should exist");
+    let data_after_cursor: AgentConversationData =
+        serde_json::from_str(&after_cursor.conversation.conversation_data)
+            .expect("conversation data should deserialize");
+    assert_eq!(data_after_cursor.last_event_sequence, Some(50));
+    assert_eq!(after_cursor.tasks[0].description, "First title");
+    assert_eq!(summary_column(&mut conn, "conv-1"), summary_before_cursor);
+
+    let second_task = task_with_user_query("task-1", "Latest query", "Latest title");
+    let mut second_data = empty_conversation_data();
+    second_data.server_conversation_token = Some("server-token".to_string());
+    second_data.last_event_sequence = Some(49);
+    upsert_agent_conversation(&mut conn, "conv-1", [&second_task], second_data)
+        .expect("later full snapshot should succeed");
+
+    let persisted = read_agent_conversation_by_id(&mut conn, "conv-1")
+        .expect("conversation read should succeed")
+        .expect("conversation should exist");
+    let data: AgentConversationData =
+        serde_json::from_str(&persisted.conversation.conversation_data)
+            .expect("conversation data should deserialize");
+
+    assert_eq!(
+        data.server_conversation_token.as_deref(),
+        Some("server-token")
+    );
+    assert_eq!(data.last_event_sequence, Some(50));
+    assert_eq!(persisted.tasks.len(), 1);
+    assert_eq!(persisted.tasks[0].description, "Latest title");
+    let Some(api::message::Message::UserQuery(query)) =
+        persisted.tasks[0].messages[0].message.as_ref()
+    else {
+        panic!("persisted task should contain a user query");
+    };
+    assert_eq!(query.query, "Latest query");
+}
+
+#[test]
 fn upsert_writes_summary_and_metadata_read_skips_tasks() {
     let mut conn = test_connection();
     let task = task_with_user_query("task-1", "Initial query", "Root title");

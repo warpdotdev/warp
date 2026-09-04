@@ -2358,7 +2358,7 @@ fn test_toggle_autoexecute_override_persists_updated_conversation_state() {
 }
 
 #[test]
-fn test_update_event_sequence_persists_updated_conversation_state() {
+fn test_update_event_sequence_queues_cursor_only_persistence_event() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
 
@@ -2370,9 +2370,23 @@ fn test_update_event_sequence_persists_updated_conversation_state() {
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let terminal_view_id = EntityId::new();
-
-        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        let conversation_id = AIConversationId::new();
+        let mut message =
+            crate::test_util::ai_agent_tasks::create_message("large-message", "root-task");
+        let Some(warp_multi_agent_api::message::Message::AgentOutput(output)) =
+            message.message.as_mut()
+        else {
+            panic!("test message should contain agent output");
+        };
+        output.text = "x".repeat(1024 * 1024);
+        let conversation = AIConversation::new_restored(
+            conversation_id,
+            vec![create_api_task("root-task", vec![message])],
+            None,
+        )
+        .expect("server-backed conversation should restore");
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.restore_conversations(terminal_view_id, vec![conversation], ctx);
         });
 
         history_model.update(&mut app, |history_model, ctx| {
@@ -2381,17 +2395,16 @@ fn test_update_event_sequence_persists_updated_conversation_state() {
 
         let event = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
 
-        let ModelEvent::UpdateMultiAgentConversation {
+        let ModelEvent::UpdateMultiAgentConversationEventSequence {
             conversation_id: persisted_conversation_id,
-            conversation_data,
-            ..
+            sequence,
         } = event
         else {
-            panic!("expected UpdateMultiAgentConversation event");
+            panic!("expected cursor-only persistence event");
         };
 
         assert_eq!(persisted_conversation_id, conversation_id.to_string());
-        assert_eq!(conversation_data.last_event_sequence, Some(42));
+        assert_eq!(sequence, 42);
 
         history_model.read(&app, |history_model, _| {
             let conversation = history_model
