@@ -664,6 +664,150 @@ fn test_hoverable_element_hover_handling_with_hover_in_out_delay() {
     });
 }
 
+/// Regression test for a hover highlight detaching during a continuous content animation (e.g.
+/// smooth scrolling): a burst of *synthetic* MouseMoved events spaced apart like separate
+/// repaint frames (not truly back-to-back) must each be allowed to update hover state, while
+/// synthetic events that really are back-to-back (the relayout-cascade case the guard exists
+/// for) must still be suppressed.
+#[test]
+fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_suppressed() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            let synthetic_move_at = |position: Vector2F| Event::MouseMoved {
+                position,
+                cmd: false,
+                shift: false,
+                is_synthetic: true,
+            };
+
+            // Simulate four repaint frames of a scroll animation: the physical mouse never
+            // moves, but content underneath it does, so each frame's synthetic MouseMoved hit
+            // -tests against a different position relative to the (stationary) hoverables --
+            // exactly as if the hoverables themselves shifted underneath a fixed cursor.
+            // Frame 1: enters the bottom-left hoverable.
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(10., 90.)),
+                window_id,
+                presenter.clone(),
+            );
+            // A real gap between repaint frames (the shortest is bounded below by
+            // `SMOOTH_SCROLL_FRAME_INTERVAL`); comfortably longer than the guard's window.
+            std::thread::sleep(Duration::from_millis(10));
+            // Frame 2: leaves the bottom-left hoverable (still a synthetic move, still no real
+            // mouse movement).
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(100., 100.)),
+                window_id,
+                presenter.clone(),
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            // Frame 3: enters the top-right hoverable.
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(90., 10.)),
+                window_id,
+                presenter.clone(),
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            // Frame 4: leaves the top-right hoverable.
+            ctx.simulate_window_event(synthetic_move_at(vec2f(100., 100.)), window_id, presenter);
+        });
+
+        // Every transition above should have been handled -- none of them were truly
+        // back-to-back, so the guard must not have suppressed any of them.
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+        });
+    });
+}
+
+/// The guard must still suppress a genuinely back-to-back synthetic cascade -- the case it was
+/// introduced for, where handling one synthetic hover change triggers a relayout that replays
+/// another synthetic MouseMoved within essentially the same instant.
+#[test]
+fn truly_back_to_back_synthetic_hover_changes_are_still_suppressed() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            let synthetic_move_at = |position: Vector2F| Event::MouseMoved {
+                position,
+                cmd: false,
+                shift: false,
+                is_synthetic: true,
+            };
+
+            // Two synthetic moves dispatched with no delay in between -- indistinguishable from
+            // the same-instant relayout cascade the guard exists to break.
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(10., 90.)),
+                window_id,
+                presenter.clone(),
+            );
+            ctx.simulate_window_event(synthetic_move_at(vec2f(100., 100.)), window_id, presenter);
+        });
+
+        // The hover-in from the first synthetic move is handled (there was nothing before it to
+        // collide with), but the immediately-following hover-out is suppressed.
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                0,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+        });
+    });
+}
+
 // Why would Elements that haven't been painted need to receive any mouse events?
 // Shouldn't paint happen BEFORE any user interaction? Yes, but remember that Elements are
 // disposable, and may get discarded and created anew between invalidations. Most of the time,

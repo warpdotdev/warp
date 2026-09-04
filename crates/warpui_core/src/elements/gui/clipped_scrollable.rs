@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use instant::Instant;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
@@ -11,6 +12,7 @@ use super::{
 };
 use crate::event::DispatchedEvent;
 use crate::scene::ClipBounds;
+use crate::smooth_scroll::SmoothScrollController;
 use crate::units::{IntoPixels, Pixels};
 use crate::{
     AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
@@ -37,7 +39,7 @@ pub struct ScrollTarget {
 
 #[derive(Clone, Default)]
 pub struct ClippedScrollData {
-    scroll_start_px: Pixels,
+    smooth_scroll: SmoothScrollController,
     pub(super) scroll_to_position: Option<ScrollTarget>,
     selection_scroll_anchor: Option<ClippedSelectionScrollAnchor>,
 }
@@ -69,12 +71,52 @@ impl ClippedScrollStateHandle {
         Self::default()
     }
 
+    /// Jumps directly to `start`, cancelling any in-flight smooth-scroll animation.
     pub fn scroll_to(&self, start: Pixels) {
-        self.clipped_scroll_data.lock().scroll_start_px = start.max(Pixels::zero());
+        self.clipped_scroll_data
+            .lock()
+            .smooth_scroll
+            .set_position_immediately(start.max(Pixels::zero()).as_f32());
     }
 
+    /// The position that should currently be displayed/painted, including any in-progress
+    /// smooth-scroll animation.
     pub fn scroll_start(&self) -> Pixels {
-        self.clipped_scroll_data.lock().scroll_start_px
+        self.clipped_scroll_data
+            .lock()
+            .smooth_scroll
+            .displayed_position(Instant::now())
+            .into_pixels()
+    }
+
+    /// The exact position this handle's scroll animation is heading toward, ignoring the
+    /// animation's current progress (unlike [`Self::scroll_start`]).
+    pub fn scroll_target(&self) -> Pixels {
+        self.clipped_scroll_data
+            .lock()
+            .smooth_scroll
+            .target()
+            .into_pixels()
+    }
+
+    /// Adds an eligible discrete (non-precise) scroll delta as a smooth-scroll contribution,
+    /// composing with or reversing any contribution already in flight. Unlike
+    /// [`Self::scroll_to`]/[`Self::scroll_by`], this does not cancel an animation that's
+    /// already running.
+    pub fn animate_scroll_by(&self, delta: Pixels, now: Instant) {
+        self.clipped_scroll_data
+            .lock()
+            .smooth_scroll
+            .add_delta(delta.as_f32(), now);
+    }
+
+    /// Whether a smooth-scroll contribution added via [`Self::animate_scroll_by`] is still
+    /// easing in.
+    pub fn is_animating(&self) -> bool {
+        self.clipped_scroll_data
+            .lock()
+            .smooth_scroll
+            .is_animating(Instant::now())
     }
 
     pub fn scroll_by(&self, delta: Pixels) {
@@ -108,7 +150,10 @@ impl ClippedScrollStateHandle {
         };
 
         let mut scroll_data = self.clipped_scroll_data.lock();
-        let scroll_start_px = scroll_data.scroll_start_px;
+        let scroll_start_px = scroll_data
+            .smooth_scroll
+            .displayed_position(Instant::now())
+            .into_pixels();
         let anchor_scroll_start = match scroll_data.selection_scroll_anchor {
             Some(anchor) if anchor.matches(selection) => anchor.scroll_start_px,
             _ => {

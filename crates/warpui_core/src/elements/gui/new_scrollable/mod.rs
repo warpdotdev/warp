@@ -5,6 +5,7 @@ mod single_axis_config;
 pub(crate) mod util;
 
 pub use dual_axis_config::*;
+use instant::Instant;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
@@ -17,6 +18,7 @@ use super::{
 };
 use crate::elements::Vector2FExt;
 use crate::event::{DispatchedEvent, ModifiersState};
+use crate::smooth_scroll::{NUM_PIXELS_PER_LINE, should_animate_scroll};
 use crate::text::word_boundaries::WordBoundariesPolicy;
 use crate::text::{IsRect, SelectionDirection, SelectionType};
 use crate::units::{IntoPixels, Pixels};
@@ -31,28 +33,6 @@ const MINIMUM_HEIGHT: f32 = 20.;
 
 // TODO: we might want this to be configurable.
 const DUAL_AXES_SCROLL_SENSITIVITY: f32 = 1.0;
-
-/// The number of pixels-per-line when dealing with a cocoa scroll event
-/// that lacks precision (i.e. [`hasPreciseScrollingDeltas`](https://developer.apple.com/documentation/appkit/nsevent/1525758-hasprecisescrollingdeltas?language=objc))
-/// is false. While some mouse devices provide finer scroll deltas
-/// (in pixels), other generic devices don't and we thus have to convert the
-/// provided non-precise scroll deltas (which are in terms of lines) into pixels.
-///
-/// While we could use the application line-height to calculate the number of pixels,
-/// this requires us to couple the scrolling APIs with `Lines`, which doesn't apply
-/// for horizontal scrolling.
-///
-/// We also decided to not use [`CGEventSourceGetPixelsPerLine`](https://developer.apple.com/documentation/coregraphics/1408775-cgeventsourcegetpixelsperline)
-/// because it defaults to ~10 pixels per line, which makes scrolling feel slow compared to other applications.
-///
-/// The value we chose is inspired by the value that Chromium and Flutter use:
-/// - https://chromium.googlesource.com/chromium/src/+/9306606fbbd1ebf51cfe23ea6bcfa19a1ff43363/ui/events/cocoa/events_mac.mm#158
-/// - https://github.com/flutter/engine/blob/cc925b0021330759e18960e1ccbd7e55dec3c375/shell/platform/darwin/macos/framework/Source/FlutterViewController.mm#L768-L775.
-///
-/// TODO: currently, this constant reflects the value that makes sense for MacOS (cocoa) scroll events.
-/// Ideally, we should hide this implementation detail at the platform level and have consumers
-/// solely operate with pixel-based scroll events.
-const NUM_PIXELS_PER_LINE: f32 = 40.;
 
 /// Trait a scrollable child element needs to implement to enable manual scrolling.
 /// The element could support scrolling on: horizontal axis, vertical axis, or both axes.
@@ -784,19 +764,36 @@ impl ScrollableState {
                     return false;
                 }
 
+                let animate = should_animate_scroll(precise);
+
                 // Dispatch scroll event on each axis.
-                config.scroll_to(
-                    viewport_size,
-                    delta.along(Axis::Horizontal).into_pixels(),
-                    Axis::Horizontal,
-                    ctx,
-                );
-                config.scroll_to(
-                    viewport_size,
-                    delta.along(Axis::Vertical).into_pixels(),
-                    Axis::Vertical,
-                    ctx,
-                );
+                if animate {
+                    config.scroll_to_animated(
+                        viewport_size,
+                        delta.along(Axis::Horizontal).into_pixels(),
+                        Axis::Horizontal,
+                        ctx,
+                    );
+                    config.scroll_to_animated(
+                        viewport_size,
+                        delta.along(Axis::Vertical).into_pixels(),
+                        Axis::Vertical,
+                        ctx,
+                    );
+                } else {
+                    config.scroll_to(
+                        viewport_size,
+                        delta.along(Axis::Horizontal).into_pixels(),
+                        Axis::Horizontal,
+                        ctx,
+                    );
+                    config.scroll_to(
+                        viewport_size,
+                        delta.along(Axis::Vertical).into_pixels(),
+                        Axis::Vertical,
+                        ctx,
+                    );
+                }
             }
             Self::SingleAxis {
                 axis,
@@ -828,10 +825,67 @@ impl ScrollableState {
                     return false;
                 }
 
-                config.scroll_to(viewport_size, delta.along(*axis).into_pixels(), *axis, ctx);
+                if should_animate_scroll(precise) {
+                    config.scroll_to_animated(
+                        viewport_size,
+                        delta.along(*axis).into_pixels(),
+                        *axis,
+                        ctx,
+                    );
+                } else {
+                    config.scroll_to(viewport_size, delta.along(*axis).into_pixels(), *axis, ctx);
+                }
             }
         }
         true
+    }
+
+    /// Applies any pending smooth-scroll increment for a `Manual` axis to its child (needs an
+    /// `EventContext`, unlike `Clipped` axes, which apply theirs directly during paint).
+    fn advance_manual_smooth_scroll(&mut self, ctx: &mut EventContext) {
+        let now = Instant::now();
+        match self {
+            Self::SingleAxis {
+                axis,
+                config: SingleAxisConfig::Manual { handle, child },
+                ..
+            } => {
+                let increment = handle.lock().unwrap().take_smooth_scroll_increment(now);
+                if increment.abs() > f32::EPSILON {
+                    child.scroll(increment.into_pixels(), *axis, ctx);
+                }
+            }
+            Self::SingleAxis {
+                config: SingleAxisConfig::Clipped { .. },
+                ..
+            } => {}
+            Self::BothAxes {
+                config:
+                    DualAxisConfig::Manual {
+                        horizontal,
+                        vertical,
+                        child,
+                    },
+                ..
+            } => {
+                if let AxisConfiguration::Manual(handle) = horizontal {
+                    let increment = handle.lock().unwrap().take_smooth_scroll_increment(now);
+                    if increment.abs() > f32::EPSILON {
+                        child.scroll(increment.into_pixels(), Axis::Horizontal, ctx);
+                    }
+                }
+                if let AxisConfiguration::Manual(handle) = vertical {
+                    let increment = handle.lock().unwrap().take_smooth_scroll_increment(now);
+                    if increment.abs() > f32::EPSILON {
+                        child.scroll(increment.into_pixels(), Axis::Vertical, ctx);
+                    }
+                }
+            }
+            Self::BothAxes {
+                config: DualAxisConfig::Clipped { .. },
+                ..
+            } => {}
+        }
     }
 
     /// Scroll the child element to match the delta scrolled from the previous to current scrollbar thumb position.
@@ -1474,6 +1528,8 @@ impl Element for NewScrollable {
             log::warn!("Tried to handle event in scrollable before the element is painted");
             return false;
         };
+
+        self.state.advance_manual_smooth_scroll(ctx);
 
         if self.always_handle_events_first {
             // Different from other elements, scrollable always tries to handle the event first. It only

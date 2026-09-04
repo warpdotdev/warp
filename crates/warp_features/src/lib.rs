@@ -967,6 +967,10 @@ pub enum FeatureFlag {
     /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
     PeriodicHandoffCheckpoints,
 
+    /// Rollout gate for smoothly animating a scroll position toward its target, instead of
+    /// jumping immediately, for non-precise scroll input in generic WarpUI scrollables.
+    SmoothScrolling,
+
     /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
     /// path to a terminal with a working, rich-status-capable CLI agent
     /// session (e.g. Claude Code). Arms a short grace window; if no further
@@ -1050,6 +1054,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::PricingTransparency,
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::SmoothScrolling,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -1073,7 +1078,10 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
-pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[FeatureFlag::LocalClaudeCodexChildHarnesses];
+pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::LocalClaudeCodexChildHarnesses,
+    FeatureFlag::SmoothScrolling,
+];
 
 impl FeatureFlag {
     pub fn is_enabled(&self) -> bool {
