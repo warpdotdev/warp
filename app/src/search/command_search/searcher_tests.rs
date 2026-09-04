@@ -751,6 +751,69 @@ fn disabled_fuzzy_matching_score_stays_comparable_to_other_sources_raw_skim_scal
 }
 
 #[test]
+fn disabled_fuzzy_matching_does_not_unconditionally_outrank_a_strong_competitor() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // The history command only contains "test" in passing; the AI query text is an exact
+        // match. If disabled-mode history scored at its own self-match ceiling instead of a
+        // fraction of it, this merely-containing match would tie the strongest possible
+        // competitor from every other source, regardless of how well that competitor matches.
+        let history_command = "run integration tests for module".to_owned();
+        let strong_ai_query = "test".to_owned();
+
+        let ai_prompt_item = AIQuerySearchResultItem {
+            query_text: strong_ai_query.clone(),
+            start_time: Local::now(),
+            output_status: AIQueryHistoryOutputStatus::Completed,
+            working_directory: None,
+            fuzzy_match_results: FuzzyMatchAIQueryResults::try_match("test", &strong_ai_query)
+                .expect("an exact match should fuzzy-match itself"),
+        };
+
+        let mixer = app.add_model(|_| CommandSearchMixer::new());
+        mixer.update(&mut app, |mixer, ctx| {
+            mixer.add_sync_source(
+                FixedResults(vec![ai_prompt_item]),
+                HashSet::from([QueryFilter::PromptHistory]),
+            );
+            mixer.add_async_source(
+                history_data_source_with_fuzzy_matching(
+                    vec![HistoryEntry::command_only(history_command)],
+                    false,
+                ),
+                HashSet::from([QueryFilter::History]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: false,
+                    run_when_unfiltered: true,
+                },
+                ctx,
+            );
+            mixer.run_query("test".into(), ctx);
+        });
+
+        assert_eventually!(
+            app.read(|app| !mixer.as_ref(app).is_loading()),
+            "the query should finish loading"
+        );
+
+        app.read(|app| {
+            let results = mixer.as_ref(app).results();
+            assert_eq!(results.len(), 2);
+            assert!(
+                !matches!(
+                    results.last().map(|result| result.accept_result()),
+                    Some(CommandSearchItemAction::AcceptHistory(_))
+                ),
+                "an exact match from another source should still outrank a merely-containing \
+                 literal history match"
+            );
+        });
+    });
+}
+
+#[test]
 fn disabled_fuzzy_matching_still_populates_the_zero_state() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);

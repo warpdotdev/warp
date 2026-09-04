@@ -41,6 +41,14 @@ const CONSECUTIVE_BONUS_PER_CHAR: f64 = 4.0;
 /// prefix of a longer one.
 const EXACT_WHOLE_LINE_BONUS: f64 = 12.0;
 
+/// Fraction of a query's self-match score (see `literal_match_score`) used as every
+/// literal-substring match's shared score. The full self-match score is the ceiling for a query
+/// of that length -- using it outright would let a merely-containing history match tie the best
+/// possible match from every other Command Search source. `0.5` instead matches the highest
+/// per-field weight `FuzzyMatchWorkflowResult` already gives its own strongest field, so a
+/// literal match competes with, rather than always beating, an equally strong match elsewhere.
+const LITERAL_MATCH_SCORE_FRACTION: f64 = 0.5;
+
 /// Recency assigned to entries with no timestamp (history-file rows with no matching sqlite
 /// record), i.e. exactly between "as fresh as possible" (1.0) and "as stale as possible" (0.0):
 /// there's no data to justify treating an untracked entry as either.
@@ -254,17 +262,17 @@ pub(crate) fn match_literal_substring(command: &str, query: &str) -> Option<Fuzz
     })
 }
 
-/// Score shared by every literal-substring match for a given `query`: the raw Skim score of
-/// matching `query` against itself, i.e. the maximum a query of that length could ever score.
-/// Every candidate that passes [`match_literal_substring`] gets this identical, genuinely
+/// Score shared by every literal-substring match for a given `query`, derived from the raw Skim
+/// score of matching `query` against itself (see [`LITERAL_MATCH_SCORE_FRACTION`]). Every
+/// candidate that passes [`match_literal_substring`] gets this identical, genuinely
 /// raw-Skim-scale score, so ties break via the mixer's stable sort, which preserves
 /// `History::commands_shared`'s already-chronological candidate order -- ordering results
 /// most-recent-first, the way bash/zsh's non-ranking reverse search does, while staying
 /// comparable to every other Command Search source's own Skim-based score.
 pub(crate) fn literal_match_score(query: &str) -> OrderedFloat<f64> {
-    let score =
+    let self_match_score =
         fuzzy_match::match_indices_case_insensitive(query, query).map_or(0, |result| result.score);
-    OrderedFloat(score as f64)
+    OrderedFloat(self_match_score as f64 * LITERAL_MATCH_SCORE_FRACTION)
 }
 
 #[cfg(test)]

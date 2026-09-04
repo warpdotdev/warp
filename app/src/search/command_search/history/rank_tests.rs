@@ -278,13 +278,13 @@ fn literal_substring_blank_query_matches_with_no_highlight() {
 }
 
 #[test]
-fn literal_match_score_is_the_query_matched_against_itself() {
-    let expected = fuzzy_match::match_indices_case_insensitive("git status", "git status")
+fn literal_match_score_is_half_the_query_matched_against_itself() {
+    let self_match_score = fuzzy_match::match_indices_case_insensitive("git status", "git status")
         .expect("a string should fuzzy-match itself")
         .score;
     assert_eq!(
         literal_match_score("git status"),
-        OrderedFloat(expected as f64)
+        OrderedFloat(self_match_score as f64 * 0.5)
     );
 }
 
