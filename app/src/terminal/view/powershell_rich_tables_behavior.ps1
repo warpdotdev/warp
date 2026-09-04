@@ -128,6 +128,13 @@ Assert-RichTableHooks 'Get-Command output'
 $script:warpMessages.Clear()
 Get-ChildItem -LiteralPath $PSScriptRoot | Select-Object -First 2 | Warp-Out-Default
 Assert-RichTableHooks 'Get-ChildItem output'
+$childItemRows = @(
+    $script:warpMessages |
+        Where-Object { $_.hook -eq 'PowerShellTableRows' } |
+        ForEach-Object { $_.value.rows }
+)
+Assert-True (-not (($childItemRows | ConvertTo-Json -Compress).Contains([char]27))) `
+    'Get-ChildItem cells should not contain terminal escape sequences'
 
 $customFormatPath = Join-Path ([System.IO.Path]::GetTempPath()) (
     "warp-rich-table-$([Guid]::NewGuid().ToString('N')).ps1xml"

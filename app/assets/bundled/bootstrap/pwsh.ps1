@@ -1191,6 +1191,23 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             }
         })
     }
+
+    function Warp-ConvertTo-PowerShellTableCell {
+        param([object]$Value)
+
+        $text = if ($null -eq $Value) {
+            ''
+        } elseif ($Value -is [System.Array]) {
+            ($Value | ForEach-Object { [string]$_ }) -join ', '
+        } else {
+            [string]$Value
+        }
+        [regex]::Replace(
+            $text,
+            '\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|[@-_])',
+            ''
+        )
+    }
     function Warp-Get-PowerShellTableRow {
         param(
             [psobject]$InputObject,
@@ -1234,13 +1251,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                         return $null
                     }
                 }
-                if ($null -eq $value) {
-                    $row += ''
-                } elseif ($value -is [System.Array]) {
-                    $row += (($value | ForEach-Object { [string]$_ }) -join ', ')
-                } else {
-                    $row += [string]$value
-                }
+                $row += Warp-ConvertTo-PowerShellTableCell $value
             } catch {
                 return $null
             }
