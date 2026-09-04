@@ -35,6 +35,7 @@ use warp::integration_testing::workspace::{
 };
 use warp::search::command_palette::mixer::CommandPaletteItemAction;
 use warp::settings::PaneSettings;
+use warp::settings_view::pane_manager::SettingsPaneManager;
 use warp::settings_view::{SettingsView, SettingsViewEvent};
 use warp::terminal::shell::ShellType;
 use warp::themes::theme::AnsiColorIdentifier;
@@ -45,7 +46,7 @@ use warpui_core::integration::{AssertionCallback, AssertionOutcome, StepDataMap,
 use warpui_core::keymap::DescriptionContext;
 use warpui_core::windowing::WindowManager;
 use warpui_core::{
-    EntityId, SingletonEntity, TypedActionView, WindowId, async_assert, async_assert_eq,
+    EntityId, SingletonEntity, TypedActionView, ViewHandle, WindowId, async_assert, async_assert_eq,
 };
 
 use super::new_builder;
@@ -55,6 +56,7 @@ use crate::util::skip_if_powershell_core_2303;
 const SOURCE_WINDOW_KEY: &str = "source window";
 const TARGET_WINDOW_KEY: &str = "target window";
 const DETACHED_WINDOW_KEY: &str = "detached window";
+const TRANSFERRED_SETTINGS_VIEW_KEY: &str = "transferred settings view";
 const METADATA_TAB_TITLE: &str = "Integration Metadata Tab";
 const METADATA_BRANCH: &str = "main";
 const METADATA_CLICKED_PANE_TITLE: &str = "Integration Metadata Clicked Pane";
@@ -1525,6 +1527,10 @@ fn detach_settings_tab_step(step_name: &'static str) -> TestStep {
             let source_window_id = *data
                 .get::<_, WindowId>(SOURCE_WINDOW_KEY)
                 .expect("saved source window id should exist");
+            data.insert(
+                TRANSFERRED_SETTINGS_VIEW_KEY,
+                app.read(|ctx| SettingsPaneManager::as_ref(ctx).settings_view(source_window_id)),
+            );
             let start = tab_center(app, source_window_id, SETTINGS_TAB_INDEX);
             dispatch_mouse_event(
                 app,
@@ -1741,20 +1747,12 @@ fn open_settings_step(step_name: &'static str, window_key: &'static str) -> Test
     })
 }
 
-/// Emits the Settings view event because the Rules button has no cached test position.
-fn click_rules_button_in_settings_step(
-    step_name: &'static str,
-    window_key: &'static str,
-) -> TestStep {
+/// Emits from the transferred Settings view because the Rules button has no cached test position.
+fn click_rules_button_in_settings_step(step_name: &'static str) -> TestStep {
     TestStep::new(step_name).with_action(move |app, _, data| {
-        let window_id = *data
-            .get::<_, WindowId>(window_key)
-            .expect("saved window id should exist");
-        let settings_view = app
-            .views_of_type::<SettingsView>(window_id)
-            .expect("settings view should exist in the window")
-            .first()
-            .expect("settings view should exist in the window")
+        let settings_view = data
+            .get::<_, ViewHandle<SettingsView>>(TRANSFERRED_SETTINGS_VIEW_KEY)
+            .expect("transferred settings view should be saved")
             .clone();
         settings_view.update(app, |_, ctx| {
             ctx.emit(SettingsViewEvent::OpenAIFactCollection);
@@ -1831,7 +1829,6 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
         .with_step(
             click_rules_button_in_settings_step(
                 "Flow B: click Rules from the transferred Settings pane",
-                DETACHED_WINDOW_KEY,
             )
             .add_assertion(assert_num_panes_in_tab(0, 2)),
         )
@@ -1855,11 +1852,8 @@ pub fn test_settings_and_rules_panes_survive_cross_window_drag() -> Builder {
         // from `pane_count()`; check `visible_pane_count()` instead.
         .with_step(close_pane_by_index(0, 1).add_assertion(assert_num_visible_panes_in_tab(0, 1)))
         .with_step(
-            click_rules_button_in_settings_step(
-                "Flow C: click Rules again after closing it",
-                DETACHED_WINDOW_KEY,
-            )
-            .add_assertion(assert_num_visible_panes_in_tab(0, 2)),
+            click_rules_button_in_settings_step("Flow C: click Rules again after closing it")
+                .add_assertion(assert_num_visible_panes_in_tab(0, 2)),
         )
         .with_step(focus_saved_window(SOURCE_WINDOW_KEY).add_assertion(assert_tab_count(1)))
         .with_step(

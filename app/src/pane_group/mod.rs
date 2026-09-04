@@ -8478,6 +8478,7 @@ impl View for PaneGroup {
 
         let settings_pane_ids: Vec<PaneId> = self
             .panes_of::<SettingsPane>()
+            .filter(|pane| !self.is_pane_hidden_for_close(pane.id()))
             .map(|pane| pane.id())
             .collect();
         for pane_id in settings_pane_ids {
@@ -8511,6 +8512,7 @@ impl View for PaneGroup {
 
         let ai_fact_pane_ids: Vec<PaneId> = self
             .panes_of::<AIFactPane>()
+            .filter(|pane| !self.is_pane_hidden_for_close(pane.id()))
             .map(|pane| pane.id())
             .collect();
         for pane_id in ai_fact_pane_ids {

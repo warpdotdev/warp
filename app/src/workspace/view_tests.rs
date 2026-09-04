@@ -5750,6 +5750,135 @@ fn test_ai_fact_pane_transfer_into_window_with_existing_pane_discards_duplicate(
 }
 
 #[test]
+fn test_hidden_settings_pane_is_not_registered_after_cross_window_transfer() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace_a = mock_workspace(&mut app);
+        let window_a = workspace_a.update(&mut app, |_, ctx| ctx.window_id());
+        let workspace_b = mock_workspace(&mut app);
+        let window_b = workspace_b.update(&mut app, |_, ctx| ctx.window_id());
+
+        workspace_a.update(&mut app, |ws, ctx| {
+            ws.open_settings_pane(None, None, ctx);
+        });
+        let settings_tab_index = workspace_a.read(&app, |ws, _| ws.tab_count() - 1);
+        let locator = app
+            .read(|ctx| SettingsPaneManager::as_ref(ctx).find_pane(window_a))
+            .expect("settings pane should be registered for window A");
+        let pane_group = workspace_a.read(&app, |ws, _| {
+            ws.get_pane_group_view(settings_tab_index)
+                .expect("settings pane group should exist")
+                .clone()
+        });
+        pane_group.update(&mut app, |pane_group, ctx| {
+            pane_group.add_terminal_pane(Direction::Right, None, ctx);
+            pane_group.close_pane(locator.pane_id, ctx);
+        });
+
+        assert!(pane_group.read(&app, |pane_group, _| {
+            pane_group.is_pane_hidden_for_close(locator.pane_id)
+        }));
+        app.read(|ctx| {
+            assert_eq!(SettingsPaneManager::as_ref(ctx).find_pane(window_a), None);
+        });
+
+        transfer_tab_to_new_window(
+            &mut app,
+            &workspace_a,
+            window_a,
+            &workspace_b,
+            window_b,
+            settings_tab_index,
+        );
+
+        app.read(|ctx| {
+            assert_eq!(SettingsPaneManager::as_ref(ctx).find_pane(window_a), None);
+            assert_eq!(SettingsPaneManager::as_ref(ctx).find_pane(window_b), None);
+        });
+        assert!(pane_group.read(&app, |pane_group, _| {
+            pane_group.is_pane_hidden_for_close(locator.pane_id)
+        }));
+
+        workspace_b.update(&mut app, |ws, ctx| {
+            ws.open_settings_pane(None, None, ctx);
+        });
+        let reopened = app
+            .read(|ctx| SettingsPaneManager::as_ref(ctx).find_pane(window_b))
+            .expect("a visible Settings pane should open in window B");
+        assert_ne!(reopened, locator);
+        assert!(workspace_b.read(&app, |ws, ctx| {
+            ws.live_settings_view_for_locator(reopened, ctx).is_some()
+        }));
+    });
+}
+
+#[test]
+fn test_hidden_ai_fact_pane_is_not_registered_after_cross_window_transfer() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace_a = mock_workspace(&mut app);
+        let window_a = workspace_a.update(&mut app, |_, ctx| ctx.window_id());
+        let workspace_b = mock_workspace(&mut app);
+        let window_b = workspace_b.update(&mut app, |_, ctx| ctx.window_id());
+
+        workspace_a.update(&mut app, |ws, ctx| {
+            ws.add_terminal_tab(false, ctx);
+            ws.open_ai_fact_collection_pane(Some(Direction::Right), None, ctx);
+        });
+        let rules_tab_index = workspace_a.read(&app, |ws, _| ws.tab_count() - 1);
+        let locator = app
+            .read(|ctx| AIFactManager::as_ref(ctx).find_pane(window_a))
+            .expect("Rules pane should be registered for window A");
+        let pane_group = workspace_a.read(&app, |ws, _| {
+            ws.get_pane_group_view(rules_tab_index)
+                .expect("Rules pane group should exist")
+                .clone()
+        });
+        pane_group.update(&mut app, |pane_group, ctx| {
+            pane_group.close_pane(locator.pane_id, ctx);
+        });
+
+        assert!(pane_group.read(&app, |pane_group, _| {
+            pane_group.is_pane_hidden_for_close(locator.pane_id)
+        }));
+        app.read(|ctx| {
+            assert_eq!(AIFactManager::as_ref(ctx).find_pane(window_a), None);
+        });
+
+        transfer_tab_to_new_window(
+            &mut app,
+            &workspace_a,
+            window_a,
+            &workspace_b,
+            window_b,
+            rules_tab_index,
+        );
+
+        app.read(|ctx| {
+            assert_eq!(AIFactManager::as_ref(ctx).find_pane(window_a), None);
+            assert_eq!(AIFactManager::as_ref(ctx).find_pane(window_b), None);
+        });
+        assert!(pane_group.read(&app, |pane_group, _| {
+            pane_group.is_pane_hidden_for_close(locator.pane_id)
+        }));
+
+        workspace_b.update(&mut app, |ws, ctx| {
+            ws.open_ai_fact_collection_pane(Some(Direction::Right), None, ctx);
+        });
+        let reopened = app
+            .read(|ctx| AIFactManager::as_ref(ctx).find_pane(window_b))
+            .expect("a visible Rules pane should open in window B");
+        assert_ne!(reopened, locator);
+        assert!(workspace_b.read(&app, |ws, ctx| {
+            ws.live_ai_fact_view_for_locator(reopened, ctx).is_some()
+        }));
+    });
+}
+#[test]
 fn test_settings_pane_native_view_is_replaced_after_transferring_out() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
