@@ -1,4 +1,6 @@
 //! Provider command for linking third-party services.
+use std::future::Future;
+
 use comfy_table::Cell;
 use serde::Serialize;
 use warp_cli::GlobalOptions;
@@ -20,9 +22,12 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| ProviderCommandRunner);
     match command {
-        ProviderCommand::Setup(args) => runner.update(ctx, |runner, ctx| {
-            runner.setup(args.provider_type, args.scope, ctx)
-        }),
+        ProviderCommand::Setup(args) => {
+            runner.update(ctx, |runner, ctx| {
+                runner.setup(args.provider_type, args.scope, ctx)
+            });
+            Ok(())
+        }
         ProviderCommand::List => runner.update(ctx, |runner, ctx| runner.list(global_options, ctx)),
     }
 }
@@ -32,7 +37,30 @@ struct ProviderCommandRunner;
 
 impl ProviderCommandRunner {
     // This shouldn't need to be done, it's usually done as part of create
-    fn setup(
+    fn setup(&self, provider_type: ProviderType, scope: ObjectScope, ctx: &mut ModelContext<Self>) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        self.setup_after_workspace_metadata_refresh(refresh_future, provider_type, scope, ctx);
+    }
+
+    fn setup_after_workspace_metadata_refresh(
+        &self,
+        refresh_future: impl Future<Output = anyhow::Result<()>> + Send + 'static,
+        provider_type: ProviderType,
+        scope: ObjectScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.spawn(refresh_future, move |runner, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            if let Err(err) = runner.finish_setup(provider_type, scope, ctx) {
+                super::report_fatal_error(err, ctx);
+            }
+        });
+    }
+
+    fn finish_setup(
         &self,
         provider_type: ProviderType,
         scope: ObjectScope,
@@ -154,3 +182,7 @@ impl TableFormat for ProviderInfo {
         ]
     }
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod tests;

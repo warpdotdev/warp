@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use futures::future;
 use warp_cli::GlobalOptions;
 use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
@@ -13,6 +15,7 @@ use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::integration_output;
 use super::oauth_flow::poll_oauth_until_terminal;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::integrations::IntegrationsClient;
 use crate::server::team_scope::RequestTeamScope;
 
 pub fn run(
@@ -20,7 +23,9 @@ pub fn run(
     global_options: GlobalOptions,
     command: IntegrationCommand,
 ) -> anyhow::Result<()> {
-    let runner = ctx.add_singleton_model(|_ctx| IntegrationCommandRunner);
+    let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
+    let runner =
+        ctx.add_singleton_model(move |_ctx| IntegrationCommandRunner::new(integrations_client));
     match command {
         IntegrationCommand::Create(args) => {
             runner.update(ctx, |runner, ctx| runner.create(args, ctx));
@@ -37,7 +42,9 @@ pub fn run(
     Ok(())
 }
 
-struct IntegrationCommandRunner;
+struct IntegrationCommandRunner {
+    integrations_client: Arc<dyn IntegrationsClient>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IntegrationRetryState {
     request_team_scope: RequestTeamScope,
@@ -61,6 +68,12 @@ impl IntegrationRetryState {
 }
 
 impl IntegrationCommandRunner {
+    fn new(integrations_client: Arc<dyn IntegrationsClient>) -> Self {
+        Self {
+            integrations_client,
+        }
+    }
+
     fn list(
         &self,
         global_options: GlobalOptions,
@@ -68,7 +81,7 @@ impl IntegrationCommandRunner {
         ctx: &mut ModelContext<Self>,
     ) {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
-        ctx.spawn(refresh_future, move |_, result, ctx| {
+        ctx.spawn(refresh_future, move |runner, result, ctx| {
             if let Err(err) = result {
                 super::report_fatal_error(err, ctx);
                 return;
@@ -85,7 +98,7 @@ impl IntegrationCommandRunner {
                 .into_iter()
                 .map(|provider| provider.slug())
                 .collect();
-            let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
+            let integrations_client = runner.integrations_client.clone();
             let list_future = async move {
                 integrations_client
                     .list_simple_integrations(request_team_scope, provider_slugs)
@@ -274,7 +287,7 @@ impl IntegrationCommandRunner {
             return;
         }
 
-        let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
+        let integrations_client = self.integrations_client.clone();
 
         let future_integration_type = integration_type.clone();
         let future_environment_uid = environment_uid.clone();
@@ -304,7 +317,7 @@ impl IntegrationCommandRunner {
 
         ctx.spawn(
             create_future,
-            move |_runner, result: anyhow::Result<CreateSimpleIntegrationOutput>, ctx| {
+            move |runner, result: anyhow::Result<CreateSimpleIntegrationOutput>, ctx| {
                 match result {
                     Ok(output) => {
                         println!("{}", output.message);
@@ -318,8 +331,7 @@ impl IntegrationCommandRunner {
                                 println!("Authorize the provider here: {auth_url}\n");
                                 ctx.open_url(&auth_url);
 
-                                let integrations_client = ServerApiProvider::as_ref(ctx)
-                                    .get_integrations_client();
+                                let integrations_client = runner.integrations_client.clone();
                                 let tx_id = tx_id.into_inner();
 
                                 let poll_future =

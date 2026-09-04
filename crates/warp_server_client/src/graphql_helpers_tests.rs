@@ -10,7 +10,7 @@ use http::StatusCode;
 use warp_graphql::client::{GraphQLError, RequestOptions};
 use warp_server_auth::auth_state::AuthState;
 
-use super::{apply_request_team_scope, send_graphql_request};
+use super::{send_graphql_request, send_team_scoped_graphql_request};
 use crate::auth::AuthEvent;
 use crate::base_client::{
     AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig, TEAM_UID_HEADER,
@@ -18,41 +18,55 @@ use crate::base_client::{
 
 fn base_client(auth_state: AuthState) -> (BaseClient, async_channel::Receiver<AuthEvent>) {
     let (event_sender, event_receiver) = async_channel::unbounded();
-    (
-        BaseClient::new(
-            Arc::new(http_client::Client::new()),
-            Arc::new(auth_state),
-            event_sender,
-            None,
-            GraphqlRoutingConfig::default(),
-            AuthenticatedGraphqlConfig::default(),
-            None,
-        ),
-        event_receiver,
-    )
-}
-
-#[test]
-fn team_scoped_request_options_preserve_authentication_and_set_team_header() {
-    let options = RequestOptions {
-        auth_token: Some("daemon-token".to_string()),
-        ..RequestOptions::default()
-    };
-
-    let options = apply_request_team_scope(options, Some("team-uid-123".to_string()));
-
-    assert_eq!(options.auth_token.as_deref(), Some("daemon-token"));
-    assert_eq!(
-        options.headers.get(TEAM_UID_HEADER).map(String::as_str),
-        Some("team-uid-123")
+    let base_client = BaseClient::new(
+        Arc::new(http_client::Client::new()),
+        Arc::new(auth_state),
+        event_sender,
+        None,
+        GraphqlRoutingConfig::default(),
+        AuthenticatedGraphqlConfig::default(),
+        None,
     );
+    base_client.set_ambient_workload_token_for_test("test-workload-token");
+    (base_client, event_receiver)
 }
 
 #[test]
-fn teamless_request_options_omit_team_header() {
-    let options = apply_request_team_scope(RequestOptions::default(), None);
+fn team_scoped_graphql_request_preserves_authentication_and_sets_team_header() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
 
-    assert!(!options.headers.contains_key(TEAM_UID_HEADER));
+    block_on(send_team_scoped_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::successful_with_team(
+            Some("daemon-token"),
+            Some("team-uid-123"),
+            send_count.clone(),
+        ),
+        None,
+        Some("team-uid-123".to_string()),
+    ))
+    .unwrap();
+
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
+}
+
+#[test]
+fn teamless_graphql_request_preserves_authentication_and_omits_team_header() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    block_on(send_team_scoped_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::successful_with_team(Some("daemon-token"), None, send_count.clone()),
+        None,
+        None,
+    ))
+    .unwrap();
+
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
 }
 
 #[test]
@@ -105,6 +119,7 @@ fn assert_user_disabled_event(event_receiver: &async_channel::Receiver<AuthEvent
 
 struct FakeGraphqlOperation {
     expected_auth_token: Option<String>,
+    expected_team_uid: Option<String>,
     send_count: Arc<AtomicUsize>,
     result: FakeGraphqlResult,
 }
@@ -119,6 +134,19 @@ impl FakeGraphqlOperation {
     fn successful(expected_auth_token: Option<&str>, send_count: Arc<AtomicUsize>) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
+            send_count,
+            result: FakeGraphqlResult::Success,
+        }
+    }
+    fn successful_with_team(
+        expected_auth_token: Option<&str>,
+        expected_team_uid: Option<&str>,
+        send_count: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: expected_team_uid.map(ToOwned::to_owned),
             send_count,
             result: FakeGraphqlResult::Success,
         }
@@ -131,6 +159,7 @@ impl FakeGraphqlOperation {
     ) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
             send_count,
             result: FakeGraphqlResult::Rejected(status),
         }
@@ -143,6 +172,7 @@ impl FakeGraphqlOperation {
     ) -> Self {
         Self {
             expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: None,
             send_count,
             result: FakeGraphqlResult::ResponseErrors(messages),
         }
@@ -170,6 +200,10 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
     {
         Box::pin(async move {
             assert_eq!(options.auth_token, self.expected_auth_token);
+            assert_eq!(
+                options.headers.get(TEAM_UID_HEADER),
+                self.expected_team_uid.as_ref()
+            );
             self.send_count.fetch_add(1, Ordering::SeqCst);
             match self.result {
                 FakeGraphqlResult::Success => Ok(GraphQlResponse {
