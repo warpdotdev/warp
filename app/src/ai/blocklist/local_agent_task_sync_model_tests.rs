@@ -648,6 +648,7 @@ fn emit_cli_started(
 #[test]
 fn is_task_backed_by_cli_harness_reflects_registration_lifecycle() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let (model, _counter) = install_model_with_call_counter(&mut app);
         let terminal_view_id = warpui::EntityId::new();
         let task_id = fixed_task_id();
@@ -692,6 +693,7 @@ fn is_task_backed_by_cli_harness_reflects_registration_lifecycle() {
 #[test]
 fn queued_shared_session_prompt_is_delivered_once_cli_session_starts() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let (model, _counter) = install_model_with_call_counter(&mut app);
         let cli_sessions_model = CLIAgentSessionsModel::handle(&app);
         let terminal_view_id = warpui::EntityId::new();
@@ -760,6 +762,7 @@ fn queued_shared_session_prompt_is_delivered_once_cli_session_starts() {
 #[test]
 fn queued_shared_session_prompt_is_only_delivered_once() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
         let (model, _counter) = install_model_with_call_counter(&mut app);
         let cli_sessions_model = CLIAgentSessionsModel::handle(&app);
         let terminal_view_id = warpui::EntityId::new();
