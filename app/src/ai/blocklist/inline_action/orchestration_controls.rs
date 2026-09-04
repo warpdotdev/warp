@@ -717,7 +717,12 @@ pub fn apply_created_auth_secret_if_matches<V: View>(
         return false;
     }
     state.auth_secret_selection = AuthSecretSelection::Named(created_name.to_string());
-    persist_auth_secret_selection(&state.harness_type, &state.auth_secret_selection, ctx);
+    persist_auth_secret_selection(
+        request_team_scope(ctx),
+        &state.harness_type,
+        &state.auth_secret_selection,
+        ctx,
+    );
     true
 }
 

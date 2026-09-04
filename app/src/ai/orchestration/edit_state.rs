@@ -47,15 +47,25 @@ impl OrchestrationConfigState {
         );
     }
 
-    /// Records the auth-secret picker choice (`None` means Inherit) and
-    /// persists it to `CloudAgentSettings`.
-    pub fn apply_auth_secret_change(&mut self, new_name: Option<String>, ctx: &mut AppContext) {
+    /// Records the auth-secret picker choice (`None` means Inherit) and persists it for the
+    /// active scope in `CloudAgentSettings`.
+    pub fn apply_auth_secret_change(
+        &mut self,
+        team_scope: RequestTeamScope,
+        new_name: Option<String>,
+        ctx: &mut AppContext,
+    ) {
         let normalized = new_name.filter(|s| !s.trim().is_empty());
         self.auth_secret_selection = match normalized {
             Some(name) => AuthSecretSelection::Named(name),
             None => AuthSecretSelection::Inherit,
         };
-        persist_auth_secret_selection(&self.harness_type, &self.auth_secret_selection, ctx);
+        persist_auth_secret_selection(
+            team_scope,
+            &self.harness_type,
+            &self.auth_secret_selection,
+            ctx,
+        );
     }
 
     /// Revalidates the state after a live catalog change: resets a

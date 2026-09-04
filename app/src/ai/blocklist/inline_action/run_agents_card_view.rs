@@ -71,7 +71,7 @@ use crate::view_components::compactible_action_button::{
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
 use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
@@ -479,6 +479,27 @@ impl RunAgentsCardView {
                     ctx,
                 );
             }
+        });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_window {
+                return;
+            }
+            me.orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection = AuthSecretSelection::Unset;
+            oc::repopulate_all_pickers(
+                &mut me.orchestration_edit_state.orchestration_config_state,
+                &me.handles.pickers,
+                ctx,
+            );
+            me.refresh_accept_button_state(ctx);
+            ctx.notify();
         });
 
         // Repopulate pickers when the server-provided harness list,
@@ -1433,7 +1454,11 @@ impl TypedActionView for RunAgentsCardView {
             RunAgentsCardViewAction::AuthSecretChanged { auth_secret_name } => {
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
+                    .apply_auth_secret_change(
+                        oc::request_team_scope(ctx),
+                        auth_secret_name.clone(),
+                        ctx,
+                    );
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }

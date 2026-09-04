@@ -10,6 +10,7 @@ use warpui::elements::{
 };
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+    WeakViewHandle,
 };
 
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
@@ -23,7 +24,7 @@ use crate::editor::{
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields, MenuVariant};
 use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::icons::Icon;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const MENU_WIDTH: f32 = 720.;
 
@@ -67,12 +68,12 @@ pub enum FtuxDropdownEvent {
 }
 
 pub struct AuthSecretFtuxDropdown {
+    view_handle: WeakViewHandle<Self>,
     search_editor: ViewHandle<EditorView>,
     search_query: String,
     menu: ViewHandle<Menu<FtuxDropdownAction>>,
     is_menu_open: bool,
     harness: Harness,
-    team_scope: RequestTeamScope,
     display_label: Option<String>,
     label_mouse_state: MouseStateHandle,
     /// Compact mode (orchestration modal): no auto-open, suppresses the
@@ -82,8 +83,6 @@ pub struct AuthSecretFtuxDropdown {
 
 impl AuthSecretFtuxDropdown {
     pub fn new(harness: Harness, ctx: &mut ViewContext<Self>) -> Self {
-        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-        let team_scope = RequestTeamScope::from_scope(&team_context);
         let search_editor = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::as_ref(ctx);
             let mut editor = EditorView::single_line(
@@ -126,9 +125,10 @@ impl AuthSecretFtuxDropdown {
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| {
+                let team_scope = me.request_team_scope(ctx);
                 if event
                     .team_scope()
-                    .is_some_and(|team_scope| team_scope != me.team_scope)
+                    .is_some_and(|event_scope| event_scope != team_scope)
                 {
                     return;
                 }
@@ -150,14 +150,25 @@ impl AuthSecretFtuxDropdown {
         ctx.subscribe_to_model(&Appearance::handle(ctx), |me, _, _, ctx| {
             me.refresh_menu(ctx);
         });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.refresh_for_team_scope_change(ctx);
+            }
+        });
 
         let mut me = Self {
+            view_handle: ctx.handle(),
             search_editor,
             search_query: String::new(),
             menu,
             is_menu_open: false,
             harness,
-            team_scope,
             display_label: None,
             label_mouse_state: MouseStateHandle::default(),
             compact_mode: false,
@@ -165,6 +176,24 @@ impl AuthSecretFtuxDropdown {
         me.refresh_menu(ctx);
         me.set_menu_visibility(true, ctx);
         me
+    }
+
+    fn request_team_scope(&self, ctx: &AppContext) -> RequestTeamScope {
+        RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx),
+        )
+    }
+
+    fn refresh_for_team_scope_change(&mut self, ctx: &mut ViewContext<Self>) {
+        self.refresh_menu(ctx);
+        if self.is_menu_open {
+            let team_scope = self.request_team_scope(ctx);
+            let harness = self.harness;
+            HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
+                model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
+            });
+        }
+        ctx.notify();
     }
 
     /// Toggle compact mode. See the `compact_mode` field for what changes.
@@ -287,7 +316,7 @@ impl AuthSecretFtuxDropdown {
             editor.system_clear_buffer(true, ctx);
         });
         if self.is_menu_open {
-            let team_scope = self.team_scope;
+            let team_scope = self.request_team_scope(ctx);
             HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
                 model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
             });
@@ -298,9 +327,10 @@ impl AuthSecretFtuxDropdown {
 
     fn matching_secret_count(&self, app: &AppContext) -> usize {
         let harness = self.harness;
+        let team_scope = self.request_team_scope(app);
         let availability = HarnessAvailabilityModel::as_ref(app);
         let query = self.search_query.trim().to_lowercase();
-        match availability.auth_secrets_for(self.team_scope, harness) {
+        match availability.auth_secrets_for(team_scope, harness) {
             AuthSecretFetchState::Loaded(secrets) => {
                 if query.is_empty() {
                     secrets.len()
@@ -323,6 +353,7 @@ impl AuthSecretFtuxDropdown {
         let border = Border::all(1.).with_border_color(internal_colors::neutral_4(theme));
 
         let harness = self.harness;
+        let team_scope = self.request_team_scope(ctx);
         let availability = HarnessAvailabilityModel::as_ref(ctx);
         let query = self.search_query.trim().to_lowercase();
         let compact = self.compact_mode;
@@ -350,7 +381,7 @@ impl AuthSecretFtuxDropdown {
             return;
         }
 
-        match availability.auth_secrets_for(self.team_scope, harness) {
+        match availability.auth_secrets_for(team_scope, harness) {
             AuthSecretFetchState::Loaded(secrets) => {
                 let mut matched = false;
                 for secret in secrets {

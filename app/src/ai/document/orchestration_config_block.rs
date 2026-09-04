@@ -49,7 +49,7 @@ use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
@@ -246,6 +246,28 @@ impl OrchestrationConfigBlockView {
                     ctx,
                 );
             }
+        });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_window {
+                return;
+            }
+            me.orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection = AuthSecretSelection::Unset;
+            if me.pickers_initialized {
+                oc::repopulate_all_pickers(
+                    &mut me.orchestration_edit_state.orchestration_config_state,
+                    &me.pickers,
+                    ctx,
+                );
+            }
+            ctx.notify();
         });
 
         // Repopulate pickers when the server-provided harness list,
@@ -1093,7 +1115,11 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 // persisted side-channel, not baked into `OrchestrationConfig`.
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
+                    .apply_auth_secret_change(
+                        oc::request_team_scope(ctx),
+                        auth_secret_name.clone(),
+                        ctx,
+                    );
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::CreateNewAuthSecretRequested => {

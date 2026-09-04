@@ -178,7 +178,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
                 let name = (!id.is_empty()).then(|| id.to_string());
                 edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(name, ctx);
+                    .apply_auth_secret_change(team_scope, name, ctx);
             }
             ConfigPage::Host => {
                 edit_state

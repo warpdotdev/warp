@@ -1,13 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use pathfinder_geometry::vector::vec2f;
-use settings::Setting as _;
 use warp_cli::agent::Harness;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
-use warp_errors::report_if_error;
 use warp_managed_secrets::client::SecretOwner;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
@@ -19,7 +17,7 @@ use warpui::{
 };
 
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
@@ -36,7 +34,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{ActionButton, ButtonSize};
 use crate::workspace::ToastStack;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const HEADER_FONT_SIZE: f32 = 12.;
 
@@ -92,7 +90,6 @@ pub struct AuthSecretSelector {
     is_new_type_sidecar_open: bool,
     menu_positioning_provider: Arc<dyn MenuPositioningProvider>,
     ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
-    team_scope: RequestTeamScope,
     /// Secrets with an in-flight delete request, keyed by harness, name,
     /// and owner. This disables only the matching X affordance while that
     /// exact request is pending.
@@ -105,8 +102,6 @@ impl AuthSecretSelector {
         ambient_agent_model: ModelHandle<AmbientAgentViewModel>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-        let team_scope = RequestTeamScope::from_scope(&team_context);
         let button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new(NO_SECRET_LABEL, NakedHeaderButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
@@ -172,9 +167,10 @@ impl AuthSecretSelector {
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| {
+                let team_scope = me.request_team_scope(ctx);
                 if event
                     .team_scope()
-                    .is_some_and(|team_scope| team_scope != me.team_scope)
+                    .is_some_and(|event_scope| event_scope != team_scope)
                 {
                     return;
                 }
@@ -218,6 +214,17 @@ impl AuthSecretSelector {
             me.refresh_menu(ctx);
             me.refresh_sidecar(ctx);
         });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.handle_team_scope_changed(ctx);
+            }
+        });
 
         let mut me = Self {
             button,
@@ -228,7 +235,6 @@ impl AuthSecretSelector {
             is_new_type_sidecar_open: false,
             menu_positioning_provider,
             ambient_agent_model,
-            team_scope,
             pending_deletes: HashSet::new(),
         };
         me.maybe_restore_auth_secret_from_settings(ctx);
@@ -249,16 +255,38 @@ impl AuthSecretSelector {
             return;
         }
         let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-        let saved_name = CloudAgentSettings::as_ref(ctx)
-            .last_selected_auth_secret
-            .value()
-            .get(harness.config_name())
-            .cloned();
+        let saved_name = match CloudAgentSettings::as_ref(ctx)
+            .auth_secret_preference(self.request_team_scope(ctx), harness)
+        {
+            Some(AuthSecretPreference::Named(name)) => Some(name),
+            Some(AuthSecretPreference::Inherit) | None => None,
+        };
         if let Some(saved_name) = saved_name {
             // Apply optimistically — secrets may not be fetched yet, but the UI
             // will update once auth secrets are loaded.
             self.ambient_agent_model.update(ctx, |model, ctx| {
                 model.set_harness_auth_secret_name(Some(saved_name), ctx);
+            });
+        }
+    }
+
+    fn request_team_scope(&self, ctx: &ViewContext<Self>) -> RequestTeamScope {
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx))
+    }
+
+    fn handle_team_scope_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        self.pending_deletes.clear();
+        self.ambient_agent_model.update(ctx, |model, ctx| {
+            model.set_harness_auth_secret_name(None, ctx);
+        });
+        self.maybe_restore_auth_secret_from_settings(ctx);
+        self.refresh_button(ctx);
+        self.refresh_menu(ctx);
+        if self.is_menu_open {
+            let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+            let team_scope = self.request_team_scope(ctx);
+            HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
+                model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
             });
         }
     }
@@ -282,7 +310,7 @@ impl AuthSecretSelector {
         self.is_menu_open = is_open;
         if is_open {
             let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-            let team_scope = self.team_scope;
+            let team_scope = self.request_team_scope(ctx);
             HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
                 model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
             });
@@ -366,10 +394,11 @@ impl AuthSecretSelector {
         let border = Border::all(1.).with_border_fill(theme.outline());
 
         let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+        let team_scope = self.request_team_scope(ctx);
         let availability = HarnessAvailabilityModel::as_ref(ctx);
         let items = build_main_menu_items(
             harness,
-            availability.auth_secrets_for(self.team_scope, harness),
+            availability.auth_secrets_for(team_scope, harness),
             &self.pending_deletes,
             hover_background,
             header_text_color,
@@ -390,10 +419,13 @@ impl AuthSecretSelector {
     ) {
         let removed_pending = self.pending_deletes.remove(&(harness, name.clone(), owner));
 
+        let team_scope = self.request_team_scope(ctx);
         CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-            let mut map = settings.last_selected_auth_secret.value().clone();
-            if remove_persisted_auth_secret_selection_if_deleted(&mut map, harness, &name) {
-                report_if_error!(settings.last_selected_auth_secret.set_value(map, ctx));
+            if matches!(
+                settings.auth_secret_preference(team_scope, harness),
+                Some(AuthSecretPreference::Named(selected)) if selected == name
+            ) {
+                settings.persist_auth_secret_preference(team_scope, harness, None, ctx);
             }
         });
 
@@ -498,7 +530,7 @@ impl AuthSecretSelector {
             return;
         }
 
-        let team_scope = self.team_scope;
+        let team_scope = self.request_team_scope(ctx);
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
             model.delete_auth_secret(team_scope, harness, name, owner, ctx);
         });
@@ -659,19 +691,6 @@ fn build_main_menu_items(
     items
 }
 
-fn remove_persisted_auth_secret_selection_if_deleted(
-    selections: &mut HashMap<String, String>,
-    harness: Harness,
-    name: &str,
-) -> bool {
-    if selections.get(harness.config_name()).map(String::as_str) == Some(name) {
-        selections.remove(harness.config_name());
-        return true;
-    }
-
-    false
-}
-
 fn build_sidecar_items(
     harness: Harness,
     hover_background: Fill,
@@ -719,28 +738,34 @@ impl TypedActionView for AuthSecretSelector {
             AuthSecretSelectorAction::SelectSecret(name) => {
                 let name = name.clone();
                 let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+                let team_scope = self.request_team_scope(ctx);
                 self.ambient_agent_model.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
-                // Persist the selection per-harness and mark FTUX completed.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.insert(harness.config_name().to_string(), name);
-                    report_if_error!(settings.last_selected_auth_secret.set_value(map, ctx));
+                    settings.persist_auth_secret_preference(
+                        team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Named(name)),
+                        ctx,
+                    );
                 });
                 self.set_menu_visibility(false, ctx);
             }
             AuthSecretSelectorAction::ClearSecret => {
                 let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
+                let team_scope = self.request_team_scope(ctx);
                 self.ambient_agent_model.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(None, ctx);
                 });
-                // Clear the persisted selection for this harness.
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.remove(harness.config_name());
-                    report_if_error!(settings.last_selected_auth_secret.set_value(map, ctx));
+                    settings.persist_auth_secret_preference(
+                        team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Inherit),
+                        ctx,
+                    );
                 });
                 self.set_menu_visibility(false, ctx);
             }
