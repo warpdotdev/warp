@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::safe_info;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner};
 
@@ -133,7 +134,8 @@ impl ThirdPartyHarness for ClaudeHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        workspace_root: &Path,
+        harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -144,11 +146,10 @@ impl ThirdPartyHarness for ClaudeHarness {
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_claude_environment_config(working_dir, resolved_env_vars).map_err(|error| {
-            AgentDriverError::HarnessConfigSetupFailed {
-                harness: self.cli_agent().command_prefix().to_owned(),
-                error,
-            }
+        prepare_claude_environment_config(workspace_root, harness_working_dir, resolved_env_vars)
+            .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
+            harness: self.cli_agent().command_prefix().to_owned(),
+            error,
         })?;
 
         // The ResumePayload shouldn't contain non-Claude information, error if it does.
@@ -173,7 +174,7 @@ impl ThirdPartyHarness for ClaudeHarness {
             self.cli_agent().command_prefix(),
             &owned_prompt,
             system_prompt,
-            working_dir,
+            harness_working_dir,
             task_id,
             server_api,
             terminal_driver,
@@ -244,7 +245,7 @@ struct ClaudeHarnessRunner {
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<ClaudeRunnerState>,
     session_id: Uuid,
-    working_dir: PathBuf,
+    harness_working_dir: PathBuf,
     parent_bridge: Option<MessageBridge>,
     /// Lazily cached output of `claude --version`.
     claude_version: Mutex<Option<String>>,
@@ -260,7 +261,7 @@ impl ClaudeHarnessRunner {
         cli_command: &str,
         prompt: &str,
         system_prompt: Option<&str>,
-        working_dir: &Path,
+        harness_working_dir: &Path,
         task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -278,7 +279,7 @@ impl ClaudeHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                rehydrate_claude_transcript(&mut envelope, working_dir)
+                rehydrate_claude_transcript(&mut envelope, harness_working_dir)
                     .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (session_id, Some(conversation_id))
             }
@@ -327,7 +328,7 @@ impl ClaudeHarnessRunner {
             terminal_driver,
             state: Mutex::new(ClaudeRunnerState::Preexec),
             session_id,
-            working_dir: working_dir.to_path_buf(),
+            harness_working_dir: harness_working_dir.to_path_buf(),
             parent_bridge,
             claude_version: Mutex::new(None),
             preexisting_conversation_id,
@@ -517,6 +518,36 @@ impl HarnessRunner for ClaudeHarnessRunner {
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /exit"))
     }
 
+    async fn exit_followup(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        // Claude Code opens a numbered confirmation when background work
+        // (e.g. a `run_in_background` shell or subagent) is still
+        // registered:
+        //
+        //   Background work is running
+        //   The following will stop when you exit:
+        //     shell · sleep 620
+        //   ❯ 1. Exit anyway
+        //     2. Move to background and exit
+        //     3. Stay
+        //
+        // "Exit anyway" is the default-highlighted option, so a bare Enter
+        // selects it without needing to write the digit. This is sent
+        // unconditionally, shortly after `/exit`, without waiting to see
+        // whether the dialog actually appeared: if there's no dialog this is
+        // a no-op Enter. If a future Claude Code version changes the default
+        // selection, this would need to send the digit explicitly instead.
+        log::info!("Sending exit confirmation follow-up (Enter) to Claude Code CLI");
+        let terminal_driver = self.terminal_driver.clone();
+        foreground
+            .spawn(move |_, ctx| {
+                terminal_driver.update(ctx, |driver, ctx| {
+                    driver.send_bare_enter_to_cli(ctx);
+                });
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending exit follow-up"))
+    }
+
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         self.handle_parent_bridge_session_update().await
     }
@@ -548,7 +579,8 @@ impl HarnessRunner for ClaudeHarnessRunner {
 
         let client = self.client.as_ref();
         let session_id = self.session_id;
-        let working_dir = &self.working_dir;
+        let harness_working_dir = &self.harness_working_dir;
+        let require_main_transcript = matches!(save_point, SavePoint::Final);
 
         futures::try_join!(
             super::upload_current_block_snapshot(
@@ -562,8 +594,9 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 client,
                 conversation_id,
                 session_id,
-                working_dir,
-                claude_version
+                harness_working_dir,
+                claude_version,
+                require_main_transcript,
             ),
         )?;
 
@@ -587,16 +620,22 @@ async fn upload_transcript(
     client: &dyn HarnessSupportClient,
     conversation_id: AIConversationId,
     session_id: Uuid,
-    working_dir: &Path,
+    harness_working_dir: &Path,
     claude_version: Option<String>,
+    require_main_transcript: bool,
 ) -> Result<()> {
     log::info!("Uploading Claude Code transcript to conversation {conversation_id}");
 
     let config_dir = claude_config_dir().context("Failed to resolve Claude config dir")?;
-    let working_dir = working_dir.to_path_buf();
+    let harness_working_dir = harness_working_dir.to_path_buf();
     let body = tokio::task::spawn_blocking(move || {
-        let mut envelope = read_envelope(session_id, &working_dir, &config_dir)
-            .with_context(|| format!("Failed to read transcript for session {session_id}"))?;
+        let mut envelope = read_envelope(
+            session_id,
+            &harness_working_dir,
+            &config_dir,
+            require_main_transcript,
+        )
+        .with_context(|| format!("Failed to read transcript for session {session_id}"))?;
         envelope.claude_version = claude_version;
         serde_json::to_vec(&envelope).context("Failed to serialize transcript envelope")
     })
@@ -609,15 +648,63 @@ async fn upload_transcript(
     upload_to_target(client.http_client(), &target, body).await
 }
 pub(crate) fn prepare_claude_environment_config(
-    working_dir: &Path,
+    workspace_root: &Path,
+    harness_working_dir: &Path,
     resolved_env_vars: &HashMap<OsString, OsString>,
 ) -> Result<()> {
     let claude_json_path = claude_global_config_path()?;
-    let claude_settings_path = claude_config_dir()?.join(CLAUDE_SETTINGS_FILE_NAME);
+    let claude_dir = claude_config_dir()?;
+    let claude_settings_path = claude_dir.join(CLAUDE_SETTINGS_FILE_NAME);
     let api_key_suffix = resolve_anthropic_api_key_suffix(resolved_env_vars);
-    prepare_claude_config(&claude_json_path, working_dir, api_key_suffix.as_deref())?;
+    prepare_claude_config(
+        &claude_json_path,
+        harness_working_dir,
+        api_key_suffix.as_deref(),
+    )?;
     prepare_claude_settings(&claude_settings_path)?;
+    publish_warp_skill_dirs_for_claude(workspace_root, harness_working_dir);
     Ok(())
+}
+
+/// Publish the skills listed in `WARP_SKILL_DIRS`, under their own names, as
+/// symlinks under `<harness_working_dir>/.claude/skills`, so an agent running on
+/// Claude Code sees the same skills the Oz harness loads from
+/// `WARP_SKILL_DIRS`.
+///
+/// Relative source directories are resolved from the workspace root, matching
+/// Oz. The links are published into the harness working directory because
+/// Claude Code discovers `.claude/skills` by walking up from its starting
+/// directory to the repository root (or, absent a repository, just the
+/// starting directory itself). This also keeps concurrent tasks from
+/// publishing into a shared home directory. A published skill overrides any
+/// existing entry with the same name (see
+/// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
+/// depending on whether this run is sandboxed (see
+/// `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS` is not
+/// configured for this run.
+fn publish_warp_skill_dirs_for_claude(workspace_root: &Path, harness_working_dir: &Path) {
+    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(workspace_root);
+    if source_dirs.is_empty() {
+        return;
+    }
+    let skill_root = harness_working_dir.join(".claude").join("skills");
+    let is_sandbox = warp_isolation_platform::detect().is_some();
+    let published =
+        super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
+    super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+        harness_working_dir,
+        &published,
+    );
+    if !published.is_empty() {
+        let published = published.len();
+        safe_info!(
+            safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Claude Code skill root"),
+            full: (
+                "Published {published} WARP_SKILL_DIRS skill(s) to Claude Code skill root {}",
+                skill_root.display()
+            )
+        );
+    }
 }
 
 // This function is used specifically for determining where to land `.claude.json`.

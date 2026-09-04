@@ -63,12 +63,14 @@ lazy_static! {
         None,
         None,
         None,
+        None,
     );
 
     static ref TEST_WORKSPACE: Workspace = Workspace::from_local_cache(
         WorkspaceUid::from(ServerId::from(1)),
         "Test Workspace".to_string(),
         Some(vec![TEST_TEAM.clone()]),
+        None,
     );
 }
 
@@ -327,11 +329,7 @@ fn move_object(id: ServerId, folder_id: Option<FolderId>, app: &mut App) {
 
         let metadata = ServerMetadata {
             uid: id,
-            revision: object
-                .metadata()
-                .revision
-                .clone()
-                .expect("Revision is required"),
+            revision: object.metadata().revision.expect("Revision is required"),
             current_editor_uid: object.metadata().current_editor_uid.clone(),
             metadata_last_updated_ts: (object
                 .metadata()

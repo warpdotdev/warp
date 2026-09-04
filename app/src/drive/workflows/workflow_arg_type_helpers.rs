@@ -47,7 +47,7 @@ where
                 name: workflow_enum.model().string_model.name.clone(),
                 id: enum_id,
                 is_shared: workflow_enum.model().string_model.is_shared,
-                revision_ts: workflow_enum.metadata.revision.clone(),
+                revision_ts: workflow_enum.metadata.revision,
                 new_data: None,
             };
             (enum_id, enum_data)
@@ -75,7 +75,7 @@ pub fn load_argument_into_selector(
             // Grab the revision_ts, enum name, and shared status from the cloud model
             let cloud_model = CloudModel::as_ref(ctx);
             let workflow_enum_model = cloud_model.get_workflow_enum(&enum_id);
-            let revision_ts = workflow_enum_model.and_then(|model| model.metadata.revision.clone());
+            let revision_ts = workflow_enum_model.and_then(|model| model.metadata.revision);
             let enum_data = workflow_enum_model.map(|workflow_enum| {
                 let workflow_enum = &workflow_enum.model().string_model;
                 (workflow_enum.name.clone(), workflow_enum.is_shared)
@@ -185,7 +185,7 @@ pub fn save_enum<V>(
                 update_manager.update_workflow_enum(
                     workflow_enum,
                     enum_data.id,
-                    enum_data.revision_ts.clone(),
+                    enum_data.revision_ts,
                     ctx,
                 );
             })

@@ -60,7 +60,7 @@ use crate::word_block_editor::{
     WordBlockStyles,
 };
 use crate::workspace::{ToastStack, WorkspaceAction};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContext, UserWorkspaces, UserWorkspacesEvent};
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 mod inheritance;
@@ -262,6 +262,10 @@ impl SharingDialog {
             },
         );
 
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            me.handle_user_workspaces_event(event, ctx);
+        });
+
         let invite_form = EmailInviteForm {
             email_editor: ctx.add_typed_action_view(|ctx| {
                 let mut view = WordBlockEditorView::new(
@@ -299,6 +303,21 @@ impl SharingDialog {
             ui_state_handles: Default::default(),
             open_menu_state: Default::default(),
             mode: Default::default(),
+        }
+    }
+
+    fn handle_user_workspaces_event(
+        &mut self,
+        event: &UserWorkspacesEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let changes_this_windows_policy = match event {
+            UserWorkspacesEvent::TeamsChanged => true,
+            UserWorkspacesEvent::WindowTeamChanged { window_id } => *window_id == ctx.window_id(),
+            _ => false,
+        };
+        if changes_this_windows_policy {
+            ctx.notify();
         }
     }
 
@@ -475,12 +494,16 @@ impl SharingDialog {
         self.target.is_some() && self.access_level(app).can_edit_access()
     }
 
+    fn team_scope<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        UserWorkspaces::as_ref(app).team_context(&self.self_handle, app)
+    }
+
     fn can_anyone_with_link_share(&self, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled()
+        UserWorkspaces::as_ref(app).is_anyone_with_link_sharing_enabled(&self.team_scope(app))
     }
 
     fn can_direct_link_share(&self, app: &AppContext) -> bool {
-        UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled()
+        UserWorkspaces::as_ref(app).is_direct_link_sharing_enabled(&self.team_scope(app))
     }
 
     /// The editability state of the object.
@@ -1615,6 +1638,12 @@ impl SharingDialog {
 
     /// Send all pending email invitations.
     fn send_invitations(&mut self, ctx: &mut ViewContext<Self>) {
+        // The window can change teams after the form renders.
+        if !self.can_direct_link_share(ctx) {
+            ctx.notify();
+            return;
+        }
+
         let form_state = self.invite_form_state(ctx);
         if !form_state.is_valid() {
             return;
@@ -2930,6 +2959,11 @@ impl TypedActionView for SharingDialog {
             }
             SharingDialogAction::SetLinkPermissions(access_level) => {
                 self.set_open_menu(OpenMenuState::None, ctx);
+                // The window can change teams after the menu renders. Revocation remains allowed.
+                if access_level.is_some() && !self.can_anyone_with_link_share(ctx) {
+                    ctx.notify();
+                    return;
+                }
                 if let Some(ShareableObject::WarpDriveObject(id)) = self.target.as_ref() {
                     UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
                         update_manager.set_object_link_permissions(*id, *access_level, ctx);

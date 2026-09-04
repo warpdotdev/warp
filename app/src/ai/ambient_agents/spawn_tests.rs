@@ -42,6 +42,8 @@ fn task_with(
         is_sandbox_running: true,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -209,6 +211,8 @@ async fn followup_terminal_failure_surfaces_status_message() {
                 task.status_message = Some(TaskStatusMessage {
                     message: "failed to provision runtime".to_string(),
                     error_code: None,
+                    session_debug_until: None,
+                    debug_agent_active: false,
                 });
                 Ok(task)
             }
@@ -416,6 +420,8 @@ async fn followup_skips_prior_terminal_state_until_working_then_attaches() {
                     task.status_message = Some(TaskStatusMessage {
                         message: "prior agent question".to_string(),
                         error_code: None,
+                        session_debug_until: None,
+                        debug_agent_active: false,
                     });
                     Ok(task)
                 }
@@ -502,6 +508,8 @@ async fn followup_skips_prior_terminal_then_surfaces_real_failure() {
                     task.status_message = Some(TaskStatusMessage {
                         message: "prior agent question — must not surface".to_string(),
                         error_code: None,
+                        session_debug_until: None,
+                        debug_agent_active: false,
                     });
                     Ok(task)
                 }
@@ -511,6 +519,8 @@ async fn followup_skips_prior_terminal_then_surfaces_real_failure() {
                     task.status_message = Some(TaskStatusMessage {
                         message: "new run failed".to_string(),
                         error_code: None,
+                        session_debug_until: None,
+                        debug_agent_active: false,
                     });
                     Ok(task)
                 }

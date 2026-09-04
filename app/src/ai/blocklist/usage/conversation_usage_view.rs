@@ -25,13 +25,14 @@ use crate::ai::blocklist::usage::render_context_window_usage_icon;
 use crate::ai::blocklist::usage::rollup::{
     AgentAvatar, OrchestrationCreditRollup, PerAgentCreditEntry, compute_orchestration_rollup,
 };
-use crate::ai::blocklist::view_util::format_credits;
+use crate::ai::blocklist::view_util::{UsageLabelKind, format_credits, format_usage, usage_label};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
 use crate::persistence::model::{
     ContextWindowSegment, ContextWindowSegmentType, FULL_TERMINAL_USE_CATEGORY, ModelTokenUsage,
     PRIMARY_AGENT_CATEGORY, token_usage_category_display_name,
 };
+use crate::settings::{AISettings, AISettingsChangedEvent, UsageDisplayUnit};
 use crate::ui_components::blended_colors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +57,22 @@ pub struct ConversationUsageInfo {
     pub lines_added: i32,
     pub lines_removed: i32,
     pub commands_executed: i32,
+    /// Total token count across the whole conversation so far, gated by
+    /// `FeatureFlag::PricingTransparency` (checked inside
+    /// `format_credits_with_cost`). `None` when the source doesn't provide
+    /// it (flag off, or a source that doesn't carry it yet — e.g. the
+    /// settings usage-history surface; documented gap, see `gql_convert.rs`).
+    pub total_tokens: Option<u32>,
+    /// Total real dollar cost across the whole conversation so far, in US
+    /// cents. `None` under the same conditions as `total_tokens`.
+    pub total_cost_in_cents: Option<f32>,
+    /// Total token count over the last block (see
+    /// `credits_spent_for_last_block`). `None` under the same conditions as
+    /// `total_tokens`.
+    pub tokens_for_last_block: Option<u32>,
+    /// Total real dollar cost over the last block, in US cents. `None`
+    /// under the same conditions as `total_tokens`.
+    pub cost_in_cents_for_last_block: Option<f32>,
 }
 
 /// Timing information for the last set of agent responses
@@ -160,6 +177,12 @@ impl ConversationUsageView {
         parent_conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
+
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         ctx.subscribe_to_model(&history_model, move |_, history, event, ctx| {
             // Narrow to events that can actually change *this* orchestrator's
@@ -303,6 +326,7 @@ impl ConversationUsageView {
         let theme = appearance.theme();
         let font_size = appearance.ui_font_size() + 2.;
         let text_color = blended_colors::text_main(theme, theme.surface_2());
+        let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
         let context_window_breakdown_enabled = FeatureFlag::ContextWindowUsageBreakdown
             .is_enabled()
             && !context_window_segment_display_rows(
@@ -323,48 +347,77 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        // "Credits spent (total)" value: use the rollup total when available,
-        // otherwise the orchestrator's own self total (today's behavior).
-        // PRODUCT invariants 2a, 11.
         let total_credits_value = rollup
             .as_ref()
             .map(|r| r.total_credits)
             .unwrap_or(self.usage_info.credits_spent + self.usage_info.platform_credits_spent);
+
+        let total_tokens_value = rollup
+            .as_ref()
+            .map(|r| r.total_tokens)
+            .unwrap_or(self.usage_info.total_tokens);
+        let total_cost_in_cents_value = rollup
+            .as_ref()
+            .map(|r| r.total_cost_in_cents)
+            .unwrap_or(self.usage_info.total_cost_in_cents);
 
         if self.display_mode == DisplayMode::Footer
             && self.usage_info.credits_spent_for_last_block.is_some()
         {
             let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
             labels.push(render_label_text(
-                "Credits spent (last response)",
+                &usage_label(
+                    UsageLabelKind::LastResponse,
+                    self.usage_info.cost_in_cents_for_last_block,
+                    usage_display_unit,
+                ),
                 appearance,
             ));
             values.push(render_value_text(
-                format_credits(last_block_credits),
+                format_usage(
+                    last_block_credits,
+                    self.usage_info.tokens_for_last_block,
+                    self.usage_info.cost_in_cents_for_last_block,
+                    usage_display_unit,
+                ),
                 appearance,
             ));
 
-            labels.push(render_label_text("Credits spent (total)", appearance));
-            values.push(self.render_total_credits_value_row(
+            labels.push(render_label_text(
+                &usage_label(
+                    UsageLabelKind::Total,
+                    total_cost_in_cents_value,
+                    usage_display_unit,
+                ),
+                appearance,
+            ));
+            values.push(self.render_total_usage_value_row(
                 total_credits_value,
+                total_tokens_value,
+                total_cost_in_cents_value,
+                usage_display_unit,
                 rollup.as_ref(),
                 appearance,
             ));
         } else {
-            labels.push(render_label_text("Credits spent", appearance));
-            values.push(self.render_total_credits_value_row(
+            labels.push(render_label_text(
+                &usage_label(
+                    UsageLabelKind::Plain,
+                    total_cost_in_cents_value,
+                    usage_display_unit,
+                ),
+                appearance,
+            ));
+            values.push(self.render_total_usage_value_row(
                 total_credits_value,
+                total_tokens_value,
+                total_cost_in_cents_value,
+                usage_display_unit,
                 rollup.as_ref(),
                 appearance,
             ));
         }
 
-        // Per-agent breakdown rows render immediately beneath the
-        // "Credits spent (total)" row so they read as a drill-down of
-        // that value, not as a separate section appended at the bottom
-        // of the card. The rows are pushed into the same two-column
-        // label/value layout as the rest of the usage summary; the
-        // existing flex spacing handles indentation.
         self.append_per_agent_rows(&mut labels, &mut values, rollup.as_ref(), appearance);
 
         labels.push(render_label_text("Tool calls", appearance));
@@ -694,16 +747,22 @@ impl ConversationUsageView {
         }
     }
 
-    /// Renders the "Credits spent (total)" value cell. When a rollup
-    /// applies, the cell is a row with the value followed by a
-    /// "View details ▾" / "Hide details ▴" toggle.
-    fn render_total_credits_value_row(
+    fn render_total_usage_value_row(
         &self,
         total_credits: f32,
+        total_tokens: Option<u32>,
+        total_cost_in_cents: Option<f32>,
+        usage_display_unit: UsageDisplayUnit,
         rollup: Option<&OrchestrationCreditRollup>,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let value_text = render_value_text(format_credits(total_credits), appearance);
+        let usage_text = format_usage(
+            total_credits,
+            total_tokens,
+            total_cost_in_cents,
+            usage_display_unit,
+        );
+        let value_text = render_value_text(usage_text, appearance);
         if rollup.is_none() {
             return value_text;
         }

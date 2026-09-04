@@ -645,3 +645,70 @@ fn local_to_cloud_idempotent_when_already_remote() {
         "toggle to Remote when already Remote should not clobber computer_use"
     );
 }
+
+mod is_orphaned_by_finished_output_tests {
+    use super::super::is_orphaned_by_finished_output;
+    use crate::ai::agent::{AIAgentOutput, CancellationReason, RenderableAIError, Shared};
+    use crate::ai::blocklist::action_model::AIActionStatus;
+    use crate::ai::blocklist::block::model::AIBlockOutputStatus;
+
+    fn partial_output() -> Shared<AIAgentOutput> {
+        Shared::new(AIAgentOutput::default())
+    }
+
+    fn cancelled_block() -> AIBlockOutputStatus {
+        AIBlockOutputStatus::Cancelled {
+            partial_output: Some(partial_output()),
+            reason: CancellationReason::ManuallyCancelled,
+        }
+    }
+
+    #[test]
+    fn statusless_action_on_cancelled_block_is_orphaned() {
+        assert!(is_orphaned_by_finished_output(None, &cancelled_block()));
+    }
+
+    #[test]
+    fn statusless_action_on_failed_block_is_orphaned() {
+        let failed = AIBlockOutputStatus::Failed {
+            partial_output: Some(partial_output()),
+            error: RenderableAIError::other("boom", false),
+        };
+        assert!(is_orphaned_by_finished_output(None, &failed));
+    }
+
+    #[test]
+    fn statusless_action_on_unfinished_or_successful_block_is_not_orphaned() {
+        for block_status in [
+            AIBlockOutputStatus::Pending,
+            AIBlockOutputStatus::PartiallyReceived {
+                output: partial_output(),
+            },
+            AIBlockOutputStatus::Complete {
+                output: partial_output(),
+            },
+        ] {
+            assert!(
+                !is_orphaned_by_finished_output(None, &block_status),
+                "{block_status:?} should not orphan the card"
+            );
+        }
+    }
+
+    /// An action that reached the queue gets a real result when the
+    /// conversation is cancelled, so its own status must keep driving the card.
+    #[test]
+    fn action_with_status_on_cancelled_block_is_not_orphaned() {
+        for action_status in [
+            AIActionStatus::Preprocessing,
+            AIActionStatus::Queued,
+            AIActionStatus::Blocked,
+            AIActionStatus::RunningAsync,
+        ] {
+            assert!(
+                !is_orphaned_by_finished_output(Some(&action_status), &cancelled_block()),
+                "{action_status:?} should not orphan the card"
+            );
+        }
+    }
+}

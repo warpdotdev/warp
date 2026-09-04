@@ -15,7 +15,7 @@ use itertools::Itertools;
 use uuid::Uuid;
 use warp_editor::model::RichTextEditorModel;
 use warp_editor::render::model::RichTextStyles;
-use warp_errors::report_error;
+use warp_errors::{ReportErrorLogMode, report_error};
 use warp_multi_agent_api as maa_api;
 use warpui::color::ColorU;
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WindowId};
@@ -47,7 +47,7 @@ use crate::terminal::TerminalView;
 use crate::terminal::model::session::Session;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::throttle::throttle;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{SoleTeamError, UserWorkspaces};
 
 /// The frequency at which we check for modifications and save the AI document to the server.
 /// Uses the same 2-second period as notebooks for consistency.
@@ -158,6 +158,15 @@ pub enum AIDocumentUpdateSource {
     User,
     Agent,
     Restoration,
+}
+
+/// Whether a document's editor lays its content out up front or on first render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayoutTiming {
+    /// Lay out whenever the content changes.
+    Eager,
+    /// Defer layout to the first render, so content that is never opened is never font-shaped.
+    Lazy,
 }
 
 /// Queued plan-card edit; cleared once it piggybacks onto an outbound query.
@@ -530,6 +539,7 @@ impl AIDocumentModel {
             conversation_id,
             file_link_resolution_context,
             Local::now(),
+            LayoutTiming::Eager,
             ctx,
         );
         id
@@ -554,6 +564,9 @@ impl AIDocumentModel {
             conversation_id,
             file_link_resolution_context,
             Local::now(),
+            // Agent-context hydration does not open a document view, so skip font shaping until
+            // a view actually renders it.
+            LayoutTiming::Lazy,
             ctx,
         );
 
@@ -626,9 +639,11 @@ impl AIDocumentModel {
         conversation_id: AIConversationId,
         file_link_resolution_context: Option<FileLinkResolutionContext>,
         created_at: DateTime<Local>,
+        layout_timing: LayoutTiming,
         ctx: &mut ModelContext<Self>,
     ) {
-        let editor = Self::create_editor_model(content, file_link_resolution_context, ctx);
+        let editor =
+            Self::create_editor_model(content, file_link_resolution_context, layout_timing, ctx);
 
         // Subscribe to editor content changes
         ctx.subscribe_to_model(&editor, move |me, _, event, ctx| {
@@ -667,6 +682,8 @@ impl AIDocumentModel {
     ///
     /// This is keyed by (conversation_id, action_id, document_index) so that streaming updates
     /// for the same tool call map to the same document.
+    ///
+    /// `will_auto_open` is true when the caller is about to open this document's pane.
     pub fn get_or_create_streaming_document_for_create_documents(
         &mut self,
         conversation_id: AIConversationId,
@@ -675,6 +692,7 @@ impl AIDocumentModel {
         title: impl Into<String>,
         initial_content: impl Into<String>,
         file_link_resolution_context: Option<FileLinkResolutionContext>,
+        will_auto_open: bool,
         ctx: &mut ModelContext<Self>,
     ) -> (AIDocumentId, bool) {
         let key = (conversation_id, action_id.clone(), document_index);
@@ -691,6 +709,12 @@ impl AIDocumentModel {
             conversation_id,
             file_link_resolution_context,
             Local::now(),
+            // The caller auto-opens only the first newly created streaming document.
+            if will_auto_open {
+                LayoutTiming::Eager
+            } else {
+                LayoutTiming::Lazy
+            },
             ctx,
         );
         self.streaming_create_documents.insert(key, id);
@@ -954,6 +978,8 @@ impl AIDocumentModel {
                 AIConversationId::new(),
                 None,
                 Local::now(),
+                // Restored plans are often never opened; skip font shaping until first display.
+                LayoutTiming::Lazy,
                 ctx,
             );
             return;
@@ -1010,6 +1036,7 @@ impl AIDocumentModel {
     fn create_editor_model(
         content: impl Into<String>,
         file_link_resolution_context: Option<FileLinkResolutionContext>,
+        layout_timing: LayoutTiming,
         ctx: &mut ModelContext<Self>,
     ) -> ModelHandle<NotebooksEditorModel> {
         ctx.add_model(|ctx| {
@@ -1019,7 +1046,10 @@ impl AIDocumentModel {
             // Use the same rich text styles as notebooks for consistency
             let styles = rich_text_styles(appearance, font_settings);
 
-            let mut model = NotebooksEditorModel::new_unbound(styles, ctx);
+            let mut model = match layout_timing {
+                LayoutTiming::Eager => NotebooksEditorModel::new_unbound(styles, ctx),
+                LayoutTiming::Lazy => NotebooksEditorModel::new_unbound_lazy(styles, ctx),
+            };
             model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
             model.set_file_link_resolution_context(file_link_resolution_context);
 
@@ -1047,9 +1077,11 @@ impl AIDocumentModel {
             .as_ref(ctx)
             .file_link_resolution_context()
             .cloned();
+        // Archived revisions are reachable only through version history, and are rarely opened.
         let editor = Self::create_editor_model(
             doc.editor.as_ref(ctx).markdown_unescaped(ctx),
             file_link_resolution_context,
+            LayoutTiming::Lazy,
             ctx,
         );
 
@@ -1117,6 +1149,8 @@ impl AIDocumentModel {
             conversation_id,
             None,
             created_at,
+            // Conversation restore replays every revision, including ones never opened.
+            LayoutTiming::Lazy,
             ctx,
         );
 
@@ -1275,13 +1309,33 @@ impl AIDocumentModel {
     fn get_plan_owner(ctx: &AppContext) -> Option<Owner> {
         let is_service_account = AuthStateProvider::as_ref(ctx).get().is_service_account();
 
-        if is_service_account {
-            // If the SA doesn't have a team, we'll skip the plan sync in the caller
-            UserWorkspaces::as_ref(ctx)
-                .sole_team_uid()
-                .map(|team_uid| Owner::Team { team_uid })
-        } else {
-            UserWorkspaces::as_ref(ctx).personal_drive(ctx)
+        if !is_service_account {
+            return UserWorkspaces::as_ref(ctx).personal_drive(ctx);
+        }
+        match UserWorkspaces::as_ref(ctx).sole_team_uid() {
+            Ok(team_uid) => Some(Owner::Team { team_uid }),
+            // The caller skips plan sync without a team.
+            Err(SoleTeamError::NoTeam) => None,
+            // A service account is bound to exactly one team server-side, so several here means
+            // the client's view of its memberships disagrees with that.
+            Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => {
+                let user_uid = AuthStateProvider::as_ref(ctx)
+                    .get()
+                    .user_id()
+                    .map(|uid| uid.as_string())
+                    .unwrap_or_default();
+                let SoleTeamError::MoreThanOneTeam { team_uids } = &error else {
+                    unreachable!()
+                };
+                let team_uids = team_uids.iter().map(ServerId::to_string).join(", ");
+                report_error!(
+                    anyhow::Error::new(error)
+                        .context("Service account resolved to more than one team"),
+                    extra: { "user_uid" => %user_uid, "team_uids" => %team_uids },
+                    ReportErrorLogMode::OncePerRun
+                );
+                None
+            }
         }
     }
 

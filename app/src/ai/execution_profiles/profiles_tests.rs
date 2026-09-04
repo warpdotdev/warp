@@ -34,8 +34,14 @@ use crate::settings::{AISettings, AgentModeCommandExecutionPredicate, PrivacySet
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::{LaunchMode, TuiEntryPoint};
+
+/// These tests mock `UserWorkspaces` with no teams, so no team policy can apply and the scope
+/// only has to exist. Scoped reads themselves are covered in `user_workspaces_tests`.
+fn test_scope() -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(1))
+}
 
 fn mock_server_metadata(uid: ServerId) -> ServerMetadata {
     ServerMetadata {
@@ -236,6 +242,7 @@ fn tui_default_denylist_overrides_agent_decides_command_execution() {
                 false,
                 Some(false),
                 Some(terminal_view_id),
+                &test_scope(),
                 ctx,
             );
             assert!(!result.is_allowed());

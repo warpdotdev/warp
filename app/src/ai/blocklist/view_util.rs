@@ -3,6 +3,8 @@ use std::sync::LazyLock;
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
+use thousands::Separable;
+use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex, Hoverable, MainAxisAlignment,
@@ -17,6 +19,7 @@ use warpui::{AppContext, Element, EntityId, EventContext, SingletonEntity};
 
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::RenderableAIError;
+use crate::settings::UsageDisplayUnit;
 use crate::themes::theme::{AnsiColorIdentifier, Fill, WarpTheme};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -296,6 +299,83 @@ pub fn format_credits(credits: f32) -> String {
     }
 }
 
+fn effective_usage_unit(unit: UsageDisplayUnit, cost_in_cents: Option<f32>) -> UsageDisplayUnit {
+    if !FeatureFlag::PricingTransparency.is_enabled() {
+        return UsageDisplayUnit::Credits;
+    }
+    match unit {
+        UsageDisplayUnit::Credits => UsageDisplayUnit::Credits,
+        UsageDisplayUnit::Dollars if cost_in_cents.is_some() => UsageDisplayUnit::Dollars,
+        UsageDisplayUnit::Dollars => UsageDisplayUnit::Credits,
+    }
+}
+
+fn format_usage_unit_value(
+    credits: f32,
+    cost_in_cents: Option<f32>,
+    unit: UsageDisplayUnit,
+) -> String {
+    match unit {
+        UsageDisplayUnit::Credits => format_credits(credits),
+        UsageDisplayUnit::Dollars => cost_in_cents
+            .map(|cost_in_cents| format!("${:.2}", cost_in_cents / 100.0))
+            .unwrap_or_else(|| format_credits(credits)),
+    }
+}
+
+/// Formats tokens with the selected unit, falling back to credits when dollars are unavailable.
+pub fn format_usage(
+    credits: f32,
+    tokens: Option<u32>,
+    cost_in_cents: Option<f32>,
+    unit: UsageDisplayUnit,
+) -> String {
+    let resolved_unit = effective_usage_unit(unit, cost_in_cents);
+    if !FeatureFlag::PricingTransparency.is_enabled() || resolved_unit != unit {
+        return format_credits(credits);
+    }
+    let unit_text = format_usage_unit_value(credits, cost_in_cents, resolved_unit);
+    let Some(tokens) = tokens.filter(|&tokens| tokens > 0) else {
+        return unit_text;
+    };
+    format!("{} tokens / {unit_text}", tokens.separate_with_commas())
+}
+
+#[derive(Clone, Copy)]
+pub enum UsageLabelKind {
+    LastResponse,
+    Total,
+    Plain,
+    DetailsPanel,
+}
+
+/// Matches the label to the unit [`format_usage`] will render.
+pub fn usage_label(
+    kind: UsageLabelKind,
+    cost_in_cents: Option<f32>,
+    unit: UsageDisplayUnit,
+) -> String {
+    let unit = effective_usage_unit(unit, cost_in_cents);
+    let base = match (kind, unit) {
+        (UsageLabelKind::DetailsPanel, UsageDisplayUnit::Credits) => "Credits used",
+        (UsageLabelKind::DetailsPanel, UsageDisplayUnit::Dollars) => "Usage",
+        (
+            UsageLabelKind::LastResponse | UsageLabelKind::Total | UsageLabelKind::Plain,
+            UsageDisplayUnit::Credits,
+        ) => "Credits spent",
+        (
+            UsageLabelKind::LastResponse | UsageLabelKind::Total | UsageLabelKind::Plain,
+            UsageDisplayUnit::Dollars,
+        ) => "Usage charged",
+    };
+    let suffix = match kind {
+        UsageLabelKind::LastResponse => " (last response)",
+        UsageLabelKind::Total => " (total)",
+        UsageLabelKind::Plain | UsageLabelKind::DetailsPanel => "",
+    };
+    format!("{base}{suffix}")
+}
+
 /// Renders a secondary button with an MCP/skill provider icon and a text label.
 pub(crate) fn render_provider_icon_button<F>(
     button_label: &str,
@@ -355,3 +435,7 @@ where
         })
         .finish()
 }
+
+#[cfg(test)]
+#[path = "view_util_tests.rs"]
+mod tests;

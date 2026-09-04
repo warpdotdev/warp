@@ -19,7 +19,7 @@ use super::safe_mode_settings::get_secret_obfuscation_mode;
 use super::session_settings::SessionSettings;
 use super::settings::TerminalSettings;
 use super::shell::ShellType;
-use super::{SizeInfo, TerminalModel, prompt};
+use super::{SizeInfo, TerminalModel, prompt, should_right_click_paste};
 use crate::ai::blocklist::BlocklistAIInputModel;
 use crate::appearance::Appearance;
 use crate::context_chips::display::PromptDisplay;
@@ -641,7 +641,11 @@ impl PromptRenderHelper {
                 } else {
                     prompt_with_padding_container
                 })
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, app, position, modifiers| {
+                    if should_right_click_paste(modifiers.shift, app) {
+                        ctx.dispatch_typed_action(TerminalAction::Paste);
+                        return DispatchEventResult::StopPropagation;
+                    }
                     let position_id = format!("prompt_area_{view_id}");
                     let Some(prompt_rect) = ctx.element_position_by_id(position_id) else {
                         return DispatchEventResult::PropagateToParent;
@@ -691,7 +695,11 @@ impl PromptRenderHelper {
 
         SavePosition::new(
             EventHandler::new(prompt_with_padding_container)
-                .on_right_mouse_down(move |ctx, _, position| {
+                .on_right_mouse_down(move |ctx, app, position, modifiers| {
+                    if should_right_click_paste(modifiers.shift, app) {
+                        ctx.dispatch_typed_action(TerminalAction::Paste);
+                        return DispatchEventResult::StopPropagation;
+                    }
                     let position_id = format!("prompt_area_{view_id}");
                     let Some(prompt_rect) = ctx.element_position_by_id(position_id) else {
                         return DispatchEventResult::PropagateToParent;

@@ -104,7 +104,7 @@ fn ref_test(dir: &Path) {
     let history_size = ref_config.history_size;
 
     let (wakeups_tx, _) = async_channel::unbounded();
-    let (events_tx, _) = async_channel::unbounded();
+    let (events_tx, _) = async_channel::unbounded::<crate::terminal::event::Event>();
     let (pty_reads_tx, _) = async_broadcast::broadcast(1000);
 
     let channel_event_proxy = ChannelEventListener::new(wakeups_tx, events_tx, pty_reads_tx);

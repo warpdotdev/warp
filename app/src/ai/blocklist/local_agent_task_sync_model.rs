@@ -1,8 +1,10 @@
 mod update_queue;
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
+use futures::channel::oneshot;
 use session_sharing_protocol::common::SessionId;
 use update_queue::LocalTaskUpdateQueue;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
@@ -45,6 +47,13 @@ pub struct LocalAgentTaskSyncModel {
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
     /// Serializes and coalesces model-owned updates independently per task.
     update_queue: LocalTaskUpdateQueue,
+    /// Senders resolved when the corresponding task's update queue drains
+    /// (no pending or in-flight updates). See [`Self::wait_for_idle`].
+    idle_waiters: HashMap<AmbientAgentTaskId, Vec<oneshot::Sender<()>>>,
+    /// The most recent terminal task state per task that the server
+    /// acknowledged. Used by the agent driver to decide whether a terminal
+    /// state still needs to be reported before the process exits.
+    confirmed_terminal_states: HashMap<AmbientAgentTaskId, AgentTaskState>,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
@@ -95,6 +104,48 @@ impl LocalAgentTaskSyncModel {
             ai_client,
             cli_session_task_ids: HashMap::new(),
             update_queue: LocalTaskUpdateQueue::default(),
+            idle_waiters: HashMap::new(),
+            confirmed_terminal_states: HashMap::new(),
+        }
+    }
+
+    /// Resolves once the task has no pending or in-flight `update_agent_task`
+    /// calls in this model's queue. Resolves immediately when the task is
+    /// already idle. Callers should bound the wait with a timeout.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn wait_for_idle(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+    ) -> impl Future<Output = ()> + use<> {
+        let rx = if self.update_queue.is_idle(&task_id) {
+            None
+        } else {
+            let (tx, rx) = oneshot::channel();
+            self.idle_waiters.entry(task_id).or_default().push(tx);
+            Some(rx)
+        };
+        async move {
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+        }
+    }
+
+    /// The most recent terminal task state this client confirmed delivering
+    /// for this task, if any. This is delivery confirmation, not task-state
+    /// ground truth: it only reflects updates sent through this model, not
+    /// direct `update_agent_task` calls made elsewhere in this process or
+    /// writes made server-side.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    pub fn confirmed_terminal_state(&self, task_id: &AmbientAgentTaskId) -> Option<AgentTaskState> {
+        self.confirmed_terminal_states.get(task_id).copied()
+    }
+
+    fn notify_idle_waiters(&mut self, task_id: &AmbientAgentTaskId) {
+        if let Some(waiters) = self.idle_waiters.remove(task_id) {
+            for waiter in waiters {
+                let _ = waiter.send(());
+            }
         }
     }
 
@@ -130,6 +181,37 @@ impl LocalAgentTaskSyncModel {
             },
             ctx,
         );
+    }
+
+    /// Test-only equivalent of `register_cli_session` that only records the
+    /// `terminal_view_id → task_id` mapping, without enqueuing the
+    /// IN_PROGRESS report that `register_cli_session` sends via the real
+    /// `AIClient`. Use this in tests that only need
+    /// `task_id_for_terminal_view` to resolve (e.g. exercising
+    /// `TerminalView::conversation_id_for_cli_status_updates`).
+    #[cfg(test)]
+    pub(crate) fn register_cli_session_for_test(
+        &mut self,
+        terminal_view_id: EntityId,
+        task_id: AmbientAgentTaskId,
+    ) {
+        self.cli_session_task_ids.insert(terminal_view_id, task_id);
+    }
+
+    /// Returns the ambient task this terminal pane's CLI-harness session, if
+    /// any, is registered under. Callers use this to identify which local
+    /// `AIConversation` (if any) represents the same run as CLI agent
+    /// lifecycle events observed in this pane — comparing against
+    /// `AIConversation::task_id()` rather than relying on pane-active-
+    /// conversation heuristics alone, since a pane can host conversations
+    /// unrelated to its CLI-harness session (e.g. an earlier native Agent
+    /// Mode conversation). Returns `None` for a purely interactive CLI agent
+    /// session with no ambient task behind it.
+    pub fn task_id_for_terminal_view(
+        &self,
+        terminal_view_id: EntityId,
+    ) -> Option<AmbientAgentTaskId> {
+        self.cli_session_task_ids.get(&terminal_view_id).copied()
     }
 
     /// Stops reporting CLI agent status changes for a completed driver run.
@@ -232,9 +314,20 @@ impl LocalAgentTaskSyncModel {
                     }
                 }
 
-                let (task_state, status_message) = map_conversation_status(conversation);
+                // A debug conversation still reports its conversation ID, but must not derive
+                // task state/status from its own status — that would overwrite the original
+                // failure record. See `TaskSyncMode::PreserveTerminalSetupFailure`.
+                let (task_state, status_message) = if conversation
+                    .task_sync_mode()
+                    .suppresses_task_lifecycle_updates()
+                {
+                    (None, None)
+                } else {
+                    let (task_state, status_message) = map_conversation_status(conversation);
+                    (Some(task_state), status_message)
+                };
                 Some(LocalTaskUpdate {
-                    task_state: Some(task_state),
+                    task_state,
                     server_conversation_token: conversation
                         .server_conversation_token()
                         .map(|token| token.as_str().to_string()),
@@ -326,6 +419,7 @@ impl LocalAgentTaskSyncModel {
                         server_conversation_token.clone(),
                         status_message,
                         None,
+                        None,
                     )
                     .await;
                 if let Err(err) = &result {
@@ -338,11 +432,31 @@ impl LocalAgentTaskSyncModel {
                 result
             },
             move |me, result, ctx| {
+                if result.is_ok()
+                    && let Some(state) = task_state
+                    && is_terminal_task_state(state)
+                {
+                    me.confirmed_terminal_states.insert(task_id, state);
+                }
                 if let Some(update) = me.update_queue.record_result(task_id, result.is_ok()) {
                     me.send_update(task_id, update, ctx);
+                } else if me.update_queue.is_idle(&task_id) {
+                    me.notify_idle_waiters(&task_id);
                 }
             },
         );
+    }
+}
+
+/// Whether a task state ends the run from the server's perspective.
+fn is_terminal_task_state(state: AgentTaskState) -> bool {
+    match state {
+        AgentTaskState::Succeeded
+        | AgentTaskState::Failed
+        | AgentTaskState::Error
+        | AgentTaskState::Cancelled
+        | AgentTaskState::Blocked => true,
+        AgentTaskState::InProgress | AgentTaskState::Claimed => false,
     }
 }
 
@@ -582,6 +696,10 @@ fn map_cli_session_status(
         CLIAgentSessionStatus::Blocked { message } => (
             AgentTaskState::Blocked,
             message.as_ref().map(TaskStatusUpdate::message),
+        ),
+        CLIAgentSessionStatus::Cancelled => (
+            AgentTaskState::Cancelled,
+            Some(TaskStatusUpdate::message("Cancelled by user")),
         ),
     }
 }

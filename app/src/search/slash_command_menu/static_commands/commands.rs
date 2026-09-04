@@ -560,6 +560,19 @@ pub static MODEL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: None,
 });
 
+/// TUI-only: the GUI switches teams from the title-bar pill, which opens a new window for the
+/// chosen team rather than re-scoping the current one. The TUI has a single window, so it
+/// switches in place instead.
+pub const TEAM: StaticCommand = StaticCommand {
+    name: "/team",
+    description: "Switch the active team",
+    kind: SlashCommandKind::Team,
+    supported_surfaces: SlashCommandSurfaces::TuiOnly,
+    availability: Availability::ALWAYS,
+    auto_enter_ai_mode: false,
+    argument: None,
+};
+
 pub static HOST: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/host",
     description: "Switch the cloud agent execution host",
@@ -756,9 +769,9 @@ pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| {
 
 pub const USAGE: StaticCommand = StaticCommand {
     name: "/usage",
-    description: "Open billing and usage settings",
+    description: "View account and credit usage",
     kind: SlashCommandKind::Usage,
-    supported_surfaces: SlashCommandSurfaces::GuiOnly {
+    supported_surfaces: SlashCommandSurfaces::GuiAndTui {
         icon_path: "bundled/svg/bar-chart-04.svg",
     },
     availability: Availability::AI_ENABLED,
@@ -994,6 +1007,7 @@ fn all_commands_for_all_surfaces() -> Vec<StaticCommand> {
         EXPORT_TO_CLIPBOARD,
         COPY_DEBUGGING_ID,
         MODEL.clone(),
+        TEAM,
         STATUS,
         VIEW_LOGS,
         VOICE,

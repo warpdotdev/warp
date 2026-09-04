@@ -11,6 +11,8 @@ $sources = @(
     './script/windows/'
 )
 
+$totalProblemCount = 0
+
 foreach ($source in $sources) {
     Write-Output "Inspecting scripts in '$source'"
     $scriptAnalyzerParams = @{
@@ -24,7 +26,11 @@ foreach ($source in $sources) {
     Write-Output $results
     $errorsAndWarnings = $results | Where-Object { $_.Severity -ge [Microsoft.Windows.PowerShell.ScriptAnalyzer.Generic.DiagnosticSeverity]::Warning }
     $problemCount = ($errorsAndWarnings | Measure-Object).Count
-    if ($problemCount -gt 0 -and $ci) {
-        throw "Lint failed with $problemCount problems"
-    }
+    $totalProblemCount += $problemCount
+}
+
+# Inspect every source before failing, so a problem in an earlier source never hides
+# problems in a later one.
+if ($totalProblemCount -gt 0 -and $ci) {
+    throw "Lint failed with $totalProblemCount problems"
 }

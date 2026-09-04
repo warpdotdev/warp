@@ -342,6 +342,7 @@ fn build_three_level_tree(
             "mid".to_string(),
             root_id,
             None,
+            false,
             ctx,
         )
     });
@@ -351,6 +352,7 @@ fn build_three_level_tree(
             "grandchild".to_string(),
             mid_id,
             None,
+            false,
             ctx,
         )
     });
@@ -461,6 +463,7 @@ fn drill_down_anchor_matches_root_anchoring_at_depth_one() {
                 "child".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -693,6 +696,7 @@ fn conversation_server_token_assignment_rerenders_the_pill_bar() {
                 "child".to_string(),
                 root_id,
                 None,
+                false,
                 ctx,
             )
         });

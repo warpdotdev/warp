@@ -36,6 +36,7 @@ dirs.workspace = true
 futures-lite.workspace = true
 strum_macros.workspace = true
 strum.workspace = true
+parking_lot.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 notify-debouncer-full.workspace = true

@@ -44,6 +44,7 @@ impl ShellCommand {
                     } => Some(
                         NamedArgument {
                             name: flag.name.as_str(),
+                            name_span: flag.name_span,
                             parsed_token: parsed_expression.value(),
                         }
                         .spanned(parsed_expression.span),
@@ -67,6 +68,7 @@ impl ShellCommand {
 #[derive(Debug)]
 pub struct NamedArgument<'a> {
     pub name: &'a str,
+    pub name_span: Span,
     pub parsed_token: &'a ParsedToken,
 }
 

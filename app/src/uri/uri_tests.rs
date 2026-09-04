@@ -765,7 +765,7 @@ fn test_settings_section_for_simple_subpage() {
     );
     assert_eq!(
         settings_section_for_simple_subpage("platform"),
-        Some(SettingsSection::OzCloudAPIKeys),
+        Some(SettingsSection::WarpCloudAgentAPIKeys),
     );
     assert_eq!(
         settings_section_for_simple_subpage("warp_agent"),

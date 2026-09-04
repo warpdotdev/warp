@@ -16,6 +16,7 @@ use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::paths::host_native_absolute_path;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContext;
 
 pub struct ReadFilesExecutor {
     active_session: ModelHandle<ActiveSession>,
@@ -33,7 +34,8 @@ impl ReadFilesExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         let ExecuteActionInput {
             action:
@@ -70,6 +72,7 @@ impl ReadFilesExecutor {
                     })
                     .collect(),
                 Some(self.terminal_view_id),
+                scope,
                 ctx,
             )
             .is_allowed()

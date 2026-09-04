@@ -10,7 +10,7 @@ use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
 use warp_terminal::model::BlockId;
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, WeakViewHandle};
 
 use super::AmbientAgentProgressUIState;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -42,10 +42,12 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
-    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, SpawnAgentRequest,
+    AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, RunFollowupRequest,
+    SpawnAgentRequest,
 };
-use crate::terminal::CLIAgent;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
+use crate::terminal::{CLIAgent, TerminalView};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Tracks progress timestamps for each step during ambient agent spawning.
 #[derive(Debug, Clone)]
@@ -134,6 +136,8 @@ pub struct AmbientAgentViewModel {
     /// The terminal view this model is part of.
     terminal_view_id: EntityId,
 
+    terminal_view: WeakViewHandle<TerminalView>,
+
     /// Selected cloud environment to launch the ambient agent with.
     environment_id: Option<SyncId>,
     /// True when `environment_id` came from an existing run config rather than from local
@@ -193,7 +197,11 @@ pub struct AmbientAgentViewModel {
 }
 
 impl AmbientAgentViewModel {
-    pub fn new(terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(
+        terminal_view_id: EntityId,
+        terminal_view: WeakViewHandle<TerminalView>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
             me.handle_cloud_model_event(event, ctx);
         });
@@ -239,6 +247,7 @@ impl AmbientAgentViewModel {
             status: Status::Composing,
             request: None,
             terminal_view_id,
+            terminal_view,
             environment_id: None,
             environment_id_from_viewed_task: false,
             progress_timer_handle: None,
@@ -263,6 +272,14 @@ impl AmbientAgentViewModel {
 
     pub fn request(&self) -> Option<&SpawnAgentRequest> {
         self.request.as_ref()
+    }
+
+    fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
+        self.terminal_view.window_id(app).and_then(|window_id| {
+            UserWorkspaces::as_ref(app)
+                .team_context_for_window(window_id)
+                .team_uid()
+        })
     }
 
     /// The terminal view this model belongs to. Used by the handoff open path
@@ -849,8 +866,10 @@ impl AmbientAgentViewModel {
         self.set_environment_id_from_viewed_task(environment_id, ctx);
 
         if let Some(model_id) = snapshot.and_then(|s| s.model_id.as_deref()) {
+            let team_uid = self.team_uid(ctx);
             LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                prefs.update_preferred_agent_mode_llm(
+                prefs.update_preferred_agent_mode_llm_for_team_uid(
+                    team_uid,
                     &LLMId::from(model_id),
                     self.terminal_view_id,
                     ctx,
@@ -916,7 +935,50 @@ impl AmbientAgentViewModel {
             log::warn!("Attempted to submit cloud follow-up while HandoffCloudCloud is disabled");
             return;
         }
+        self.submit_run_followup_unchecked(prompt, ctx);
+    }
 
+    /// Submits a follow-up into a retained environment-setup-failure debug session
+    /// (REMOTE-2661), via the same authenticated `submit_run_followup` service call as
+    /// [`Self::submit_cloud_followup`] but not gated on `HandoffCloudCloud`, and not routed
+    /// through [`Self::submit_run_followup_unchecked`]'s task-state polling: a retained run's
+    /// task is supposed to stay failure-like for the whole debug conversation, so that polling
+    /// would eventually misreport it. Treat this as sent once the server accepts the request.
+    pub fn submit_setup_failure_debug_followup(
+        &mut self,
+        prompt: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(task_id) = self.task_id else {
+            log::warn!(
+                "Attempted to submit a setup-failure debug follow-up without an ambient task ID"
+            );
+            return;
+        };
+
+        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let request = RunFollowupRequest {
+            message: prompt.clone(),
+        };
+        self.pending_followup_prompt = Some(prompt);
+        ctx.emit(AmbientAgentViewModelEvent::FollowupDispatched);
+
+        ctx.spawn(
+            async move { ai_client.submit_run_followup(&task_id, request).await },
+            |me, result, ctx| {
+                me.pending_followup_prompt = None;
+                if let Err(err) = result {
+                    log::warn!("Failed to submit setup-failure debug follow-up: {err}");
+                    ctx.emit(AmbientAgentViewModelEvent::FollowupSubmissionFailed {
+                        error_message: err.to_string(),
+                    });
+                }
+                ctx.notify();
+            },
+        );
+    }
+
+    fn submit_run_followup_unchecked(&mut self, prompt: String, ctx: &mut ModelContext<Self>) {
         let Some(task_id) = self.task_id else {
             log::warn!("Attempted to submit cloud follow-up without an ambient task ID");
             return;
@@ -1003,12 +1065,16 @@ impl AmbientAgentViewModel {
     /// host (`WARP_CLOUD_MODE_DEFAULT_HOST`), and the pane's currently-selected env
     /// and harness. Shared by `spawn_agent` and the local-to-cloud handoff path so
     /// both flows route to the same worker host and inherit the same defaults.
-    pub(crate) fn build_default_spawn_config(&self, ctx: &AppContext) -> AgentConfigSnapshot {
+    pub(crate) fn build_default_spawn_config(
+        &self,
+        scope: &impl TeamScope,
+        ctx: &AppContext,
+    ) -> AgentConfigSnapshot {
         let selected_harness = self.selected_harness();
         let computer_use_enabled = if selected_harness == Harness::Oz {
             // If the harness is Oz, determine computer use based on workspace AI autonomy settings.
             let CloudAgentComputerUseState { enabled, .. } =
-                resolve_cloud_agent_computer_use_state(ctx);
+                resolve_cloud_agent_computer_use_state(scope, ctx);
             Some(enabled)
         } else {
             None
@@ -1017,7 +1083,11 @@ impl AmbientAgentViewModel {
         let oz_model = (selected_harness == Harness::Oz).then(|| {
             let prefs = LLMPreferences::as_ref(ctx);
             let active_id = &prefs
-                .get_active_base_model(ctx, Some(self.terminal_view_id))
+                .get_active_base_model_for_team_uid(
+                    self.team_uid(ctx),
+                    ctx,
+                    Some(self.terminal_view_id),
+                )
                 .id;
             prefs.cloud_runnable_oz_model_id_or_fallback(active_id)
         });
@@ -1058,9 +1128,10 @@ impl AmbientAgentViewModel {
         &mut self,
         prompt: String,
         attachments: Vec<AttachmentInput>,
+        scope: &impl TeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let config = Some(self.build_default_spawn_config(ctx));
+        let config = Some(self.build_default_spawn_config(scope, ctx));
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {
@@ -1101,8 +1172,10 @@ impl AmbientAgentViewModel {
             self.environment_id_from_viewed_task = false;
 
             if let Some(model_id) = config.model_id.as_deref() {
+                let team_uid = self.team_uid(ctx);
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.update_preferred_agent_mode_llm(
+                    prefs.update_preferred_agent_mode_llm_for_team_uid(
+                        team_uid,
                         &LLMId::from(model_id),
                         self.terminal_view_id,
                         ctx,
@@ -1552,6 +1625,12 @@ pub enum AmbientAgentViewModelEvent {
     EnvironmentSelected,
     /// The ambient agent failed.
     Failed {
+        error_message: String,
+    },
+    /// A retained-setup-failure debug follow-up (REMOTE-2661) failed to submit. Distinct from
+    /// `Failed`: the run's failure state is expected to persist, so this is just a lightweight
+    /// signal that this one message didn't go through.
+    FollowupSubmissionFailed {
         error_message: String,
     },
     /// Request to show the cloud agent concurrency/capacity modal.

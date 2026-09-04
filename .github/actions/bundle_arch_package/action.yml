@@ -17,6 +17,9 @@ inputs:
     description: The artifact type to build (app or cli)
     required: false
     default: app
+  settings-schema-source:
+    description: The path to the settings schema to package.
+    required: true
 
 runs:
   using: composite
@@ -27,16 +30,20 @@ runs:
 
     - name: Run in container
       shell: bash
+      env:
+        SETTINGS_SCHEMA_SOURCE: ${{ inputs.settings-schema-source }}
       run: |
+        settings_schema_source="$(realpath "$SETTINGS_SCHEMA_SOURCE")"
         docker run --rm \
           -v "${{ github.workspace }}:/github/workspace" \
           -v "${{ github.workspace }}/target:/github/workspace/target" \
+          -v "$settings_schema_source:/tmp/settings_schema.json:ro" \
           -w /github/workspace \
           -v "${CARGO_HOME:-$HOME/.cargo}/git:/home/build/.cargo/git" \
           -v "${CARGO_HOME:-$HOME/.cargo}/registry:/home/build/.cargo/registry" \
           -e GIT_RELEASE_TAG="$GIT_RELEASE_TAG" \
           -e GITHUB_ACTIONS="$GITHUB_ACTIONS" \
           -e GITHUB_OUTPUT="/dev/null" \
-          ${SETTINGS_SCHEMA_CACHE:+-e SETTINGS_SCHEMA_CACHE=/github/workspace/.settings_schema_cache.json} \
+          -e SETTINGS_SCHEMA_SOURCE="/tmp/settings_schema.json" \
           arch-bundle-builder \
           ${{ inputs.channel }} ${{ inputs.release-tag }} ${{ inputs.arch }} ${{ inputs.artifact }}

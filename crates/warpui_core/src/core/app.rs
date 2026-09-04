@@ -61,8 +61,8 @@ use crate::{
     EntityIdSet, Event, GetSingletonModelHandle, ModelAsRef, ModelContext, ModelHandle,
     NextNewWindowsHasThisWindowsBoundsUponClose, Presenter, ReadModel, ReadView, Scene,
     SingletonEntity, SpawnedFuture, TaskId, TypedActionView, UpdateModel, UpdateView, View,
-    ViewAsRef, ViewContext, ViewHandle, WindowId, WindowInvalidation, ZoomFactor, assets,
-    rendering,
+    ViewAsRef, ViewContext, ViewHandle, ViewUpdateError, WindowId, WindowInvalidation, ZoomFactor,
+    assets, rendering,
 };
 
 #[cfg(feature = "tui")]
@@ -483,6 +483,18 @@ impl UpdateView for App {
     {
         self.as_mut().update_view(handle, update)
     }
+
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        self.as_mut().try_update_view(handle, update)
+    }
 }
 
 impl ReadView for App {
@@ -600,8 +612,8 @@ pub struct AppContext {
     last_frame_position_cache: HashMap<WindowId, crate::presenter::PositionCache>,
     /// Last cursor position observed after scene layout, used to notify platform IME code only
     /// when layout moves the active cursor.
-    last_observed_active_cursor_positions: HashMap<WindowId, Option<CursorInfo>>,
-    pub(super) windows: HashMap<WindowId, Window>,
+    last_observed_active_cursor_positions: FxHashMap<WindowId, Option<CursorInfo>>,
+    pub(super) windows: FxHashMap<WindowId, Window>,
     pub(super) ref_counts: Arc<Mutex<RefCounts>>,
     pub(super) platform_delegate: Box<dyn platform::Delegate>,
 
@@ -1946,7 +1958,7 @@ impl AppContext {
         match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                report_error!(error.context("Unable to fetch Key Bindings for View"));
+                log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 Vec::new()
             }
         }
@@ -1993,7 +2005,7 @@ impl AppContext {
         let contexts = match self.contexts_from_responder_chain(window_id, &responder_chain) {
             Ok(ctxs) => ctxs,
             Err(error) => {
-                report_error!(error.context("Unable to fetch Key Bindings for View"));
+                log::error!("Unable to fetch Key Bindings for View: {error:#}");
                 return Vec::new();
             }
         };
@@ -2661,7 +2673,7 @@ impl AppContext {
 
         match window_result {
             Err(err) => {
-                report_error!("error opening window", extra: { "error" => %err });
+                report_error!(err.context("error opening window"));
             }
             Ok(_) => {
                 self.on_window_invalidated(window_id, move |window_id, ctx| {
@@ -3518,6 +3530,11 @@ impl AppContext {
     ) -> bool {
         self.handle_window_event(event, window_id, presenter)
             .handled
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn simulate_window_closed(&mut self, window_id: WindowId) {
+        let _ = self.handle_window_closed(window_id);
     }
 
     fn handle_window_event(
@@ -4598,28 +4615,85 @@ impl AppContext {
     }
 }
 
+impl AppContext {
+    /// Removes the model with the given ID so that an update closure can run against it.
+    ///
+    /// This bookkeeping is not generic, so it is compiled once instead of being duplicated into
+    /// every instantiation of [`UpdateModel::update_model`].
+    fn take_model_for_update(&mut self, model_id: EntityId) -> Box<dyn AnyModel> {
+        let Some(model) = self.models.remove(&model_id) else {
+            panic!("Circular model update");
+        };
+        self.pending_flushes += 1;
+        model
+    }
+
+    /// Restores a model removed by [`Self::take_model_for_update`] and flushes pending effects.
+    fn finish_model_update(&mut self, model_id: EntityId, model: Box<dyn AnyModel>) {
+        self.models.insert(model_id, model);
+        self.flush_effects();
+    }
+
+    /// Removes the view with the given ID so that an update closure can run against it.
+    ///
+    /// This bookkeeping is not generic, so it is compiled once instead of being duplicated into
+    /// every instantiation of [`UpdateView`].
+    fn take_view_for_update(
+        &mut self,
+        window_id: WindowId,
+        view_id: EntityId,
+    ) -> Result<StoredView, ViewUpdateError> {
+        let Some(window) = self.windows.get_mut(&window_id) else {
+            return Err(ViewUpdateError::WindowClosed);
+        };
+        let Some(view) = window.views.remove(&view_id) else {
+            return Err(ViewUpdateError::CircularUpdate);
+        };
+        self.pending_flushes += 1;
+        Ok(view)
+    }
+
+    /// Restores a view removed by [`Self::take_view_for_update`] and flushes pending effects.
+    fn finish_view_update(&mut self, window_id: WindowId, view_id: EntityId, view: StoredView) {
+        if let Some(window) = self.windows.get_mut(&window_id) {
+            window.views.insert(view_id, view);
+        }
+        self.flush_effects();
+    }
+}
+
+/// Downcasts a checked-out model to its concrete type.
+///
+/// This is generic over the entity type only, so the downcast and panic machinery is shared by
+/// all [`UpdateModel::update_model`] call sites for a given model type.
+fn downcast_model_mut<T: Entity>(model: &mut Box<dyn AnyModel>) -> &mut T {
+    model
+        .as_any_mut()
+        .downcast_mut()
+        .expect("Downcast is type safe")
+}
+
+/// Downcasts a checked-out view to its concrete type.
+///
+/// This is generic over the entity type only, so the downcast and panic machinery is shared by
+/// all [`UpdateView::update_view`] call sites for a given view type.
+fn downcast_view_mut<T: Entity>(view: &mut StoredView) -> &mut T {
+    view.as_any_mut()
+        .downcast_mut()
+        .expect("Downcast is type safe")
+}
+
 impl UpdateModel for AppContext {
     fn update_model<T, F, S>(&mut self, handle: &ModelHandle<T>, update: F) -> S
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ModelContext<T>) -> S,
     {
-        if let Some(mut model) = self.models.remove(&handle.id()) {
-            self.pending_flushes += 1;
-            let mut ctx = ModelContext::new(self, handle.id());
-            let result = update(
-                model
-                    .as_any_mut()
-                    .downcast_mut()
-                    .expect("Downcast is type safe"),
-                &mut ctx,
-            );
-            self.models.insert(handle.id(), model);
-            self.flush_effects();
-            result
-        } else {
-            panic!("Circular model update");
-        }
+        let mut model = self.take_model_for_update(handle.id());
+        let mut ctx = ModelContext::new(self, handle.id());
+        let result = update(downcast_model_mut(&mut model), &mut ctx);
+        self.finish_model_update(handle.id(), model);
+        result
     }
 }
 
@@ -4629,30 +4703,28 @@ impl UpdateView for AppContext {
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
-        self.pending_flushes += 1;
-        let window_id = handle.window_id(self);
-        let mut view = if let Some(window) = self.windows.get_mut(&window_id) {
-            if let Some(view) = window.views.remove(&handle.id()) {
-                view
-            } else {
-                panic!("Circular view update");
-            }
-        } else {
-            panic!("Window does not exist");
-        };
-
-        let mut ctx = ViewContext::new(self, window_id, handle.id());
-        let result = update(
-            view.as_any_mut()
-                .downcast_mut()
-                .expect("Downcast is type safe"),
-            &mut ctx,
-        );
-        if let Some(window) = self.windows.get_mut(&window_id) {
-            window.views.insert(handle.id(), view);
+        match self.try_update_view(handle, update) {
+            Ok(result) => result,
+            Err(ViewUpdateError::WindowClosed) => panic!("Window does not exist"),
+            Err(ViewUpdateError::CircularUpdate) => panic!("Circular view update"),
         }
-        self.flush_effects();
-        result
+    }
+
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        let window_id = handle.window_id(self);
+        let mut view = self.take_view_for_update(window_id, handle.id())?;
+        let mut ctx = ViewContext::new(self, window_id, handle.id());
+        let result = update(downcast_view_mut(&mut view), &mut ctx);
+        self.finish_view_update(window_id, handle.id(), view);
+        Ok(result)
     }
 }
 

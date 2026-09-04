@@ -162,7 +162,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Rust cache
-        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3 # v1.6.0
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1.6.1
         with:
           cache: rust
 
@@ -243,7 +243,7 @@ jobs:
           base: ${{ github.event.repository.default_branch }}
           commit-message: "Clean up ${{ needs.analyze.outputs.flag_name }} feature flag"
           branch: "oz-agent/cleanup-feature-flag-${{ needs.analyze.outputs.flag_name }}"
-          author: "Oz Agent <oz-agent@warp.dev>"
+          author: "Warp <agent@warp.dev>"
           delete-branch: true
           reviewers: ${{ needs.analyze.outputs.reviewers }}
           title: "Clean up ${{ needs.analyze.outputs.flag_name }} feature flag"

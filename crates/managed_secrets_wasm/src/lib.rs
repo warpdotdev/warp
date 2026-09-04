@@ -118,6 +118,24 @@ pub fn encrypt_openai_api_key_secret(
     )
 }
 
+/// Encrypt a container registry credential secret.
+#[wasm_bindgen]
+pub fn encrypt_docker_registry_secret(
+    public_key_base64: &str,
+    actor_uid: &str,
+    secret_name: &str,
+    registry_host: &str,
+    username: &str,
+    password: &str,
+) -> Result<String, JsValue> {
+    do_encrypt(
+        public_key_base64,
+        actor_uid,
+        secret_name,
+        &ManagedSecretValue::docker_registry(registry_host, username, password),
+    )
+}
+
 // ── BYO (bring-your-own) credential sealing ─────────────────────────────────
 //
 // These exports seal enterprise BYOK / BYOE credentials for team upload. They

@@ -94,12 +94,35 @@ impl Span {
         self.end
     }
 
+    /// Returns this span with both ends pulled inside `source` and floored to char boundaries, so
+    /// the result is always safe to index `source` with. This is the range [`Self::slice`] cuts.
+    pub fn clamped_to(&self, source: &str) -> Span {
+        let len = source.len();
+        let start = floor_char_boundary(source, self.start.min(len));
+        let end = floor_char_boundary(source, self.end.min(len)).max(start);
+
+        Span { start, end }
+    }
+
     pub fn slice<'a>(&self, source: &'a str) -> &'a str {
-        let start = self.start;
-        let end = self.end;
+        let Span { start, end } = self.clamped_to(source);
 
         &source[start..end]
     }
+}
+
+/// Returns the largest byte index `<= index` that lies on a UTF-8 char boundary in `source`.
+/// `index` may exceed `source.len()`, in which case this returns `source.len()`. Equivalent to
+/// the standard library's still-unstable `str::floor_char_boundary`.
+fn floor_char_boundary(source: &str, index: usize) -> usize {
+    if index >= source.len() {
+        return source.len();
+    }
+    let mut index = index;
+    while index > 0 && !source.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 impl PartialOrd<usize> for Span {

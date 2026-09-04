@@ -1,6 +1,5 @@
 //! Ambient agent task types and utilities.
 
-use anyhow::anyhow;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::HarnessModelConfig;
@@ -49,6 +48,12 @@ pub enum AgentSource {
     GitHubAction,
     GitHubWebhook,
     CloudMode,
+    Orchestration,
+    Jira,
+    GitLabWebhook,
+    RunScorer,
+    Autofix,
+    BenchmarkTrial,
 }
 
 impl AgentSource {
@@ -66,6 +71,14 @@ impl AgentSource {
             AgentSource::GitHubAction => "GITHUB_ACTION",
             AgentSource::GitHubWebhook => "GITHUB_WEBHOOK",
             AgentSource::CloudMode => "CLOUD_MODE",
+            AgentSource::Orchestration => "ORCHESTRATION",
+            AgentSource::Jira => "JIRA",
+            AgentSource::GitLabWebhook => "GITLAB_WEBHOOK",
+            AgentSource::RunScorer => "RUN_SCORER",
+            // The server surfaces the internal AUTOFIX task source under the public
+            // name SELF_IMPROVEMENT (mirrors AgentWebhook/"API" above).
+            AgentSource::Autofix => "SELF_IMPROVEMENT",
+            AgentSource::BenchmarkTrial => "BENCHMARK_TRIAL",
         }
     }
 
@@ -80,13 +93,24 @@ impl AgentSource {
             AgentSource::WebApp => "Oz Web",
             AgentSource::GitHubAction => "GitHub Action",
             AgentSource::GitHubWebhook => "GitHub",
+            AgentSource::Orchestration => "Orchestration",
+            AgentSource::Jira => "Jira",
+            AgentSource::GitLabWebhook => "GitLab",
+            AgentSource::RunScorer => "Scorer",
+            AgentSource::Autofix => "Self-improvement",
+            AgentSource::BenchmarkTrial => "Benchmark",
         }
     }
 
     /// Returns true when tasks from this source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         match self {
-            AgentSource::GitHubAction | AgentSource::GitHubWebhook => true,
+            AgentSource::GitHubAction
+            | AgentSource::GitHubWebhook
+            | AgentSource::GitLabWebhook
+            | AgentSource::RunScorer
+            | AgentSource::Autofix
+            | AgentSource::BenchmarkTrial => true,
             AgentSource::Linear
             | AgentSource::AgentWebhook
             | AgentSource::Slack
@@ -94,7 +118,9 @@ impl AgentSource {
             | AgentSource::ScheduledAgent
             | AgentSource::Interactive
             | AgentSource::WebApp
-            | AgentSource::CloudMode => false,
+            | AgentSource::CloudMode
+            | AgentSource::Orchestration
+            | AgentSource::Jira => false,
         }
     }
 
@@ -106,12 +132,18 @@ impl AgentSource {
             | AgentSource::Slack
             | AgentSource::Interactive
             | AgentSource::WebApp
-            | AgentSource::CloudMode => true,
+            | AgentSource::CloudMode
+            | AgentSource::Jira => true,
             AgentSource::Cli
             | AgentSource::ScheduledAgent
             | AgentSource::AgentWebhook
             | AgentSource::GitHubAction
-            | AgentSource::GitHubWebhook => false,
+            | AgentSource::GitHubWebhook
+            | AgentSource::Orchestration
+            | AgentSource::GitLabWebhook
+            | AgentSource::RunScorer
+            | AgentSource::Autofix
+            | AgentSource::BenchmarkTrial => false,
         }
     }
 }
@@ -152,13 +184,37 @@ where
             "GITHUB_ACTION" => Some(AgentSource::GitHubAction),
             "GITHUB_WEBHOOK" => Some(AgentSource::GitHubWebhook),
             "CLOUD_MODE" => Some(AgentSource::CloudMode),
+            "ORCHESTRATION" => Some(AgentSource::Orchestration),
+            "JIRA" => Some(AgentSource::Jira),
+            "GITLAB_WEBHOOK" => Some(AgentSource::GitLabWebhook),
+            "RUN_SCORER" => Some(AgentSource::RunScorer),
+            // The server surfaces the internal AUTOFIX task source under the public
+            // name SELF_IMPROVEMENT; accept both spellings.
+            "AUTOFIX" | "SELF_IMPROVEMENT" => Some(AgentSource::Autofix),
+            "BENCHMARK_TRIAL" => Some(AgentSource::BenchmarkTrial),
             _ => {
-                report_error!(anyhow!("Unknown AmbientAgentSource: {}", s));
+                log::warn!("Unknown AmbientAgentSource: {s}");
                 None
             }
         },
         None => None,
     })
+}
+
+/// Ownership scope for a run: personal or team-owned. Mirrors the public API's
+/// `RunItem.scope`; distinct from `creator`, which is never a team.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+pub struct TaskScope {
+    #[serde(rename = "type", default)]
+    pub scope_type: String,
+    #[serde(default)]
+    pub uid: String,
+}
+
+impl TaskScope {
+    pub fn is_team(&self) -> bool {
+        self.scope_type.eq_ignore_ascii_case("team")
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -207,6 +263,17 @@ pub struct AmbientAgentTask {
     /// driver case). Empty on older servers.
     #[serde(default)]
     pub children: Vec<String>,
+
+    /// Server-computed: whether a debug agent may be bootstrapped into this run's retained
+    /// environment-setup-failure session right now (REMOTE-2661). `#[serde(default)]` so an
+    /// older or ineligible server deserializes to `false`.
+    #[serde(default)]
+    pub debug_agent_available: bool,
+
+    /// This run's ownership scope. `#[serde(default)]` for an older server that never sends
+    /// it, in which case only the literal creator is recognized as authorized.
+    #[serde(default)]
+    pub scope: Option<TaskScope>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -288,6 +355,20 @@ impl AmbientAgentTask {
 
     pub fn conversation_id(&self) -> Option<&str> {
         self.conversation_id.as_deref()
+    }
+
+    /// Whether this run is a retained environment-setup-failure session whose debug window is
+    /// still usable, so a debug prompt may be routed into it (REMOTE-2661). The server is the
+    /// sole authority here and re-verifies eligibility before accepting a follow-up; this only
+    /// decides what the client presents and where a submission goes.
+    pub fn is_setup_failure_debug_session_open(&self) -> bool {
+        self.debug_agent_available
+    }
+
+    /// Whether a debug conversation may still be *bootstrapped* into this session, i.e. none
+    /// exists yet. A later prompt reuses the persisted conversation instead.
+    pub fn is_open_for_setup_failure_debug_bootstrap(&self) -> bool {
+        self.is_setup_failure_debug_session_open() && self.conversation_id().is_none()
     }
 
     /// Returns true when this task's source must not accept user-triggered cloud follow-ups.
@@ -526,6 +607,14 @@ pub struct TaskStatusMessage {
     pub message: String,
     #[serde(default, alias = "errorCode")]
     pub error_code: Option<TaskStatusErrorCode>,
+    /// Deadline of an open post-failure debug window (REMOTE-2208/REMOTE-2661), if the server
+    /// is holding one open. `#[serde(default)]`; `None` means no window is known to be open.
+    #[serde(default)]
+    pub session_debug_until: Option<DateTime<Utc>>,
+    /// True while a REMOTE-2661 debug turn is actively pinning the idle timer. Display-only;
+    /// can outlast an expired `session_debug_until` while pinned.
+    #[serde(default, alias = "debugAgentActive")]
+    pub debug_agent_active: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]

@@ -5,9 +5,8 @@ use warpui_core::{App, Entity, ModelHandle};
 
 use crate::OnboardingIntention;
 use crate::model::{
-    AiSetupChoice, ChooseHowToStartExperimentArm, CreditPackOption, CreditPurchaseState,
-    NoAiConfirmationSource, OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel,
-    OnboardingStep, SelectedSettings,
+    AiSetupChoice, NoAiConfirmationSource, OnboardingAuthState, OnboardingStateEvent,
+    OnboardingStateModel, OnboardingStep, SelectedSettings,
 };
 use crate::slides::OfferVariant;
 
@@ -49,7 +48,6 @@ fn add_model(app: &mut App) -> ModelHandle<OnboardingStateModel> {
             Vec::new(),
             LLMId::from("auto"),
             false,
-            true,
             OnboardingAuthState::FreeUser,
         )
     })
@@ -62,7 +60,6 @@ fn step(app: &App, model: &ModelHandle<OnboardingStateModel>) -> OnboardingStep 
 #[test]
 fn account_first_path_is_linear_and_reversible() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
-    let _settings_modes = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -100,40 +97,6 @@ fn post_auth_offer_is_unclassified_until_selected_and_does_not_switch() {
     });
 }
 
-/// REV-1939 regression: `offer_variant` is sticky, so after backing out of the
-/// offer the reported arm must clear — otherwise the `theme_picker` (and
-/// earlier) `SlideViewed` events would still carry `experiment_arm`, violating
-/// spec invariant #6. `offer_experiment_arm()` is the sole source of that
-/// payload key (`with_experiment_arm(None)` omits it entirely), so asserting it
-/// is `None` on the non-offer slide proves the payload omits the key.
-#[test]
-fn backing_out_of_the_offer_drops_the_experiment_arm_from_slide_views() {
-    let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.set_choose_how_to_start_experiment_arm(
-                ChooseHowToStartExperimentArm::Experiment,
-                ctx,
-            );
-            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
-        });
-        // On the offer, the arm is reported.
-        model.read(&app, |model, _| {
-            assert_eq!(model.offer_experiment_arm(), Some("experiment"));
-        });
-
-        // Backing out lands on theme_picker, a non-offer slide whose SlideViewed
-        // must omit the arm even though `offer_variant` is still set.
-        model.update(&mut app, |model, ctx| model.back(ctx));
-        assert_eq!(step(&app, &model), OnboardingStep::ThemePicker);
-        model.read(&app, |model, _| {
-            assert_eq!(model.offer_variant(), Some(OfferVariant::ChooseHowToStart));
-            assert_eq!(model.offer_experiment_arm(), None);
-        });
-    });
-}
-
 #[test]
 fn post_auth_offer_supports_back_to_theme_and_no_direct_next() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
@@ -163,25 +126,6 @@ fn post_auth_offer_supports_back_to_theme_and_no_direct_next() {
     });
 }
 
-fn credit_packs() -> Vec<CreditPackOption> {
-    vec![
-        CreditPackOption {
-            credits: 400,
-            price_usd_cents: 1_200,
-            savings_percent: 0,
-        },
-        CreditPackOption {
-            credits: 1_000,
-            price_usd_cents: 2_400,
-            savings_percent: 20,
-        },
-    ]
-}
-
-fn purchase_state(app: &App, model: &ModelHandle<OnboardingStateModel>) -> CreditPurchaseState {
-    model.read(app, |model, _| model.credit_purchase_state())
-}
-
 /// A do-nothing model used only to count the completion events the onboarding
 /// model emits. Completion is an event rather than a state change, so it can't
 /// be read back off the model itself.
@@ -201,7 +145,7 @@ fn observe_completions(
     let model = model.clone();
     app.add_model(move |ctx| {
         ctx.subscribe_to_model(&model, |observer: &mut CompletionObserver, _, event, _| {
-            if matches!(event, OnboardingStateEvent::CreditPurchaseCompleted) {
+            if matches!(event, OnboardingStateEvent::AiSellOfferSatisfied) {
                 observer.completions += 1;
             }
         });
@@ -213,125 +157,6 @@ fn completions(app: &App, observer: &ModelHandle<CompletionObserver>) -> usize {
     observer.read(app, |observer, _| observer.completions)
 }
 
-#[test]
-fn credit_packs_default_to_the_first_option_and_are_selectable() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.read(&app, |model, _| {
-            assert!(model.credit_pack_options().is_empty());
-            assert_eq!(model.selected_credit_pack(), None);
-        });
-
-        model.update(&mut app, |model, ctx| {
-            model.set_credit_pack_options(credit_packs(), ctx)
-        });
-        model.read(&app, |model, _| {
-            assert_eq!(model.selected_credit_pack_index(), 0);
-            assert_eq!(model.selected_credit_pack().map(|p| p.credits), Some(400));
-        });
-
-        model.update(&mut app, |model, ctx| model.select_credit_pack(1, ctx));
-        model.read(&app, |model, _| {
-            assert_eq!(model.selected_credit_pack().map(|p| p.credits), Some(1_000));
-        });
-
-        // Out-of-range selections are ignored rather than panicking.
-        model.update(&mut app, |model, ctx| model.select_credit_pack(9, ctx));
-        model.read(&app, |model, _| {
-            assert_eq!(model.selected_credit_pack_index(), 1);
-        });
-    });
-}
-
-/// Regression test for REV-1886: browser checkout must not advance onboarding
-/// on its own. The purchase stays in flight until the credits actually land,
-/// so abandoning checkout leaves the user on the offer slide.
-#[test]
-fn abandoned_checkout_leaves_the_purchase_in_flight() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.request_credit_purchase(ctx);
-        });
-        assert_eq!(
-            purchase_state(&app, &model),
-            CreditPurchaseState::Purchasing
-        );
-
-        model.update(&mut app, |model, ctx| model.on_credit_checkout_opened(ctx));
-        assert_eq!(
-            purchase_state(&app, &model),
-            CreditPurchaseState::AwaitingCheckout
-        );
-        assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
-
-        // Only the server reporting AI as available clears the in-flight
-        // purchase.
-        model.update(&mut app, |model, ctx| {
-            model.on_credit_availability_observed(true, ctx)
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
-    });
-}
-
-/// Regression test for REV-1886: cancelling browser checkout must leave the
-/// user on the offer slide. The common case is a brand-new account that still
-/// can't make an AI request, so every refresh while checkout is open reports
-/// unavailable and the slide must hold.
-#[test]
-fn canceled_checkout_does_not_advance_a_user_without_ai_access() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.request_credit_purchase(ctx);
-            model.on_credit_checkout_opened(ctx);
-        });
-
-        // Every refresh while checkout is open still reports no AI access.
-        for _ in 0..3 {
-            model.update(&mut app, |model, ctx| {
-                model.on_credit_availability_observed(false, ctx)
-            });
-            assert_eq!(
-                purchase_state(&app, &model),
-                CreditPurchaseState::AwaitingCheckout,
-                "an unavailable answer must not complete the purchase"
-            );
-            assert_eq!(step(&app, &model), OnboardingStep::PostAuthOffer);
-        }
-
-        // Access arriving completes it.
-        model.update(&mut app, |model, ctx| {
-            model.on_credit_availability_observed(true, ctx)
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
-    });
-}
-
-/// Onboarding doesn't care *how* the user ended up able to use AI — a team
-/// plan landing mid-checkout counts just as much as the add-on credits they
-/// were buying. The bar is "can make an AI request", not "this purchase
-/// settled".
-#[test]
-fn access_arriving_from_any_source_completes_the_purchase() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.request_credit_purchase(ctx);
-            model.on_credit_checkout_opened(ctx);
-            // Not the add-on credits: some other grant made AI usable.
-            model.on_credit_availability_observed(true, ctx);
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
-    });
-}
-
 /// The availability report rides along on a generic usage refresh, so it must
 /// be inert while no AI-sell offer is on screen.
 #[test]
@@ -339,38 +164,25 @@ fn observing_availability_outside_the_offer_does_nothing() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         let observer = observe_completions(&mut app, &model);
-        model.update(&mut app, |model, ctx| {
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.on_credit_availability_observed(true, ctx);
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
 
         model.update(&mut app, |model, ctx| {
-            model.request_credit_purchase(ctx);
-            model.on_credit_availability_observed(true, ctx);
+            model.on_credit_availability_observed(true, ctx)
         });
-        assert_eq!(
-            purchase_state(&app, &model),
-            CreditPurchaseState::Purchasing
-        );
         assert_eq!(completions(&app, &observer), 0);
     });
 }
 
-/// Regression test for REV-1952: the user leaves the offer through the plan
-/// call to action and buys a one-time pack on the web instead, so no
-/// client-side checkout was ever recorded. Completion has to come from the
-/// account having AI, not from a purchase the client started.
+/// The user leaves the offer through the plan call to action and buys on the
+/// web, so nothing was ever recorded client-side. Completion has to come from
+/// the account having AI (REV-1952).
 #[test]
-fn credit_availability_advances_the_offer_without_a_pending_checkout() {
+fn credit_availability_advances_the_ai_sell_offer() {
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         let observer = observe_completions(&mut app, &model);
         model.update(&mut app, |model, ctx| {
             model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
-            model.set_credit_pack_options(credit_packs(), ctx);
         });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
 
         model.update(&mut app, |model, ctx| {
             model.on_credit_availability_observed(false, ctx)
@@ -432,102 +244,6 @@ fn the_checkout_success_handoff_is_inert_outside_an_ai_sell_offer() {
 }
 
 #[test]
-fn a_synchronous_purchase_completes_without_checkout() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.show_post_auth_offer(OfferVariant::ChooseHowToStart, ctx);
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.request_credit_purchase(ctx);
-            model.on_credit_purchase_completed(ctx);
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
-    });
-}
-
-#[test]
-fn a_rejected_purchase_is_retryable() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.request_credit_purchase(ctx);
-            model.on_credit_purchase_failed(ctx);
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Failed);
-
-        model.update(&mut app, |model, ctx| model.request_credit_purchase(ctx));
-        assert_eq!(
-            purchase_state(&app, &model),
-            CreditPurchaseState::Purchasing
-        );
-    });
-}
-
-#[test]
-fn a_purchase_cannot_start_without_packs_or_while_one_is_in_flight() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-
-        // No packs offered yet: nothing to buy.
-        model.update(&mut app, |model, ctx| model.request_credit_purchase(ctx));
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
-
-        model.update(&mut app, |model, ctx| {
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.request_credit_purchase(ctx);
-            model.on_credit_checkout_opened(ctx);
-            // A second request must not restart checkout...
-            model.request_credit_purchase(ctx);
-            // ...and the pack being paid for must not change underneath it.
-            model.select_credit_pack(1, ctx);
-        });
-        assert_eq!(
-            purchase_state(&app, &model),
-            CreditPurchaseState::AwaitingCheckout
-        );
-        model.read(&app, |model, _| {
-            assert_eq!(model.selected_credit_pack_index(), 0);
-        });
-    });
-}
-
-/// Completion callbacks are safe to fire speculatively (they are driven by a
-/// generic usage refresh), so they must be inert when nothing was purchased.
-#[test]
-fn purchase_callbacks_are_inert_when_no_purchase_is_in_flight() {
-    App::test((), |mut app| async move {
-        let model = add_test_model(&mut app);
-        model.update(&mut app, |model, ctx| {
-            model.set_credit_pack_options(credit_packs(), ctx);
-            model.on_credit_purchase_completed(ctx);
-            model.on_credit_checkout_opened(ctx);
-            model.on_credit_purchase_failed(ctx);
-        });
-        assert_eq!(purchase_state(&app, &model), CreditPurchaseState::Idle);
-    });
-}
-
-#[test]
-fn credit_pack_labels_are_formatted_for_display() {
-    let pack = CreditPackOption {
-        credits: 6_500,
-        price_usd_cents: 12_000,
-        savings_percent: 38,
-    };
-    assert_eq!(pack.credits_label(), "6,500");
-    assert_eq!(pack.price_label(), "$120");
-
-    let fractional = CreditPackOption {
-        credits: 400,
-        price_usd_cents: 1_250,
-        savings_percent: 0,
-    };
-    assert_eq!(fractional.credits_label(), "400");
-    assert_eq!(fractional.price_label(), "$12.50");
-}
-
-#[test]
 fn account_first_path_uses_three_step_progress() {
     let _account_first = FeatureFlag::AccountFirstOnboarding.override_enabled(true);
     App::test((), |mut app| async move {
@@ -576,7 +292,6 @@ fn account_first_path_uses_agent_ui_defaults() {
 
 #[test]
 fn agent_path_routes_through_ai_setup() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -612,7 +327,6 @@ fn agent_path_routes_through_ai_setup() {
 
 #[test]
 fn third_party_choice_routes_to_third_party_slide() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -637,7 +351,6 @@ fn third_party_choice_routes_to_third_party_slide() {
 
 #[test]
 fn confirm_no_ai_switches_to_terminal_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -673,7 +386,6 @@ fn confirm_no_ai_switches_to_terminal_path() {
 
 #[test]
 fn confirm_no_ai_from_intention_then_back_returns_to_intention() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -697,7 +409,6 @@ fn confirm_no_ai_from_intention_then_back_returns_to_intention() {
 
 #[test]
 fn cancel_no_ai_from_intention_routes_to_ai_setup() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -722,7 +433,6 @@ fn cancel_no_ai_from_intention_routes_to_ai_setup() {
 
 #[test]
 fn dismiss_no_ai_closes_without_changing_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -743,7 +453,6 @@ fn dismiss_no_ai_closes_without_changing_path() {
 
 #[test]
 fn terminal_settings_disable_ai() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| model.set_intention_terminal(ctx));
@@ -759,7 +468,6 @@ fn terminal_settings_disable_ai() {
 
 #[test]
 fn agent_intent_keeps_ai_enabled_for_any_setup_choice() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -783,7 +491,6 @@ fn agent_intent_keeps_ai_enabled_for_any_setup_choice() {
 
 #[test]
 fn terminal_path_skips_third_party() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| model.set_intention_terminal(ctx));
@@ -809,7 +516,6 @@ fn terminal_path_skips_third_party() {
 
 #[test]
 fn progress_reports_v3_positions_for_agent_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
 
@@ -832,7 +538,6 @@ fn progress_reports_v3_positions_for_agent_path() {
 
 #[test]
 fn progress_reports_v3_positions_for_third_party_path() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| {
@@ -858,7 +563,6 @@ fn progress_reports_v3_positions_for_third_party_path() {
 
 #[test]
 fn progress_reports_terminal_path_uses_three_dot_variant() {
-    let _flag = FeatureFlag::OpenWarpNewSettingsModes.override_enabled(true);
     App::test((), |mut app| async move {
         let model = add_test_model(&mut app);
         model.update(&mut app, |model, ctx| model.set_intention_terminal(ctx));

@@ -708,6 +708,8 @@ fn create_cloud_mode_task_for_user(creator_uid: &str) -> AmbientAgentTask {
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -757,6 +759,8 @@ fn server_conversation_metadata(
             platform_credits_spent: 0.0,
             total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -1449,6 +1453,8 @@ fn test_on_session_share_ended_hides_input_for_no_cta_tombstone() {
         task.status_message = Some(TaskStatusMessage {
             message: "Environment setup failed: Failed to run setup command".to_string(),
             error_code: Some(TaskStatusErrorCode::EnvironmentSetupFailed),
+            session_debug_until: None,
+            debug_agent_active: false,
         });
 
         AgentConversationsModel::handle(&app).update(&mut app, |model, _| {
