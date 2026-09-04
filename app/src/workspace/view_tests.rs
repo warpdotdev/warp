@@ -90,6 +90,25 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
+
+#[test]
+fn simplified_wasm_navigation_uses_factory_destination_for_allowed_users() {
+    let navigation = SimplifiedWasmProductNavigation::from_factory_access(true);
+
+    assert_eq!(navigation.action_label, "View Factory");
+    assert_eq!(navigation.destination, ChannelState::server_root_url());
+}
+
+#[test]
+fn simplified_wasm_navigation_falls_back_to_legacy_oz_destination() {
+    let navigation = SimplifiedWasmProductNavigation::from_factory_access(false);
+
+    assert_eq!(navigation.action_label, "View in Oz");
+    assert_eq!(
+        navigation.destination(),
+        format!("{}/runs", ChannelState::oz_root_url())
+    );
+}
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 

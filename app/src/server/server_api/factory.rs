@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::automock;
+#[cfg(target_family = "wasm")]
+use serde::Deserialize;
 use warp_graphql::mutations::delete_runner::{
     DeleteRunner, DeleteRunnerInput, DeleteRunnerResult, DeleteRunnerVariables,
 };
@@ -26,11 +28,20 @@ pub struct UpsertedRunner {
     pub is_update: bool,
 }
 
-/// Client for the Factory GraphQL surface (runner CRUD).
+#[cfg(target_family = "wasm")]
+#[derive(Debug, Deserialize)]
+struct FactoryAccessResponse {
+    allowed: bool,
+}
+
+/// Client for the Factory API surface.
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait FactoryClient: 'static + Send + Sync {
+    #[cfg(target_family = "wasm")]
+    /// Returns whether the current principal is in the Factory early-access rollout.
+    async fn has_factory_access(&self) -> Result<bool>;
     /// Fetch all runners visible to the caller, optionally sorted.
     async fn get_runners(&self, sort_by: Option<RunnerSortBy>) -> Result<Vec<Runner>>;
 
@@ -47,6 +58,11 @@ pub trait FactoryClient: 'static + Send + Sync {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl FactoryClient for ServerApi {
+    #[cfg(target_family = "wasm")]
+    async fn has_factory_access(&self) -> Result<bool> {
+        let response: FactoryAccessResponse = self.get_public_api("factory/access").await?;
+        Ok(response.allowed)
+    }
     async fn get_runners(&self, sort_by: Option<RunnerSortBy>) -> Result<Vec<Runner>> {
         let operation = GetRunners::build(GetRunnersVariables {
             request_context: get_request_context(),
