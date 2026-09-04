@@ -2937,6 +2937,7 @@ pub struct TerminalView {
 
     /// First-time cloud agent setup view (full-screen overlay for creating initial environment).
     first_time_cloud_agent_setup_view: ViewHandle<ambient_agent::FirstTimeCloudAgentSetupView>,
+    cloud_agent_team_required_view: ViewHandle<ambient_agent::CloudAgentTeamRequiredView>,
 
     /// Environment setup mode selector modal for /create-environment command.
     environment_setup_mode_selector: ViewHandle<EnvironmentSetupModeSelector>,
@@ -3738,6 +3739,7 @@ impl TerminalView {
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if matches!(event, UserWorkspacesEvent::TeamsChanged) {
                 me.update_focused_terminal_info(ctx);
+                ctx.notify();
             }
         });
 
@@ -4256,6 +4258,25 @@ impl TerminalView {
             me.handle_first_time_cloud_agent_setup_event(event, ctx);
         });
 
+        let cloud_agent_team_required_view =
+            ctx.add_typed_action_view(ambient_agent::CloudAgentTeamRequiredView::new);
+        ctx.subscribe_to_view(
+            &cloud_agent_team_required_view,
+            |me, _, event, ctx| match event {
+                ambient_agent::CloudAgentTeamRequiredViewEvent::OpenTeamsSettings => {
+                    ctx.emit(Event::OpenSettings(SettingsSection::Teams));
+                }
+                ambient_agent::CloudAgentTeamRequiredViewEvent::OpenAdminPanel => {
+                    crate::settings_view::admin_actions::AdminActions::open_workspace_admin_panel(
+                        ctx,
+                    );
+                }
+                ambient_agent::CloudAgentTeamRequiredViewEvent::BackToTerminal => {
+                    me.exit_agent_view(ctx);
+                }
+            },
+        );
+
         let environment_setup_mode_selector =
             ctx.add_typed_action_view(EnvironmentSetupModeSelector::new);
 
@@ -4512,6 +4533,7 @@ impl TerminalView {
             is_pending_aws_login: false,
             manual_pty_shutdown_requested: false,
             first_time_cloud_agent_setup_view,
+            cloud_agent_team_required_view,
             environment_setup_mode_selector,
             is_environment_setup_mode_selector_open: false,
             pane_stack: None,
@@ -28788,12 +28810,22 @@ impl View for TerminalView {
             stack.add_child(ChildView::new(sharer.inactivity_modal()).finish())
         }
 
-        // Render first-time cloud agent setup view when in Setup status
-        if self
+        let cloud_agents_require_team = UserWorkspaces::as_ref(app).cloud_agents_require_team();
+        let (is_in_setup, is_configuring) = self
             .ambient_agent_view_model
             .as_ref()
-            .is_some_and(|model| model.as_ref(app).is_in_setup())
-        {
+            .map(|model| {
+                let model = model.as_ref(app);
+                (model.is_in_setup(), model.is_configuring_ambient_agent())
+            })
+            .unwrap_or_default();
+        if ambient_agent::should_render_cloud_agent_team_required_view(
+            cloud_agents_require_team,
+            is_in_setup,
+            is_configuring,
+        ) {
+            stack.add_child(ChildView::new(&self.cloud_agent_team_required_view).finish());
+        } else if is_in_setup {
             stack.add_child(ChildView::new(&self.first_time_cloud_agent_setup_view).finish());
         }
 

@@ -933,6 +933,44 @@ fn workspace_for_test(team: &Team) -> Workspace {
 }
 
 #[test]
+fn cloud_agents_require_team_for_workspace_without_teams() {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams.clear();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert!(UserWorkspaces::as_ref(ctx).cloud_agents_require_team());
+        });
+    })
+}
+
+#[test]
+fn cloud_agents_do_not_require_team_without_workspace_metadata() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![]);
+
+        app.read(|ctx| {
+            assert!(!UserWorkspaces::as_ref(ctx).cloud_agents_require_team());
+        });
+    })
+}
+
+#[test]
+fn cloud_agents_do_not_require_an_additional_team_for_teamed_users() {
+    let workspace = workspace_for_test(&team_for_test());
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            assert!(!UserWorkspaces::as_ref(ctx).cloud_agents_require_team());
+        });
+    })
+}
+
+#[test]
 fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
     let first_team = team_for_test();
     let first_workspace = workspace_for_test(&first_team);

@@ -195,7 +195,9 @@ use crate::ai::connected_self_hosted_workers::{
 use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::harness_availability::{
+    CloudAgentStartBlocker, HarnessAvailabilityModel, cloud_agent_start_blocker,
+};
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::predict::next_command_model::{
@@ -14031,9 +14033,12 @@ impl Input {
                         .is_configuring_ambient_agent()
                 })
             {
-                if FeatureFlag::AgentHarness.is_enabled() {
-                    let availability = HarnessAvailabilityModel::as_ref(ctx);
-                    if !availability.has_any_enabled_harness() {
+                let team_required = UserWorkspaces::as_ref(ctx).cloud_agents_require_team();
+                let has_enabled_harness = !FeatureFlag::AgentHarness.is_enabled()
+                    || HarnessAvailabilityModel::as_ref(ctx).has_any_enabled_harness();
+                match cloud_agent_start_blocker(team_required, has_enabled_harness) {
+                    Some(CloudAgentStartBlocker::TeamRequired) => return,
+                    Some(CloudAgentStartBlocker::NoEnabledHarnesses) => {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
                             ts.add_ephemeral_toast(
@@ -14047,6 +14052,7 @@ impl Input {
                         });
                         return;
                     }
+                    None => {}
                 }
 
                 let prompt = command.trim().to_owned();

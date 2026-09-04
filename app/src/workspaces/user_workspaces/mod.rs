@@ -755,6 +755,10 @@ impl UserWorkspaces {
         !self.workspaces.is_empty()
     }
 
+    pub fn cloud_agents_require_team(&self) -> bool {
+        self.has_workspaces() && !self.has_teams()
+    }
+
     pub fn update_workspaces(&mut self, workspaces: Vec<Workspace>, ctx: &mut ModelContext<Self>) {
         // Check if sunsetted_to_build_ts changed for any workspace
         let sunsetted_to_build_changed = self.has_sunsetted_to_build_data_changed(&workspaces);
