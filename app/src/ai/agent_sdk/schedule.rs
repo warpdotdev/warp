@@ -8,6 +8,7 @@ use warp_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
+use warp_cli::scope::TeamSelection;
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
@@ -21,6 +22,7 @@ use crate::ai::ambient_agents::scheduled::{
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::ids::{ServerId, SyncId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Run a scheduled agent command.
 pub fn run(
@@ -31,7 +33,7 @@ pub fn run(
     let output_format = global_options.output_format;
     match command.into_subcommand() {
         ScheduleSubcommand::Create(args) => create(ctx, args),
-        ScheduleSubcommand::List => list(ctx, output_format),
+        ScheduleSubcommand::List { team_selection } => list(ctx, output_format, team_selection),
         ScheduleSubcommand::Get(args) => get(ctx, output_format, args),
         ScheduleSubcommand::Pause(args) => pause(ctx, args),
         ScheduleSubcommand::Unpause(args) => unpause(ctx, args),
@@ -547,17 +549,44 @@ fn update(ctx: &mut AppContext, args: UpdateScheduleArgs) -> anyhow::Result<()> 
     Ok(())
 }
 
+fn schedule_is_visible_to_scope(
+    schedule: &CloudScheduledAmbientAgent,
+    team_scope: &(impl TeamScope + ?Sized),
+) -> bool {
+    match schedule.permissions().owner {
+        crate::cloud_object::Owner::User { .. } => true,
+        crate::cloud_object::Owner::Team { team_uid } => team_scope.team_uid() == Some(team_uid),
+    }
+}
+
 /// List all scheduled agents available to the current user.
-fn list(ctx: &mut AppContext, output_format: OutputFormat) -> anyhow::Result<()> {
+fn list(
+    ctx: &mut AppContext,
+    output_format: OutputFormat,
+    team_selection: TeamSelection,
+) -> anyhow::Result<()> {
     ScheduledAgentManager::handle(ctx).update(ctx, move |_manager, ctx| {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
         let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
-        ctx.spawn(warp_drive_sync_future, move |manager, result, ctx| {
-            if let Err(err) = result {
+        let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
+        ctx.spawn(setup_future, move |manager, setup_result, ctx| {
+            if let Err(err) = setup_result {
                 super::report_fatal_error(err, ctx);
                 return;
             }
+            let team_scope = match super::common::resolve_team_scope(&team_selection, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
-            let mut schedules = manager.list_schedules(ctx);
+            let mut schedules: Vec<_> = manager
+                .list_schedules(ctx)
+                .into_iter()
+                .filter(|schedule| schedule_is_visible_to_scope(schedule, &team_scope))
+                .collect();
             schedules.sort_by_key(|schedule| schedule.model().string_model.name.clone());
 
             let futures = schedules.into_iter().map(|schedule| {
@@ -682,3 +711,7 @@ fn delete(ctx: &mut AppContext, args: DeleteScheduleArgs) -> anyhow::Result<()> 
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "schedule_tests.rs"]
+mod tests;

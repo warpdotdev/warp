@@ -4,7 +4,7 @@ use crate::config_file::ConfigFileArgs;
 use crate::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::skill::SkillSpec;
 
 /// `ScheduleCommand` has a slightly unusual definition because we allow `oz schedule` as
@@ -23,7 +23,7 @@ impl ScheduleCommand {
     pub(crate) fn as_str_for_tracing(&self) -> &'static str {
         match self.subcommand() {
             Some(ScheduleSubcommand::Create(_)) | None => "schedule create",
-            Some(ScheduleSubcommand::List) => "schedule list",
+            Some(ScheduleSubcommand::List { .. }) => "schedule list",
             Some(ScheduleSubcommand::Get(_)) => "schedule get",
             Some(ScheduleSubcommand::Update(_)) => "schedule update",
             Some(ScheduleSubcommand::Pause(_)) => "schedule pause",
@@ -54,7 +54,10 @@ pub enum ScheduleSubcommand {
     /// Create a scheduled Oz agent.
     Create(CreateScheduleArgs),
     /// List scheduled Oz agents.
-    List,
+    List {
+        #[command(flatten)]
+        team_selection: TeamSelection,
+    },
     /// Get a scheduled Oz agent's configuration.
     Get(GetScheduleArgs),
     /// Update a scheduled Oz agent.
