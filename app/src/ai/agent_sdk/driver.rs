@@ -2721,6 +2721,21 @@ impl AgentDriver {
         Ok(())
     }
 
+    /// Omits user-interactive-only bundled skills from MAA listings for this Oz cloud run.
+    /// Independent of environment/global repo loading, which may be empty.
+    async fn enable_cloud_maa_listing(foreground: &ModelSpawner<Self>) {
+        let result = foreground
+            .spawn(|_, ctx| {
+                SkillManager::handle(ctx).update(ctx, |manager, _| {
+                    manager.set_cloud_maa_listing(true);
+                });
+            })
+            .await;
+        if let Err(err) = result {
+            log::warn!("Failed to enable cloud MAA skill listing: {err}");
+        }
+    }
+
     /// Load skills from environment repositories.
     ///
     /// It's assumed that `prepare_environment` registers all cloned repositories
@@ -3353,6 +3368,7 @@ impl AgentDriver {
                 specs: global_skill_specs,
                 repos: global_skill_repos,
             } = global_skill_resolution;
+            Self::enable_cloud_maa_listing(&foreground).await;
             setup_events
                 .record_value(
                     SetupStep::EnvironmentSkillLoading,

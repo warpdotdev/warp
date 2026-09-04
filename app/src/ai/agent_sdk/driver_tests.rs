@@ -62,7 +62,7 @@ use crate::ai::llms::LLMId;
 use crate::ai::mcp::JSONTransportType;
 use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::parsing::normalize_mcp_json;
-use crate::ai::skills::SkillManager;
+use crate::ai::skills::{BundledSkillActivation, SkillManager};
 use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::managed_mcp::MockManagedMcpClient;
@@ -2220,6 +2220,100 @@ fn warp_skill_dirs_env_relative_entries_resolve_against_working_dir() {
             skill_names.contains(&"env-skill-rel".to_string()),
             "'env-skill-rel' should load via a relative WARP_SKILL_DIRS entry resolved against the driver's working dir; got: {skill_names:?}"
         );
+    });
+}
+
+fn bundled_test_skill(id: &str, name: &str) -> ai::skills::ParsedSkill {
+    ai::skills::ParsedSkill {
+        name: name.to_owned(),
+        description: name.to_owned(),
+        path: warp_util::local_or_remote_path::LocalOrRemotePath::Local(
+            format!("/bundled/skills/{id}/SKILL.md").into(),
+        ),
+        content: format!("# {id}"),
+        line_range: None,
+        provider: ai::skills::SkillProvider::Warp,
+        scope: ai::skills::SkillScope::Bundled,
+    }
+}
+
+/// Oz cloud skill loading with empty environment/global sources still enables cloud MAA
+/// listing, so user-interactive bundled skills are omitted even without repo loading.
+#[test]
+fn oz_cloud_skill_loading_with_empty_sources_omits_user_interactive_bundled_skills() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let temp = TempDir::new().unwrap();
+        let working_dir = dunce::canonicalize(temp.path()).unwrap();
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        SkillManager::handle(&app).update(&mut app, |manager, _| {
+            manager.add_bundled_skill_for_testing(
+                "add-mcp-server",
+                bundled_test_skill("add-mcp-server", "agent-add-mcp"),
+                BundledSkillActivation::Always,
+            );
+            manager.add_bundled_skill_for_testing(
+                "warpctrl",
+                bundled_test_skill("warpctrl", "warpctrl"),
+                BundledSkillActivation::Always,
+            );
+            manager.add_bundled_skill_for_testing(
+                "factory-mcp",
+                bundled_test_skill("factory-mcp", "factory-mcp"),
+                BundledSkillActivation::Always,
+            );
+            manager.add_bundled_skill_for_testing(
+                "pr-comments",
+                bundled_test_skill("pr-comments", "pr-comments"),
+                BundledSkillActivation::Always,
+            );
+        });
+
+        let terminal_view = add_window_with_terminal(&mut app, None);
+        let driver_handle = app.add_model(|ctx| {
+            let terminal_driver =
+                super::terminal::TerminalDriver::create_from_existing_view(terminal_view, ctx);
+            AgentDriver::new_for_test(working_dir, terminal_driver, ctx)
+        });
+
+        let (done_tx, done_rx) = futures::channel::oneshot::channel::<()>();
+        driver_handle.update(&mut app, |_, ctx| {
+            let spawner = ctx.spawner();
+            ctx.spawn(
+                async move {
+                    AgentDriver::enable_cloud_maa_listing(&spawner).await;
+                    AgentDriver::load_environment_skills(&spawner, Vec::new()).await;
+                    AgentDriver::load_global_skills(&spawner, Vec::new(), Vec::new()).await;
+                    AgentDriver::load_skills_dirs(&spawner).await;
+                    let _ = done_tx.send(());
+                },
+                |_, _, _| {},
+            );
+        });
+        done_rx.await.expect("loading task should complete");
+
+        let bundled_ids: HashSet<_> = SkillManager::handle(&app).read(&app, |manager, ctx| {
+            manager
+                .get_skills_for_working_directory(None, ctx)
+                .into_iter()
+                .filter_map(|skill| match skill.reference {
+                    ai::skills::SkillReference::BundledSkillId(id) => Some(id),
+                    ai::skills::SkillReference::Path(_) => None,
+                })
+                .collect()
+        });
+        assert!(
+            !bundled_ids.contains("add-mcp-server"),
+            "empty Oz cloud sources must still omit add-mcp-server; got: {bundled_ids:?}"
+        );
+        assert!(
+            !bundled_ids.contains("warpctrl"),
+            "empty Oz cloud sources must still omit warpctrl; got: {bundled_ids:?}"
+        );
+        assert!(bundled_ids.contains("factory-mcp"));
+        assert!(bundled_ids.contains("pr-comments"));
     });
 }
 

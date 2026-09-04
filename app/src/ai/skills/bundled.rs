@@ -568,6 +568,26 @@ pub(crate) fn activation_for_bundled_skill(
     }
 }
 
+/// Bundled directory IDs that only make sense in an interactive local Warp session.
+///
+/// Classification is by directory name, not SKILL.md frontmatter `name`, because those can differ
+/// (`add-mcp-server` vs `agent-add-mcp`). Independent of [`BundledSkillActivation`].
+pub(crate) const USER_INTERACTIVE_ONLY_BUNDLED_SKILL_IDS: &[&str] = &[
+    "add-mcp-server",
+    "change-keybinding",
+    "create-tab-config",
+    "modify-settings",
+    "tab-configs",
+    "tui-migrate-setup",
+    "update-tab-config",
+    "verify-ui-change-in-cloud",
+    "warpctrl",
+];
+
+pub(crate) fn is_user_interactive_only_bundled_skill(skill_id: &str) -> bool {
+    USER_INTERACTIVE_ONLY_BUNDLED_SKILL_IDS.contains(&skill_id)
+}
+
 #[cfg(test)]
 #[path = "bundled_tests.rs"]
 mod tests;

@@ -1187,6 +1187,91 @@ fn factory_mcp_bundled_skill_activation_tracks_factory_mcp_feature() {
     });
 }
 
+fn bundled_skill_ids(skills: &[SkillDescriptor]) -> HashSet<&str> {
+    skills
+        .iter()
+        .filter_map(|skill| match &skill.reference {
+            SkillReference::BundledSkillId(id) => Some(id.as_str()),
+            SkillReference::Path(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn user_interactive_only_bundled_skills_are_omitted_from_cloud_listings() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(DirectoryWatcher::new);
+        app.add_singleton_model(AISettings::new_with_defaults);
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        app.add_singleton_model(RepoMetadataModel::new);
+        app.add_singleton_model(HomeDirectoryWatcher::new_for_test);
+        app.add_singleton_model(WarpManagedPathsWatcher::new_for_testing);
+        let handle = app.add_singleton_model(SkillManager::new);
+        let _bundled_skills = FeatureFlag::BundledSkills.override_enabled(true);
+
+        handle.update(&mut app, |manager, _| {
+            for id in USER_INTERACTIVE_ONLY_BUNDLED_SKILL_IDS {
+                let skill = if *id == "add-mcp-server" {
+                    ParsedSkill {
+                        name: "agent-add-mcp".to_owned(),
+                        ..bundled_test_skill(id, "Add MCP servers")
+                    }
+                } else {
+                    bundled_test_skill(id, id)
+                };
+                manager.add_bundled_skill_for_testing(*id, skill, BundledSkillActivation::Always);
+            }
+            for id in ["factory-mcp", "pr-comments"] {
+                manager.add_bundled_skill_for_testing(
+                    id,
+                    bundled_test_skill(id, id),
+                    BundledSkillActivation::Always,
+                );
+            }
+        });
+
+        let local_ids = handle.read(&app, |manager, ctx| {
+            bundled_skill_ids(&manager.get_skills_for_working_directory(None, ctx))
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<HashSet<_>>()
+        });
+        for id in USER_INTERACTIVE_ONLY_BUNDLED_SKILL_IDS {
+            assert!(
+                local_ids.contains(*id),
+                "{id} must remain listed for local agents"
+            );
+        }
+        assert!(local_ids.contains("factory-mcp"));
+        assert!(local_ids.contains("pr-comments"));
+        assert!(!local_ids.contains("agent-add-mcp"));
+
+        handle.update(&mut app, |manager, _| {
+            manager.set_cloud_maa_listing(true);
+        });
+        let cloud_ids = handle.read(&app, |manager, ctx| {
+            bundled_skill_ids(&manager.get_skills_for_working_directory(None, ctx))
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<HashSet<_>>()
+        });
+        for id in USER_INTERACTIVE_ONLY_BUNDLED_SKILL_IDS {
+            assert!(
+                !cloud_ids.contains(*id),
+                "{id} must be omitted from cloud-agent listings"
+            );
+        }
+        assert!(cloud_ids.contains("factory-mcp"));
+        assert!(cloud_ids.contains("pr-comments"));
+        assert!(!cloud_ids.contains("agent-add-mcp"));
+        assert!(
+            cloud_ids
+                .iter()
+                .all(|id| !is_user_interactive_only_bundled_skill(id))
+        );
+    });
+}
+
 #[test]
 fn warp_control_direct_read_respects_warp_control_feature() {
     let reference = SkillReference::BundledSkillId("warpctrl".to_owned());

@@ -35,6 +35,47 @@ fn remote_content<'a>(bundled_skills: &'a BundledSkills, host_id: &HostId) -> Op
 }
 
 #[test]
+fn user_interactive_only_classification_uses_directory_ids() {
+    for id in USER_INTERACTIVE_ONLY_BUNDLED_SKILL_IDS {
+        assert!(
+            is_user_interactive_only_bundled_skill(id),
+            "{id} should be user-interactive-only"
+        );
+    }
+    assert!(
+        is_user_interactive_only_bundled_skill("add-mcp-server"),
+        "classification must use the bundled directory ID"
+    );
+    assert!(
+        !is_user_interactive_only_bundled_skill("agent-add-mcp"),
+        "frontmatter name is not the classification key"
+    );
+    for id in [
+        "claude-api",
+        "create-skill",
+        "factory-files",
+        "factory-mcp",
+        "oz-platform",
+        "pr-comments",
+        "test-warp-ui",
+        "triage-vulnerabilities",
+        "edit-figma-design",
+        "figma-code-connect-components",
+        "figma-create-design-system-rules",
+        "figma-create-new-file",
+        "figma-generate-design",
+        "figma-generate-library",
+        "figma-implement-design",
+        "figma-use",
+    ] {
+        assert!(
+            !is_user_interactive_only_bundled_skill(id),
+            "{id} must remain available to cloud agents"
+        );
+    }
+}
+
+#[test]
 fn factory_mcp_bundled_skill_bootstraps_canonical_mcp_resource() {
     let skill = include_str!("../../../../resources/bundled/skills/factory-mcp/SKILL.md");
 
