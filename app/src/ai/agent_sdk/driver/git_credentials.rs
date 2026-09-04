@@ -10,14 +10,19 @@
 /// - An async refresh loop that periodically fetches a fresh token from the
 ///   server and overwrites the credential files, keeping long-running agents
 ///   authenticated for their entire duration.
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
 
-use crate::server::server_api::ai::{AIClient, GitCredential};
+use crate::server::server_api::ai::{AIClient, GitCredential, TaskGitCredentialsResponse};
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
@@ -64,19 +69,92 @@ fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-fn git_credentials_file_content(credentials: &[GitCredential]) -> String {
-    let mut content = String::new();
+fn git_credentials_line(cred: &GitCredential) -> String {
+    let userinfo = match &cred.username {
+        Some(username) => format!("{username}:{}", cred.token),
+        None => format!("x-access-token:{}", cred.token),
+    };
+    format!("https://{}@{}", userinfo, cred.host)
+}
+
+fn host_of_credentials_line(line: &str) -> Option<&str> {
+    line.rsplit_once('@').map(|(_, host)| host)
+}
+
+/// Keep one credential per host. Identical duplicates are dropped; conflicting
+/// token or identity fields for the same host are rejected so `gh`/`glab` YAML
+/// cannot grow duplicate mapping keys.
+fn unique_credentials_by_host(credentials: &[GitCredential]) -> Result<Vec<GitCredential>> {
+    let mut index_by_host = HashMap::new();
+    let mut unique = Vec::new();
     for cred in credentials {
-        let userinfo = match &cred.username {
-            Some(username) => format!("{username}:{}", cred.token),
-            None => format!("x-access-token:{}", cred.token),
-        };
-        content.push_str(&format!("https://{}@{}\n", userinfo, cred.host));
+        if let Some(&index) = index_by_host.get(&cred.host) {
+            let existing: &GitCredential = &unique[index];
+            if existing.token != cred.token
+                || existing.username != cred.username
+                || existing.email != cred.email
+            {
+                bail!(
+                    "Conflicting git credentials for host {}; refusing to write duplicate mapping keys",
+                    cred.host
+                );
+            }
+            continue;
+        }
+        index_by_host.insert(cred.host.clone(), unique.len());
+        unique.push(cred.clone());
+    }
+    Ok(unique)
+}
+
+/// Bootstrap has no prior credential store, so a one-host success would leave
+/// the other host unauthenticated for the first clone.
+pub(crate) fn credentials_for_bootstrap(
+    response: TaskGitCredentialsResponse,
+) -> Result<Vec<GitCredential>> {
+    if !response.failed_hosts.is_empty() {
+        bail!(
+            "Git credential bootstrap cannot proceed with failed hosts ({}); \
+             an all-or-nothing fetch is required before the first clone",
+            response.failed_hosts.join(", ")
+        );
+    }
+    unique_credentials_by_host(&response.credentials)
+}
+
+/// Merge fresh credentials into the existing `~/.git-credentials` content,
+/// replacing the line for each refreshed host and preserving every other line.
+fn merge_git_credentials_file_content(existing: &str, credentials: &[GitCredential]) -> String {
+    let refreshed_hosts = credentials
+        .iter()
+        .map(|cred| cred.host.as_str())
+        .collect::<Vec<_>>();
+
+    let mut lines = Vec::new();
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let superseded =
+            host_of_credentials_line(trimmed).is_some_and(|host| refreshed_hosts.contains(&host));
+        if !superseded {
+            lines.push(trimmed.to_string());
+        }
+    }
+    for cred in credentials {
+        lines.push(git_credentials_line(cred));
+    }
+
+    let mut content = lines.join("\n");
+    if !content.is_empty() {
+        content.push('\n');
     }
     content
 }
 
-/// Write `~/.git-credentials` with the given credentials.
+/// Write `~/.git-credentials`, replacing the entry for each host in
+/// `credentials` and leaving every other host's entry in place.
 ///
 /// Each credential entry is formatted as:
 /// - `https://{username}:{token}@{host}` when a username is present
@@ -91,7 +169,8 @@ fn write_git_credentials_file(credentials: &[GitCredential]) -> Result<()> {
     let home = home_dir()?;
     let path = home.join(".git-credentials");
     let tmp_path = home.join(".git-credentials.tmp");
-    let content = git_credentials_file_content(credentials);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let content = merge_git_credentials_file_content(&existing, credentials);
     write_secret_file(&tmp_path, &content)?;
     std::fs::rename(&tmp_path, &path).with_context(|| {
         format!(
@@ -199,44 +278,81 @@ fn write_glab_config(credentials: &[GitCredential], home: &std::path::Path) -> R
 }
 
 /// Formats non-sensitive metadata for verifying local credential injection.
-pub(crate) fn credential_diagnostics(credentials: &[GitCredential]) -> String {
-    credentials
+pub(crate) fn credential_diagnostics(
+    credentials: &[GitCredential],
+    failed_hosts: &[String],
+) -> String {
+    let mut entries = credentials
         .iter()
         .map(|credential| {
             format!(
-                "{}(token_present={}, username_present={})",
+                "{}(refreshed, token_present={}, username_present={})",
                 credential.host,
                 !credential.token.is_empty(),
                 credential.username.is_some()
             )
         })
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect::<Vec<_>>();
+    entries.extend(
+        failed_hosts
+            .iter()
+            .map(|host| format!("{host}(stale, refresh failed; existing credential kept)")),
+    );
+    entries.join(", ")
 }
 
 pub(crate) fn write_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    write_git_credentials_with_failures(credentials, &[])
+}
+
+pub(crate) fn write_git_credentials_with_failures(
+    credentials: &[GitCredential],
+    failed_hosts: &[String],
+) -> Result<()> {
+    let credentials = unique_credentials_by_host(credentials)?;
+    let credentials = credentials.as_slice();
     if credentials.is_empty() {
+        if !failed_hosts.is_empty() {
+            log::info!(
+                "Wrote 0 git credential(s) to the local credential store: {}",
+                credential_diagnostics(credentials, failed_hosts)
+            );
+        }
         return Ok(());
     }
-    write_git_credentials_file(credentials)?;
     let home = home_dir()?;
-    write_gh_hosts_yml(credentials, &home)?;
-    write_glab_config(credentials, &home)?;
+    let outcomes = [
+        write_git_credentials_file(credentials),
+        write_gh_hosts_yml(credentials, &home),
+        write_glab_config(credentials, &home),
+    ];
+    let mut first_error = None;
+    for outcome in outcomes {
+        if let Err(e) = outcome {
+            log::warn!("Failed to write a git credential store: {e:#}");
+            first_error.get_or_insert(e);
+        }
+    }
     log::info!(
         "Wrote {} git credential(s) to the local credential store: {}",
         credentials.len(),
-        credential_diagnostics(credentials)
+        credential_diagnostics(credentials, failed_hosts)
     );
-    Ok(())
+    match first_error {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 pub(crate) fn configure_git_credentials(credentials: &[GitCredential]) -> Result<()> {
+    let credentials = unique_credentials_by_host(credentials)?;
     if credentials.is_empty() {
         return Ok(());
     }
-    setup_git_config(credentials);
-    configure_git_identity(credentials);
-    write_git_credentials(credentials)
+    setup_git_config(&credentials);
+    configure_git_identity(&credentials);
+    record_host_identities(&credentials);
+    write_git_credentials(&credentials)
 }
 
 /// Run a git config command, logging a warning on failure rather than
@@ -303,60 +419,144 @@ pub(crate) fn setup_git_config(credentials: &[GitCredential]) {
     }
 }
 
-/// Configure the git user identity from the server-returned credential.
+/// Configure the global git user identity from the server-returned credential.
 ///
 /// Uses the first credential's `username`/`email` fields, falling back to the
 /// Warp defaults when either is absent (e.g. service-account principals).
 pub(crate) fn configure_git_identity(credentials: &[GitCredential]) {
-    let (name, email) = credentials
-        .first()
-        .map(|c| {
-            (
-                c.username.as_deref().unwrap_or(DEFAULT_GIT_NAME),
-                c.email.as_deref().unwrap_or(DEFAULT_GIT_EMAIL),
-            )
-        })
-        .unwrap_or((DEFAULT_GIT_NAME, DEFAULT_GIT_EMAIL));
+    let (name, email) = identity_of(credentials.first());
+    run_git_config("user.name", &name);
+    run_git_config("user.email", &email);
+}
 
-    run_git_config("user.name", name);
-    run_git_config("user.email", email);
+#[derive(Clone)]
+struct HostIdentity {
+    host: String,
+    name: String,
+    email: String,
+}
+
+static HOST_IDENTITIES: RwLock<Vec<HostIdentity>> = RwLock::new(Vec::new());
+
+fn record_host_identities(credentials: &[GitCredential]) {
+    let identities = credentials
+        .iter()
+        .map(|c| {
+            let (name, email) = identity_of(Some(c));
+            HostIdentity {
+                host: c.host.clone(),
+                name,
+                email,
+            }
+        })
+        .collect::<Vec<_>>();
+    match HOST_IDENTITIES.write() {
+        Ok(mut stored) => *stored = identities,
+        Err(e) => log::warn!("Failed to record git author identities: {e}"),
+    }
+}
+
+fn identity_of(credential: Option<&GitCredential>) -> (String, String) {
+    match credential {
+        Some(c) => (
+            c.username
+                .as_deref()
+                .unwrap_or(DEFAULT_GIT_NAME)
+                .to_string(),
+            c.email.as_deref().unwrap_or(DEFAULT_GIT_EMAIL).to_string(),
+        ),
+        None => (DEFAULT_GIT_NAME.to_string(), DEFAULT_GIT_EMAIL.to_string()),
+    }
+}
+
+fn select_host_identity<'a>(
+    identities: &'a [HostIdentity],
+    host: &str,
+) -> Option<&'a HostIdentity> {
+    identities
+        .iter()
+        .find(|identity| identity.host == host)
+        .or_else(|| identities.first())
+}
+
+fn recorded_identity_for_host(host: &str) -> Option<(String, String)> {
+    let stored = HOST_IDENTITIES.read().ok()?;
+    let matched = select_host_identity(&stored, host)?;
+    Some((matched.name.clone(), matched.email.clone()))
+}
+
+/// Write `user.name`/`user.email` into one repository's local git config,
+/// selecting the identity of the forge that hosts it.
+pub(crate) fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &str) {
+    let Some((name, email)) = recorded_identity_for_host(host) else {
+        return;
+    };
+    run_repository_git_config(repository_dir, "user.name", &name);
+    run_repository_git_config(repository_dir, "user.email", &email);
+}
+
+fn run_repository_git_config(repository_dir: &std::path::Path, key: &str, value: &str) {
+    let dir = repository_dir.to_string_lossy();
+    match BlockingCommand::new("git")
+        .args(["-C", dir.as_ref(), "config", key, value])
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            log::warn!(
+                "git -C {} config {key} failed: {}",
+                repository_dir.display(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Err(e) => {
+            log::warn!(
+                "Failed to run git -C {} config {key}: {e}",
+                repository_dir.display()
+            );
+        }
+    }
+}
+
+/// Write refreshed credentials and report whether every host succeeded.
+///
+/// Returns `Ok(true)` when every applicable forge refreshed, and `Ok(false)`
+/// when some refreshed and others failed. Returns `Err` when the local write
+/// fails.
+fn apply_refreshed_credentials(response: TaskGitCredentialsResponse) -> Result<bool> {
+    if response.credentials.is_empty() && response.failed_hosts.is_empty() {
+        log::debug!("No git credentials returned during refresh; skipping file write");
+        return Ok(true);
+    }
+
+    write_git_credentials_with_failures(&response.credentials, &response.failed_hosts)
+        .context("Failed to write refreshed git credentials")?;
+    log::info!("Git credentials refreshed successfully");
+    Ok(response.failed_hosts.is_empty())
 }
 
 /// Perform one git credentials refresh attempt.
 ///
-/// Returns `Ok(())` on success (including when the server returns no
-/// credentials). Returns `Err` when the workload-token issuance or the server
-/// API call fails — these are transient failures worth retrying.
+/// Returns `Ok(true)` when every applicable forge refreshed, and `Ok(false)`
+/// when some refreshed and others failed. Returns `Err` when the workload-token
+/// issuance, the server call, or the local credential write fails.
 #[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err, fields(
     tags.cloud_agent = true,
     task_id,
 ))]
-async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<()> {
+async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<bool> {
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
             .context("Failed to issue workload token for git credentials refresh")?
             .token;
 
-    let credentials = ai_client
-        .get_task_git_credentials(task_id.to_string(), workload_token)
+    let response = ai_client
+        .get_task_git_credentials(task_id.to_string(), workload_token, true)
         .await
         .context("Failed to fetch git credentials from server")?;
 
-    if credentials.is_empty() {
-        log::debug!("No git credentials returned during refresh; skipping file write");
-        return Ok(());
-    }
-
-    match write_git_credentials(&credentials) {
-        Err(e) => {
-            log::warn!("Failed to write refreshed git credentials: {e:#}");
-        }
-        _ => {
-            log::info!("Git credentials refreshed successfully");
-        }
-    }
-    Ok(())
+    apply_refreshed_credentials(response)
 }
 
 /// Infinite async loop that refreshes git credentials every
@@ -391,7 +591,26 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
         let mut attempt = 0usize;
         loop {
             match try_refresh(&task_id, &ai_client).await {
-                Ok(()) => break,
+                Ok(true) => break,
+                Ok(false) if attempt < backoff_delays.len() => {
+                    let delay = backoff_delays[attempt];
+                    log::warn!(
+                        "Git credentials refreshed for some forges but not others (attempt {}); \
+                         retrying the remaining ones in {}s",
+                        attempt + 1,
+                        delay.as_secs()
+                    );
+                    warpui::r#async::Timer::after(delay).await;
+                    attempt += 1;
+                }
+                Ok(false) => {
+                    log::warn!(
+                        "Git credentials still stale for some forges after {} attempts; \
+                         those forges may lose access before the next refresh cycle",
+                        attempt + 1
+                    );
+                    break;
+                }
                 Err(e) if attempt < backoff_delays.len() => {
                     let delay = backoff_delays[attempt];
                     log::warn!(

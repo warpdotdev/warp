@@ -49,7 +49,7 @@ use crate::modal::{Modal, ModalEvent, ModalViewState};
 use crate::pricing::PricingInfoModel;
 use crate::server::ids::ServerId;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::ai::AISettings;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
@@ -318,6 +318,12 @@ impl BillingAndUsagePageV2View {
             ctx.notify();
         });
         usage_history_model.update(ctx, |m, ctx| m.refresh_usage_history_async(ctx));
+
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
 
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
 
@@ -1126,9 +1132,7 @@ impl BillingAndUsagePageV2View {
         app: &AppContext,
     ) -> AddonCreditsPanelState {
         let workspaces = UserWorkspaces::as_ref(app);
-        let purchase_policy = workspaces.purchase_policy_for_team(
-            team_uid.and_then(|team_uid| workspaces.team_from_uid(team_uid)),
-        );
+        let purchase_policy = workspaces.purchase_policy();
         let team_can_purchase = purchase_policy.is_some_and(|policy| policy.allows_purchases());
         let premium_bps = purchase_policy.map_or(0, |policy| policy.effective_premium_bps());
         let can_upgrade = workspace
@@ -1788,7 +1792,7 @@ impl BillingAndUsagePageV2View {
         let team = workspaces.team_for_view_handle(&self.self_handle, app);
         let show_addon_credits_panel = ws.is_some()
             || workspaces
-                .purchase_policy_for_team(team)
+                .purchase_policy()
                 .is_some_and(|policy| policy.allows_purchases());
         if show_addon_credits_panel {
             let is_payg_zero = ws.is_some_and(|ws| {

@@ -1,4 +1,7 @@
-use super::{AgentAttributionToggleState, derive_agent_attribution_toggle_state};
+use super::{
+    AgentAttributionToggleState, GrokSubscriptionButtonAction,
+    derive_agent_attribution_toggle_state, grok_subscription_button_action,
+};
 use crate::workspaces::workspace::AdminEnablementSetting;
 
 #[test]
@@ -89,5 +92,34 @@ fn team_force_takes_precedence_over_global_ai_disabled() {
             is_forced_by_org: true,
             is_disabled: true,
         }
+    );
+}
+
+#[test]
+fn grok_button_action_reflects_tokens_and_attempt_phase() {
+    assert_eq!(
+        grok_subscription_button_action(false, None),
+        GrokSubscriptionButtonAction::Connect
+    );
+    assert_eq!(
+        grok_subscription_button_action(false, Some(false)),
+        GrokSubscriptionButtonAction::Cancel
+    );
+    assert_eq!(
+        grok_subscription_button_action(false, Some(true)),
+        GrokSubscriptionButtonAction::Cancelling
+    );
+    // Stored tokens take precedence regardless of attempt phase.
+    assert_eq!(
+        grok_subscription_button_action(true, None),
+        GrokSubscriptionButtonAction::Disconnect
+    );
+    assert_eq!(
+        grok_subscription_button_action(true, Some(false)),
+        GrokSubscriptionButtonAction::Disconnect
+    );
+    assert_eq!(
+        grok_subscription_button_action(true, Some(true)),
+        GrokSubscriptionButtonAction::Disconnect
     );
 }

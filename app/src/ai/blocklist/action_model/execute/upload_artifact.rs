@@ -13,6 +13,7 @@ use warpui::{Entity, EntityId, ModelContext, ModelHandle};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::TeamContext;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     ai::{
@@ -54,7 +55,8 @@ impl UploadArtifactExecutor {
     pub(super) fn should_autoexecute(
         &self,
         input: ExecuteActionInput,
-        ctx: &mut ModelContext<Self>,
+        scope: &TeamContext<'_>,
+        ctx: &ModelContext<Self>,
     ) -> bool {
         #[cfg(target_family = "wasm")]
         {
@@ -81,6 +83,7 @@ impl UploadArtifactExecutor {
                     &conversation_id,
                     vec![resolved_path],
                     Some(self.terminal_view_id),
+                    scope,
                     ctx,
                 )
                 .is_allowed()

@@ -169,12 +169,14 @@ fn should_autoexecute_honors_file_read_permissions_for_resolved_path() {
         });
         let action = build_upload_artifact_action("reports/report.txt");
 
+        let team_context_resolver = UserWorkspaces::teamless_context_resolver_for_test();
         let should_autoexecute_before = executor.update(&mut app, |executor, ctx| {
             executor.should_autoexecute(
                 ExecuteActionInput {
                     action: &action,
                     conversation_id,
                 },
+                &team_context_resolver(ctx),
                 ctx,
             )
         });
@@ -193,6 +195,7 @@ fn should_autoexecute_honors_file_read_permissions_for_resolved_path() {
                     action: &action,
                     conversation_id,
                 },
+                &team_context_resolver(ctx),
                 ctx,
             )
         });

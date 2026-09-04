@@ -65,7 +65,28 @@ end
 
 # warp_hex_encode_string hex-encodes the given string with `od`.
 function warp_hex_encode_string 
-  echo "$argv" | od -An -v -tx1 | command tr -d ' \n'
+  printf '%s' "$argv" | od -An -v -tx1 | command tr -d ' \n'
+end
+
+# fish has no byte-safe string indexing, so `od` is still needed to reach the raw UTF-8 bytes.
+function warp_completions_hex_encode
+  set -l od_output (printf '%s' "$argv" | od -An -v -tx1)
+  string replace -a -- ' ' '' (string join '' $od_output)
+end
+
+function warp_hex_decode_string
+    if test (count $argv) -eq 0 -o -z "$argv[1]"
+        return
+    end
+    set -l hex $argv[1]
+    set -l escaped ''
+    set -l i 1
+    while test $i -le (string length -- $hex)
+        set -l pair (string sub -s $i -l 2 -- $hex)
+        set escaped "$escaped\\x$pair"
+        set i (math $i + 2)
+    end
+    printf '%b' $escaped
 end
 
 # A list of PIDs for running in-band command(s). This is used to kill running
@@ -156,6 +177,32 @@ function warp_run_generator_command
     _warp_run_generator_command_internal $argv
 end
 
+# Computes native shell completions for the given (hex-encoded) command line and emits them over the
+# completions OSC protocol.
+function warp_run_generator_command_native_completions
+    set -g _WARP_GENERATOR_COMMAND 1
+    set -l line
+    if test (count $argv) -gt 0
+        set line (warp_hex_decode_string $argv[1] 2>/dev/null)
+    end
+
+    printf '\e]9280;A\a'
+    set -l trimmed_line (string trim -- "$line")
+    if test -n "$trimmed_line"
+        for entry in (complete -C "$line")
+            set -l parts (string split -m 1 \t -- $entry)
+            # Hex-encode both fields: OSC params are semicolon-delimited and only the third is
+            # read (see decode_hex_completions_payload in ansi/mod.rs), so a literal `;`, BEL,
+            # or ESC in a match or description would otherwise corrupt the sequence.
+            printf '\e]9280;C;%s\a' (warp_completions_hex_encode $parts[1])
+            if test (count $parts) -gt 1 -a -n "$parts[2]"
+                printf '\e]9280;D?description;%s\a' (warp_completions_hex_encode $parts[2])
+            end
+        end
+    end
+    printf '\e]9280;B\a'
+end
+
 # Run before a command is executed.
 function warp_preexec --on-event fish_preexec
     set -l command (warp_escape_json "$argv")
@@ -163,12 +210,12 @@ function warp_preexec --on-event fish_preexec
     warp_maybe_send_reset_grid_osc
 
     # If this preexec is called for user command, kill ongoing generator command jobs.
-    if test (! string match -q "warp_run_generator_command*" $argv[1])
+    if not string match -q "warp_run_generator_command*" -- (string trim -- $argv[1])
         for pid in $_warp_generator_pids
-            # Suppress stderr output; kill writes to stderr if any of the given
-            # PIDS are not running (which might rarely be the case due to race
-            # conditions in checking which PIDS to cancel and this kill command.
-            kill -9 $pids >/dev/null 2>/dev/null
+            # Suppress stderr output; kill writes to stderr if the given PID is not running
+            # (which might rarely be the case due to race conditions in checking which PIDs to
+            # cancel and this kill command).
+            kill -9 $pid >/dev/null 2>/dev/null
         end
         set -g _warp_generator_pids ''
     end
@@ -504,6 +551,114 @@ function warp_escape_json
     string join \n $argv | command sed -E 's/(["\\\\])/\\\\\\1/g; s/'\b'/\\\\b/g; s/'\t'/\\\\t/g; s/'\f'/\\\\f/g; s/'\r'/\\\\r/g; $!s/$/\\\\n/' | command tr -d '\n'
 end
 
+# Reports the widget `^R` is bound to, if the user has rebound it away from fish's own
+# history search. Returns non-zero when `^R` is still on a fish default.
+function warp_external_ctrl_r_widget
+  # fish >= 4.0 renamed key specifications, so `bind` echoes back `ctrl-r` where earlier
+  # versions echo `\cr`.
+  set -l widget ""
+  for binding in (bind \cr 2>/dev/null)
+    if string match --quiet -- 'bind --preset *' "$binding"
+      continue
+    end
+    # Strip the leading `bind [-M <mode>] <key>`, leaving just the widget/command.
+    set widget (string replace --regex -- '^bind (-M \S+ +)?\S+ +' '' "$binding")
+  end
+  test -n "$widget"; or return 1
+  echo "$widget"
+end
+
+# Reports the widget `^T` is bound to, if the user has rebound it away from fish's default (no
+# binding at all). Returns non-zero when `^T` has no non-preset binding.
+function warp_external_ctrl_t_widget
+  set -l widget ""
+  for binding in (bind \ct 2>/dev/null)
+    if string match --quiet -- 'bind --preset *' "$binding"
+      continue
+    end
+    set widget (string replace --regex -- '^bind (-M \S+ +)?\S+ +' '' "$binding")
+  end
+  test -n "$widget"; or return 1
+  echo "$widget"
+end
+
+# Runs the shell's own ctrl-r history tool as a foreground command.
+function warp_run_external_ctrl_r_widget
+  set -l result ""
+  switch "$_WARP_EXTERNAL_CTRL_R_WIDGET"
+    case 'fzf-history-widget' '_fzf_search_history'
+      test -z "$fish_private_mode"; and builtin history merge
+      $_WARP_EXTERNAL_CTRL_R_WIDGET
+      set result (commandline | string collect)
+      commandline -r ''
+    case '_atuin_search'
+      # atuin writes its TUI to stdout and the selection to fd 3, so the two are swapped here to
+      # leave the UI on the terminal and capture only the selection.
+      set -l output (ATUIN_SHELL_FISH=t ATUIN_LOG=error atuin search -i 3>&1 1>&2 2>&3 | string collect)
+      # atuin prefixes the selection with __atuin_accept__: when `enter_accept` is on and the
+      # user pressed enter. Warp always inserts without executing, so the prefix is dropped.
+      set result (string replace "__atuin_accept__:" "" -- "$output" | string collect)
+  end
+  set -l warp_escaped_selection (warp_escape_json "$result")
+  warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
+end
+
+function warp_ctrl_t_widget_result
+  test "$argv[1]" = "$argv[2]"; or string collect -- "$argv[2]"
+end
+
+# Runs fzf directly against a find-style command as a foreground command.
+function warp_run_external_ctrl_t_widget
+  set -l result ""
+  switch "$_WARP_EXTERNAL_CTRL_T_WIDGET"
+    case 'fzf-file-widget'
+      set -l warp_ctrl_t_parts (string split -m 1 -- ':' "$argv[1]")
+      set -l char_cursor $warp_ctrl_t_parts[1]
+      set -l original_line (warp_hex_decode_string $warp_ctrl_t_parts[2] | string collect --no-trim-newlines --allow-empty)
+      commandline -r -- $original_line
+      commandline -C -- $char_cursor
+      fzf-file-widget
+      set -l cl_readback (commandline | string collect)
+      set result (warp_ctrl_t_widget_result "$original_line" "$cl_readback")
+      commandline -r ''
+  end
+  set -l warp_escaped_selection (warp_escape_json "$result")
+  warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
+end
+
+# Exclude the ctrl-r/ctrl-t external handoff helpers (see warp_run_external_ctrl_r_widget/
+# warp_run_external_ctrl_t_widget above) from the user's history.
+#
+# fish only supports a single fish_should_add_to_history function (unlike zsh's array of
+# zshaddhistory hooks or bash's PROMPT_COMMAND-style stacking), so compose with any
+# user-defined one -- e.g. from a plugin sourced in config.fish before this bootstrap script
+# runs -- rather than clobbering it, following the same backup pattern warp_update_prompt_vars
+# uses for fish_prompt.
+#
+# warp_original_fish_should_add_to_history must exist and be safe to call *before* we install our
+# own wrapper below. This bootstrap script can run more than once in the same fish process (a
+# shell reload, or a nested fish subshell), and a user or plugin can define or replace
+# fish_should_add_to_history at any point, including between two of our sourcings -- so on every
+# run, re-derive the backup from whatever fish_should_add_to_history currently is, unless that's
+# already our own wrapper from a previous run (identified by the warp_run_external_ctrl_r_widget
+# sentinel in its body), in which case the existing backup -- the last real hook we captured, or
+# the accept-everything default if none ever existed -- is left alone. Backing up our own wrapper
+# as if it were the original would make every history check call itself.
+if functions -q fish_should_add_to_history
+  and not functions fish_should_add_to_history | string match --quiet -- '*warp_run_external_ctrl_r_widget*'
+  functions -q warp_original_fish_should_add_to_history; and functions -e warp_original_fish_should_add_to_history
+  functions -c fish_should_add_to_history warp_original_fish_should_add_to_history
+else if not functions -q warp_original_fish_should_add_to_history
+  function warp_original_fish_should_add_to_history
+    return 0
+  end
+end
+function fish_should_add_to_history
+  string match --quiet -- '*warp_run_external_ctrl_r_widget*' $argv[1]; and return 1
+  string match --quiet -- '*warp_run_external_ctrl_t_widget*' $argv[1]; and return 1
+  warp_original_fish_should_add_to_history $argv
+end
+
 function warp_bootstrapped
   set -l histfile_directory
   set histfile_directory "$XDG_DATA_HOME"
@@ -516,6 +671,28 @@ function warp_bootstrapped
   if [ "$fish_key_bindings" = "fish_vi_key_bindings" ]
       set vi_mode_enabled "1"
   end
+
+  set -l shell_plugins
+  set -g _WARP_EXTERNAL_CTRL_R_WIDGET ""
+  set -l warp_ctrl_r_widget (warp_external_ctrl_r_widget)
+  switch "$warp_ctrl_r_widget"
+    case 'fzf-history-widget' '_atuin_search' '_fzf_search_history'
+      if functions -q $warp_ctrl_r_widget
+        set -g _WARP_EXTERNAL_CTRL_R_WIDGET "$warp_ctrl_r_widget"
+        set -a shell_plugins external_ctrl_r_history
+      end
+  end
+
+  set -g _WARP_EXTERNAL_CTRL_T_WIDGET ""
+  set -l warp_ctrl_t_widget (warp_external_ctrl_t_widget)
+  switch "$warp_ctrl_t_widget"
+    case 'fzf-file-widget'
+      if functions -q fzf-file-widget
+        set -g _WARP_EXTERNAL_CTRL_T_WIDGET "$warp_ctrl_t_widget"
+        set -a shell_plugins external_ctrl_t_file
+      end
+  end
+  set -l escaped_shell_plugins (warp_escape_json $shell_plugins)
 
   set -l kernel_name (uname)
   if test -n "$kernel_name"
@@ -546,7 +723,7 @@ function warp_bootstrapped
   # part of its builtins (e.g. "for", "while", etc.).
   set -l escaped_editor (warp_escape_json "$EDITOR")
   set -l escaped_shell_path (warp_escape_json (status fish-path))
-  set -l escaped_json "{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"fish\", \"home_dir\": \"$HOME\", \"path\": \"$PATH\", \"editor\": \"$escaped_editor\", \"abbreviations\": \"$escaped_abbr\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\", \"env_var_names\": \"$env_var_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"\", \"shell_version\": \"$FISH_VERSION\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
+  set -l escaped_json "{\"hook\": \"Bootstrapped\", \"value\": {\"histfile\": \"$escaped_histfile\", \"session_id\": $WARP_SESSION_ID, \"shell\": \"fish\", \"home_dir\": \"$HOME\", \"path\": \"$PATH\", \"editor\": \"$escaped_editor\", \"abbreviations\": \"$escaped_abbr\", \"aliases\": \"$escaped_aliases\", \"function_names\": \"$function_names\", \"env_var_names\": \"$env_var_names\", \"builtins\": \"$escaped_builtins\", \"keywords\": \"\", \"shell_version\": \"$FISH_VERSION\", \"shell_plugins\": \"$escaped_shell_plugins\", \"vi_mode_enabled\": \"$vi_mode_enabled\", \"os_category\": \"$os_category\", \"linux_distribution\": \"$linux_distribution\", \"wsl_name\": \"$WSL_DISTRO_NAME\", \"shell_path\": \"$escaped_shell_path\"}}"
   warp_send_json_message $escaped_json
 end
 

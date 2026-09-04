@@ -1,9 +1,7 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use cloud_object_client::MockObjectClient;
-use instant::Instant;
 use settings::manager::SettingsManager;
 use warp_graphql::object_permissions::AccessLevel;
 use warpui::{App, SingletonEntity, WindowId};
@@ -30,6 +28,7 @@ use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::{AISettings, PrivacySettings};
 use crate::system::SystemStats;
+use crate::test_util::assert_eventually;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflowModel, WorkflowId};
 use crate::workspaces::team::{Team, TeamVisibility};
@@ -91,6 +90,7 @@ fn team_for_test(uid: i64, name: &str) -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -108,6 +108,7 @@ fn workspace_for_test(teams: Vec<Team>) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
@@ -357,11 +358,6 @@ fn test_drive_data_source_correctly_filters_notebook_filter() {
     })
 }
 
-/// Upper bound on how long the background indexer may take before a test gives up. Only a
-/// broken assertion ever waits this long; the poll below exits as soon as the state matches.
-const INDEX_TIMEOUT: Duration = Duration::from_secs(10);
-const INDEX_POLL_INTERVAL: Duration = Duration::from_millis(5);
-
 /// First id reserved for index markers, kept clear of the ids the tests assert on.
 const INDEX_MARKER_ID: i64 = 900;
 
@@ -397,19 +393,17 @@ fn workflow_label(name: &str) -> String {
 
 /// Polls the palette until it reports `expected`, so tests synchronise on the background indexer
 /// instead of racing a fixed delay.
-fn assert_workflow_labels_eventually(
+async fn assert_workflow_labels_eventually(
     mixer: &ModelHandle<CommandPaletteMixer>,
     query: &str,
     expected: &[String],
     app: &mut App,
 ) {
-    let deadline = Instant::now() + INDEX_TIMEOUT;
-    let mut observed = workflow_labels(mixer, query, app);
-    while observed != expected && Instant::now() < deadline {
-        std::thread::sleep(INDEX_POLL_INTERVAL);
-        observed = workflow_labels(mixer, query, app);
-    }
-    assert_eq!(observed, expected);
+    assert_eventually!(
+        2000 => workflow_labels(mixer, query, app) == expected,
+        "workflow labels for {query:?} did not match after ~10s. last observed: {:?}, expected: {expected:?}",
+        workflow_labels(mixer, query, app)
+    );
 }
 
 /// Indexes a fresh in-scope workflow and waits for it to become searchable.
@@ -417,7 +411,7 @@ fn assert_workflow_labels_eventually(
 /// The searcher drains its queue in order, so once the marker is visible every operation queued
 /// before it has been applied. Without this, asserting that something is *absent* from the index
 /// would pass simply because the indexer had not run yet.
-fn drain_index(marker_id: i64, mixer: &ModelHandle<CommandPaletteMixer>, app: &mut App) {
+async fn drain_index(marker_id: i64, mixer: &ModelHandle<CommandPaletteMixer>, app: &mut App) {
     let marker_name = format!("indexmarker{marker_id}");
     CloudModel::handle(app).update(app, |model, ctx| {
         model.upsert_from_server_workflow(
@@ -430,7 +424,8 @@ fn drain_index(marker_id: i64, mixer: &ModelHandle<CommandPaletteMixer>, app: &m
             ctx,
         );
     });
-    assert_workflow_labels_eventually(mixer, &marker_name, &[workflow_label(&marker_name)], app);
+    assert_workflow_labels_eventually(mixer, &marker_name, &[workflow_label(&marker_name)], app)
+        .await;
 }
 
 fn prompt_or_workflow_uid(id: i64) -> ObjectUid {
@@ -559,7 +554,8 @@ fn test_full_text_drive_data_source_finds_in_window_objects_outranked_by_another
             "deploy",
             &[workflow_label("release notes generator")],
             &mut app,
-        );
+        )
+        .await;
     })
 }
 
@@ -598,8 +594,8 @@ fn test_full_text_drive_data_source_indexes_an_object_that_moves_into_the_window
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
 
-        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
-        assert_workflow_labels_eventually(&mixer, "migrating", &[], &mut app);
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app).await;
+        assert_workflow_labels_eventually(&mixer, "migrating", &[], &mut app).await;
 
         // The server reassigns the workflow to this window's team.
         CloudModel::handle(&app).update(&mut app, |model, ctx| {
@@ -618,7 +614,8 @@ fn test_full_text_drive_data_source_indexes_an_object_that_moves_into_the_window
             "migrating",
             &[workflow_label("migrating workflow")],
             &mut app,
-        );
+        )
+        .await;
     })
 }
 
@@ -662,7 +659,8 @@ fn test_full_text_drive_data_source_removes_an_object_that_moves_out_of_the_wind
             "departing",
             &[workflow_label("departing workflow")],
             &mut app,
-        );
+        )
+        .await;
 
         // The user moves the workflow into the other team's drive.
         CloudModel::handle(&app).update(&mut app, |model, ctx| {
@@ -676,8 +674,8 @@ fn test_full_text_drive_data_source_removes_an_object_that_moves_out_of_the_wind
             );
         });
 
-        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
-        assert_workflow_labels_eventually(&mixer, "departing", &[], &mut app);
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app).await;
+        assert_workflow_labels_eventually(&mixer, "departing", &[], &mut app).await;
     })
 }
 
@@ -713,8 +711,8 @@ fn test_full_text_drive_data_source_rebuilds_when_the_windows_team_changes() {
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
 
-        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
-        assert_workflow_labels_eventually(&mixer, "second", &[], &mut app);
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app).await;
+        assert_workflow_labels_eventually(&mixer, "second", &[], &mut app).await;
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.set_team_for_window(window_id, second_team.uid, ctx);
@@ -725,7 +723,8 @@ fn test_full_text_drive_data_source_rebuilds_when_the_windows_team_changes() {
             "second",
             &[workflow_label("second team workflow")],
             &mut app,
-        );
+        )
+        .await;
     })
 }
 
@@ -843,8 +842,8 @@ fn test_full_text_drive_data_source_indexes_the_first_directly_shared_object() {
         mixer.update(&mut app, |mixer, _| {
             mixer.add_sync_source(data_source_handle, [QueryFilter::Workflows]);
         });
-        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
-        assert_workflow_labels_eventually(&mixer, "bequeathed", &[], &mut app);
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app).await;
+        assert_workflow_labels_eventually(&mixer, "bequeathed", &[], &mut app).await;
 
         let shared_with = current_user_uid(&app);
         CloudModel::handle(&app).update(&mut app, |model, ctx| {
@@ -864,7 +863,8 @@ fn test_full_text_drive_data_source_indexes_the_first_directly_shared_object() {
             "bequeathed",
             &[workflow_label("bequeathed workflow")],
             &mut app,
-        );
+        )
+        .await;
     })
 }
 
@@ -921,8 +921,8 @@ fn test_full_text_drive_data_source_reindexes_when_a_team_stops_being_a_member_t
 
         let spaces_before =
             app.read(|app| UserWorkspaces::as_ref(app).spaces_for_window(window_id, app));
-        drain_index(INDEX_MARKER_ID, &mixer, &mut app);
-        assert_workflow_labels_eventually(&mixer, "remapped", &[], &mut app);
+        drain_index(INDEX_MARKER_ID, &mixer, &mut app).await;
+        assert_workflow_labels_eventually(&mixer, "remapped", &[], &mut app).await;
 
         // The user leaves the departing team; its objects now resolve to the shared space.
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
@@ -941,6 +941,7 @@ fn test_full_text_drive_data_source_reindexes_when_a_team_stops_being_a_member_t
             "remapped",
             &[workflow_label("remapped workflow")],
             &mut app,
-        );
+        )
+        .await;
     })
 }

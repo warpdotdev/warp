@@ -26,7 +26,7 @@ use std::sync::Arc;
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
 use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Local};
 use cli_controller::{CLISubagentController, CLISubagentEvent};
 use find::FindState;
 use indexmap::IndexMap;
@@ -38,9 +38,10 @@ use pathfinder_geometry::vector::vec2f;
 pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-use secret_redaction::*;
+use rustc_hash::FxHashSet;
 use serde::Serialize;
 use settings::Setting as _;
+use string_offset::StringRange;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
@@ -52,12 +53,12 @@ use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
-use warpui::assets::asset_cache::AssetCache;
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SecretRange,
-    SelectionBound, SelectionHandle, TableStateHandle, get_rich_content_position_id,
+    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SelectionBound,
+    SelectionHandle, TableStateHandle, get_rich_content_position_id,
 };
 use warpui::image_cache::ImageType;
 use warpui::keymap::FixedBinding;
@@ -71,6 +72,7 @@ use warpui::{
 };
 
 use self::model::{AIBlockModel, AIBlockModelHelper};
+use self::secret_redaction::*;
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
 use super::controller::ClientIdentifiers;
@@ -96,9 +98,9 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
     CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
     MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, ServerOutputId,
-    SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult, SuggestedLoggingId,
-    SummarizationType, TodoOperation,
+    RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource, SearchCodebaseResult,
+    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
+    SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -152,6 +154,7 @@ use crate::ai::get_relevant_files::controller::{
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::SkillOpenOrigin;
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
+use crate::ai::stored_screenshots::stored_screenshot_asset_source;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -197,6 +200,7 @@ use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
+use crate::util::time_format::format_message_timestamp;
 use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
@@ -474,6 +478,7 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the overflow menu button
     overflow_menu_handle: MouseStateHandle,
+    query_timestamp_tooltip_handle: MouseStateHandle,
 
     menu_accept_button_handle: MouseStateHandle,
     menu_reject_button_handle: MouseStateHandle,
@@ -944,7 +949,7 @@ pub struct AIBlock {
     context_model: ModelHandle<BlocklistAIContextModel>,
 
     /// The IDs of requested blocking actions rendered in this block.
-    requested_action_ids: HashSet<AIAgentActionId>,
+    requested_action_ids: FxHashSet<AIAgentActionId>,
 
     /// Map from a requested command action ID to its view handle and status.
     requested_commands: HashMap<AIAgentActionId, RequestedCommand>,
@@ -1221,7 +1226,8 @@ impl AIBlock {
                     ctx.notify();
                 }
                 AISettingsChangedEvent::ThinkingDisplayMode { .. }
-                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
+                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. }
+                | AISettingsChangedEvent::UsageDisplayUnit { .. } => {
                     ctx.notify();
                 }
                 _ => {}
@@ -2001,7 +2007,7 @@ impl AIBlock {
             }
         }
 
-        self.has_recording_related_actions = output.actions().any(|action| {
+        let has_recording_related_actions = output.actions().any(|action| {
             matches!(
                 &action.action,
                 AIAgentActionType::StartRecording { .. }
@@ -2009,6 +2015,13 @@ impl AIBlock {
                     | AIAgentActionType::UseComputer(_)
             )
         });
+        if self.has_recording_related_actions || has_recording_related_actions {
+            let conversation_id = self.client_ids.conversation_id;
+            self.action_model.update(ctx, |action_model, _ctx| {
+                action_model.invalidate_recording_spans(conversation_id);
+            });
+        }
+        self.has_recording_related_actions = has_recording_related_actions;
 
         if FeatureFlag::WebSearchUI.is_enabled() {
             // Handle WebSearch messages
@@ -2022,10 +2035,10 @@ impl AIBlock {
 
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
+        let new_action_ids: FxHashSet<AIAgentActionId> =
+            output.actions().map(|action| action.id.clone()).collect();
         for action in output.actions() {
-            let new_action_ids: HashSet<AIAgentActionId> =
-                output.actions().map(|action| action.id.clone()).collect();
-
+            let new_action_ids = new_action_ids.clone();
             #[cfg(feature = "integration_tests")]
             {
                 // Log action IDs that were cached from a previous version of `output` that are not
@@ -2743,6 +2756,10 @@ impl AIBlock {
 
         let shell_type = self.active_session.as_ref(ctx).shell_type(ctx);
         let escape_char = shell_type.map(|s| ShellFamily::from(s).escape_char());
+        let autonomy_allowed = {
+            let scope = self.controller.as_ref(ctx).team_context(ctx);
+            is_agent_mode_autonomy_allowed(&scope, ctx)
+        };
 
         for (requested_command_action_id, command, is_read_only, is_risky) in
             output.actions().filter_map(|action| {
@@ -2768,8 +2785,9 @@ impl AIBlock {
                 }
             })
         {
-            if is_agent_mode_autonomy_allowed(ctx) {
+            if autonomy_allowed {
                 let autoexecute_decision = escape_char.map(|escape_char| {
+                    let scope = self.controller.as_ref(ctx).team_context(ctx);
                     BlocklistAIPermissions::as_ref(ctx).can_autoexecute_command(
                         &self.client_ids.conversation_id,
                         command,
@@ -2777,6 +2795,7 @@ impl AIBlock {
                         is_read_only,
                         is_risky,
                         Some(self.terminal_view_id),
+                        &scope,
                         ctx,
                     )
                 });
@@ -2855,7 +2874,7 @@ impl AIBlock {
             .actions()
             .filter_map(|action| (action.is_get_relevant_files()).then_some(&action.id))
         {
-            if is_agent_mode_autonomy_allowed(ctx)
+            if autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
             {
                 // Try to show the speedbump for codebase search.
@@ -2888,7 +2907,7 @@ impl AIBlock {
             let is_file_access =
                 action.is_get_specific_files() || action.is_grep() || action.is_file_glob();
             if is_file_access {
-                if is_agent_mode_autonomy_allowed(ctx)
+                if autonomy_allowed
                     && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
                 {
                     // Try to show the speedbump for autoread files setting
@@ -2914,7 +2933,7 @@ impl AIBlock {
             } else if matches!(action.action, AIAgentActionType::AskUserQuestion { .. })
                 && !self.model.is_restored()
                 && FeatureFlag::AskUserQuestion.is_enabled()
-                && is_agent_mode_autonomy_allowed(ctx)
+                && autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
             {
                 self.autonomy_setting_speedbump =
@@ -3897,6 +3916,7 @@ impl AIBlock {
                 document.title.clone()
             };
 
+            let will_auto_open = !opened_first;
             let (document_id, created_new) = model_handle.update(ctx, |model, model_ctx| {
                 let (document_id, created_new) = model
                     .get_or_create_streaming_document_for_create_documents(
@@ -3906,6 +3926,7 @@ impl AIBlock {
                         &title,
                         document.content.clone(),
                         file_link_resolution_context.clone(),
+                        will_auto_open,
                         model_ctx,
                     );
                 if !created_new {
@@ -3919,7 +3940,7 @@ impl AIBlock {
                 (document_id, created_new)
             });
 
-            if created_new && !opened_first {
+            if created_new && will_auto_open {
                 ctx.emit(AIBlockEvent::OpenAIDocumentPane {
                     document_id,
                     document_version: AIDocumentVersion::default(),
@@ -4489,6 +4510,10 @@ impl AIBlock {
 
     pub fn output_status(&self, app: &AppContext) -> AIBlockOutputStatus {
         self.model.status(app)
+    }
+
+    pub fn query_sent_at(&self, app: &AppContext) -> Option<DateTime<Local>> {
+        self.model.query_sent_at(app)
     }
 
     /// Returns `true` if this AI block contains user input.
@@ -5264,13 +5289,24 @@ impl AIBlock {
     }
 
     pub fn dismiss_ai_tooltips(&mut self, ctx: &mut ViewContext<Self>) {
-        self.detected_links_state.link_location_open_tooltip = None;
-        ctx.emit(AIBlockEvent::DismissLinkTooltip);
-        self.secret_redaction_state.dismiss_tooltip();
-        ctx.emit(AIBlockEvent::DismissSecretTooltip);
+        let dismissed_link_tooltip = self
+            .detected_links_state
+            .link_location_open_tooltip
+            .take()
+            .is_some();
+        if dismissed_link_tooltip {
+            ctx.emit(AIBlockEvent::DismissLinkTooltip);
+        }
+
+        let dismissed_secret_tooltip = self.secret_redaction_state.dismiss_tooltip();
+        if dismissed_secret_tooltip {
+            ctx.emit(AIBlockEvent::DismissSecretTooltip);
+        }
+
+        let mut dismissed_search_tooltip = false;
         for search_view in self.search_codebase_view.values() {
             search_view.update(ctx, |view, ctx| {
-                view.clear_link_tooltip(ctx);
+                dismissed_search_tooltip |= view.clear_link_tooltip(ctx);
             });
         }
 
@@ -5282,8 +5318,9 @@ impl AIBlock {
         {
             button_handles.reset_hover_state_on_focus_change();
         }
-
-        ctx.notify();
+        if dismissed_link_tooltip || dismissed_secret_tooltip || dismissed_search_tooltip {
+            ctx.notify();
+        }
     }
 
     fn open_link(
@@ -5345,7 +5382,7 @@ impl AIBlock {
     fn show_secret_tooltip(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(hoverable_secret) = self
@@ -5369,7 +5406,7 @@ impl AIBlock {
     pub fn set_secret_redaction_state(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         is_obfuscated: bool,
     ) {
         self.secret_redaction_state
@@ -5679,7 +5716,7 @@ impl AIBlock {
 
         // Get the model name from the input metadata.
         let mut model_name = LLMPreferences::as_ref(app)
-            .get_llm_info(base_model_id)
+            .get_llm_info(base_model_id, app)
             .map(|info| info.display_name.clone())
             .unwrap_or_default();
 
@@ -5688,7 +5725,7 @@ impl AIBlock {
             let model_id = self.model.model_id(app);
             if let Some(model_id) = model_id
                 && let Some(output_model_name) = LLMPreferences::as_ref(app)
-                    .get_llm_info(&model_id)
+                    .get_llm_info(&model_id, app)
                     .map(|info| info.display_name.clone())
             {
                 model_name = output_model_name;
@@ -6297,7 +6334,7 @@ pub enum AIBlockAction {
         location: TextLocation,
     },
     ChangedHoverOnSecret {
-        secret_range: SecretRange,
+        secret_range: StringRange,
         location: TextLocation,
         is_hovering: bool,
     },
@@ -6306,7 +6343,7 @@ pub enum AIBlockAction {
         location: TextLocation,
     },
     OpenSecretTooltip {
-        secret_range: SecretRange,
+        secret_range: StringRange,
         location: TextLocation,
     },
     OpenCitation(AIAgentCitation),
@@ -6340,6 +6377,7 @@ pub enum AIBlockAction {
     /// Copy the content from the previous user query.
     /// Note that this block may not have the user query.
     CopyQuery,
+    CopyTimestamp,
     /// Copy all AI output from the previous user query to the next user query.
     /// Note that this contains more than just this block, since from the user perspective everything after the user query appears like one block.
     CopyOutput,
@@ -6418,6 +6456,30 @@ fn open_code_action_event(
             layout,
         },
     }
+}
+
+/// The raw-asset cache ID under which a UseComputer action's screenshot bytes are stored.
+fn screenshot_asset_id(action_id: &AIAgentActionId) -> String {
+    format!("screenshot-{action_id}")
+}
+
+/// Opens the lightbox over the given screenshot asset sources.
+fn open_screenshot_lightbox(
+    sources: Vec<AssetSource>,
+    initial_index: usize,
+    ctx: &mut ViewContext<AIBlock>,
+) {
+    let images = sources
+        .into_iter()
+        .map(|asset_source| ui_components::lightbox::LightboxImage {
+            source: ui_components::lightbox::LightboxImageSource::Resolved { asset_source },
+            description: None,
+        })
+        .collect();
+    ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+        images,
+        initial_index,
+    });
 }
 
 impl TypedActionView for AIBlock {
@@ -6845,6 +6907,14 @@ impl TypedActionView for AIBlock {
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(prompt_text));
             }
+            AIBlockAction::CopyTimestamp => {
+                if let Some(timestamp) = self.query_sent_at(ctx) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(format_message_timestamp(
+                            &timestamp,
+                        )));
+                }
+            }
             AIBlockAction::CopyOutput => {
                 // Copy all AI output from preceding user query until the next user query
                 let output_text = self.get_output_text_since_preceding_user_query(ctx);
@@ -7053,12 +7123,12 @@ impl TypedActionView for AIBlock {
                         .flat_map(|c| c.use_computer_action_ids())
                         .collect();
 
-                // Build lightbox images for each action that has a screenshot result.
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+
                 // We Arc::clone the result each iteration to release the immutable
                 // borrow on ctx, allowing the mutable AssetCache update in the same
                 // loop body. Arc::clone is just a refcount bump (no data copied).
-                let mut screenshot_action_ids: Vec<&AIAgentActionId> = Vec::new();
-                let mut images: Vec<ui_components::lightbox::LightboxImage> = Vec::new();
+                let mut screenshot_sources: Vec<(AIAgentActionId, AssetSource)> = Vec::new();
                 for action_id in &use_computer_action_ids {
                     let Some(result) = self
                         .action_model
@@ -7069,46 +7139,50 @@ impl TypedActionView for AIBlock {
                         continue;
                     };
                     let AIAgentActionResultType::UseComputer(
-                        crate::ai::agent::UseComputerResult::Success(computer_use::ActionResult {
-                            screenshot: Some(screenshot),
-                            ..
-                        }),
+                        crate::ai::agent::UseComputerResult::Success { screenshot, .. },
                     ) = &result.result
                     else {
                         continue;
                     };
-                    let asset_id = format!("screenshot-{action_id}");
-                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                        asset_cache.insert_raw_asset_bytes::<ImageType>(
-                            asset_id.clone(),
-                            &screenshot.data,
-                            ctx,
-                        );
-                    });
-                    images.push(ui_components::lightbox::LightboxImage {
-                        source: ui_components::lightbox::LightboxImageSource::Resolved {
-                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
-                                id: asset_id,
-                            },
-                        },
-                        description: None,
-                    });
-                    screenshot_action_ids.push(action_id);
+                    match screenshot {
+                        Some(ScreenshotSource::Inline(screenshot)) => {
+                            let asset_id = screenshot_asset_id(action_id);
+                            AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                                asset_cache.insert_raw_asset_bytes::<ImageType>(
+                                    asset_id.clone(),
+                                    &screenshot.data,
+                                    ctx,
+                                );
+                            });
+                            screenshot_sources
+                                .push((action_id.clone(), AssetSource::Raw { id: asset_id }));
+                        }
+                        Some(ScreenshotSource::Stored { stored_ref, .. }) => {
+                            screenshot_sources.push((
+                                action_id.clone(),
+                                stored_screenshot_asset_source(
+                                    stored_ref.clone(),
+                                    ai_client.clone(),
+                                ),
+                            ));
+                        }
+                        None => {}
+                    }
                 }
 
-                if images.is_empty() {
+                if screenshot_sources.is_empty() {
                     return;
                 }
 
-                let initial_index = screenshot_action_ids
+                let initial_index = screenshot_sources
                     .iter()
-                    .position(|id| *id == action_id)
+                    .position(|(id, _)| id == action_id)
                     .unwrap_or(0);
-
-                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
-                    images,
-                    initial_index,
-                });
+                let sources = screenshot_sources
+                    .into_iter()
+                    .map(|(_, source)| source)
+                    .collect();
+                open_screenshot_lightbox(sources, initial_index, ctx);
             }
             AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
                 let decoded_images = self

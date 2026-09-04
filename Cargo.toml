@@ -30,6 +30,7 @@ publish = false
 [workspace.dependencies]
 # Local workspace crates. This lets us reference them in other crates without specifying a path.
 ai = { path = "crates/ai" }
+ai_types = { path = "crates/ai_types" }
 app-installation-detection = { path = "crates/app-installation-detection" }
 asset_cache = { path = "crates/asset_cache" }
 asset_macro = { path = "crates/asset_macro" }
@@ -63,8 +64,10 @@ node_runtime = { path = "crates/node_runtime" }
 onboarding = { path = "crates/onboarding" }
 persistence = { path = "crates/persistence" }
 prevent_sleep = { path = "crates/prevent_sleep" }
+regex_dfas = { path = "crates/regex_dfas" }
 remote_server = { path = "crates/remote_server" }
 repo_metadata = { path = "crates/repo_metadata" }
+secret_redaction = { path = "crates/secret_redaction" }
 settings = { path = "crates/settings" }
 settings_value = { path = "crates/settings_value", default-features = false }
 settings_value_derive = { path = "crates/settings_value_derive" }
@@ -168,6 +171,7 @@ gloo = { version = "0.11.0", default-features = false, features = [
   "utils",
 ] }
 graphql-ws-client = { version = "0.11.1", default-features = false }
+hashbrown = "0.17.1"
 hex = "0.4.3"
 # This matches the version of hyper used by reqwest.
 hyper = "1.6.0"
@@ -277,7 +281,7 @@ serde_json = { version = "1.0", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 serde_with = "^3.21"
 serde_yaml = "0.8"
-session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "b30fdd06379a3d073b398eabd106abed5b443aae" }
+session-sharing-protocol = { git = "https://github.com/warpdotdev/session-sharing-protocol.git", rev = "fcd0fea35ab9f782043c8ec74fd81bce187ded9f" }
 similar = { version = "2.7", features = ["inline"] }
 simplelog = "0.12.2"
 smallvec = "1.6.1"
@@ -345,7 +349,7 @@ version-compare = "0.1"
 vte = { git = "https://github.com/warpdotdev/vte.git", rev = "4b399c87b63ba88f45709edaa6383fc519f6c900", default-features = false }
 walkdir = "2"
 warp-workflows = { git = "https://github.com/warpdotdev/workflows", rev = "793a98ddda6ef19682aed66364faebd2829f0e01" }
-warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "b0886a9523e2e05d102f61bd0a212dc15ade4835" }
+warp_multi_agent_api = { git = "https://github.com/warpdotdev/warp-proto-apis.git", rev = "7b638a3bce15b6159116c25caa1dda62cf004b0e" }
 wasm-bindgen = "0.2.89"
 wasm-bindgen-futures = "0.4.42"
 web-sys = { version = "0.3.69", features = [
@@ -384,13 +388,14 @@ memo-map = "0.3.1"
 async-recursion = "1.0.0"
 getset = "0.1.1"
 regex = "1.11.1"
+regex-automata = "0.4.6"
 rquickjs = { version = "0.3.1" }
 dirs = "6.0.0"
 rayon = "1.10.0"
 sha2 = "0.10"
 shellexpand = "3.1.1"
-warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "ac69f9b00c48d6de229ba5905056d9302da1c5c4", default-features = false }
-winit = { git = "https://github.com/warpdotdev/winit.git", rev = "a4e0ecb5f9626ccac9445a73dc28354b52423abc" }
+warp-command-signatures = { git = "https://github.com/warpdotdev/command-signatures.git", rev = "6a39d62048abbf3885be54a7887f1916ebcf7445", default-features = false }
+winit = { git = "https://github.com/warpdotdev/winit.git", rev = "14db95a686387211d57cf2afd1d908b2d82a20fe" }
 x11rb = "0.13.0"
 mockito = "1.7.0"
 sysinfo = { version = "0.37.0", default-features = false, features = [
@@ -506,7 +511,10 @@ inherits = "release-lto-debug_assertions"
 [profile.release-cli]
 inherits = "release-lto"
 opt-level = "s"
-codegen-units = 1
+# 4 (not the default 16, and not 1) roughly halves build time versus codegen-units=1 for ~4%
+# larger stripped/gzipped binaries. This profile already uses thin LTO, which does most of the
+# cross-crate size optimization, so 1 was paying a lot of compile time for little extra size.
+codegen-units = 4
 
 # A custom CLI release-like profile that forces debug assertions on, used for
 # dev/local channel CLI bundles.

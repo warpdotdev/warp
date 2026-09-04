@@ -333,7 +333,7 @@ pub enum SettingsSection {
     EditorAndCodeReview,
     // ── Cloud platform umbrella subpages ──
     CloudEnvironments,
-    OzCloudAPIKeys,
+    WarpCloudAgentAPIKeys,
 }
 
 use std::fmt::{self, Display};
@@ -356,7 +356,7 @@ impl Display for SettingsSection {
             SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
-            SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API Keys"),
+            SettingsSection::WarpCloudAgentAPIKeys => write!(f, "API keys"),
             _ => write!(f, "{self:?}"),
         }
     }
@@ -399,7 +399,9 @@ impl SettingsSection {
             Self::CodeIndexing => "Indexing and projects",
             Self::EditorAndCodeReview => "Editor and Code Review",
             Self::CloudEnvironments => "Environments",
-            Self::OzCloudAPIKeys => "Oz Cloud API Keys",
+            // Keeps the "Oz" spelling the slug was seeded from; only the
+            // Display label above dropped it.
+            Self::WarpCloudAgentAPIKeys => "Oz Cloud API Keys",
         }
     }
 
@@ -437,7 +439,7 @@ impl SettingsSection {
             "Indexing and projects" | "CodeIndexing" | "Code" => Self::CodeIndexing,
             "Editor and Code Review" | "EditorAndCodeReview" => Self::EditorAndCodeReview,
             "Environments" | "CloudEnvironments" => Self::CloudEnvironments,
-            "Oz Cloud API Keys" | "OzCloudAPIKeys" => Self::OzCloudAPIKeys,
+            "Oz Cloud API Keys" | "OzCloudAPIKeys" => Self::WarpCloudAgentAPIKeys,
             _ => return None,
         };
         Some(section)
@@ -520,6 +522,8 @@ pub mod flags {
         "Jump_To_Bottom_Of_Block_Button_Enabled";
     pub const RESPECT_SYSTEM_THEME_CONTEXT_FLAG: &str = "Respect_System_Theme";
     pub const COMPLETIONS_OPEN_WHILE_TYPING_CONTEXT_FLAG: &str = "Completions_Open_While_Typing";
+    pub const WARP_COMPLETIONS_CONTEXT_FLAG: &str = "Warp_Completions";
+    pub const NATIVE_SHELL_COMPLETIONS_CONTEXT_FLAG: &str = "Native_Shell_Completions";
     pub const COMMAND_CORRECTIONS_CONTEXT_FLAG: &str = "Command_Corrections";
     pub const ERROR_UNDERLINING_FLAG: &str = "error_underlining";
     pub const SYNTAX_HIGHLIGHTING_FLAG: &str = "syntax_highlighting";
@@ -588,6 +592,7 @@ pub mod flags {
         "Preserve_Input_Focus_On_Block_Selection";
     pub const SLASH_COMMANDS_IN_TERMINAL_FLAG: &str = "Slash_Commands_In_Terminal";
     pub const AT_CONTEXT_MENU_IN_TERMINAL_FLAG: &str = "At_Context_Menu_In_Terminal";
+    pub const AI_COMMAND_SEARCH_HASH_TRIGGER_FLAG: &str = "AI_Command_Search_Hash_Trigger";
     pub const OUTLINE_CODEBASE_SYMBOLS_FOR_AT_CONTEXT_MENU_FLAG: &str =
         "Outline_Codebase_Symbols_For_At_Context_Menu";
     pub const AUTOSUGGESTIONS_ENABLED_FLAG: &str = "Autosuggestions_Enabled";
@@ -1140,7 +1145,9 @@ macro_rules! update_page {
             SettingsPageViewHandle::Keybindings(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Teams(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Warpify(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::OzCloudAPIKeys(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::WarpCloudAgentAPIKeys(handle) => {
+                $ctx.update_view(handle, $update)
+            }
             SettingsPageViewHandle::Privacy(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Referrals(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Scripting(handle) => $ctx.update_view(handle, $update),
@@ -1290,6 +1297,8 @@ impl SettingsView {
                     flavor: *flavor,
                 })
             }
+            // Modal rendering is handled in get_modal_content_for_page
+            TeamsPageViewEvent::ModalVisibilityChanged => ctx.notify(),
         });
 
         let warpify_page_handle = ctx.add_typed_action_view(WarpifyPageView::new);
@@ -1418,7 +1427,7 @@ impl SettingsView {
                 "Cloud platform",
                 vec![
                     SettingsSection::CloudEnvironments,
-                    SettingsSection::OzCloudAPIKeys,
+                    SettingsSection::WarpCloudAgentAPIKeys,
                 ],
             )),
             SettingsNavItem::Page(SettingsSection::Teams),
@@ -2110,7 +2119,7 @@ impl SettingsView {
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::BillingAndUsage(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::OzCloudAPIKeys(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::WarpCloudAgentAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Warpify(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Referrals(v) => v.as_ref(app).should_render(app),
@@ -2334,7 +2343,7 @@ impl SettingsView {
             SettingsPageViewHandle::Privacy(view) => {
                 view.read(app, |view, _| view.get_modal_content())
             }
-            SettingsPageViewHandle::OzCloudAPIKeys(view) => {
+            SettingsPageViewHandle::WarpCloudAgentAPIKeys(view) => {
                 view.read(app, |view, _| view.get_modal_content())
             }
             SettingsPageViewHandle::MCPServers(view) => {
@@ -2342,6 +2351,9 @@ impl SettingsView {
             }
             SettingsPageViewHandle::WarpAgent(view) => {
                 view.read(app, |view, _| view.get_modal_content(app))
+            }
+            SettingsPageViewHandle::Teams(view) => {
+                view.read(app, |view, _| view.get_modal_content())
             }
             _ => None,
         }
@@ -2626,7 +2638,7 @@ impl View for SettingsView {
                     })
                     .finish(),
             )
-            .on_right_mouse_down(|event, _app, position| {
+            .on_right_mouse_down(|event, _app, position, _| {
                 let Some(parent_bounds) = event.element_position_by_id(POSITION_ID) else {
                     return DispatchEventResult::PropagateToParent;
                 };

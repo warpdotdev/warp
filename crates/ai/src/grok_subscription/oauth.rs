@@ -22,6 +22,7 @@
 //! [`crate::grok_subscription`] module (refresh orchestration) and
 //! [`crate::api_keys::ApiKeyManager`] (storage + request injection).
 
+use std::future::Future;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::Arc;
@@ -51,6 +52,9 @@ const REDIRECT_PORT: u16 = 56121;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 /// How long to nap between non-blocking `accept()` attempts.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// How long to wait for an accepted connection to send its request before
+/// giving up on it.
+const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// xAI's browser consent screen fetches the loopback callback from these
 /// origins. Since that request crosses origins (https://accounts.x.ai ->
@@ -87,6 +91,20 @@ impl OauthCancellationHandle {
     }
 }
 
+/// Resolves once the loopback callback listener has been released -- either
+/// because the browser's redirect was received or the attempt was cancelled
+/// -- strictly before [`OauthAttempt::finish`]'s result future does any
+/// further work (the CSRF check and the token exchange both happen after the
+/// point this signal fires). Lets a caller learn the bound port is free
+/// without waiting on a token exchange that doesn't affect it.
+pub struct OauthReleaseSignal(async_channel::Receiver<()>);
+
+impl OauthReleaseSignal {
+    pub async fn released(self) {
+        let _ = self.0.recv().await;
+    }
+}
+
 impl OauthAttempt {
     /// Binds the loopback callback server and generates fresh per-attempt
     /// secrets. Call this before opening the browser so a bind failure (e.g.
@@ -110,8 +128,20 @@ impl OauthAttempt {
     /// Runs the rest of the browser-based PKCE flow: waits for the loopback
     /// callback, validates the CSRF state, and exchanges the authorization
     /// code for tokens. Consumes the attempt so its secrets can't be reused.
-    pub async fn finish(self) -> anyhow::Result<TokenResponse> {
-        run_oauth_flow(self.listener, self.pkce, self.cancellation).await
+    ///
+    /// Returns an [`OauthReleaseSignal`] alongside the result future so a
+    /// caller that only needs to know the port is free again -- to allow a
+    /// retry -- doesn't have to wait for a token exchange that a raced-in
+    /// callback may have already started.
+    pub fn finish(
+        self,
+    ) -> (
+        OauthReleaseSignal,
+        impl Future<Output = anyhow::Result<TokenResponse>>,
+    ) {
+        let (release_tx, release_rx) = async_channel::bounded(1);
+        let result = run_oauth_flow(self.listener, self.pkce, self.cancellation, release_tx);
+        (OauthReleaseSignal(release_rx), result)
     }
 
     /// Clones the PKCE verifier for the pasted-code fallback while the
@@ -242,6 +272,7 @@ async fn run_oauth_flow(
     listener: TcpListener,
     pkce: PkceParams,
     cancellation: OauthCancellationHandle,
+    release_tx: async_channel::Sender<()>,
 ) -> anyhow::Result<TokenResponse> {
     // The loopback accept loop is blocking, so run it on a dedicated OS thread
     // and bridge the result back through a runtime-agnostic async channel.
@@ -255,8 +286,12 @@ async fn run_oauth_flow(
             // retried login, or Grok CLI), and that bind fails with "address in
             // use" while this listener is still open.
             drop(listener);
+            // Signal release before publishing the callback: a real callback
+            // still has a token exchange ahead of it, which doesn't hold the
+            // port and shouldn't block a caller that only wants to retry.
             // `send_blocking` is disallowed (no wasm support); block this
             // dedicated thread on the async `send` instead.
+            let _ = warpui_core::r#async::block_on(release_tx.send(()));
             let _ = warpui_core::r#async::block_on(tx.send(callback));
         })
         .context("failed to spawn the Grok OAuth callback server thread")?;
@@ -297,7 +332,7 @@ fn wait_for_callback(
             bail!("timed out waiting for the Grok authorization callback");
         }
         match listener.accept() {
-            Ok((stream, _)) => match handle_callback_connection(stream)? {
+            Ok((stream, _)) => match handle_callback_connection(stream, cancellation)? {
                 Some(data) => return Ok(data),
                 // Unrelated request (e.g. /favicon.ico); keep waiting.
                 None => continue,
@@ -318,19 +353,11 @@ fn wait_for_callback(
 /// Returns `Ok(None)` for requests that aren't the OAuth callback (so the
 /// caller keeps listening), `Ok(Some(..))` on a successful callback, and `Err`
 /// when the provider reported an error or the callback was malformed.
-fn handle_callback_connection(mut stream: TcpStream) -> anyhow::Result<Option<CallbackData>> {
-    // The accepted stream may inherit the listener's non-blocking flag on some
-    // platforms; force blocking reads with a timeout so we get the full request
-    // line without spinning.
-    stream.set_nonblocking(false).ok();
-    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-
-    let mut buf = [0u8; 8192];
-    let n = stream
-        .read(&mut buf)
-        .context("failed to read the Grok OAuth callback request")?;
-    let request = String::from_utf8_lossy(&buf[..n]);
-
+fn handle_callback_connection(
+    mut stream: TcpStream,
+    cancellation: &OauthCancellationHandle,
+) -> anyhow::Result<Option<CallbackData>> {
+    let request = read_callback_request(&mut stream, cancellation)?;
     let origin = request_header(&request, "Origin");
 
     // The request line looks like: "GET /callback?code=...&state=... HTTP/1.1".
@@ -398,6 +425,55 @@ fn handle_callback_connection(mut stream: TcpStream) -> anyhow::Result<Option<Ca
     write_response(&mut stream, "200 OK", SUCCESS_HTML, origin.as_deref());
     Ok(Some(CallbackData { code, state }))
 }
+
+/// Reads `stream` until its headers are fully received (a blank line), the
+/// buffer fills, or the connection closes, polling in short increments so a
+/// cancellation is noticed promptly rather than only once `CALLBACK_READ_TIMEOUT`
+/// elapses -- otherwise a connection that's accepted but never sends anything
+/// (e.g. a stray network probe) would hold the listener for that long after
+/// Cancel.
+fn read_callback_request(
+    stream: &mut TcpStream,
+    cancellation: &OauthCancellationHandle,
+) -> anyhow::Result<String> {
+    stream
+        .set_nonblocking(true)
+        .context("failed to set the Grok OAuth callback stream to non-blocking mode")?;
+    let deadline = Instant::now() + CALLBACK_READ_TIMEOUT;
+    let mut buf = [0u8; 8192];
+    let mut total = 0;
+    loop {
+        if cancellation.cancelled.load(Ordering::Acquire) {
+            bail!("Grok authorization was cancelled");
+        }
+        // Checked every iteration, not just after a `WouldBlock`, so a client
+        // that drips one byte per poll interval still can't hold the
+        // connection past `CALLBACK_READ_TIMEOUT`.
+        if Instant::now() >= deadline {
+            bail!("timed out reading the Grok OAuth callback request");
+        }
+        match stream.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => {
+                total += n;
+                if total == buf.len() || buf[..total].windows(4).any(|window| window == b"\r\n\r\n")
+                {
+                    break;
+                }
+            }
+            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(e) => {
+                return Err(
+                    anyhow::Error::new(e).context("failed to read the Grok OAuth callback request")
+                );
+            }
+        }
+    }
+    Ok(String::from_utf8_lossy(&buf[..total]).into_owned())
+}
+
 fn request_header(request: &str, header_name: &str) -> Option<String> {
     request.lines().skip(1).find_map(|line| {
         let (name, value) = line.split_once(':')?;

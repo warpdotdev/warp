@@ -19,6 +19,7 @@ diesel = { workspace = true, features = [
 # via some mechanism that the feature resolver has access to, we can't
 # make it optional.
 diesel_migrations = "2.2.0"
+ai_types.workspace = true
 serde.workspace = true
 warp_multi_agent_api.workspace = true
 

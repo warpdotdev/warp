@@ -321,9 +321,16 @@ pub async fn make_authenticated_client(
                  in the Warp desktop app first."
             );
         }
+        // Naming the alternatives matters more than it looks: a cloud agent
+        // often runs somewhere its operator cannot open a browser against, so
+        // "authenticate in the desktop app" is not always a remedy they can
+        // act on.
         return Err(AuthError::AuthorizationFailed(
-            "MCP server requires OAuth authentication. Please authenticate this server in the \
-             Warp desktop app first, then try again."
+            "This MCP server asked for interactive OAuth, which cannot run in a headless or \
+             cloud agent. Either attach the server as a Warp-managed MCP so the platform \
+             supplies its credentials, or configure a static credential header backed by a \
+             managed secret. Authenticating the server in the Warp desktop app also works for \
+             runs on that same machine."
                 .to_string(),
         ));
     }

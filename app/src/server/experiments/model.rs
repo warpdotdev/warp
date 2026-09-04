@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 
 use anyhow::Context;
-use onboarding::ChooseHowToStartExperimentArm;
 #[cfg(test)]
 pub use tests::TestModel;
 use warp_errors::report_if_error;
@@ -55,24 +54,6 @@ impl ServerExperiments {
     /// Returns true iff the `experiment` is enabled.
     pub fn is_experiment_enabled(&self, experiment: &ServerExperiment) -> bool {
         self.latest.contains(experiment)
-    }
-
-    /// The user's arm in the onboarding "Choose how to start" option-count
-    /// experiment.
-    ///
-    /// Ineligible users receive neither arm; malformed state carrying both
-    /// fails closed rather than guessing. Both cases resolve to `Unassigned`,
-    /// which renders the safe two-option layout.
-    pub fn choose_how_to_start_experiment_arm(&self) -> ChooseHowToStartExperimentArm {
-        let control =
-            self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartControl);
-        let experiment =
-            self.is_experiment_enabled(&ServerExperiment::OnboardingChooseHowToStartExperiment);
-        match (control, experiment) {
-            (true, false) => ChooseHowToStartExperimentArm::Control,
-            (false, true) => ChooseHowToStartExperimentArm::Experiment,
-            _ => ChooseHowToStartExperimentArm::Unassigned,
-        }
     }
 
     /// Saves the latest experiment state in-memory and to the local cache.

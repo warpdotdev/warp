@@ -17,6 +17,19 @@ pub(crate) enum ThirdPartyHarnessTelemetryEvent {
         /// The originating needle from `runtime_error_patterns` that hit.
         pattern: String,
     },
+
+    /// One attempt in the harness exit escalation ladder driven by
+    /// `AgentDriver::run_harness`: the initial `/exit` request, a follow-up
+    /// retry (e.g. dismissing Claude's background-task confirmation), or a
+    /// final force-kill of the harness's process group. Fires on every
+    /// attempt, not just escalations, so the ratio of clean exits to
+    /// escalations is measurable.
+    ExitEscalation {
+        /// CLI command prefix for the harness (e.g. `"claude"`, `"codex"`).
+        harness: String,
+        /// `"exit"`, `"exit_followup"`, or `"force_kill"`.
+        method: &'static str,
+    },
 }
 
 impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
@@ -32,6 +45,10 @@ impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
                     "pattern": pattern,
                 }))
             }
+            ThirdPartyHarnessTelemetryEvent::ExitEscalation { harness, method } => Some(json!({
+                "harness": harness,
+                "method": method,
+            })),
         }
     }
 
@@ -46,6 +63,7 @@ impl TelemetryEvent for ThirdPartyHarnessTelemetryEvent {
     fn contains_ugc(&self) -> bool {
         match self {
             ThirdPartyHarnessTelemetryEvent::RuntimeErrorDetected { .. } => false,
+            ThirdPartyHarnessTelemetryEvent::ExitEscalation { .. } => false,
         }
     }
 
@@ -60,6 +78,9 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
             ThirdPartyHarnessTelemetryEventDiscriminants::RuntimeErrorDetected => {
                 "AmbientAgents.ThirdPartyHarness.RuntimeError.Detected"
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => {
+                "AmbientAgents.ThirdPartyHarness.Exit.Escalation"
+            }
         }
     }
 
@@ -69,6 +90,10 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
                 "Runtime output scanner detected a known failure substring in a third-party \
                  harness block."
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => {
+                "One attempt (initial exit, follow-up retry, or force-kill) in the harness \
+                 exit escalation ladder."
+            }
         }
     }
 
@@ -77,6 +102,7 @@ impl TelemetryEventDesc for ThirdPartyHarnessTelemetryEventDiscriminants {
             ThirdPartyHarnessTelemetryEventDiscriminants::RuntimeErrorDetected => {
                 EnablementState::Always
             }
+            ThirdPartyHarnessTelemetryEventDiscriminants::ExitEscalation => EnablementState::Always,
         }
     }
 }

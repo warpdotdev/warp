@@ -371,6 +371,24 @@ impl HarnessRunner for CodexHarnessRunner {
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /exit"))
     }
 
+    async fn exit_followup(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        // Retry with a bare Enter shortly after `/exit`, in case the first
+        // write was dropped (e.g. the block was transiently under agent
+        // control) or Codex is sitting at a confirmation prompt. No
+        // numbered confirmation dialog analogous to Claude's has been
+        // observed for Codex; this is a blind retry, not a targeted dismissal.
+        log::info!("Sending exit follow-up (Enter) to Codex CLI");
+        let terminal_driver = self.terminal_driver.clone();
+        foreground
+            .spawn(move |_, ctx| {
+                terminal_driver.update(ctx, |driver, ctx| {
+                    driver.send_bare_enter_to_cli(ctx);
+                });
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending exit follow-up"))
+    }
+
     /// Capture the codex session ID from the `SessionStart` event picked up by the `CLIAgentSessionsModel`.
     ///
     /// Relies on codex hooks being set up to emit this event correctly.

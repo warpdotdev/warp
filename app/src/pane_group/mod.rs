@@ -27,6 +27,7 @@ use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_errors::report_if_error;
+use warp_terminal::focus_env::add_session_focus_env_vars;
 use warp_terminal::shell::{ShellName, ShellType};
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -64,7 +65,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlock
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
@@ -122,7 +123,6 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
-use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
@@ -171,6 +171,7 @@ use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::{
     self, CommandSearchOptions, PaneViewLocator, TabBarLocation, WorkspaceAction,
 };
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 mod ambient_pane_restoration;
@@ -1752,8 +1753,16 @@ impl PaneGroup {
                     && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override)
                 {
                     log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
-                    crate::ai::llms::LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
-                        llm_prefs.update_preferred_agent_mode_llm(&llm_id, terminal_view_id, ctx);
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
+                        llm_prefs.update_preferred_agent_mode_llm(
+                            &scope,
+                            &llm_id,
+                            terminal_view_id,
+                            ctx,
+                        );
                     });
                 }
 
@@ -4787,6 +4796,12 @@ impl PaneGroup {
             return;
         }
 
+        // Remove any share modal associated with the closing session before
+        // taking an early return for the last pane or an already-hidden pane.
+        if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
+            self.terminal_with_open_share_block_modal = None;
+        }
+
         // Child agent panes return to off-tree state instead of being
         // destroyed; future pill clicks re-host the same view. The view
         // keeps ownership of its conversation, so we skip the
@@ -4862,11 +4877,6 @@ impl PaneGroup {
                 self.hide_closed_pane(pane_id, ctx);
             }
 
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
-
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
             }
@@ -4896,11 +4906,6 @@ impl PaneGroup {
             }
 
             self.clean_up_pane(pane_id, ctx);
-
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
 
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
@@ -5094,6 +5099,7 @@ impl PaneGroup {
         file_pane_id: PaneId,
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        scroll_fraction: Option<f32>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::code::editor_management::CodeSource;
@@ -5103,6 +5109,14 @@ impl PaneGroup {
         let source = source.unwrap_or(CodeSource::FileTree { location: path });
 
         let code_pane = CodePane::new(source, None, ctx);
+        // Seed the restored scroll before the pane attaches and lays out. The fraction is consumed
+        // on a later async `ViewportUpdated` (never within this synchronous pass), so setting it
+        // here is strictly before any possible apply.
+        if let Some(fraction) = scroll_fraction {
+            code_pane.file_view(ctx).update(ctx, |code_view, ctx| {
+                code_view.set_pending_scroll_fraction(fraction, ctx);
+            });
+        }
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);
 
         if !success {
@@ -5119,6 +5133,7 @@ impl PaneGroup {
         code_pane_id: PaneId,
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        scroll_fraction: Option<f32>,
         ctx: &mut ViewContext<Self>,
     ) {
         // Get the active session to pass to the FilePane, if any
@@ -5134,7 +5149,14 @@ impl PaneGroup {
             }
         });
 
-        let file_pane = FilePane::new(Some(path), session, source, ctx);
+        // Construct the pane empty, seed the restored scroll, THEN open the path — so the content
+        // load that triggers `set_content` -> scroll apply can never run before the pending
+        // fraction is set, even if a load were to deliver synchronously.
+        let file_pane = FilePane::new(None, None, source, ctx);
+        file_pane.file_view(ctx).update(ctx, |view, ctx| {
+            view.set_pending_scroll_fraction(scroll_fraction);
+            view.open(path, session, ctx);
+        });
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {
@@ -5189,12 +5211,32 @@ impl PaneGroup {
             }
             PaneEvent::ClearHoveredTabIndex => ctx.emit(Event::ClearHoveredTabIndex),
             #[cfg(feature = "local_fs")]
-            PaneEvent::ReplaceWithCodePane { path, source } => {
-                self.replace_file_pane_with_code_pane(pane_id, path.clone(), source.clone(), ctx);
+            PaneEvent::ReplaceWithCodePane {
+                path,
+                source,
+                scroll_fraction,
+            } => {
+                self.replace_file_pane_with_code_pane(
+                    pane_id,
+                    path.clone(),
+                    source.clone(),
+                    (*scroll_fraction).map(|f| f.into_inner()),
+                    ctx,
+                );
             }
             #[cfg(feature = "local_fs")]
-            PaneEvent::ReplaceWithFilePane { path, source } => {
-                self.replace_code_pane_with_file_pane(pane_id, path.clone(), source.clone(), ctx);
+            PaneEvent::ReplaceWithFilePane {
+                path,
+                source,
+                scroll_fraction,
+            } => {
+                self.replace_code_pane_with_file_pane(
+                    pane_id,
+                    path.clone(),
+                    source.clone(),
+                    (*scroll_fraction).map(|f| f.into_inner()),
+                    ctx,
+                );
             }
             PaneEvent::RepoChanged => {
                 ctx.emit(Event::RepoChanged);

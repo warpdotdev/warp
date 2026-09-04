@@ -17,7 +17,7 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
-    ConversationUsageMetadata, TokenUsage,
+    ConversationUsageMetadata, RequestCharges, TokenUsage,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -1147,6 +1147,25 @@ impl BlocklistAIHistoryModel {
             .is_some_and(|c| c.is_exchange_hidden(exchange_id))
     }
 
+    /// Test-only, crate-visible wrapper around [`Self::update_conversation_for_new_request_input`]
+    /// so tests outside this module (e.g. `agent_sdk::driver_tests`) can attach an in-flight
+    /// request to a conversation without widening that method's production visibility.
+    #[cfg(test)]
+    pub(crate) fn update_conversation_for_new_request_input_for_test(
+        &mut self,
+        request_input: RequestInput,
+        stream_id: ResponseStreamId,
+        terminal_surface_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), UpdateHistoryError> {
+        self.update_conversation_for_new_request_input(
+            request_input,
+            stream_id,
+            terminal_surface_id,
+            ctx,
+        )
+    }
+
     /// Add a new [`AIAgentExchange`] to the [`AIConversation`] with the given [`AIConversationId`].
     /// Emits an event with the new exchange.
     pub(super) fn update_conversation_for_new_request_input(
@@ -1538,6 +1557,20 @@ impl BlocklistAIHistoryModel {
         };
 
         if let Some(key) = agent_key {
+            // The server emits `child_agent_started` on the parent for every
+            // child, local ones included, so the SSE family drain cannot
+            // tell this conversation's own child apart from one spawned
+            // out-of-band (CLI/API) and may have already fetched task
+            // metadata and materialized an `is_remote_child` placeholder for
+            // this run_id (`ensure_remote_child_placeholder`) before this
+            // conversation claimed it. Discard that stale placeholder so
+            // exactly one conversation ever represents this run_id,
+            // regardless of which side wins the race.
+            if let Some(existing) = self.agent_id_to_conversation_id.get(&key).copied()
+                && existing != conversation_id
+            {
+                self.discard_stale_placeholder_for_run_id(existing, conversation_id, &key, ctx);
+            }
             self.agent_id_to_conversation_id
                 .insert(key, conversation_id);
         }
@@ -1551,6 +1584,39 @@ impl BlocklistAIHistoryModel {
             conversation_id,
             terminal_surface_id,
         });
+    }
+
+    /// Discards `stale_conversation_id` when it is a remote-child placeholder
+    /// left behind by a `run_id` that `conversation_id` is now authoritatively
+    /// claiming. Only ever discards a placeholder (`is_remote_child`) — if the
+    /// existing mapping instead points at a real conversation, that would be
+    /// an unrelated bug, so it's logged rather than silently deleted.
+    fn discard_stale_placeholder_for_run_id(
+        &mut self,
+        stale_conversation_id: AIConversationId,
+        conversation_id: AIConversationId,
+        run_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let is_placeholder = self
+            .conversations_by_id
+            .get(&stale_conversation_id)
+            .is_some_and(|conversation| conversation.is_remote_child());
+        if !is_placeholder {
+            log::warn!(
+                "assign_run_id_for_conversation: run_id={run_id} already mapped to \
+                 non-placeholder conversation {stale_conversation_id:?}; leaving it in place \
+                 and rebinding the run-id index to {conversation_id:?}."
+            );
+            return;
+        }
+        log::info!(
+            "assign_run_id_for_conversation: discarding stale remote-child placeholder \
+             {stale_conversation_id:?} for run_id={run_id}, superseded by local conversation \
+             {conversation_id:?}."
+        );
+        let terminal_surface_id = self.terminal_surface_id_for_conversation(&stale_conversation_id);
+        self.remove_conversation_from_memory(stale_conversation_id, terminal_surface_id, ctx);
     }
 
     /// Resolves a server-side agent identifier to a local conversation ID.
@@ -1986,10 +2052,12 @@ impl BlocklistAIHistoryModel {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_conversation_cost_and_usage_for_request(
         &mut self,
         conversation_id: AIConversationId,
         request_cost: Option<RequestCost>,
+        request_charges: Option<RequestCharges>,
         token_usage: Vec<TokenUsage>,
         usage_metadata: Option<ConversationUsageMetadata>,
         was_user_initiated_request: bool,
@@ -2000,11 +2068,14 @@ impl BlocklistAIHistoryModel {
         // subscribers (e.g. the orchestration credit rollup or the TUI
         // footer's usage entry). We emit the event only when there's actual
         // data to react to.
-        let emits_usage_event =
-            request_cost.is_some() || usage_metadata.is_some() || !token_usage.is_empty();
+        let emits_usage_event = request_cost.is_some()
+            || request_charges.is_some()
+            || usage_metadata.is_some()
+            || !token_usage.is_empty();
         if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
             if let Err(e) = conversation.update_cost_and_usage_for_request(
                 request_cost,
+                request_charges,
                 token_usage,
                 usage_metadata,
                 was_user_initiated_request,

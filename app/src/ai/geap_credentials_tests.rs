@@ -8,6 +8,7 @@ use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
 
 use super::*;
+use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -133,12 +134,6 @@ fn timer_delay_clamps_to_floor_when_near_or_past_expiry() {
     );
 }
 
-// The structured `LoadGeapCredentialsError` is intentionally not user-facing
-// (no `Display` prose, no truncation) — the UI layer owns turning a leg + HTTP
-// `status` + raw `detail` into actionable copy. Coverage that the structured
-// error round-trips into `Failed { error }` lives in the mint-completion tests
-// below.
-
 // ── refresh guard / safety net (app harness) ───────────────────
 
 fn team_for_test() -> Team {
@@ -153,6 +148,7 @@ fn team_for_test() -> Team {
         billing_metadata: Default::default(),
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: TeamVisibility::Open,
@@ -160,8 +156,21 @@ fn team_for_test() -> Team {
 }
 
 fn workspace_with_geap_host(enabled: bool) -> Workspace {
-    let team = team_for_test();
-    let mut workspace = Workspace {
+    let mut team = team_for_test();
+    // The scoped and any-team accessors both read a team's own `settings.llm_settings`
+    // (never the workspace's, once any team exists -- see `team_workspace_settings.rs`), so
+    // the host has to live there for a windowed or windowless read to see it.
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        crate::ai::llms::LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(TEST_AUDIENCE.to_string()),
+            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
+        },
+    );
+    Workspace {
         uid: "workspace_uid123456789".to_string().into(),
         name: "test".to_string(),
         stripe_customer_id: None,
@@ -171,23 +180,13 @@ fn workspace_with_geap_host(enabled: bool) -> Workspace {
         billing_cycle_usage: None,
         has_billing_history: false,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         invite_link_domain_restrictions: vec![],
         pending_email_invites: vec![],
         is_eligible_for_discovery: false,
         members: vec![],
         total_requests_used_since_last_refresh: 0,
-    };
-    workspace.settings.llm_settings.enabled = true;
-    workspace.settings.llm_settings.host_configs.insert(
-        crate::ai::llms::LLMModelHost::GeminiEnterprise,
-        LlmHostSettings {
-            enabled,
-            enablement_setting: HostEnablementSetting::Enforce,
-            gcp_audience: Some(TEST_AUDIENCE.to_string()),
-            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
-        },
-    );
-    workspace
+    }
 }
 
 /// Registers the minimal singleton set the refresh path touches: workspace
@@ -254,7 +253,7 @@ fn stale_binding() -> GeapMintBinding {
 /// The mintable binding for the harness gate. The harness enables the GEAP
 /// host with a configured audience, so the policy is always `Mintable`.
 fn current_binding(ctx: &mut ModelContext<ApiKeyManager>) -> GeapMintBinding {
-    match current_geap_policy(ctx) {
+    match current_geap_policy_for_any_team(ctx) {
         GeapPolicy::Mintable(binding) => binding,
         other => panic!("expected a mintable GEAP policy, got {other:?}"),
     }
@@ -298,7 +297,7 @@ fn refresh_disables_and_drops_tokens_when_gate_is_off() {
 fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
     let mut workspace = workspace_with_geap_host(true);
     // Enabled, but the admin has not configured an audience yet.
-    workspace
+    workspace.teams[0]
         .settings
         .llm_settings
         .host_configs
@@ -314,6 +313,69 @@ fn refresh_rests_at_unconfigured_when_enabled_but_unconfigured() {
                 *manager.geap_credentials_state(),
                 GeapCredentialsState::Unconfigured
             );
+        });
+    })
+}
+
+/// Two teams enabling GEAP against different Google Cloud projects, named here so a fixture
+/// used by more than one test doesn't have to repeat the setup.
+fn team_with_geap_host(name: &str, uid: i64, audience: &str) -> Team {
+    let mut team = team_for_test();
+    team.uid = uid.into();
+    team.name = name.to_string();
+    team.settings.llm_settings.enabled = true;
+    team.settings.llm_settings.host_configs.insert(
+        crate::ai::llms::LLMModelHost::GeminiEnterprise,
+        LlmHostSettings {
+            enabled: true,
+            enablement_setting: HostEnablementSetting::Enforce,
+            gcp_audience: Some(audience.to_string()),
+            gcp_sa_email: Some(TEST_SA_EMAIL.to_string()),
+        },
+    );
+    team
+}
+
+fn workspace_with_teams(teams: Vec<Team>) -> Workspace {
+    Workspace {
+        uid: "workspace_uid123456789".to_string().into(),
+        name: "test".to_string(),
+        stripe_customer_id: None,
+        teams,
+        billing_metadata: Default::default(),
+        bonus_grants_purchased_this_month: Default::default(),
+        billing_cycle_usage: None,
+        has_billing_history: false,
+        settings: Default::default(),
+        feature_model_choice: Default::default(),
+        invite_link_domain_restrictions: vec![],
+        pending_email_invites: vec![],
+        is_eligible_for_discovery: false,
+        members: vec![],
+        total_requests_used_since_last_refresh: 0,
+    }
+}
+
+#[test]
+fn refresh_rests_at_conflicting_across_teams_when_projects_disagree() {
+    const OTHER_AUDIENCE: &str = "//iam.googleapis.com/projects/999999/locations/global/workloadIdentityPools/other-pool/providers/other-provider";
+    let team_a = team_with_geap_host("Acme Corp", 1, TEST_AUDIENCE);
+    let team_b = team_with_geap_host("Acme Labs", 2, OTHER_AUDIENCE);
+    let workspace = workspace_with_teams(vec![team_a, team_b]);
+    App::test((), |mut app| async move {
+        let _geap_flag = FeatureFlag::GeminiEnterprise.override_enabled(true);
+        initialize_app(&mut app, vec![workspace]);
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            refresh_geap_credentials(manager, ctx);
+            match manager.geap_credentials_state() {
+                GeapCredentialsState::ConflictingAcrossTeams { team_names } => {
+                    assert_eq!(
+                        team_names,
+                        &vec!["Acme Corp".to_string(), "Acme Labs".to_string()]
+                    );
+                }
+                other => panic!("expected ConflictingAcrossTeams, got {other:?}"),
+            }
         });
     })
 }

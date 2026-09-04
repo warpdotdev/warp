@@ -38,7 +38,7 @@ fn fixture(app: &mut App) -> Fixture {
                 window_style: WindowStyle::NotStealFocus,
                 ..Default::default()
             },
-            |_| RootTuiView::new(),
+            RootTuiView::new,
         )
     });
     let sessions = app.add_singleton_model(|_| TuiSessions::new_for_test());

@@ -131,6 +131,8 @@ const INVALID_EMAILS_INSTRUCTIONS: &str =
 
 const OFFLINE_TEXT: &str = "You are offline.";
 
+const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
+
 const MAX_CHIP_WIDTH: f32 = 280.;
 
 lazy_static! {
@@ -148,6 +150,22 @@ fn owner_state_chip_text_color(theme: &themes::theme::WarpTheme) -> ColorU {
         .background()
         .blend(&theme.accent().with_opacity(OWNER_STATE_CHIP_ACCENT_OPACITY));
     theme.main_text_color(chip_background).into_solid()
+}
+
+fn dim_color(color: ColorU) -> ColorU {
+    ColorU::new(color.r, color.g, color.b, color.a / 2)
+}
+
+fn item_row_text_color(appearance: &Appearance, is_disabled: bool) -> themes::theme::Fill {
+    if is_disabled {
+        appearance.theme().disabled_ui_text_color()
+    } else {
+        appearance.theme().active_ui_text_color()
+    }
+}
+
+fn disabled_member_tooltip_text(is_disabled: bool) -> Option<&'static str> {
+    is_disabled.then_some(DISABLED_MEMBER_TOOLTIP_TEXT)
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +320,9 @@ pub enum TeamsPageViewEvent {
         message: String,
         flavor: ToastFlavor,
     },
+    /// One of this page's modals opened or closed. [`SettingsView`] owns the
+    /// slot they render in, so it has to re-render to pick the change up.
+    ModalVisibilityChanged,
 }
 
 #[derive(Default)]
@@ -415,12 +436,19 @@ struct ItemAction {
     action: TeamsPageAction,
 }
 
+#[derive(Clone, Default)]
+struct ItemMouseStates {
+    action: MouseStateHandle,
+    disabled_tooltip: MouseStateHandle,
+}
+
 /// An item (team member, pending email invite, or domain) consists of its text, and actions associated with it.
 #[derive(Clone)]
 pub struct Item {
     text: String,
     actions: Vec<ItemAction>,
     state: ItemState,
+    is_disabled: bool,
 }
 
 impl PartialEq for Item {
@@ -497,8 +525,8 @@ pub struct TeamsPageView {
     pricing_info_model: ModelHandle<PricingInfoModel>,
     cloud_model: ModelHandle<CloudModel>,
     invite_view: TeamsInviteOption,
-    team_members_mouse_state_handles: Vec<MouseStateHandle>,
-    team_approved_domains_mouse_state_handles: Vec<MouseStateHandle>,
+    team_members_mouse_states: Vec<ItemMouseStates>,
+    team_approved_domains_mouse_states: Vec<ItemMouseStates>,
     team_action_confirmation_dialog: ViewHandle<CloudActionConfirmationDialog>,
     show_team_action_confirmation_dialog: bool,
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
@@ -789,21 +817,21 @@ impl TeamsPageView {
 
         let current_user_team = user_workspaces.as_ref(ctx).team_for_view(ctx);
 
-        let team_members_mouse_state_handles =
-            current_user_team.map_or_else(Vec::new, |user_team| {
-                user_team
-                    .members
-                    .iter()
-                    .map(|_| Default::default())
-                    .collect()
-            });
+        // Sized from pending invites + members, matching
+        // `update_team_member_mouse_state_handles` below.
+        let team_members_mouse_states = current_user_team.map_or_else(Vec::new, |user_team| {
+            let total_length = user_team.pending_email_invites.len() + user_team.members.len();
+            (0..total_length)
+                .map(|_| ItemMouseStates::default())
+                .collect()
+        });
 
-        let team_approved_domains_mouse_state_handles =
+        let team_approved_domains_mouse_states =
             current_user_team.map_or_else(Vec::new, |user_team| {
                 user_team
                     .invite_link_domain_restrictions
                     .iter()
-                    .map(|_| Default::default())
+                    .map(|_| ItemMouseStates::default())
                     .collect()
             });
 
@@ -889,8 +917,8 @@ impl TeamsPageView {
             pricing_info_model,
             cloud_model,
             invite_view: TeamsInviteOption::default(),
-            team_members_mouse_state_handles,
-            team_approved_domains_mouse_state_handles,
+            team_members_mouse_states,
+            team_approved_domains_mouse_states,
             clipped_scroll_state: Default::default(),
             team_action_confirmation_dialog,
             show_team_action_confirmation_dialog: false,
@@ -1131,6 +1159,9 @@ impl TeamsPageView {
         target: TeamActionConfirmationTarget,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Only one modal renders (see `get_modal_content`), so opening one must clear the other
+        // rather than leave it queued behind for a target the user has moved on from.
+        self.clear_transfer_ownership_modal(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1140,21 +1171,30 @@ impl TeamsPageView {
                 ctx.notify();
             });
         self.show_team_action_confirmation_dialog = true;
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
-    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Drops the confirmation dialog's state without announcing it. Callers that change what is on
+    /// screen emit [`TeamsPageViewEvent::ModalVisibilityChanged`] once for the whole transition.
+    fn clear_team_action_confirmation(&mut self) {
         self.pending_team_action_confirmation = None;
         self.show_team_action_confirmation_dialog = false;
+    }
+
+    fn hide_team_action_confirmation(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
     fn confirm_pending_team_action(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(target) = self.pending_team_action_confirmation.take() else {
-            self.hide_team_action_confirmation(ctx);
+        // Take the target first: hiding clears it.
+        let target = self.pending_team_action_confirmation.take();
+        self.hide_team_action_confirmation(ctx);
+        let Some(target) = target else {
             return;
         };
-        self.show_team_action_confirmation_dialog = false;
         match target {
             TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete => {
                 self.leave_team(ctx);
@@ -1166,20 +1206,17 @@ impl TeamsPageView {
         ctx.notify();
     }
 
-    fn should_show_delete_or_leave_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::Leave | TeamActionConfirmationTarget::Delete)
-            )
-    }
-
-    fn should_show_remove_user_from_team_confirmation_dialog(&self) -> bool {
-        self.show_team_action_confirmation_dialog
-            && matches!(
-                &self.pending_team_action_confirmation,
-                Some(TeamActionConfirmationTarget::RemoveUser { .. })
-            )
+    /// This page's modal overlays, rendered by [`SettingsView`] in its top-level stack rather than
+    /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
+    /// centered on it lands wherever the scroll offset happens to put it.
+    pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
+        if self.transfer_ownership_modal_state.is_open() {
+            Some(self.transfer_ownership_modal_state.render())
+        } else if self.show_team_action_confirmation_dialog {
+            Some(ChildView::new(&self.team_action_confirmation_dialog).finish())
+        } else {
+            None
+        }
     }
 
     /// Scroll to the team membership settings. If an email is provided, it's prepopulated in the
@@ -1251,12 +1288,10 @@ impl TeamsPageView {
                 team_uid,
             } => {
                 self.set_team_member_role(*new_owner_uid, *team_uid, MembershipRole::Owner, ctx);
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
             TransferOwnershipConfirmationEvent::Cancel => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
+                self.close_transfer_ownership_modal(ctx);
             }
         }
     }
@@ -1267,11 +1302,22 @@ impl TeamsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         match event {
-            ModalEvent::Close => {
-                self.transfer_ownership_modal_state.close();
-                ctx.notify();
-            }
+            ModalEvent::Close => self.close_transfer_ownership_modal(ctx),
         }
+    }
+
+    /// Closes the transfer-ownership modal and takes back the focus it was given on open, so
+    /// Escape stops dispatching into a view that is no longer rendered. Announcing the change is
+    /// the caller's job, as it is for [`Self::clear_team_action_confirmation`].
+    fn clear_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.transfer_ownership_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_transfer_ownership_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_transfer_ownership_modal(ctx);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
     }
 
     fn show_transfer_ownership_modal(
@@ -1281,6 +1327,7 @@ impl TeamsPageView {
         team_uid: ServerId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.clear_team_action_confirmation();
         self.transfer_ownership_modal_state
             .view
             .update(ctx, |modal, ctx| {
@@ -1290,6 +1337,10 @@ impl TeamsPageView {
                 });
             });
         self.transfer_ownership_modal_state.open();
+        // Focus the modal so Escape closes it (the modal's escape binding only
+        // fires while something inside the modal holds focus).
+        ctx.focus(&self.transfer_ownership_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
         ctx.notify();
     }
 
@@ -1342,10 +1393,10 @@ impl TeamsPageView {
 
     fn update_approved_domains_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
-            self.team_approved_domains_mouse_state_handles = team
+            self.team_approved_domains_mouse_states = team
                 .invite_link_domain_restrictions
                 .iter()
-                .map(|_| Default::default())
+                .map(|_| ItemMouseStates::default())
                 .collect();
         }
         ctx.notify();
@@ -1410,8 +1461,9 @@ impl TeamsPageView {
     fn update_team_member_mouse_state_handles(&mut self, ctx: &mut ViewContext<Self>) {
         if let Some(team) = self.user_workspaces.as_ref(ctx).team_for_view(ctx) {
             let total_length = team.pending_email_invites.len() + team.members.len();
-            self.team_members_mouse_state_handles =
-                (0..total_length).map(|_| Default::default()).collect();
+            self.team_members_mouse_states = (0..total_length)
+                .map(|_| ItemMouseStates::default())
+                .collect();
         }
         ctx.notify();
     }
@@ -1817,6 +1869,7 @@ impl TeamsPageView {
                 text: email_invite.invitee_email.clone(),
                 actions,
                 state,
+                is_disabled: false,
             });
         });
 
@@ -1903,6 +1956,7 @@ impl TeamsPageView {
                 text: member.email.clone(),
                 actions,
                 state,
+                is_disabled: member.is_disabled,
             });
         });
 
@@ -2423,7 +2477,6 @@ impl TeamsWidget {
                 Container::new(self.render_leave_or_delete_team_button(
                     is_owner,
                     delete_disabled_reason.is_none(),
-                    view,
                     appearance,
                 ))
                 .with_padding_right(24.)
@@ -3099,7 +3152,7 @@ impl TeamsWidget {
         // 2) List of team members
         section.add_child(self.render_item_list(
             TeamsPageView::team_to_item_list(team, user_email, workspace),
-            view.team_members_mouse_state_handles.clone(),
+            view.team_members_mouse_states.clone(),
             view,
             appearance,
         ));
@@ -3318,6 +3371,7 @@ impl TeamsWidget {
                     text: domain_restriction.domain.clone(),
                     actions,
                     state: ItemState::Valid,
+                    is_disabled: false,
                 }
             })
             .collect();
@@ -3326,7 +3380,7 @@ impl TeamsWidget {
             section.add_child(
                 Container::new(self.render_item_list(
                     domains_as_items,
-                    view.team_approved_domains_mouse_state_handles.clone(),
+                    view.team_approved_domains_mouse_states.clone(),
                     view,
                     appearance,
                 ))
@@ -3470,11 +3524,8 @@ impl TeamsWidget {
         &self,
         is_team_owner: bool,
         can_team_be_deleted: bool,
-        view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let mut stack = Stack::new();
-
         let (label, action) = if is_team_owner {
             (
                 DELETE_TEAM_BUTTON_LABEL,
@@ -3521,26 +3572,10 @@ impl TeamsWidget {
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         };
 
-        stack.add_child(
-            Container::new(hoverable.finish())
-                .with_padding_top(CONTENT_SEPARATION_PADDING)
-                .with_padding_bottom(CONTENT_SEPARATION_PADDING)
-                .finish(),
-        );
-
-        if view.should_show_delete_or_leave_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::Unbounded,
-                    ParentAnchor::Center,
-                    ChildAnchor::BottomMiddle,
-                ),
-            );
-        }
-
-        stack.finish()
+        Container::new(hoverable.finish())
+            .with_padding_top(CONTENT_SEPARATION_PADDING)
+            .with_padding_bottom(CONTENT_SEPARATION_PADDING)
+            .finish()
     }
 
     fn render_delete_disabled_help_text(
@@ -3596,6 +3631,7 @@ impl TeamsWidget {
         .finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_state_chip(
         &self,
         appearance: &Appearance,
@@ -3604,7 +3640,13 @@ impl TeamsWidget {
         chip_color: ColorU,
         font_size: f32,
         font_weight: Weight,
+        dim: bool,
     ) -> Box<dyn Element> {
+        let (text_color, chip_color) = if dim {
+            (dim_color(text_color), dim_color(chip_color))
+        } else {
+            (text_color, chip_color)
+        };
         Container::new(
             Text::new_inline(text, appearance.ui_font_family(), font_size)
                 .with_color(text_color)
@@ -3621,33 +3663,38 @@ impl TeamsWidget {
     fn render_item_list(
         &self,
         items: Vec<Item>,
-        mouse_state_handles: Vec<MouseStateHandle>,
+        mouse_states: Vec<ItemMouseStates>,
         view: &TeamsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
+        debug_assert_eq!(
+            items.len(),
+            mouse_states.len(),
+            "item list ({}) and mouse-state vector ({}) diverged",
+            items.len(),
+            mouse_states.len()
+        );
         let all_items = items
             .iter()
             .sorted()
-            .zip(mouse_state_handles.iter())
             .enumerate()
-            .map(|(idx, (item, handle))| {
+            .map(|(idx, item)| {
+                let handles = mouse_states[idx].clone();
+
+                let text_color = item_row_text_color(appearance, item.is_disabled);
+                let text_element = Text::new_inline(
+                    item.text.clone(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size() - 1.,
+                )
+                .with_color(text_color.into_solid())
+                .finish();
+
                 let mut row = Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_main_axis_size(MainAxisSize::Max)
-                    .with_child(
-                        Shrinkable::new(
-                            1.,
-                            Text::new_inline(
-                                item.text.clone(),
-                                appearance.ui_font_family(),
-                                appearance.ui_font_size() - 1.,
-                            )
-                            .with_color(appearance.theme().active_ui_text_color().into())
-                            .finish(),
-                        )
-                        .finish(),
-                    );
+                    .with_child(Shrinkable::new(1., text_element).finish());
 
                 let mut pending_and_close_row = Flex::row()
                     .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -3666,6 +3713,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3680,6 +3728,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3696,6 +3745,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3716,6 +3766,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3732,6 +3783,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3752,6 +3804,7 @@ impl TeamsWidget {
                                     .into(),
                                 appearance.ui_font_size() - 1.,
                                 Weight::Normal,
+                                item.is_disabled,
                             ),
                         );
                     }
@@ -3769,7 +3822,7 @@ impl TeamsWidget {
                         let icon = item_action.icon;
                         pending_and_close_row.add_child(
                             Container::new(
-                                Hoverable::new(handle.clone(), move |_mouse_state| {
+                                Hoverable::new(handles.action.clone(), move |_mouse_state| {
                                     Container::new(
                                         ConstrainedBox::new(
                                             icon.to_warpui_icon(
@@ -3801,7 +3854,7 @@ impl TeamsWidget {
                         // Multiple actions - show dots menu
                         let menu_is_open = view.open_member_actions_menu_index == Some(idx);
                         let mut stack = Stack::new();
-                        let dots_button = Hoverable::new(handle.clone(), |_mouse_state| {
+                        let dots_button = Hoverable::new(handles.action.clone(), |_mouse_state| {
                             Container::new(
                                 ConstrainedBox::new(
                                     Icon::DotsVertical
@@ -3856,8 +3909,22 @@ impl TeamsWidget {
 
                 row.add_child(pending_and_close_row.finish());
 
+                // Overlay variant: the page renders inside a `Clipped` scroll viewport.
+                let row_content = row.finish();
+                let row_content = match disabled_member_tooltip_text(item.is_disabled) {
+                    Some(tooltip_text) => appearance.ui_builder().overlay_tool_tip_on_element(
+                        tooltip_text.to_string(),
+                        handles.disabled_tooltip.clone(),
+                        row_content,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::BottomLeft,
+                        vec2f(0., -5.),
+                    ),
+                    None => row_content,
+                };
+
                 let list_element =
-                    Container::new(row.finish()).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
+                    Container::new(row_content).with_uniform_padding(SCROLLABLE_LIST_ITEM_PADDING);
 
                 if idx % 2 == 0 {
                     list_element
@@ -4673,33 +4740,9 @@ impl SettingsWidget for TeamsWidget {
                 .finish()
         };
 
-        let mut stack = Stack::new();
-        stack.add_child(Flex::column().with_child(content).finish());
-
-        if view.transfer_ownership_modal_state.is_open() {
-            stack.add_positioned_overlay_child(
-                view.transfer_ownership_modal_state.render(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-        if view.should_show_remove_user_from_team_confirmation_dialog() {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&view.team_action_confirmation_dialog).finish(),
-                OffsetPositioning::offset_from_parent(
-                    vec2f(0., 0.),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::Center,
-                    ChildAnchor::Center,
-                ),
-            );
-        }
-
-        stack.finish()
+        // The page's modals are rendered by `SettingsView`, not here; see
+        // `TeamsPageView::get_modal_content`.
+        Flex::column().with_child(content).finish()
     }
 }
 

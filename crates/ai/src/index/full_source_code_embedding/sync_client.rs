@@ -339,9 +339,6 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    // `err` is a registered error still needed below to build
-                    // `SyncOperationError::ServerSyncError`, so it's reported borrowed to
-                    // keep it typed.
                     report_error!(&err);
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));
@@ -419,9 +416,6 @@ impl<'a> CodebaseIndexSyncOperation<'a> {
             }) {
                 Ok(res) => res,
                 Err(err) => {
-                    // `err` is a registered error still needed below to build
-                    // `SyncOperationError::ServerSyncError`, so it's reported borrowed to
-                    // keep it typed.
                     report_error!(&err);
                     if files_need_resync.is_empty() {
                         return Err(SyncOperationError::ServerSyncError(err));

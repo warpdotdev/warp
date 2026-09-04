@@ -111,6 +111,7 @@ pub struct WorkspaceMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }
 
@@ -302,6 +303,7 @@ pub struct Team {
     pub color: Option<String>,
     pub invite_link: Option<String>,
     pub visibility: TeamVisibility,
+    pub feature_model_choice: FeatureModelChoice,
 }
 
 /// Governs which workspace members can discover and join a team. Orthogonal to
@@ -428,6 +430,7 @@ pub struct TeamMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq, Copy)]

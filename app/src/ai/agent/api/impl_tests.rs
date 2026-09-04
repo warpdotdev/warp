@@ -33,6 +33,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         mcp_context: None,
         planning_enabled: true,
         should_redact_secrets: false,
+        member_byo_credentials_allowed: false,
         api_keys: None,
         custom_model_providers: None,
         custom_model_routers: None,

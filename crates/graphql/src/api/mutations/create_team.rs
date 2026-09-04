@@ -16,6 +16,7 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
           uid
           email
           role
+          isDisabled
         }
         teams {
           uid
@@ -25,6 +26,7 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
             uid
             email
             role
+            isDisabled
           }
         }
         billingMetadata {

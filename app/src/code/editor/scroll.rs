@@ -27,6 +27,10 @@ impl ScrollWheelBehavior {
 pub enum ScrollPosition {
     LineAndColumn(LineAndColumnArg),
     FocusedDiffHunk,
+    /// Scroll to a fraction of the scrollable range, in `0..=1`. Used to restore scroll position
+    /// across a markdown raw<->rendered toggle, where the documents differ and a line/column can't
+    /// map between them.
+    Fraction(f32),
 }
 
 /// We don't want to scroll to the provided line number until the content has

@@ -15,7 +15,7 @@ use crate::cloud_object::{
 };
 use crate::server::sync_queue::QueueItem;
 use crate::settings::AISettings;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 /// This threshold currently only applies to GPT 5.4 and GPT 5.5 models
 pub const LONG_CONTEXT_WARNING_THRESHOLD: u32 = 272_000;
 pub(crate) const LONG_CONTEXT_PRICING_WARNING_URL: &str =
@@ -45,16 +45,20 @@ pub struct CloudAgentComputerUseState {
 }
 fn effective_base_model<'a>(profile: &AIExecutionProfile, app: &'a AppContext) -> &'a LLMInfo {
     let prefs = LLMPreferences::as_ref(app);
+    let team_uid = UserWorkspaces::as_ref(app).inherited_or_default_team_uid(None);
     profile
         .base_model
         .as_ref()
-        .and_then(|id| prefs.get_llm_info(id))
-        .unwrap_or_else(|| prefs.get_default_base_model(app))
+        .and_then(|id| prefs.get_llm_info(id, app))
+        .unwrap_or_else(|| prefs.get_default_base_model_for_team_uid(team_uid, app))
 }
 
 /// Resolves the effective cloud agent computer use state by reading the workspace
 /// autonomy setting and user's local preference from their respective singletons.
-pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentComputerUseState {
+pub fn resolve_cloud_agent_computer_use_state(
+    scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> CloudAgentComputerUseState {
     if !FeatureFlag::AgentModeComputerUse.is_enabled() {
         return CloudAgentComputerUseState {
             enabled: false,
@@ -63,7 +67,7 @@ pub fn resolve_cloud_agent_computer_use_state(ctx: &AppContext) -> CloudAgentCom
     }
 
     let autonomy_setting = UserWorkspaces::as_ref(ctx)
-        .ai_autonomy_settings()
+        .ai_autonomy_settings(scope)
         .computer_use_setting;
     let user_preference = *AISettings::as_ref(ctx).cloud_agent_computer_use_enabled;
 

@@ -333,8 +333,10 @@ dependencies = [
  "filetime",
  "futures",
  "generic-array",
+ "hex",
  "http_client",
  "ignore",
+ "indexmap 2.12.0",
  "instant",
  "itertools 0.14.0",
  "languages",
@@ -351,12 +353,14 @@ dependencies = [
  "regex",
  "repo_metadata",
  "rmcp",
+ "schemars 1.0.4",
  "sentry",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "serde_yaml 0.8.26",
  "serial_test",
+ "settings_value",
  "sha2 0.10.9",
  "shellexpand",
  "streaming-iterator",
@@ -370,6 +374,7 @@ dependencies = [
  "tokio",
  "typed-path 0.10.0",
  "unicode-width 0.1.14",
+ "url",
  "uuid",
  "virtual-fs",
  "warp_core",
@@ -381,6 +386,17 @@ dependencies = [
  "warpui_core",
  "warpui_extras",
  "watcher",
+]
+
+[[package]]
+name = "ai_types"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "uuid",
 ]
 
 [[package]]
@@ -3508,7 +3524,7 @@ dependencies = [
 [[package]]
 name = "cosmic-text"
 version = "0.12.0"
-source = "git+https://github.com/warpdotdev/cosmic-text.git?rev=15198beba692162201c0ea8b15222cf5643ea068#15198beba692162201c0ea8b15222cf5643ea068"
+source = "git+https://github.com/warpdotdev/cosmic-text.git?rev=a7c7b71497542758e08f77390b8efce543b3181f#a7c7b71497542758e08f77390b8efce543b3181f"
 dependencies = [
  "bitflags 2.13.0",
  "fontdb",
@@ -4510,7 +4526,7 @@ checksum = "6738d2e996274e499bc7b0d693c858b7720b9cd2543a0643a3087e6cb0a4fa16"
 dependencies = [
  "cfg-if",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4543,7 +4559,7 @@ checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 [[package]]
 name = "dpi"
 version = "0.1.1"
-source = "git+https://github.com/warpdotdev/winit.git?rev=a4e0ecb5f9626ccac9445a73dc28354b52423abc#a4e0ecb5f9626ccac9445a73dc28354b52423abc"
+source = "git+https://github.com/warpdotdev/winit.git?rev=14db95a686387211d57cf2afd1d908b2d82a20fe#14db95a686387211d57cf2afd1d908b2d82a20fe"
 
 [[package]]
 name = "dsl_auto_type"
@@ -7141,7 +7157,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7335,7 +7351,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -8183,6 +8199,7 @@ dependencies = [
  "cfg-if",
  "cloud_object_models",
  "futures",
+ "handlebars",
  "http 1.4.0",
  "log",
  "oauth2",
@@ -9763,7 +9780,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -9992,6 +10009,7 @@ dependencies = [
 name = "persistence"
 version = "0.0.0"
 dependencies = [
+ "ai_types",
  "chrono",
  "diesel",
  "diesel_migrations",
@@ -10579,7 +10597,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck 0.4.1",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "log",
  "multimap",
  "petgraph",
@@ -10598,7 +10616,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.11.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -11376,6 +11394,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b15c43186be67a4fd63bee50d0303afffcef381492ebe2c5d87f324e1b8815c"
 
 [[package]]
+name = "regex_dfas"
+version = "0.0.0"
+dependencies = [
+ "regex",
+ "regex-automata",
+]
+
+[[package]]
 name = "remote_server"
 version = "0.1.0"
 dependencies = [
@@ -11849,7 +11875,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11917,7 +11943,7 @@ dependencies = [
  "security-framework 3.5.1",
  "security-framework-sys",
  "webpki-root-certs 1.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -12143,6 +12169,22 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "zbus",
+]
+
+[[package]]
+name = "secret_redaction"
+version = "0.0.0"
+dependencies = [
+ "itertools 0.14.0",
+ "lazy_static",
+ "log",
+ "parking_lot",
+ "regex",
+ "regex-automata",
+ "regex_dfas",
+ "string-offset",
+ "warp_core",
+ "warp_errors",
 ]
 
 [[package]]
@@ -12603,7 +12645,7 @@ dependencies = [
 [[package]]
 name = "session-sharing-protocol"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=b30fdd06379a3d073b398eabd106abed5b443aae#b30fdd06379a3d073b398eabd106abed5b443aae"
+source = "git+https://github.com/warpdotdev/session-sharing-protocol.git?rev=fcd0fea35ab9f782043c8ec74fd81bce187ded9f#fcd0fea35ab9f782043c8ec74fd81bce187ded9f"
 dependencies = [
  "byte-unit",
  "serde",
@@ -13613,7 +13655,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -15123,6 +15165,7 @@ dependencies = [
  "aha-reqwest-eventsource",
  "aho-corasick",
  "ai",
+ "ai_types",
  "alphanumeric-sort",
  "anyhow",
  "app-installation-detection",
@@ -15182,7 +15225,6 @@ dependencies = [
  "crc",
  "csv",
  "ctor",
- "cvt",
  "cynic",
  "dashmap",
  "deltae",
@@ -15203,7 +15245,6 @@ dependencies = [
  "event-listener",
  "field_mask",
  "firebase",
- "flate2",
  "float-cmp",
  "freedesktop-desktop-entry",
  "futures",
@@ -15211,12 +15252,12 @@ dependencies = [
  "futures-timer",
  "futures-util",
  "fuzzy_match",
- "gethostname",
  "getrandom 0.2.16",
  "getset",
  "git2",
  "gloo",
  "handlebars",
+ "hashbrown 0.17.1",
  "hex",
  "http 1.4.0",
  "http_client",
@@ -15305,8 +15346,10 @@ dependencies = [
  "rmcp",
  "rquickjs",
  "rust-embed 8.7.2",
+ "rustc-hash 2.1.1",
  "rustls",
  "schemars 1.0.4",
+ "secret_redaction",
  "security-framework-sys",
  "sentry",
  "sentry-log",
@@ -15328,7 +15371,6 @@ dependencies = [
  "shellexpand",
  "shlex",
  "signal-hook",
- "signal-hook-mio",
  "similar",
  "simple_logger",
  "siphasher 0.3.11",
@@ -15418,7 +15460,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=6a39d62048abbf3885be54a7887f1916ebcf7445#6a39d62048abbf3885be54a7887f1916ebcf7445"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15436,7 +15478,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=ac69f9b00c48d6de229ba5905056d9302da1c5c4#ac69f9b00c48d6de229ba5905056d9302da1c5c4"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=6a39d62048abbf3885be54a7887f1916ebcf7445#6a39d62048abbf3885be54a7887f1916ebcf7445"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -15818,7 +15860,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=b0886a9523e2e05d102f61bd0a212dc15ade4835#b0886a9523e2e05d102f61bd0a212dc15ade4835"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=7b638a3bce15b6159116c25caa1dda62cf004b0e#7b638a3bce15b6159116c25caa1dda62cf004b0e"
 dependencies = [
  "prost",
  "prost-reflect",
@@ -15976,35 +16018,83 @@ name = "warp_terminal"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
+ "async-channel",
+ "async-io",
+ "base64 0.22.1",
+ "bimap",
+ "bincode",
  "bitflags 2.13.0",
  "bitflags-serde-legacy",
+ "bounded-vec-deque",
+ "byte-unit",
+ "bytemuck",
  "cfg-if",
  "channel_versions",
+ "command",
  "command-corrections",
+ "cvt",
  "enum-iterator",
+ "flate2",
+ "futures",
+ "futures-lite 1.13.0",
  "get-size",
+ "gethostname",
+ "hex",
+ "image",
+ "instant",
  "itertools 0.14.0",
  "lazy_static",
+ "libc",
  "log",
+ "memo-map",
+ "mio",
+ "nix 0.26.4",
+ "ordered-float 3.9.2",
+ "parking_lot",
  "pathfinder_color",
+ "pathfinder_geometry",
+ "rand 0.8.6",
+ "rangemap",
  "regex",
+ "regex-automata",
+ "regex_dfas",
+ "secret_redaction",
+ "sentry",
  "serde",
+ "serde_json",
+ "serial_test",
  "session-sharing-protocol",
+ "shellexpand",
+ "signal-hook",
+ "signal-hook-mio",
+ "smallvec 1.15.1",
  "smol_str",
  "static_assertions",
  "string-offset",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
+ "unicode-general-category",
  "unicode-segmentation",
  "unicode-width 0.1.14",
+ "urlocator",
  "uuid",
+ "vec1",
  "version-compare",
  "vte",
+ "warp_assets",
+ "warp_cli",
  "warp_completer",
  "warp_core",
  "warp_errors",
+ "warp_isolation_platform",
  "warp_util",
  "warpui_core",
+ "windows 0.62.2",
+ "windows-registry 0.2.0",
+ "windows-result 0.2.0",
+ "winreg",
 ]
 
 [[package]]
@@ -16075,6 +16165,7 @@ dependencies = [
  "anyhow",
  "command",
  "content_inspector",
+ "directories",
  "dirs 6.0.0",
  "dunce",
  "event-listener",
@@ -16082,15 +16173,20 @@ dependencies = [
  "futures-util",
  "gloo",
  "hex",
+ "is_executable",
+ "itertools 0.14.0",
  "lazy_static",
  "log",
  "mime_guess",
+ "parking_lot",
  "pathdiff",
  "pin-project",
  "rand 0.8.6",
  "regex",
  "serde",
  "serde_json",
+ "serial_test",
+ "tempfile",
  "thiserror 2.0.17",
  "typed-path 0.10.0",
  "warp_errors",
@@ -17010,7 +17106,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -17428,7 +17524,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "winit"
 version = "0.30.13"
-source = "git+https://github.com/warpdotdev/winit.git?rev=a4e0ecb5f9626ccac9445a73dc28354b52423abc#a4e0ecb5f9626ccac9445a73dc28354b52423abc"
+source = "git+https://github.com/warpdotdev/winit.git?rev=14db95a686387211d57cf2afd1d908b2d82a20fe#14db95a686387211d57cf2afd1d908b2d82a20fe"
 dependencies = [
  "ahash 0.8.11",
  "android-activity",

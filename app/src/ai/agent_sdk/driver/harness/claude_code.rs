@@ -518,6 +518,36 @@ impl HarnessRunner for ClaudeHarnessRunner {
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /exit"))
     }
 
+    async fn exit_followup(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        // Claude Code opens a numbered confirmation when background work
+        // (e.g. a `run_in_background` shell or subagent) is still
+        // registered:
+        //
+        //   Background work is running
+        //   The following will stop when you exit:
+        //     shell · sleep 620
+        //   ❯ 1. Exit anyway
+        //     2. Move to background and exit
+        //     3. Stay
+        //
+        // "Exit anyway" is the default-highlighted option, so a bare Enter
+        // selects it without needing to write the digit. This is sent
+        // unconditionally, shortly after `/exit`, without waiting to see
+        // whether the dialog actually appeared: if there's no dialog this is
+        // a no-op Enter. If a future Claude Code version changes the default
+        // selection, this would need to send the digit explicitly instead.
+        log::info!("Sending exit confirmation follow-up (Enter) to Claude Code CLI");
+        let terminal_driver = self.terminal_driver.clone();
+        foreground
+            .spawn(move |_, ctx| {
+                terminal_driver.update(ctx, |driver, ctx| {
+                    driver.send_bare_enter_to_cli(ctx);
+                });
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending exit follow-up"))
+    }
+
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         self.handle_parent_bridge_session_update().await
     }

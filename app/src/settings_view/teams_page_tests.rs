@@ -10,6 +10,14 @@ fn member(email: &str, role: MembershipRole) -> TeamMember {
         uid: UserUid::new(email),
         email: email.to_string(),
         role,
+        is_disabled: false,
+    }
+}
+
+fn disabled_member(email: &str, role: MembershipRole) -> TeamMember {
+    TeamMember {
+        is_disabled: true,
+        ..member(email, role)
     }
 }
 
@@ -33,6 +41,7 @@ fn team_with_members(members: Vec<TeamMember>, multi_admin_enabled: bool) -> Tea
         },
         stripe_customer_id: None,
         settings: Default::default(),
+        feature_model_choice: Default::default(),
         is_eligible_for_discovery: false,
         has_billing_history: false,
         visibility: Default::default(),
@@ -44,8 +53,12 @@ fn workspace_with_member(
     role: MembershipRole,
     native_workspaces_enabled: bool,
 ) -> Workspace {
-    let mut workspace =
-        Workspace::from_local_cache(ServerId::from(2).into(), "Test Workspace".to_string(), None);
+    let mut workspace = Workspace::from_local_cache(
+        ServerId::from(2).into(),
+        "Test Workspace".to_string(),
+        None,
+        None,
+    );
     workspace.billing_metadata.tier.native_workspaces_policy = Some(NativeWorkspacesPolicy {
         enabled: native_workspaces_enabled,
     });
@@ -53,6 +66,7 @@ fn workspace_with_member(
         uid: UserUid::new(email),
         email: email.to_string(),
         role,
+        is_disabled: false,
         usage_info: WorkspaceMemberUsageInfo {
             is_unlimited: true,
             request_limit: 0,
@@ -321,4 +335,77 @@ fn workspace_admin_can_cancel_pending_invite() {
         action_labels(&items, "invitee@example.com"),
         vec!["Cancel invite"]
     );
+}
+
+#[test]
+fn disabled_member_is_flagged_but_keeps_removal_action() {
+    let team = team_with_members(
+        vec![
+            member(ADMIN_EMAIL, MembershipRole::Admin),
+            disabled_member(MEMBER_EMAIL, MembershipRole::User),
+        ],
+        true,
+    );
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+
+    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
+
+    let disabled_item = items
+        .iter()
+        .find(|item| item.text == MEMBER_EMAIL)
+        .expect("disabled member should still be listed");
+    assert!(
+        disabled_item.is_disabled,
+        "a member whose account is disabled should be flagged for the dimmed/tooltip treatment"
+    );
+    // Same action set as an equivalent active member (see
+    // `team_admin_can_promote_and_remove_without_workspace_admin_role`):
+    // disabling an account must not change which actions are offered.
+    assert_eq!(
+        action_labels(&items, MEMBER_EMAIL),
+        vec!["Promote to admin", "Remove from team"]
+    );
+}
+
+#[test]
+fn active_member_is_not_flagged_disabled() {
+    let team = team_with_members(
+        vec![
+            member(ADMIN_EMAIL, MembershipRole::Admin),
+            member(MEMBER_EMAIL, MembershipRole::User),
+        ],
+        true,
+    );
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+
+    let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
+
+    let active_item = items
+        .iter()
+        .find(|item| item.text == MEMBER_EMAIL)
+        .expect("member should be listed");
+    assert!(
+        !active_item.is_disabled,
+        "an active member's account must not be flagged disabled"
+    );
+}
+
+#[test]
+fn disabled_row_renders_dimmed_and_tooltipped() {
+    let appearance = Appearance::mock();
+
+    assert_eq!(
+        item_row_text_color(&appearance, true),
+        appearance.theme().disabled_ui_text_color(),
+    );
+    assert_ne!(
+        item_row_text_color(&appearance, true),
+        item_row_text_color(&appearance, false),
+        "a disabled row must render in a visibly different color than an active row"
+    );
+    assert_eq!(
+        disabled_member_tooltip_text(true),
+        Some(DISABLED_MEMBER_TOOLTIP_TEXT)
+    );
+    assert_eq!(disabled_member_tooltip_text(false), None);
 }

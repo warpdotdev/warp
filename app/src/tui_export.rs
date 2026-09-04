@@ -121,7 +121,8 @@ pub use crate::ai::blocklist::{
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
-    PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
+    PreparedLocalOzChildLaunch, apply_child_agent_model_override,
+    finish_local_oz_child_conversation, prepare_local_oz_child_launch,
 };
 pub use crate::ai::cloud_environments::{
     CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
@@ -174,6 +175,7 @@ pub use crate::code_review::github_repo_model::GitHubRepoModel;
 pub use crate::completer::SessionContext;
 pub use crate::global_resource_handles::GlobalResourceHandlesProvider;
 pub use crate::persistence::PersistenceWriter;
+pub use crate::persistence::model::ChargedUsageTotals;
 pub use crate::prefix::longest_common_prefix;
 pub use crate::search::slash_command_menu::static_commands::commands::{
     self as slash_commands, COMMAND_REGISTRY,
@@ -182,13 +184,15 @@ pub use crate::search::slash_command_menu::static_commands::{
     SlashCommandKind, SlashCommandSurfaces,
 };
 pub use crate::search::slash_command_menu::{SlashCommandId, StaticCommand};
-pub use crate::server::ids::SyncId;
+pub use crate::server::ids::{ServerId, SyncId};
 pub use crate::server::server_api::ServerApiProvider;
 #[cfg(feature = "voice_input")]
 pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
+#[cfg(feature = "voice_input")]
+pub use crate::server::team_scope::RequestTeamScope;
 pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
 pub use crate::settings::{AISettingsChangedEvent, InputSettings};
 pub use crate::terminal::alt_screen::{should_intercept_mouse, should_intercept_scroll};
@@ -264,6 +268,7 @@ pub use crate::tui_test_support::{
     blocklist_ai_history_model_with_queries, forkable_tui_conversation_for_test,
     queue_tui_permission_action, register_tui_input_mode_test_settings,
     register_tui_session_view_test_singletons, set_tui_default_team_admin_for_test,
+    set_tui_workspace_teams_for_test,
 };
 pub use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 pub use crate::util::image::{
@@ -274,7 +279,11 @@ pub use crate::util::repo_detection::{RepoDetectionSessionType, detect_possible_
 pub use crate::util::time_format::format_elapsed_seconds;
 #[cfg(feature = "voice_input")]
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
-pub use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+pub use crate::workspaces::update_manager::TeamUpdateManager;
+pub use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+    UserWorkspacesEvent,
+};
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 
 pub fn format_usage_cost_cents(cents: i64) -> String {

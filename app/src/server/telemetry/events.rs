@@ -11,6 +11,7 @@ use warp_core::interval_timer::TimingDataPoint;
 use warp_core::telemetry::{
     EnablementState, TelemetryEvent as TelemetryEventTrait, TelemetryEventDesc,
 };
+pub use warp_terminal::ImageProtocol;
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome};
 use warpui::rendering::ThinStrokes;
@@ -527,7 +528,6 @@ pub enum CommandSearchResultType {
     Workflow,
     OpenWarpAI,
     TranslateUsingWarpAI,
-    Notebook,
     EnvVarCollection,
     ViewInWarpDrive,
     AIQuery,
@@ -540,7 +540,6 @@ impl From<&CommandSearchItemAction> for CommandSearchResultType {
         match action {
             AcceptHistory(_) | ExecuteHistory(_) => Self::History,
             AcceptWorkflow(_) => Self::Workflow,
-            AcceptNotebook(_) => Self::Notebook,
             AcceptEnvVarCollection(_) => Self::EnvVarCollection,
             OpenWarpAI => Self::OpenWarpAI,
             TranslateUsingWarpAI => Self::TranslateUsingWarpAI,
@@ -970,12 +969,6 @@ pub enum AgentModeCitation {
         memory_store_id: String,
         memory_id: String,
     },
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-pub enum ImageProtocol {
-    Kitty,
-    ITerm,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Default)]
@@ -2088,17 +2081,20 @@ pub enum TelemetryEvent {
     /// This is emitted at the start of the attempt (immediately on click),
     /// before binding the loopback callback server or opening the browser.
     /// It is always followed by a `SuperGrokSubscriptionConnectFinished`
-    /// (success or a short stable error code on failure).
+    /// (success, cancellation, or a short stable error code on failure).
     SuperGrokSubscriptionConnectInitiated,
 
-    /// Outcome (success or failure) of the user attempting to connect their
-    /// SuperGrok / xAI subscription via the OAuth flow in AI settings.
+    /// Outcome (success, cancellation, or failure) of the user attempting to
+    /// connect their SuperGrok / xAI subscription via the OAuth flow in AI
+    /// settings.
     ///
-    /// On failure, `error` contains a short stable error *code* (e.g.
-    /// "bind_failed", "oauth_failed"). The full error chain/body is emitted
-    /// via `safe_error!` at the call site (only the code goes into telemetry).
+    /// On failure or cancellation, `error` contains a short stable error
+    /// *code* (e.g. "bind_failed", "oauth_failed", "cancelled"). The full
+    /// error chain/body is emitted via `safe_error!` at the call site (only
+    /// the code goes into telemetry).
     SuperGrokSubscriptionConnectFinished {
-        /// Short stable error code on failure (e.g. "bind_failed"); absent on success.
+        /// Short stable error code on failure or cancellation (e.g.
+        /// "bind_failed", "cancelled"); absent on success.
         error: Option<String>,
     },
 

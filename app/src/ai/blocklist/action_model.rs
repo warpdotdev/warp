@@ -18,6 +18,7 @@ pub(crate) mod recording_controller;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod recording_finalize;
 pub(crate) mod recording_telemetry;
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,7 +54,9 @@ use self::execute::{
 #[cfg(not(target_family = "wasm"))]
 use self::recording_finalize::{FinalizeReason, finalize_recording_for_conversation};
 use super::BlocklistAIHistoryModel;
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ConversationStatus, RecordingSpanInfo,
+};
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentActionTypeDiscriminants, AIAgentExchange, AIAgentInput,
@@ -67,6 +70,7 @@ use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::terminal::TerminalModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::ModelEventDispatcher;
+use crate::workspaces::user_workspaces::TeamContextResolver;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// The status of an action from an AI output.
@@ -239,6 +243,8 @@ pub struct BlocklistAIActionModel {
 
     /// Past actions and their corresponding statuses from previous AI exchanges.
     past_action_results: HashMap<AIAgentActionId, Arc<AIAgentActionResult>>,
+    recording_spans_by_conversation:
+        RefCell<HashMap<AIConversationId, Arc<HashMap<AIAgentActionId, RecordingSpanInfo>>>>,
 
     /// The ID of the terminal view this controller is associated with.
     terminal_view_id: EntityId,
@@ -258,6 +264,7 @@ impl BlocklistAIActionModel {
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
         terminal_view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let executor = ctx.add_model(|ctx| {
@@ -267,6 +274,7 @@ impl BlocklistAIActionModel {
                 model_event_dispatcher,
                 get_relevant_files_controller,
                 terminal_view_id,
+                team_context_resolver,
                 ctx,
             )
         });
@@ -307,6 +315,7 @@ impl BlocklistAIActionModel {
             finished_action_results: Default::default(),
             executor,
             past_action_results: HashMap::new(),
+            recording_spans_by_conversation: Default::default(),
             running_actions: Default::default(),
             action_order: Default::default(),
             terminal_view_id,
@@ -463,6 +472,7 @@ impl BlocklistAIActionModel {
     /// Clears action results restored from a previous conversation transcript.
     pub fn clear_restored_action_results(&mut self) {
         self.past_action_results.clear();
+        self.recording_spans_by_conversation.get_mut().clear();
     }
 
     fn try_to_execute_available_actions(
@@ -656,8 +666,36 @@ impl BlocklistAIActionModel {
             .or_else(|| self.past_action_results.get(id))
     }
 
+    pub fn recording_spans_for_conversation(
+        &self,
+        conversation: &AIConversation,
+    ) -> Arc<HashMap<AIAgentActionId, RecordingSpanInfo>> {
+        let conversation_id = conversation.id();
+        if let Some(spans) = self
+            .recording_spans_by_conversation
+            .borrow()
+            .get(&conversation_id)
+            .cloned()
+        {
+            return spans;
+        }
+
+        let spans = Arc::new(conversation.recording_spans_by_action_id(Some(self)));
+        self.recording_spans_by_conversation
+            .borrow_mut()
+            .insert(conversation_id, spans.clone());
+        spans
+    }
+
+    pub fn invalidate_recording_spans(&self, conversation_id: AIConversationId) {
+        self.recording_spans_by_conversation
+            .borrow_mut()
+            .remove(&conversation_id);
+    }
+
     /// Bulk restore action results from a list of exchanges (used when loading conversations from tasks)
     pub fn restore_action_results_from_exchanges(&mut self, exchanges: Vec<&AIAgentExchange>) {
+        self.recording_spans_by_conversation.get_mut().clear();
         for exchange in exchanges.iter() {
             for input in &exchange.input {
                 if let AIAgentInput::ActionResult { result, .. } = input {
@@ -1262,6 +1300,9 @@ impl BlocklistAIActionModel {
     pub(super) fn clear_finished_action_results(&mut self, conversation_id: AIConversationId) {
         self.action_order.remove(&conversation_id);
         self.finished_action_results.remove(&conversation_id);
+        self.recording_spans_by_conversation
+            .get_mut()
+            .remove(&conversation_id);
     }
 
     /// The control flow for initiating cancellations across suggested plans, requested commands,
@@ -1346,6 +1387,9 @@ impl BlocklistAIActionModel {
             .entry(conversation_id)
             .or_default()
             .push(action_result);
+        self.recording_spans_by_conversation
+            .get_mut()
+            .remove(&conversation_id);
 
         ctx.emit(BlocklistAIActionEvent::FinishedAction {
             action_id,

@@ -1,6 +1,6 @@
 ---
 name: factory-files
-description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, Agent, Automation, Scorer, or Runner files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
+description: Create and edit file-based Warp software factory definitions, in a repository tree rooted at a factory.yaml. Use when authoring or changing that factory.yaml, Agent, Automation, Scorer, Runner, or Webhook files under that root, or its factory and agent skill trees, and when fixing Factory file diagnostics. Do not use for agent-definition Markdown that belongs to another tool, for a tree with no factory.yaml, or to operate a live factory or hand work to one through Factory MCP.
 ---
 
 # Factory Files
@@ -40,6 +40,7 @@ agents/<name>/skills/**             skills only that agent can use
 automations/<name>/automation.md    optional
 runners/<name>.yaml                 optional
 scorers/<name>/scorer.md            optional; Markdown body is the rubric
+webhooks/<name>.yaml                optional; custom webhook sources
 skills/**                           skills every agent in the factory can use
 ```
 
@@ -70,11 +71,11 @@ curl -s https://app.warp.dev/api/v1/factory-files/schemas/<schemaVersion>
 The registry lists the versions the server supports. The version endpoint
 returns every document describing one version, keyed by file name:
 `factory.schema.json` for `factory.yaml`, `agent.schema.json`,
-`automation.schema.json`, `runner.schema.json` and `scorer.schema.json` for the
-corresponding resources, and `common.schema.json` for the definitions they
-share. Both endpoints are unauthenticated. They are exact for the version they
-describe: an unknown field is an error, and each enumerated value is one the
-server accepts today.
+`automation.schema.json`, `runner.schema.json`, `scorer.schema.json` and
+`webhook.schema.json` for the corresponding resources, and
+`common.schema.json` for the definitions they share. Both endpoints are
+unauthenticated. They are exact for the version they describe: an unknown
+field is an error, and each enumerated value is one the server accepts today.
 
 If the server does not publish the declared version, stop. Do not measure the
 tree against a version it does not claim to be, and never lower
@@ -96,9 +97,11 @@ python3 "{{skill_dir}}/scripts/validate_factory_files.py" "<factory-root>"
 
 It selects the tree's resource files and submits them to the server, which runs
 the real parser. Add `--json` for machine-readable output and `--server-root
-<url>`, or `WARP_SERVER_ROOT`, to point at a local, staging, or self-hosted
-server. No credential is required; `WARP_API_KEY` is forwarded when the
-environment already carries one, as an agent sandbox does.
+<url>`, or `WARP_SERVER_ROOT` (or `WARP_SERVER_ROOT_URL`, the name an Oz
+sandbox exports), to point at a local, staging, or self-hosted server. No
+credential is required; `WARP_API_KEY` is forwarded when the environment
+already carries one, as an agent sandbox does, and dropped for a single retry
+if the server answers it with 401 or 403.
 
 The exit code distinguishes three outcomes, and so must you:
 
@@ -155,6 +158,17 @@ read them.
   its canonical key, and declaring both is an error. The Linear and Slack ones
   name objects the server looks up at apply time, so they take a plain list of
   names rather than an `in`/`not_in` matcher.
+- A webhook never carries secret material. `secretName` is required in every
+  `authMode` and names an existing managed secret; the server does not generate
+  a secret for a file-declared source, because nothing could then read it back
+  to configure the sender.
+- `signatureScheme` is required when `authMode: signature` and rejected
+  otherwise.
+- `authMode` and `signatureScheme` cannot be changed on an existing source.
+  Changing either means deleting the file and adding a new one under a
+  different name.
+- A webhook subscription's `filter.webhook_ids` takes source UIDs the server
+  assigned, not the file names declared here.
 
 ## Do not add a local copy of the format
 It is tempting to bundle the schema, or to reimplement a few checks here so

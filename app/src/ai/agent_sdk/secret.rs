@@ -230,7 +230,7 @@ fn create_secret_with_input(
                 return;
             }
 
-            let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+            let owner = match super::common::resolve_owner(&scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -283,8 +283,7 @@ fn create_secret_with_input(
 fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
     let name = args.name;
     let force = args.force;
-    let team = args.scope.team;
-    let personal = args.scope.personal;
+    let scope = args.scope;
 
     ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
@@ -295,7 +294,7 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner = match super::common::resolve_owner(team, personal, ctx) {
+            let owner = match super::common::resolve_owner(&scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -379,14 +378,13 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner =
-                match super::common::resolve_owner(args.scope.team, args.scope.personal, ctx) {
-                    Ok(owner) => owner,
-                    Err(err) => {
-                        super::report_fatal_error(err, ctx);
-                        return;
-                    }
-                };
+            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+                Ok(owner) => owner,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             // Read the secret value if either --value or --value-file is provided.
             let secret_value = if args.value || args.value_args.value_file.is_some() {
@@ -604,6 +602,12 @@ fn make_secret_value_from_gql_type(
             ))
         }
         ManagedSecretType::OpenaiApiKey => Ok(ManagedSecretValue::openai_api_key(raw, None)),
+        ManagedSecretType::DockerRegistry => {
+            // Registry credentials are multi-field and have no CLI creation/update flow yet.
+            Err(anyhow::anyhow!(
+                "Container registry credential secrets cannot be updated via `--value`; re-create the secret instead"
+            ))
+        }
     }
 }
 
@@ -853,5 +857,6 @@ fn format_secret_type(type_: &ManagedSecretType) -> String {
         ManagedSecretType::AnthropicBedrockAccessKey => "Anthropic Bedrock Access Key".to_string(),
         ManagedSecretType::AnthropicBedrockApiKey => "Anthropic Bedrock API Key".to_string(),
         ManagedSecretType::OpenaiApiKey => "OpenAI API Key".to_string(),
+        ManagedSecretType::DockerRegistry => "Container Registry Credential".to_string(),
     }
 }

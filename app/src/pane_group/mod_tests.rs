@@ -96,6 +96,7 @@ use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
     SharedSessionSource, SharedSessionStatus,
 };
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseStack;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -320,6 +321,8 @@ fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAg
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -371,6 +374,8 @@ fn test_server_conversation_metadata(
             platform_credits_spent: 0.0,
             total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -2817,6 +2822,29 @@ fn test_active_session_id_reset_on_last_pane_close() {
 }
 
 #[test]
+fn test_close_last_pane_clears_share_modal_state() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+
+        pane_group.update(&mut app, |panes, ctx| {
+            let pane_id = get_newly_created_pane_id(panes, &[]);
+            panes.terminal_with_open_share_block_modal = Some(
+                pane_id
+                    .as_terminal_pane_id()
+                    .expect("newly created pane should be a terminal"),
+            );
+
+            panes.close_pane(pane_id, ctx);
+
+            assert_eq!(panes.terminal_with_open_share_block_modal, None);
+        });
+    });
+}
+
+#[test]
 fn test_add_pane_aborts_cleanly_when_pre_attach_returns_false() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -3673,25 +3701,23 @@ fn test_pane_focus_does_not_have_an_infinite_event_loop() {
         // An active and long-running block causes focus to move to the
         // terminal instead of the input, so we need to wait until we've
         // finished bootstrapping to ensure no such block will exist.
-        loop {
-            let mut all_terminals_bootstrapped = true;
-            pane_group.update(&mut app, |pane_group, ctx| {
-                pane_group.for_all_terminal_panes(|terminal_view, _ctx| {
-                    let model = terminal_view.model.lock();
-                    let active_block = model.block_list().active_block();
-                    if active_block.bootstrap_stage() != crate::terminal::model::bootstrap::BootstrapStage::PostBootstrapPrecmd ||
-                        active_block.is_active_and_long_running() {
-                        all_terminals_bootstrapped = false;
-                    }
-                }, ctx);
-            });
-            if all_terminals_bootstrapped {
-                break;
-            }
-            // Return control back to the executor briefly so we can make
-            // progress.
-            futures_lite::future::yield_now().await;
-        }
+        assert_eventually!(
+            2000 => {
+                let mut all_terminals_bootstrapped = true;
+                pane_group.update(&mut app, |pane_group, ctx| {
+                    pane_group.for_all_terminal_panes(|terminal_view, _ctx| {
+                        let model = terminal_view.model.lock();
+                        let active_block = model.block_list().active_block();
+                        if active_block.bootstrap_stage() != crate::terminal::model::bootstrap::BootstrapStage::PostBootstrapPrecmd ||
+                            active_block.is_active_and_long_running() {
+                            all_terminals_bootstrapped = false;
+                        }
+                    }, ctx);
+                });
+                all_terminals_bootstrapped
+            },
+            "timed out after ~10s waiting for terminals to finish bootstrapping"
+        );
 
         pane_group.update(&mut app, |pane_group, ctx| {
             // Switch panes twice in quick succession.  We want to make

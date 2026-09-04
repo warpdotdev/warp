@@ -5,7 +5,10 @@ use std::time::Duration;
 use chrono::{Local, NaiveDateTime};
 use vim::vim::{MotionType, VimMode};
 use warp::settings::{AISettings, TuiStatuslineConfig, TuiStatuslineItem};
-use warp::tui_export::{ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences};
+use warp::tui_export::{
+    ConversationUsageTotals, GitRepoModels, GitStatusMetadata, LLMPreferences, ResolvedTeamScope,
+    UserWorkspaces,
+};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::SingletonEntity;
 use warpui_core::elements::tui::{
@@ -123,6 +126,7 @@ pub(super) enum FooterSegment {
     AutoApproveIndicator(Box<dyn TuiElement>),
     VimIndicator(&'static str),
     Model(Box<dyn TuiElement>),
+    Team(Box<dyn TuiElement>),
     WorkingDirectory(String),
     GitBranch(String),
     CreditUsage(Box<dyn TuiElement>),
@@ -158,6 +162,7 @@ impl FooterSegment {
                 Self::AutoApproveIndicator(_)
                 | Self::VimIndicator(_)
                 | Self::Model(_)
+                | Self::Team(_)
                 | Self::WorkingDirectory(_)
                 | Self::GitBranch(_)
                 | Self::CreditUsage(_)
@@ -170,6 +175,7 @@ impl FooterSegment {
                 Self::AutoApproveIndicator(_)
                 | Self::VimIndicator(_)
                 | Self::Model(_)
+                | Self::Team(_)
                 | Self::WorkingDirectory(_)
                 | Self::GitBranch(_)
                 | Self::CreditUsage(_)
@@ -221,6 +227,7 @@ pub(super) fn render_status_footer_row(
             }
             FooterSegment::AutoApproveIndicator(element)
             | FooterSegment::Model(element)
+            | FooterSegment::Team(element)
             | FooterSegment::CreditUsage(element)
             | FooterSegment::GitBranchStatus(element)
             | FooterSegment::GitHubPullRequest(element)
@@ -396,6 +403,40 @@ impl TuiTerminalSessionView {
         None
     }
 
+    fn render_active_team_statusline(
+        &self,
+        builder: &TuiUiBuilder,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn TuiElement>> {
+        let user_workspaces = UserWorkspaces::as_ref(ctx);
+        let team_name = user_workspaces
+            .team_for_window(self.input_view.window_id(ctx))?
+            .name
+            .clone();
+        let hovered = self
+            .team_label_hover
+            .lock()
+            .is_ok_and(|state| state.is_hovered());
+        let style = if hovered {
+            builder.primary_text_style()
+        } else {
+            builder.muted_text_style()
+        };
+        Some(
+            TuiHoverable::new(
+                self.team_label_hover.clone(),
+                TuiText::new(team_name)
+                    .with_style(style)
+                    .truncate()
+                    .finish(),
+            )
+            .on_click(|event_ctx, _| {
+                event_ctx.dispatch_typed_action(TuiTerminalSessionAction::ToggleTeamMenu);
+            })
+            .finish(),
+        )
+    }
+
     /// Builds the configured statusline under the input box. Normal mode uses
     /// the persisted item order and visibility; shell mode always leads with
     /// its mode label and resolves configured shell-relevant metadata. A
@@ -447,8 +488,12 @@ impl TuiTerminalSessionView {
                     .vim_mode_indicator(ctx)
                     .map(FooterSegment::VimIndicator),
                 TuiStatuslineItem::Model => (!shell_mode).then(|| {
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx)
+                            .team_context_for_window(self.input_view.window_id(ctx)),
+                    );
                     let model_name = LLMPreferences::as_ref(ctx)
-                        .get_active_base_model(ctx, Some(self.terminal_surface_id))
+                        .get_active_base_model(&scope, ctx, Some(self.terminal_surface_id))
                         .display_name
                         .clone();
                     let model_label_hovered = self
@@ -475,6 +520,10 @@ impl TuiTerminalSessionView {
                         .finish(),
                     )
                 }),
+                TuiStatuslineItem::Team => (!shell_mode)
+                    .then(|| self.render_active_team_statusline(&builder, ctx))
+                    .flatten()
+                    .map(FooterSegment::Team),
                 TuiStatuslineItem::GitHubPullRequest => (!shell_mode)
                     .then_some(self.github_repo.as_ref())
                     .flatten()

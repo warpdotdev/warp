@@ -111,18 +111,16 @@ fi
 BUILD_DIR="${BUILD_DIR}/${PROFILE_DIR}"
 
 # Stage bundled skills and the settings schema next to the binary so the
-# standalone TUI can resolve them at runtime. License generation remains skipped
-# for local runs. Reuse the selected Cargo profile for schema generation so its
-# dependencies do not need to be rebuilt in a separate profile.
+# standalone TUI can resolve them at runtime, including activating the
+# modify-settings skill. The schema comes from the just-built TUI binary
+# itself and is for local development only; packaged TUI builds still
+# consume the canonical schema generated from the full app binary. License
+# generation remains skipped for local runs.
 prepare_tui_bundled_resources() {
   echo "Preparing bundled resources at ${BUILD_DIR}/resources (channel: ${CHANNEL})..."
-  if [ "${PROFILE_DIR}" = "debug" ]; then
-    NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
-      "${BUILD_DIR}/resources" "${CHANNEL}"
-  else
-    NO_LICENSES=1 "${REPO_ROOT}/script/prepare_bundled_resources" \
-      "${BUILD_DIR}/resources" "${CHANNEL}" "${PROFILE_DIR}"
-  fi
+  NO_LICENSES=1 SETTINGS_SCHEMA_EXECUTABLE="${BUILD_DIR}/${BIN}" \
+    "${REPO_ROOT}/script/prepare_bundled_resources" \
+    "${BUILD_DIR}/resources" "${CHANNEL}"
 }
 
 if [[ "$(uname -s)" = "Darwin" ]]; then

@@ -1892,8 +1892,6 @@ impl CodebaseIndex {
                             },
                             ctx
                         );
-                        // `err` is a registered error still needed below to build
-                        // `InitializeTreeFailure`, so it's reported borrowed to keep it typed.
                         report_error!(&err);
                         me.update_tree_sync_state(
                             TreeSourceSyncState::InitializeTreeFailure(err),
