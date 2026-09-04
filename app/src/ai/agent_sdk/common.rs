@@ -9,7 +9,7 @@ use futures::TryFutureExt;
 use inquire::{InquireError, Select};
 use warp_cli::agent::Harness;
 use warp_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
-use warp_cli::scope::ObjectScope;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateModel};
 
@@ -27,7 +27,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
-    NotATeamMemberError, TeamScopeForCli,
+    NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
 };
 use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope as _, UserWorkspaces};
 
@@ -135,55 +135,27 @@ fn describe_team_choices(team_uids: &[ServerId], ctx: &AppContext) -> String {
         .join("\n")
 }
 
-/// Why a `--team` invocation could not be pinned to a single team.
-#[derive(Debug, thiserror::Error)]
-enum TeamResolutionError {
-    #[error(transparent)]
-    NoSoleTeam(#[from] SoleTeamError),
-    #[error(transparent)]
-    NotAMember(#[from] NotATeamMemberError),
-}
-
-fn describe_team_resolution_error(error: TeamResolutionError, ctx: &AppContext) -> anyhow::Error {
+fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext) -> anyhow::Error {
     match error {
-        TeamResolutionError::NoSoleTeam(error) => describe_sole_team_error(error, ctx),
-        TeamResolutionError::NotAMember(NotATeamMemberError { team_uid }) => {
+        TeamScopeForCliError::InvalidTeamUid { team_uid, message } => {
+            anyhow::anyhow!("Invalid --team '{team_uid}': {message}")
+        }
+        TeamScopeForCliError::NoSoleTeam(error) => describe_sole_team_error(error, ctx),
+        TeamScopeForCliError::NotAMember(NotATeamMemberError { team_uid }) => {
             anyhow::anyhow!("You are not on team {team_uid}")
         }
     }
 }
 
-/// Parses the uid given as `--team=<UID>`, if one was.
-fn requested_team_uid(scope: &ObjectScope) -> anyhow::Result<Option<ServerId>> {
-    scope
-        .requested_team_uid()
-        .map(|uid| {
-            ServerId::try_from(uid).map_err(|err| anyhow::anyhow!("Invalid --team '{uid}': {err}"))
-        })
-        .transpose()
-}
-
-/// The team a CLI invocation acts as: the one it named, or its sole team when it named none.
-///
-/// Membership is checked so a mistyped uid fails loudly, rather than resolving to a team whose
-/// policy lookups find nothing and being denied everything for a reason the user cannot see.
-fn resolve_team_uid(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<ServerId> {
-    let workspaces = UserWorkspaces::as_ref(ctx);
-    let resolved = match requested_team_uid(scope)? {
-        Some(team_uid) if workspaces.is_member_of_team(team_uid) => Ok(team_uid),
-        Some(team_uid) => Err(NotATeamMemberError { team_uid }.into()),
-        None => workspaces.sole_team_uid().map_err(Into::into),
-    };
-    resolved.map_err(|err| describe_team_resolution_error(err, ctx))
-}
-
 /// The team a CLI command's policy reads are scoped to, resolved from the same `--team` the
 /// object's owner is resolved from so the two cannot disagree.
-fn resolve_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<TeamScopeForCli> {
-    let team_uid = resolve_team_uid(scope, ctx)?;
+fn resolve_team_scope(
+    team_selection: &TeamSelection,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
     UserWorkspaces::as_ref(ctx)
-        .team_scope_for_cli(team_uid)
-        .map_err(|err| describe_team_resolution_error(err.into(), ctx))
+        .team_scope_for_cli(team_selection)
+        .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 
 /// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
@@ -194,7 +166,7 @@ fn resolve_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<T
 /// multi-team user pass `--team` to name a model no team governs.
 pub fn validate_agent_mode_base_model_id_for_scope(
     model_id: &str,
-    scope: &ObjectScope,
+    team_selection: &TeamSelection,
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
     let llm_id = validate_agent_mode_base_model_id(model_id, ctx)?;
@@ -203,7 +175,7 @@ pub fn validate_agent_mode_base_model_id_for_scope(
         return Ok(llm_id);
     };
 
-    let team_scope = resolve_team_scope(scope, ctx)?;
+    let team_scope = resolve_team_scope(team_selection, ctx)?;
     if is_model_allowed_for_scope(prefs, llm, &team_scope, ctx) {
         return Ok(llm_id);
     }
@@ -234,8 +206,11 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
     }
 
     if scope.is_team() {
+        let team_scope = resolve_team_scope(&scope.team_selection, ctx)?;
         return Ok(Owner::Team {
-            team_uid: resolve_team_uid(scope, ctx)?,
+            team_uid: team_scope
+                .team_uid()
+                .expect("a CLI team scope always names a team"),
         });
     }
 
@@ -252,12 +227,11 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
 
 /// Checks `--team` against the caller's memberships, for commands that leave the owner for the
 /// server to resolve.
-pub fn validate_team_scope(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<()> {
-    if !scope.is_team() {
+pub fn validate_team_scope(team_selection: &TeamSelection, ctx: &AppContext) -> anyhow::Result<()> {
+    if !team_selection.is_team() {
         return Ok(());
     }
-
-    resolve_team_uid(scope, ctx).map(|_| ())
+    resolve_team_scope(team_selection, ctx).map(|_| ())
 }
 
 /// Refresh workspace metadata before executing an operation.
