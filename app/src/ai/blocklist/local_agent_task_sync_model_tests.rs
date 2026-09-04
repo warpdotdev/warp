@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::anyhow;
 use session_sharing_protocol::common::{ParticipantId, SessionId};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
-use warpui::App;
 use warpui::r#async::FutureExt as _;
+use warpui::{App, SingletonEntity};
 
 use super::super::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use super::{

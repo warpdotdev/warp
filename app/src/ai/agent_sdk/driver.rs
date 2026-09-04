@@ -5017,9 +5017,9 @@ impl AgentDriver {
             &LocalAgentTaskSyncModel::handle(ctx),
             move |me, _, event, ctx| match event {
                 LocalAgentTaskSyncModelEvent::SharedSessionPromptsReadyForCliHarness {
+                    task_id,
                     terminal_view_id: event_tid,
                     prompts,
-                    ..
                 } => {
                     if *event_tid != terminal_view_id {
                         return;
@@ -5027,7 +5027,8 @@ impl AgentDriver {
                     for queued in prompts {
                         log::info!(
                             "Ambient agent CLI lifecycle: event=shared_session_prompt_delivered \
-                             terminal_view_id={terminal_view_id:?} participant_id={:?}",
+                             task_id={task_id:?} terminal_view_id={terminal_view_id:?} \
+                             participant_id={:?}",
                             queued.participant_id
                         );
                         let prompt = queued.prompt.clone();
