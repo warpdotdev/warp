@@ -4315,7 +4315,7 @@ impl PaneGroup {
         self.pane_contents.contains_key(&pane_id)
     }
 
-    /// Gets the Settings view at `pane_index`, if it is a settings pane.
+    /// Gets the Settings view within the visible pane at `pane_index`.
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn settings_view_at_pane_index(
         &self,
@@ -8488,7 +8488,6 @@ impl View for PaneGroup {
     ) {
         let pane_group_id = ctx.view_id();
 
-        // Hidden panes are retained for undo and must not be re-registered as live singletons.
         let settings_pane_ids: Vec<PaneId> = self
             .panes_of::<SettingsPane>()
             .filter(|pane| !self.is_pane_hidden_for_close(pane.id()))

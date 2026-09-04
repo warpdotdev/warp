@@ -1742,7 +1742,7 @@ fn open_settings_step(step_name: &'static str, window_key: &'static str) -> Test
     })
 }
 
-/// Emits the Settings view event because the Rules button has no cached test position.
+/// Emits the visible Settings pane's event because the Rules button has no cached test position.
 fn click_rules_button_in_settings_step(
     step_name: &'static str,
     window_key: &'static str,

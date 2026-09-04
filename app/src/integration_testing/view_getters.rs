@@ -208,7 +208,7 @@ pub fn pane_group_view(app: &App, window_id: WindowId, tab_index: usize) -> View
     })
 }
 
-/// Panics if there isn't a Settings view at the given tab and pane index.
+/// Panics unless the visible pane at the given tab and pane index contains a Settings view.
 pub fn settings_view_at_pane_index(
     app: &App,
     window_id: WindowId,
