@@ -127,6 +127,11 @@ pub enum AutoCloudHandoffTrigger {
 
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
+    /// Permanently discards a transferred singleton collision loser and focuses the survivor.
+    DiscardDuplicateTransferredPane {
+        keep: PaneViewLocator,
+        discard: PaneViewLocator,
+    },
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1241,6 +1246,7 @@ impl WorkspaceAction {
             #[cfg(feature = "local_fs")]
             FileDeleted { .. } => false, // File deletion doesn't change workspace state
             OpenEnvironmentManagementPane => false,
+            DiscardDuplicateTransferredPane { .. } => false,
             #[cfg(target_os = "linux")]
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]

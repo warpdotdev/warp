@@ -45,7 +45,7 @@ impl SettingsPane {
         Self::from_view(view, ctx)
     }
 
-    fn settings_view(&self, ctx: &AppContext) -> ViewHandle<SettingsView> {
+    pub(crate) fn settings_view(&self, ctx: &AppContext) -> ViewHandle<SettingsView> {
         self.view.as_ref(ctx).child(ctx)
     }
 }
