@@ -4612,6 +4612,21 @@ impl PaneGroup {
         self.cleanup_closed_pane(pane_id, ctx);
     }
 
+    /// Permanently discards a transferred pane without adding it to undo-close history.
+    pub(crate) fn discard_transferred_pane(
+        &mut self,
+        pane_id: PaneId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.pane_contents.contains_key(&pane_id) {
+            return;
+        }
+
+        self.focus_next_terminal_pane_and_activate_session(pane_id, PaneRemovalReason::Close, ctx);
+        self.discard_pane(pane_id, ctx);
+        self.handle_pane_count_change(ctx);
+    }
+
     /// Best-effort: re-bind each live child agent conversation on the
     /// closing view to the pane that owns its parent. Defensive plumbing
     /// for paths where the parent's view actually contains the child;

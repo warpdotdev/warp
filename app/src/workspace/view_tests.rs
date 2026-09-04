@@ -5505,6 +5505,7 @@ fn test_settings_pane_page_navigation_after_transfer_updates_transferred_view() 
 /// Uses the real handoff path so deferred collision reconciliation runs after insertion.
 #[test]
 fn test_settings_pane_transfer_into_window_with_existing_pane_discards_duplicate() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -5517,8 +5518,20 @@ fn test_settings_pane_transfer_into_window_with_existing_pane_discards_duplicate
             ws.open_settings_pane(None, None, ctx);
         });
         workspace_a.update(&mut app, |ws, ctx| {
+            ws.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+                pane_group.add_terminal_pane(Direction::Right, None, ctx);
+            });
+        });
+        workspace_a.update(&mut app, |ws, ctx| {
             ws.remove_tab_without_undo(0, ctx);
         });
+        assert_eq!(
+            workspace_a.read(&app, |ws, ctx| ws
+                .active_tab_pane_group()
+                .as_ref(ctx)
+                .pane_count()),
+            2
+        );
         let locator_a = app
             .read(|ctx| SettingsPaneManager::as_ref(ctx).find_pane(window_a))
             .expect("settings pane should be registered for window A");
@@ -5570,6 +5583,25 @@ fn test_settings_pane_transfer_into_window_with_existing_pane_discards_duplicate
             "the pre-existing Settings pane must remain reachable"
         );
 
+        app.update(|ctx| {
+            UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
+                stack.undo_close(ctx);
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                SettingsPaneManager::as_ref(ctx).find_pane(window_b),
+                Some(locator_b_before),
+                "undo close must not replace the surviving Settings registration"
+            );
+        });
+        assert!(
+            workspace_b.read(&app, |ws, ctx| ws
+                .live_settings_view_for_locator(locator_a, ctx)
+                .is_none()),
+            "undo close must not restore the discarded Settings duplicate"
+        );
+
         let b_settings_tab_index = workspace_b.read(&app, |ws, _| {
             ws.tabs
                 .iter()
@@ -5596,6 +5628,7 @@ fn test_settings_pane_transfer_into_window_with_existing_pane_discards_duplicate
 
 #[test]
 fn test_ai_fact_pane_transfer_into_window_with_existing_pane_discards_duplicate() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
     App::test((), |mut app| async move {
         initialize_app(&mut app);
 
@@ -5663,6 +5696,25 @@ fn test_ai_fact_pane_transfer_into_window_with_existing_pane_discards_duplicate(
                 .live_ai_fact_view_for_locator(locator_b_before, ctx)
                 .is_some()),
             "the pre-existing Rules pane must remain reachable"
+        );
+
+        app.update(|ctx| {
+            UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
+                stack.undo_close(ctx);
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                AIFactManager::as_ref(ctx).find_pane(window_b),
+                Some(locator_b_before),
+                "undo close must not replace the surviving Rules registration"
+            );
+        });
+        assert!(
+            workspace_b.read(&app, |ws, ctx| ws
+                .live_ai_fact_view_for_locator(locator_a, ctx)
+                .is_none()),
+            "undo close must not restore the discarded Rules duplicate"
         );
 
         let b_tab_index = workspace_b.read(&app, |ws, _| {
