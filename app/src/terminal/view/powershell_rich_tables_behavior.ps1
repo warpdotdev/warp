@@ -194,6 +194,24 @@ $customFormat = @'
         </TableRowEntries>
       </TableControl>
     </View>
+    <View>
+      <Name>WarpLargeHidden</Name>
+      <ViewSelectedBy><TypeName>Warp.Test.LargeHidden</TypeName></ViewSelectedBy>
+      <TableControl>
+        <TableHeaders>
+          <TableColumnHeader><Label>Name</Label></TableColumnHeader>
+          <TableColumnHeader><Label>Id</Label></TableColumnHeader>
+        </TableHeaders>
+        <TableRowEntries>
+          <TableRowEntry>
+            <TableColumnItems>
+              <TableColumnItem><PropertyName>Name</PropertyName></TableColumnItem>
+              <TableColumnItem><PropertyName>Id</PropertyName></TableColumnItem>
+            </TableColumnItems>
+          </TableRowEntry>
+        </TableRowEntries>
+      </TableControl>
+    </View>
   </ViewDefinitions>
 </Configuration>
 '@
@@ -230,14 +248,52 @@ try {
         New-CustomTableObject -TypeName 'Warp.Test.ComputedFailure' -Value 'kept'
         New-CustomTableObject -TypeName 'Warp.Test.ComputedFailure' -Value 'fail'
     ) | Warp-Out-Default
-    Assert-True ((Get-HookNames).Count -eq 0) `
-        'a computed expression failure must fall back the buffered table before any OSC'
+    $hooks = Get-HookNames
+    Assert-True ($hooks[0] -eq 'PowerShellTableBegin') `
+        'a valid computed row should start streaming before a later expression failure'
+    Assert-True ($hooks[-1] -eq 'PowerShellTableEnd') `
+        'a later computed expression failure should close the emitted table'
+    Assert-True ((Get-RowCount) -eq 1) `
+        'a later computed expression failure should not replay the emitted object'
 
     $script:warpMessages.Clear()
     New-CustomTableObject -TypeName 'Warp.Test.ComputedCollection' -Value 'ignored' |
         Warp-Out-Default
     Assert-True ((Get-HookNames).Count -eq 0) `
         'a non-scalar computed expression must fall back before any OSC'
+    $script:warpMessages.Clear()
+    $script:midstreamHookCount = 0
+    $script:midstreamLiveReferences = 0
+    $weakReferences = [System.Collections.Generic.List[System.WeakReference]]::new()
+    & {
+        foreach ($index in 1..100) {
+            $object = [pscustomobject]@{
+                Name = "row-$index"
+                Id = $index
+                Hidden = ('x' * 262144)
+            }
+            $object.PSObject.TypeNames.Insert(0, 'Warp.Test.LargeHidden')
+            $weakReferences.Add([System.WeakReference]::new($object))
+            Write-Output $object
+            $object = $null
+
+            if ($index -eq 50) {
+                [GC]::Collect()
+                [GC]::WaitForPendingFinalizers()
+                [GC]::Collect()
+                $script:midstreamHookCount = (Get-HookNames).Count
+                $script:midstreamLiveReferences = @(
+                    $weakReferences | Where-Object { $_.IsAlive }
+                ).Count
+            }
+        }
+    } | Warp-Out-Default
+    Assert-True ($script:midstreamHookCount -gt 1) `
+        'table metadata and rows should be emitted before the input pipeline completes'
+    Assert-True ($script:midstreamLiveReferences -le 2) `
+        'streaming should not retain prior objects with large undisplayed properties'
+    Assert-True ((Get-RowCount) -eq 100) `
+        'streaming should preserve every displayed row'
 } finally {
     Remove-Item -LiteralPath $customFormatPath -ErrorAction Ignore
 }
@@ -277,8 +333,13 @@ Assert-True ((Get-HookNames).Count -eq 0) `
 
 $script:warpMessages.Clear()
 $simple, ([pscustomobject]@{ Name = ('x' * 33000); Id = 2 }) | Warp-Out-Default
-Assert-True ((Get-HookNames).Count -eq 0) `
-    'an oversized row must fall back the buffered table before emitting any OSC'
+$hooks = Get-HookNames
+Assert-True ($hooks[0] -eq 'PowerShellTableBegin') `
+    'a valid row should be emitted before a later oversized row'
+Assert-True ($hooks[-1] -eq 'PowerShellTableEnd') `
+    'a later oversized row should close the emitted table before fallback'
+Assert-True ((Get-RowCount) -eq 1) `
+    'a later oversized row should not replay the emitted object'
 
 $script:warpMessages.Clear()
 1..10001 | ForEach-Object { [pscustomobject]@{ Name = "$_"; Id = $_ } } | Warp-Out-Default

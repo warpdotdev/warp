@@ -1319,14 +1319,13 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         $Rows.Clear()
     }
 
-    function Warp-Complete-PowerShellTable {
+    function Warp-Start-PowerShellTable {
         param(
             [string]$TableId,
-            [array]$Columns,
-            [System.Collections.Generic.List[object]]$Rows
+            [array]$Columns
         )
 
-        if ([string]::IsNullOrEmpty($TableId) -or $Rows.Count -eq 0) {
+        if ([string]::IsNullOrEmpty($TableId)) {
             return
         }
 
@@ -1338,6 +1337,18 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 columns = $Columns
             }
         }
+    }
+
+    function Warp-Complete-PowerShellTable {
+        param(
+            [string]$TableId,
+            [System.Collections.Generic.List[object]]$Rows
+        )
+
+        if ([string]::IsNullOrEmpty($TableId)) {
+            return
+        }
+
         Warp-Send-PowerShellTableRows -TableId $TableId -Rows $Rows -MaxRowsPerMessage 25
         Warp-Send-JsonMessage @{
             hook = 'PowerShellTableEnd'
@@ -1358,11 +1369,9 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
         begin {
             $maxTableRows = 10000
-            $columns = $null
             $schema = $null
             $tableId = $null
             $rowBuffer = [System.Collections.Generic.List[object]]::new()
-            $inputBuffer = [System.Collections.Generic.List[object]]::new()
             $acceptedRows = 0
             $fallback = $false
             $fallbackPipeline = $null
@@ -1390,25 +1399,9 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             $schemaChanged = ($null -ne $schema -and $null -ne $nextSchema -and $schema -ne $nextSchema)
             $unsupported = ($null -eq $nextColumns -or $null -eq $nextRow)
             $overRowCap = (-not $schemaChanged -and $acceptedRows -ge $maxTableRows)
-            if ($null -ne $nextColumns -and $null -eq $nextRow) {
-                $fallback = $true
-                $fallbackPipeline = {
-                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
-                }.GetSteppablePipeline($MyInvocation.CommandOrigin)
-                $fallbackPipeline.Begin($PSCmdlet)
-                foreach ($bufferedInput in $inputBuffer) {
-                    $fallbackPipeline.Process($bufferedInput)
-                }
-                $fallbackPipeline.Process($InputObject)
-                $inputBuffer.Clear()
-                $rowBuffer.Clear()
-                $tableId = $null
-                return
-            }
 
             if ($unsupported -or $overRowCap) {
-                Warp-Complete-PowerShellTable -TableId $tableId -Columns $columns -Rows $rowBuffer
-                $inputBuffer.Clear()
+                Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
                 $tableId = $null
                 $fallback = $true
                 $fallbackPipeline = {
@@ -1420,33 +1413,63 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             }
 
             if ($schemaChanged) {
-                Warp-Complete-PowerShellTable -TableId $tableId -Columns $columns -Rows $rowBuffer
-                $inputBuffer.Clear()
+                Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
                 $tableId = $null
                 $acceptedRows = 0
             }
 
             if ([string]::IsNullOrEmpty($tableId)) {
-                $tableId = [Guid]::NewGuid().ToString('N')
-                $columns = Warp-Get-PowerShellTableWireColumns $nextColumns
-                $schema = $nextSchema
+                $nextTableId = [Guid]::NewGuid().ToString('N')
+                $nextWireColumns = Warp-Get-PowerShellTableWireColumns $nextColumns
                 $beginMessage = @{
                     hook = 'PowerShellTableBegin'
                     value = @{
                         session_id = $global:_warpSessionId
-                        table_id = $tableId
-                        columns = $columns
+                        table_id = $nextTableId
+                        columns = $nextWireColumns
                     }
                 }
                 $endMessage = @{
                     hook = 'PowerShellTableEnd'
                     value = @{
                         session_id = $global:_warpSessionId
-                        table_id = $tableId
+                        table_id = $nextTableId
+                    }
+                }
+                $singleRowMessage = @{
+                    hook = 'PowerShellTableRows'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $nextTableId
+                        rows = @(,$nextRow)
                     }
                 }
                 if (-not (Warp-Test-PowerShellTableMessageFits $beginMessage) -or
-                    -not (Warp-Test-PowerShellTableMessageFits $endMessage)) {
+                    -not (Warp-Test-PowerShellTableMessageFits $endMessage) -or
+                    -not (Warp-Test-PowerShellTableMessageFits $singleRowMessage)) {
+                    $fallback = $true
+                    $fallbackPipeline = {
+                        Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
+                    }.GetSteppablePipeline($MyInvocation.CommandOrigin)
+                    $fallbackPipeline.Begin($PSCmdlet)
+                    $fallbackPipeline.Process($InputObject)
+                    return
+                }
+
+                $tableId = $nextTableId
+                $schema = $nextSchema
+                Warp-Start-PowerShellTable -TableId $tableId -Columns $nextWireColumns
+            } else {
+                $singleRowMessage = @{
+                    hook = 'PowerShellTableRows'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $tableId
+                        rows = @(,$nextRow)
+                    }
+                }
+                if (-not (Warp-Test-PowerShellTableMessageFits $singleRowMessage)) {
+                    Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
                     $tableId = $null
                     $fallback = $true
                     $fallbackPipeline = {
@@ -1458,33 +1481,29 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 }
             }
 
-            $singleRowMessage = @{
+            $bufferedRowsMessage = @{
                 hook = 'PowerShellTableRows'
                 value = @{
                     session_id = $global:_warpSessionId
                     table_id = $tableId
-                    rows = @(,$nextRow)
+                    rows = @($rowBuffer) + @(,$nextRow)
                 }
             }
-            if (-not (Warp-Test-PowerShellTableMessageFits $singleRowMessage)) {
-                $fallback = $true
-                $fallbackPipeline = {
-                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
-                }.GetSteppablePipeline($MyInvocation.CommandOrigin)
-                $fallbackPipeline.Begin($PSCmdlet)
-                foreach ($bufferedInput in $inputBuffer) {
-                    $fallbackPipeline.Process($bufferedInput)
-                }
-                $fallbackPipeline.Process($InputObject)
-                $inputBuffer.Clear()
-                $rowBuffer.Clear()
-                $tableId = $null
-                return
+            if ($rowBuffer.Count -gt 0 -and
+                -not (Warp-Test-PowerShellTableMessageFits $bufferedRowsMessage)) {
+                Warp-Send-PowerShellTableRows `
+                    -TableId $tableId `
+                    -Rows $rowBuffer `
+                    -MaxRowsPerMessage 25
             }
-
             $rowBuffer.Add($nextRow)
-            $inputBuffer.Add($InputObject)
             $acceptedRows++
+            if ($rowBuffer.Count -ge 25) {
+                Warp-Send-PowerShellTableRows `
+                    -TableId $tableId `
+                    -Rows $rowBuffer `
+                    -MaxRowsPerMessage 25
+            }
         }
         end {
             if ($fallback) {
@@ -1494,7 +1513,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
                 return
             }
 
-            Warp-Complete-PowerShellTable -TableId $tableId -Columns $columns -Rows $rowBuffer
+            Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
         }
     }
 
