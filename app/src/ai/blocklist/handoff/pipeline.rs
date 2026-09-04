@@ -57,6 +57,7 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
@@ -685,6 +686,7 @@ struct SnapshotSettledHandoff {
 /// exclusive.
 pub fn execute_handoff(
     mut pending: PendingHandoff,
+    team_scope: RequestTeamScope,
     ai_client: Arc<dyn AIClient>,
     caller_cancellation: Option<oneshot::Receiver<()>>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
@@ -715,6 +717,7 @@ pub fn execute_handoff(
 
     Box::pin(execute_validated_handoff(
         pending,
+        team_scope,
         ai_client,
         caller_cancellation,
         materialize_handoff_target,
@@ -723,6 +726,7 @@ pub fn execute_handoff(
 
 async fn execute_validated_handoff(
     pending: PendingHandoff,
+    team_scope: RequestTeamScope,
     ai_client: Arc<dyn AIClient>,
     caller_cancellation: Option<oneshot::Receiver<()>>,
     materialize_handoff_target: Option<MaterializeHandoffTarget>,
@@ -799,7 +803,7 @@ async fn execute_validated_handoff(
         settled.forked_conversation_id,
         settled.initial_snapshot_token,
     );
-    let response = ai_client.spawn_agent(request.clone()).await;
+    let response = ai_client.spawn_agent(request.clone(), team_scope).await;
     if cancellation
         .as_mut()
         .is_some_and(handoff_cancellation_requested)

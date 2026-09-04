@@ -46,6 +46,7 @@ use crate::server::server_api::ai::{
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -393,6 +394,7 @@ impl AmbientAgentRunner {
                     return;
                 }
             };
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
 
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment
@@ -559,7 +561,12 @@ impl AmbientAgentRunner {
             let oz_root_url = ChannelState::oz_root_url();
             let ai_client_clone = ai_client.clone();
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task(request, ai_client_clone, Some(TASK_STATUS_POLLING_DURATION)));
+                let mut stream = Box::pin(spawn_task(
+                    request,
+                    request_team_scope,
+                    ai_client_clone,
+                    Some(TASK_STATUS_POLLING_DURATION),
+                ));
                 let mut session_join_info = None;
                 let mut spawned_task_id = None;
 

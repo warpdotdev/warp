@@ -14,6 +14,7 @@ use crate::server::retry_strategies::with_bounded_retry;
 use crate::server::server_api::ai::{
     AIClient, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 
 /// How long to poll for the agent to be ready.
@@ -101,6 +102,7 @@ enum RunPollMode {
 /// If `timeout` is `None`, there is no timeout.
 pub fn spawn_task(
     request: SpawnAgentRequest,
+    team_scope: RequestTeamScope,
     ai_client: Arc<dyn AIClient>,
     timeout: Option<Duration>,
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
@@ -108,7 +110,7 @@ pub fn spawn_task(
     // See https://github.com/tokio-rs/async-stream/issues/63.
     async_stream::stream! {
         // First, spawn the ambient agent task.
-        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request).await {
+        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request, team_scope).await {
             Ok(response) => (response.task_id, response.run_id, response.at_capacity),
             Err(err) => {
                 yield Err(err);

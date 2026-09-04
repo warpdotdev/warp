@@ -19,9 +19,9 @@ use warp::tui_export::{
     CloudEnvironmentCatalog, HandoffCommitOutcome, HandoffEntryPoint, HandoffLaunchAttachments,
     HandoffPrepareError, HandoffPrepareInput, HandoffRestoration, HandoffSurface, LLMId,
     LLMPreferences, LLMPreferencesEvent, OptionRow, OptionSnapshot, OptionSourceStatus,
-    PendingCloudLaunch, PendingHandoff, ServerApiProvider, SnapshotUploadTarget, TerminalModel,
-    UserWorkspaces, UserWorkspacesEvent, execute_handoff, handoff_dispatch_error,
-    oz_model_snapshot, prepare_handoff, suggest_handoff_environment,
+    PendingCloudLaunch, PendingHandoff, RequestTeamScope, ServerApiProvider, SnapshotUploadTarget,
+    TeamContextResolver, TerminalModel, UserWorkspaces, UserWorkspacesEvent, execute_handoff,
+    handoff_dispatch_error, oz_model_snapshot, prepare_handoff, suggest_handoff_environment,
 };
 use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
@@ -102,6 +102,7 @@ pub(crate) struct TuiHandoffModel {
     source_conversation_id: Option<AIConversationId>,
     phase: TuiHandoffPhase,
     environments: ModelHandle<CloudEnvironmentCatalog>,
+    team_context_resolver: TeamContextResolver,
     forked_existing_conversation: bool,
     next_operation_id: u64,
     execution_cancellation: Option<oneshot::Sender<()>>,
@@ -110,6 +111,7 @@ pub(crate) struct TuiHandoffModel {
 
 impl TuiHandoffModel {
     /// Prepares a handoff and registers its retained model.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         terminal_surface_id: EntityId,
         terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -117,6 +119,7 @@ impl TuiHandoffModel {
         context: ModelHandle<BlocklistAIContextModel>,
         current_working_directory: Option<String>,
         argument: Option<String>,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut AppContext,
     ) -> Result<ModelHandle<Self>, TuiHandoffPreparationFailure> {
         if !AISettings::as_ref(ctx).is_cloud_handoff_enabled(ctx) {
@@ -229,6 +232,7 @@ impl TuiHandoffModel {
                     pending: Box::new(pending),
                 },
                 environments,
+                team_context_resolver,
                 forked_existing_conversation,
                 next_operation_id: 0,
                 execution_cancellation: None,
@@ -601,9 +605,17 @@ impl TuiHandoffModel {
         ctx.notify();
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let team_scope = RequestTeamScope::from_scope(&(self.team_context_resolver)(ctx));
         let (cancel, cancellation) = oneshot::channel();
         self.execution_cancellation = Some(cancel);
-        let execution = execute_handoff(*pending, ai_client, Some(cancellation), None, ctx);
+        let execution = execute_handoff(
+            *pending,
+            team_scope,
+            ai_client,
+            Some(cancellation),
+            None,
+            ctx,
+        );
         ctx.spawn(execution, move |model, outcome, ctx| {
             if !matches!(
                 model.phase,

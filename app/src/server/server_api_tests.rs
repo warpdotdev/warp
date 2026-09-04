@@ -1,8 +1,12 @@
+use std::sync::{Arc, Mutex};
+
 use futures::executor::block_on;
 use mockito::Server;
 
 use super::*;
+use crate::server::ids::ServerId;
 use crate::server::retry_strategies::is_transient_http_error;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 /// Sends a GET request to a mock endpoint returning `status`/`headers`/`body`, then feeds the
 /// resulting response through [`ServerApi::error_from_response`].
@@ -26,6 +30,53 @@ fn error_from_mock_response(status: usize, headers: &[(&str, &str)], body: &str)
             .unwrap();
         ServerApi::error_from_response(response).await
     })
+}
+
+#[test]
+fn request_team_scope_controls_the_team_header() {
+    let observed_headers = Arc::new(Mutex::new(Vec::new()));
+    let observed_headers_for_hook = observed_headers.clone();
+    let mut client = http_client::Client::new_for_test();
+    client.set_before_request_fn(Box::new(move |request, _| {
+        observed_headers_for_hook
+            .lock()
+            .expect("header observations lock")
+            .push(
+                request
+                    .headers()
+                    .get(TEAM_UID_HEADER)
+                    .map(|value| value.to_str().expect("team header is valid").to_owned()),
+            );
+    }));
+    let mut server = Server::new();
+    let request = server
+        .mock("POST", "/scope")
+        .with_status(200)
+        .expect(2)
+        .create();
+    let url = format!("{}/scope", server.url());
+    let selected_team_uid = ServerId::from(42);
+    let expected_header = selected_team_uid.uid().to_owned();
+    let selected_scope =
+        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(selected_team_uid));
+    let teamless_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+
+    block_on(async {
+        ServerApi::with_request_team_scope(client.post(&url), Some(selected_scope))
+            .send()
+            .await
+            .expect("selected-team request");
+        ServerApi::with_request_team_scope(client.post(&url), Some(teamless_scope))
+            .send()
+            .await
+            .expect("teamless request");
+    });
+    request.assert();
+
+    assert_eq!(
+        *observed_headers.lock().expect("header observations lock"),
+        vec![Some(expected_header), None]
+    );
 }
 
 /// The status carried by the [`HttpStatusError`] in `err`'s chain, if any.

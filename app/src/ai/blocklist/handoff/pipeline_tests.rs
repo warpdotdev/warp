@@ -23,8 +23,14 @@ use crate::features::FeatureFlag;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{ForkConversationResponse, MockAIClient, SpawnAgentResponse};
+use crate::server::team_scope::RequestTeamScope;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+}
 
 fn task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000"
@@ -185,7 +191,8 @@ fn execute_revalidates_current_model_before_returning_future() {
         pending.selected_model_id = "custom-router:local:byok".to_owned();
         pending.model_is_cloud_runnable = true;
 
-        let future = app.update(|ctx| execute_handoff(pending, client, None, None, ctx));
+        let future = app
+            .update(|ctx| execute_handoff(pending, request_team_scope(), client, None, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("current invalid model must reject before external work");
         };
@@ -208,7 +215,8 @@ fn execute_revalidates_current_environment_catalog_before_returning_future() {
         pending.valid_environment_ids.insert(environment_id);
         pending.config.environment_id = Some(environment_id.to_string());
 
-        let future = app.update(|ctx| execute_handoff(pending, client, None, None, ctx));
+        let future = app
+            .update(|ctx| execute_handoff(pending, request_team_scope(), client, None, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("deleted environment must reject before external work");
         };
@@ -227,7 +235,8 @@ fn execute_revalidates_current_handoff_enablement_before_returning_future() {
         let client: Arc<dyn AIClient> = Arc::new(mock);
         let pending = pending(client.clone(), None, false, "continue");
 
-        let future = app.update(|ctx| execute_handoff(pending, client, None, None, ctx));
+        let future = app
+            .update(|ctx| execute_handoff(pending, request_team_scope(), client, None, None, ctx));
         let HandoffCommitOutcome::Rejected { error, .. } = future.await else {
             panic!("disabled handoff must reject before external work");
         };
@@ -764,6 +773,11 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
     let materialized = Arc::new(AtomicBool::new(false));
     let spawn_count = Arc::new(AtomicUsize::new(0));
     let observed_request = Arc::new(Mutex::new(None));
+    let expected_scope = RequestTeamScope::from_scope(
+        &crate::workspaces::user_workspaces::TeamContextForOperation::new_for_test(ServerId::from(
+            42,
+        )),
+    );
     let mut mock = MockAIClient::new();
     mock.expect_fork_conversation()
         .times(1)
@@ -779,8 +793,9 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
         let materialized = materialized.clone();
         let spawn_count = spawn_count.clone();
         let observed_request = observed_request.clone();
-        move |request| {
+        move |request, team_scope| {
             assert!(materialized.load(Ordering::SeqCst));
+            assert_eq!(team_scope, expected_scope);
             spawn_count.fetch_add(1, Ordering::SeqCst);
             *observed_request.lock().expect("request lock") = Some(request);
             Ok(SpawnAgentResponse {
@@ -814,6 +829,7 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
             true,
             "",
         ),
+        expected_scope,
         client,
         None,
         Some(materialize),
@@ -856,7 +872,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
     mock.expect_fork_conversation().times(0);
     mock.expect_spawn_agent().times(1).returning({
         let materialized = materialized.clone();
-        move |request| {
+        move |request, _| {
             assert!(materialized.load(Ordering::SeqCst));
             assert!(request.conversation_id.is_none());
             Ok(SpawnAgentResponse {
@@ -882,6 +898,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
 
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
+        request_team_scope(),
         client,
         None,
         Some(materialize),
@@ -912,6 +929,7 @@ async fn cancellation_after_materialization_stops_before_spawn() {
 
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
+        request_team_scope(),
         client,
         None,
         Some(materialize),
@@ -928,7 +946,7 @@ async fn cancellation_during_spawn_cancels_the_created_task() {
     mock.expect_fork_conversation().times(0);
     mock.expect_spawn_agent().times(1).returning({
         let cancel = cancel.clone();
-        move |_| {
+        move |_, _| {
             cancel
                 .lock()
                 .expect("cancel sender lock")
@@ -958,6 +976,7 @@ async fn cancellation_during_spawn_cancels_the_created_task() {
 
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
+        request_team_scope(),
         client,
         None,
         Some(materialize),
@@ -984,7 +1003,7 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     mock.expect_upload_local_handoff_snapshot()
         .times(1)
         .returning(|_| Err(anyhow::anyhow!("snapshot unavailable")));
-    mock.expect_spawn_agent().times(1).returning(|request| {
+    mock.expect_spawn_agent().times(1).returning(|request, _| {
         assert!(request.initial_snapshot_token.is_none());
         Ok(SpawnAgentResponse {
             task_id: task_id(),
@@ -996,7 +1015,8 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     let mut pending = pending(client.clone(), None, false, "continue");
     pending.source_paths = vec![path];
 
-    let outcome = execute_validated_handoff(pending, client, None, None).await;
+    let outcome =
+        execute_validated_handoff(pending, request_team_scope(), client, None, None).await;
     let HandoffCommitOutcome::Created(created) = outcome else {
         panic!("snapshot failure should not fail the handoff");
     };
@@ -1016,6 +1036,7 @@ async fn caller_cancellation_stops_before_spawn() {
 
     let outcome = execute_validated_handoff(
         pending(client.clone(), None, false, "new task"),
+        request_team_scope(),
         client,
         Some(cancellation),
         None,
