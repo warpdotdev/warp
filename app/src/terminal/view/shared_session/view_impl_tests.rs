@@ -678,6 +678,124 @@ fn test_on_session_share_ended_skips_cloud_continuation_for_user_share_with_task
     });
 }
 
+/// Creates a terminal view that is a live sharer (not a viewer), with the inactivity
+/// ladder already armed per whatever `SharedSessionSettings` are in effect at call time.
+/// Callers must call `initialize_app_for_terminal_view` (which registers
+/// `SharedSessionSettings`) before configuring settings and calling this.
+fn start_sharer_session(app: &mut App) -> ViewHandle<TerminalView> {
+    let terminal = add_window_with_terminal(app, None);
+    terminal.update(app, |view, ctx| {
+        view.on_session_share_started(
+            ParticipantId::new(),
+            UserUid::new("mock_sharer_firebase_uid"),
+            SharedSessionScrollbackType::None,
+            SessionId::new(),
+            SessionSourceType::User,
+            ctx,
+        );
+    });
+    terminal
+}
+
+// REMOTE(APP-5313 follow-up): a mid-flight settings change must not leave a single idle
+// period's phase chain computed from a mix of old and new durations -- an already-armed
+// timer keeps running on the duration it started with, and the *next* phase transition
+// must be judged against that same snapshot, not live (possibly changed) settings.
+
+#[test]
+fn mid_flight_settings_change_does_not_affect_the_current_idle_periods_snapshot() {
+    let _flag = FeatureFlag::CreatingSharedSessions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        // The reviewer's example numbers: revoke=10m, warn=25m, end=30m.
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_revoking_roles
+                .set_value(Duration::from_secs(600), ctx);
+            let _ = settings
+                .inactivity_period_before_warning
+                .set_value(Duration::from_secs(1500), ctx);
+            let _ = settings
+                .inactivity_period_before_ending_session
+                .set_value(Duration::from_secs(1800), ctx);
+        });
+
+        let terminal = start_sharer_session(&mut app);
+        let snapshot_at_start = terminal.read(&app, |view, _| {
+            view.shared_session_sharer()
+                .expect("sharer")
+                .inactivity_snapshot
+                .expect("a snapshot should be captured when the idle period starts")
+        });
+        assert_eq!(snapshot_at_start.revoke, Duration::from_secs(600));
+        assert_eq!(snapshot_at_start.warn, Duration::from_secs(1500));
+        assert_eq!(snapshot_at_start.end, Duration::from_secs(1800));
+
+        // Mid-flight settings change, as in the reviewer's example: revoke changes from
+        // 10m to 20m while the original 10m revoke timer is still armed.
+        SharedSessionSettings::handle(&app).update(&mut app, |settings, ctx| {
+            let _ = settings
+                .inactivity_period_before_revoking_roles
+                .set_value(Duration::from_secs(1200), ctx);
+        });
+
+        // The in-flight idle period's snapshot must be unaffected by the change.
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert_eq!(
+                sharer.inactivity_snapshot,
+                Some(snapshot_at_start),
+                "a settings change mid-flight must not alter the snapshot an already-armed \
+                 idle period is using"
+            );
+        });
+
+        // Simulate the already-armed (pre-change) revoke timer firing: this exercises the
+        // exact code path under test without waiting for the real duration to elapse.
+        terminal.update(&mut app, |view, ctx| {
+            view.revoke_roles_on_inactivity_period_expired(ctx);
+        });
+
+        // The next phase must still be armed from the *original* snapshot (600s revoke),
+        // not the changed live setting (1200s): the warning phase should fire
+        // 1500 - 600 = 900s after revoke, not 1500 - 1200 = 300s after.
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert_eq!(
+                sharer.inactivity_snapshot,
+                Some(snapshot_at_start),
+                "the snapshot must still be the one captured at session start after \
+                 advancing to the next phase"
+            );
+            assert!(
+                sharer.inactivity_timer_abort_handle.is_some(),
+                "the warning phase should have armed since it's enabled in the snapshot"
+            );
+        });
+
+        // A *fresh* idle period (e.g. from new activity) should pick up the changed
+        // settings -- only the period that was already in flight when the change happened
+        // is unaffected.
+        terminal.update(&mut app, |view, ctx| {
+            view.reset_sharer_inactivity_timer(ctx);
+        });
+        terminal.read(&app, |view, _| {
+            let sharer = view.shared_session_sharer().expect("sharer");
+            assert_eq!(
+                sharer.inactivity_snapshot,
+                Some(InactivityLadderSnapshot {
+                    revoke: Duration::from_secs(1200),
+                    warn: Duration::from_secs(1500),
+                    end: Duration::from_secs(1800),
+                }),
+                "a freshly reset idle period should snapshot the current (changed) settings"
+            );
+        });
+    });
+}
+
 fn create_cloud_mode_task_for_user(creator_uid: &str) -> AmbientAgentTask {
     let now = chrono::Utc::now();
     AmbientAgentTask {
