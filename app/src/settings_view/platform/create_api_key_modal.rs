@@ -444,6 +444,9 @@ impl CreateApiKeyModal {
         self.raw_key_copied = false;
         self.raw_key = None;
         self.selected_agent_uid = None;
+        self.agent_dropdown.update(ctx, |dropdown, ctx| {
+            dropdown.clear_filter(ctx);
+        });
         self.name_editor.update(ctx, |editor, ctx| {
             editor.clear_buffer_and_reset_undo_stack(ctx);
         });
