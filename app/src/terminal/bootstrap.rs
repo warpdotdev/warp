@@ -170,3 +170,7 @@ fn init_subshell_script_for_unknown_shell(
         .replace("HOOK_NAME", "InitSubshell")
         .replace(SESSION_ID_PLACEHOLDER, &session_id.as_u64().to_string())
 }
+
+#[cfg(all(test, unix))]
+#[path = "bootstrap_tests.rs"]
+mod tests;
