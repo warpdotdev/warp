@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
@@ -59,6 +60,7 @@ use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::factory::MockFactoryClient;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
@@ -104,10 +106,145 @@ fn simplified_wasm_navigation_falls_back_to_legacy_oz_destination() {
     let navigation = SimplifiedWasmProductNavigation::from_factory_access(false);
 
     assert_eq!(navigation.action_label, "View in Oz");
-    assert_eq!(
-        navigation.destination(),
-        format!("{}/runs", ChannelState::oz_root_url())
+    assert_open_link_action(
+        &navigation,
+        &format!("{}/runs", ChannelState::oz_root_url()),
     );
+}
+
+fn assert_open_link_action(navigation: &SimplifiedWasmProductNavigation, expected: &str) {
+    match navigation.open_action() {
+        WorkspaceAction::OpenLink(destination) => assert_eq!(destination, expected),
+        _ => panic!("expected OpenLink action"),
+    }
+}
+
+#[test]
+fn factory_access_updates_workspace_navigation_asynchronously() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let legacy_destination = format!("{}/runs", ChannelState::oz_root_url());
+        let initial_button_id = workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                workspace.simplified_wasm_product_navigation.action_label,
+                "View in Oz"
+            );
+            assert_open_link_action(
+                &workspace.simplified_wasm_product_navigation,
+                &legacy_destination,
+            );
+            workspace.view_product_button.id()
+        });
+
+        let mut factory_client = MockFactoryClient::new();
+        factory_client
+            .expect_has_factory_access()
+            .once()
+            .return_once(|| Ok(true));
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.fetch_factory_access_with_client(Arc::new(factory_client), ctx);
+            assert_eq!(
+                workspace.simplified_wasm_product_navigation.action_label,
+                "View in Oz"
+            );
+            assert_eq!(workspace.view_product_button.id(), initial_button_id);
+        });
+
+        crate::test_util::assert_eventually!(
+            workspace.read(&app, |workspace, _| {
+                workspace.simplified_wasm_product_navigation.action_label == "View Factory"
+                    && workspace.view_product_button.id() != initial_button_id
+            }),
+            "Factory access did not update the workspace navigation"
+        );
+        workspace.read(&app, |workspace, _| {
+            assert_open_link_action(
+                &workspace.simplified_wasm_product_navigation,
+                ChannelState::server_root_url().as_ref(),
+            );
+        });
+    });
+}
+
+#[test]
+fn denied_factory_access_keeps_legacy_destination_and_refreshes_button() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let initial_button_id =
+            workspace.read(&app, |workspace, _| workspace.view_product_button.id());
+        let mut factory_client = MockFactoryClient::new();
+        factory_client
+            .expect_has_factory_access()
+            .once()
+            .return_once(|| Ok(false));
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.fetch_factory_access_with_client(Arc::new(factory_client), ctx);
+        });
+
+        crate::test_util::assert_eventually!(
+            workspace.read(&app, |workspace, _| {
+                workspace.view_product_button.id() != initial_button_id
+            }),
+            "Denied Factory access did not complete"
+        );
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(
+                workspace.simplified_wasm_product_navigation.action_label,
+                "View in Oz"
+            );
+            assert_open_link_action(
+                &workspace.simplified_wasm_product_navigation,
+                &format!("{}/runs", ChannelState::oz_root_url()),
+            );
+        });
+    });
+}
+
+#[test]
+fn failed_factory_access_preserves_loading_fallback() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let initial_button_id =
+            workspace.read(&app, |workspace, _| workspace.view_product_button.id());
+        let probe_completed = Arc::new(AtomicBool::new(false));
+        let probe_completed_for_mock = probe_completed.clone();
+        let mut factory_client = MockFactoryClient::new();
+        factory_client
+            .expect_has_factory_access()
+            .once()
+            .return_once(move || {
+                probe_completed_for_mock.store(true, Ordering::SeqCst);
+                Err(anyhow::anyhow!("malformed response"))
+            });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.fetch_factory_access_with_client(Arc::new(factory_client), ctx);
+            assert_eq!(
+                workspace.simplified_wasm_product_navigation.action_label,
+                "View in Oz"
+            );
+        });
+
+        crate::test_util::assert_eventually!(
+            probe_completed.load(Ordering::SeqCst),
+            "Failed Factory access probe did not complete"
+        );
+        workspace.read(&app, |workspace, _| {
+            assert_eq!(workspace.view_product_button.id(), initial_button_id);
+            assert_eq!(
+                workspace.simplified_wasm_product_navigation.action_label,
+                "View in Oz"
+            );
+            assert_open_link_action(
+                &workspace.simplified_wasm_product_navigation,
+                &format!("{}/runs", ChannelState::oz_root_url()),
+            );
+        });
+    });
 }
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);

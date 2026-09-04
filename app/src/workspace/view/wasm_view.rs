@@ -3,7 +3,7 @@
 use warpui::elements::{ChildView, Element};
 use warpui::{AppContext, SingletonEntity, ViewContext, ViewHandle};
 
-use super::{PanelPosition, SimplifiedWasmProductNavigation};
+use super::PanelPosition;
 use crate::BlocklistAIHistoryModel;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::conversation_details_panel::{
@@ -13,9 +13,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::terminal::TerminalView;
 use crate::ui_components::icons;
 use crate::uri::browser_url_handler::parse_current_url;
-use crate::view_components::action_button::{
-    ActionButton, ButtonSize, NakedTheme, PrimaryTheme, SecondaryTheme,
-};
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme, PrimaryTheme};
 use crate::wasm_nux_dialog::{WasmNUXDialog, WasmNUXDialogEvent};
 use crate::workspace::action::WorkspaceAction;
 use crate::workspace::view::{NotebookSource, OpenWarpDriveObjectSettings, Workspace};
@@ -51,36 +49,7 @@ impl Workspace {
 
     pub(super) fn fetch_factory_access(&mut self, ctx: &mut ViewContext<Self>) {
         let factory_client = ServerApiProvider::as_ref(ctx).get_factory_client();
-        ctx.spawn(
-            async move { factory_client.has_factory_access().await },
-            |workspace, result, ctx| match result {
-                Ok(allowed) => {
-                    let navigation = SimplifiedWasmProductNavigation::from_factory_access(allowed);
-                    workspace.view_product_button =
-                        Self::build_view_product_button(navigation.clone(), ctx);
-                    workspace.simplified_wasm_product_navigation = navigation;
-                    ctx.notify();
-                }
-                Err(error) => {
-                    log::warn!(
-                        "Failed to check Factory access; keeping legacy Oz navigation: {error:#}"
-                    );
-                }
-            },
-        );
-    }
-
-    pub(super) fn build_view_product_button(
-        navigation: SimplifiedWasmProductNavigation,
-        ctx: &mut ViewContext<Self>,
-    ) -> ViewHandle<ActionButton> {
-        let label = navigation.action_label;
-        let destination = navigation.destination;
-        ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new(label, SecondaryTheme).on_click(move |ctx| {
-                ctx.dispatch_typed_action(WorkspaceAction::OpenLink(destination.clone()));
-            })
-        })
+        self.fetch_factory_access_with_client(factory_client, ctx);
     }
 
     pub(super) fn build_transcript_info_button(

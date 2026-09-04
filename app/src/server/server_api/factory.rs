@@ -1,9 +1,11 @@
+#[cfg(any(target_family = "wasm", test))]
+use anyhow::Context;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
 use mockall::automock;
-#[cfg(target_family = "wasm")]
+#[cfg(any(target_family = "wasm", test))]
 use serde::Deserialize;
 use warp_graphql::mutations::delete_runner::{
     DeleteRunner, DeleteRunnerInput, DeleteRunnerResult, DeleteRunnerVariables,
@@ -28,7 +30,7 @@ pub struct UpsertedRunner {
     pub is_update: bool,
 }
 
-#[cfg(target_family = "wasm")]
+#[cfg(any(target_family = "wasm", test))]
 #[derive(Debug, Deserialize)]
 struct FactoryAccessResponse {
     allowed: bool,
@@ -39,7 +41,7 @@ struct FactoryAccessResponse {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait FactoryClient: 'static + Send + Sync {
-    #[cfg(target_family = "wasm")]
+    #[cfg(any(target_family = "wasm", test))]
     /// Returns whether the current principal is in the Factory early-access rollout.
     async fn has_factory_access(&self) -> Result<bool>;
     /// Fetch all runners visible to the caller, optionally sorted.
@@ -58,9 +60,32 @@ pub trait FactoryClient: 'static + Send + Sync {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl FactoryClient for ServerApi {
-    #[cfg(target_family = "wasm")]
+    #[cfg(any(target_family = "wasm", test))]
     async fn has_factory_access(&self) -> Result<bool> {
-        let response: FactoryAccessResponse = self.get_public_api("factory/access").await?;
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for Factory access request")?;
+        let url = format!(
+            "{}/api/v1/factory/access",
+            crate::ChannelState::server_root_url()
+        );
+        let mut request = self.http_client().get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send Factory access request to {url}"))?;
+        if !response.status().is_success() {
+            self.observe_iap_challenge(&response);
+            return Err(Self::error_from_response(response).await);
+        }
+        let response: FactoryAccessResponse = response
+            .json()
+            .await
+            .with_context(|| format!("Failed to deserialize Factory access response from {url}"))?;
         Ok(response.allowed)
     }
     async fn get_runners(&self, sort_by: Option<RunnerSortBy>) -> Result<Vec<Runner>> {
@@ -113,3 +138,7 @@ impl FactoryClient for ServerApi {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "factory_tests.rs"]
+mod tests;
