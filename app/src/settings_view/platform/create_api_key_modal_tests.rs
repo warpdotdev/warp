@@ -1,6 +1,7 @@
 use warp_core::ui::appearance::Appearance;
 use warp_server_client::auth::AgentIdentity;
 use warpui::App;
+use warpui::TypedActionView;
 use warpui::platform::WindowStyle;
 
 use super::CreateApiKeyModal;
@@ -103,5 +104,90 @@ fn test_agent_dropdown_is_searchable() {
                 .visible_items_len_for_test(ctx)
         });
         assert_eq!(restored, 3);
+    })
+}
+
+/// Regression test for APP-5819: once agents load, the default shown agent
+/// (Default Service Account, or the first available agent otherwise) must be
+/// stored in `selected_agent_uid` without requiring the user to click the
+/// dropdown, since that's what gates the Create key button for Type=Agent.
+#[test]
+fn test_agent_dropdown_auto_selects_default_agent() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SyncedInputState::mock());
+        app.add_singleton_model(|_| VimRegisters::new());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, CreateApiKeyModal::new);
+
+        assert!(
+            view.read(&app, |modal, _| modal.selected_agent_uid.clone())
+                .is_none(),
+            "no agent should be selected before agents load"
+        );
+
+        view.update(&mut app, |modal, ctx| {
+            modal.set_agents_for_test(
+                vec![
+                    agent("1", "Default Service Account", true),
+                    agent("2", "Ben's Agent", true),
+                    agent("3", "Unavailable Agent", false),
+                ],
+                ctx,
+            );
+        });
+
+        let selected = view.read(&app, |modal, _| modal.selected_agent_uid.clone());
+        assert_eq!(
+            selected,
+            Some("1".to_string()),
+            "Default Service Account should be auto-selected once agents load"
+        );
+
+        // Re-selecting the default (as if the user picked it again) should keep it selected.
+        view.update(&mut app, |modal, ctx| {
+            modal.handle_action(
+                &super::CreateApiKeyModalAction::SelectAgent("1".to_string()),
+                ctx,
+            );
+        });
+        let selected_again = view.read(&app, |modal, _| modal.selected_agent_uid.clone());
+        assert_eq!(selected_again, Some("1".to_string()));
+    })
+}
+
+/// When no agent is named "Default Service Account", the first available
+/// agent should be auto-selected instead.
+#[test]
+fn test_agent_dropdown_auto_selects_first_agent_without_default_service_account() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+        app.add_singleton_model(|_| Appearance::mock());
+        app.add_singleton_model(|_| SyncedInputState::mock());
+        app.add_singleton_model(|_| VimRegisters::new());
+        app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+
+        let (_, view) = app.add_window(WindowStyle::NotStealFocus, CreateApiKeyModal::new);
+
+        view.update(&mut app, |modal, ctx| {
+            modal.set_agents_for_test(
+                vec![
+                    agent("2", "Ben's Agent", true),
+                    agent("3", "Server Migration Agent", true),
+                ],
+                ctx,
+            );
+        });
+
+        let selected = view.read(&app, |modal, _| modal.selected_agent_uid.clone());
+        assert_eq!(selected, Some("2".to_string()));
     })
 }

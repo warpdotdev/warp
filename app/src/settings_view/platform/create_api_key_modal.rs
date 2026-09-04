@@ -308,10 +308,10 @@ impl CreateApiKeyModal {
     }
 
     fn populate_agent_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let items: Vec<DropdownItem<CreateApiKeyModalAction>> = self
-            .agents
+        let available_agents: Vec<&AgentIdentity> =
+            self.agents.iter().filter(|a| a.available).collect();
+        let items: Vec<DropdownItem<CreateApiKeyModalAction>> = available_agents
             .iter()
-            .filter(|a| a.available)
             .map(|agent| {
                 DropdownItem::new(
                     &agent.name,
@@ -322,6 +322,25 @@ impl CreateApiKeyModal {
         self.agent_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_items(items, ctx);
         });
+
+        // `set_items` only updates the dropdown's displayed label; it does not dispatch a
+        // selection action. Without explicitly wiring up the default shown agent here, the
+        // closed dropdown would display a default (e.g. Default Service Account) that
+        // `selected_agent_uid` doesn't know about, leaving Create key disabled until the user
+        // re-selects an agent.
+        if self.selected_agent_uid.is_none() {
+            let default_agent = available_agents
+                .iter()
+                .find(|agent| agent.name == "Default Service Account")
+                .or_else(|| available_agents.first());
+            if let Some(agent) = default_agent {
+                let uid = agent.uid.clone();
+                self.selected_agent_uid = Some(uid.clone());
+                self.agent_dropdown.update(ctx, |dropdown, ctx| {
+                    dropdown.set_selected_by_action(CreateApiKeyModalAction::SelectAgent(uid), ctx);
+                });
+            }
+        }
     }
 
     #[cfg(test)]
