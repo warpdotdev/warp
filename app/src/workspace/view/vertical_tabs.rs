@@ -1725,7 +1725,7 @@ fn render_vertical_tabs_panel(
             .finish()
     })
     .on_click(|ctx, _, _| {
-        ctx.dispatch_typed_action(WorkspaceAction::CancelActiveRename);
+        ctx.dispatch_typed_action(WorkspaceAction::CommitActiveRename);
     })
     .on_right_click(|ctx, _, position| {
         if FeatureFlag::GroupedTabs.is_enabled() {

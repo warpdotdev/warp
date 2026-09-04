@@ -177,6 +177,7 @@ pub enum WorkspaceAction {
     ToggleTabGroupCollapsed(TabGroupId),
     /// Opens an inline editor over the given group's header for renaming.
     RenameTabGroup(TabGroupId),
+    CommitActiveRename,
     CancelActiveRename,
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
@@ -1156,6 +1157,7 @@ impl WorkspaceAction {
             | ShiftSelectTabRange { .. }
             | ToggleTabMultiSelection { .. }
             | ClearTabMultiSelection
+            | CommitActiveRename
             | CancelActiveRename
             | StartNewConversation { .. }
             | UndoRevertInCodeReviewPane { .. }

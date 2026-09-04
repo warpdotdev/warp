@@ -23959,6 +23959,11 @@ impl TypedActionView for Workspace {
             CloseTabGroup(group_id) => self.close_tab_group(*group_id, ctx),
             ToggleTabGroupCollapsed(group_id) => self.toggle_tab_group_collapsed(*group_id, ctx),
             RenameTabGroup(group_id) => self.rename_tab_group(*group_id, ctx),
+            CommitActiveRename => {
+                self.finish_tab_rename(ctx);
+                self.finish_pane_rename(ctx);
+                self.finish_tab_group_rename(ctx);
+            }
             CancelActiveRename => {
                 self.cancel_tab_rename(ctx);
                 self.cancel_pane_rename(ctx);
