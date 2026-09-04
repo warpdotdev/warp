@@ -8,11 +8,31 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::auth::AuthStateProvider;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(crate) const TITLE: &str = "Cloud agents need a team";
-pub(crate) const BODY: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join or create a team, then try again.";
+pub(crate) const BODY_ADMIN: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join or create a team, then try again.";
+pub(crate) const BODY_NON_ADMIN: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join a team, then try again.";
 pub(crate) const PRIMARY_CTA_LABEL: &str = "Open Teams settings";
+
+fn is_current_user_workspace_admin(app: &AppContext) -> bool {
+    let Some(email) = AuthStateProvider::as_ref(app).get().user_email() else {
+        return false;
+    };
+    UserWorkspaces::as_ref(app)
+        .current_workspace()
+        .is_some_and(|workspace| workspace.is_workspace_admin(&email))
+}
+
+fn body_text(app: &AppContext) -> &'static str {
+    if is_current_user_workspace_admin(app) {
+        BODY_ADMIN
+    } else {
+        BODY_NON_ADMIN
+    }
+}
 
 pub(crate) fn should_render(team_required: bool, is_in_setup: bool, is_configuring: bool) -> bool {
     team_required && (is_in_setup || is_configuring)
@@ -82,10 +102,14 @@ impl View for CloudAgentTeamRequiredView {
                     .finish(),
             )
             .with_child(
-                Text::new(BODY, appearance.ui_font_family(), appearance.ui_font_size())
-                    .with_color(theme.nonactive_ui_text_color().into_solid())
-                    .soft_wrap(true)
-                    .finish(),
+                Text::new(
+                    body_text(app),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.nonactive_ui_text_color().into_solid())
+                .soft_wrap(true)
+                .finish(),
             )
             .with_child(ChildView::new(&self.open_teams_settings_button).finish())
             .finish();
