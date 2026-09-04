@@ -237,7 +237,7 @@ define_settings_group!(InputSettings,
             surface: settings::SettingSurfaces::GUI,
             private: false,
             toml_path: "terminal.input.command_search_fuzzy_matching_enabled",
-            description: "Whether Command Search (Ctrl+R) uses fuzzy matching, or falls back to a literal, case-insensitive substring search like bash/zsh's reverse history search.",
+            description: "Whether command history results in Command Search (Ctrl+R) use fuzzy matching, or fall back to a literal, case-insensitive substring search like bash/zsh's reverse history search. Other Command Search results are unaffected.",
         },
     ]
 );

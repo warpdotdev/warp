@@ -258,7 +258,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .is_supported_on_current_platform(),
         ),
         ToggleSettingActionPair::new(
-            "fuzzy matching in command search",
+            "fuzzy matching of command history in command search",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleCommandSearchFuzzyMatching,
             )),
@@ -6184,7 +6184,7 @@ impl SettingsWidget for CommandSearchFuzzyMatchingWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "command search fuzzy matching ctrl+r bash zsh literal substring history"
+        "command search history fuzzy matching ctrl+r bash zsh literal substring"
     }
 
     fn render(
@@ -6195,7 +6195,7 @@ impl SettingsWidget for CommandSearchFuzzyMatchingWidget {
     ) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder();
         render_body_item::<FeaturesPageAction>(
-            "Fuzzy match in Command Search".into(),
+            "Fuzzy match command history in Command Search".into(),
             None,
             LocalOnlyIconState::for_setting(
                 CommandSearchFuzzyMatchingEnabled::storage_key(),
@@ -6217,8 +6217,9 @@ impl SettingsWidget for CommandSearchFuzzyMatchingWidget {
                 })
                 .finish(),
             Some(
-                "When disabled, Command Search falls back to a literal substring search, like \
-                 bash and zsh's history search."
+                "When disabled, command history results in Command Search fall back to a \
+                 literal substring search, like bash and zsh's history search. Other Command \
+                 Search results are unaffected."
                     .to_owned(),
             ),
         )
