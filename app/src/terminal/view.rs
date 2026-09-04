@@ -839,6 +839,7 @@ impl NotificationsTrigger {
             }
         }
     }
+
     /// Notifications have the following format
     /// - title: "'{start_of_command}...' {trigger_specific_details}"
     /// - body: "{additional_context} ...{end_of_output}"
@@ -4260,22 +4261,9 @@ impl TerminalView {
 
         let cloud_agent_team_required_view =
             ctx.add_typed_action_view(ambient_agent::CloudAgentTeamRequiredView::new);
-        ctx.subscribe_to_view(
-            &cloud_agent_team_required_view,
-            |me, _, event, ctx| match event {
-                ambient_agent::CloudAgentTeamRequiredViewEvent::OpenTeamsSettings => {
-                    ctx.emit(Event::OpenSettings(SettingsSection::Teams));
-                }
-                ambient_agent::CloudAgentTeamRequiredViewEvent::OpenAdminPanel => {
-                    crate::settings_view::admin_actions::AdminActions::open_workspace_admin_panel(
-                        ctx,
-                    );
-                }
-                ambient_agent::CloudAgentTeamRequiredViewEvent::BackToTerminal => {
-                    me.exit_agent_view(ctx);
-                }
-            },
-        );
+        ctx.subscribe_to_view(&cloud_agent_team_required_view, |me, _, event, ctx| {
+            me.handle_cloud_agent_team_required_view_event(event, ctx);
+        });
 
         let environment_setup_mode_selector =
             ctx.add_typed_action_view(EnvironmentSetupModeSelector::new);
@@ -5030,6 +5018,30 @@ impl TerminalView {
             self.agent_view_controller.update(ctx, |controller, ctx| {
                 controller.exit_agent_view(ctx);
             });
+        }
+    }
+
+    fn handle_cloud_agent_team_required_view_event(
+        &mut self,
+        event: &ambient_agent::CloudAgentTeamRequiredViewEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ambient_agent::CloudAgentTeamRequiredViewEvent::OpenTeamsSettings => {
+                ctx.emit(Event::OpenSettings(SettingsSection::Teams));
+            }
+            ambient_agent::CloudAgentTeamRequiredViewEvent::BackToTerminal => {
+                if let Some(pane_stack) = self
+                    .pane_stack
+                    .as_ref()
+                    .and_then(|handle| handle.upgrade(ctx))
+                    .filter(|stack| stack.as_ref(ctx).depth() > 1)
+                {
+                    pane_stack.update(ctx, |stack, ctx| {
+                        stack.pop(ctx);
+                    });
+                }
+            }
         }
     }
 

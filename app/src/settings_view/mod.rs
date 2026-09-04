@@ -76,7 +76,7 @@ use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
-pub(crate) mod admin_actions;
+mod admin_actions;
 mod agent_assisted_environment_modal;
 mod agent_profiles_page;
 mod ai_shared;

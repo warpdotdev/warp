@@ -8,12 +8,11 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
-use crate::auth::AuthStateProvider;
 use crate::view_components::action_button::{ActionButton, PrimaryTheme, SecondaryTheme};
-use crate::workspaces::user_workspaces::UserWorkspaces;
 
 pub(crate) const TITLE: &str = "Cloud agents need a team";
 pub(crate) const BODY: &str = "You’re in this workspace but not on a team, so you can’t start cloud runs. Join or create a team, then try again.";
+pub(crate) const PRIMARY_CTA_LABEL: &str = "Open Teams settings";
 
 pub(crate) fn should_render(team_required: bool, is_in_setup: bool, is_configuring: bool) -> bool {
     team_required && (is_in_setup || is_configuring)
@@ -22,56 +21,25 @@ pub(crate) fn should_render(team_required: bool, is_in_setup: bool, is_configuri
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloudAgentTeamRequiredViewEvent {
     OpenTeamsSettings,
-    OpenAdminPanel,
     BackToTerminal,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PrimaryCta {
-    OpenTeamsSettings,
-    OpenAdminPanel,
-}
-
-impl PrimaryCta {
-    fn for_workspace_admin(is_workspace_admin: bool) -> Self {
-        if is_workspace_admin {
-            Self::OpenAdminPanel
-        } else {
-            Self::OpenTeamsSettings
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::OpenTeamsSettings => "Open Teams settings",
-            Self::OpenAdminPanel => "Open admin panel",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloudAgentTeamRequiredViewAction {
     OpenTeamsSettings,
-    OpenAdminPanel,
     BackToTerminal,
 }
 
 pub struct CloudAgentTeamRequiredView {
     open_teams_settings_button: ViewHandle<ActionButton>,
-    open_admin_panel_button: ViewHandle<ActionButton>,
     back_to_terminal_button: ViewHandle<ActionButton>,
 }
 
 impl CloudAgentTeamRequiredView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let open_teams_settings_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(PrimaryCta::OpenTeamsSettings.label(), PrimaryTheme).on_click(|ctx| {
+            ActionButton::new(PRIMARY_CTA_LABEL, PrimaryTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(CloudAgentTeamRequiredViewAction::OpenTeamsSettings);
-            })
-        });
-        let open_admin_panel_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(PrimaryCta::OpenAdminPanel.label(), PrimaryTheme).on_click(|ctx| {
-                ctx.dispatch_typed_action(CloudAgentTeamRequiredViewAction::OpenAdminPanel);
             })
         });
         let back_to_terminal_button = ctx.add_typed_action_view(|_| {
@@ -82,7 +50,6 @@ impl CloudAgentTeamRequiredView {
 
         Self {
             open_teams_settings_button,
-            open_admin_panel_button,
             back_to_terminal_button,
         }
     }
@@ -100,9 +67,6 @@ impl TypedActionView for CloudAgentTeamRequiredView {
             CloudAgentTeamRequiredViewAction::OpenTeamsSettings => {
                 CloudAgentTeamRequiredViewEvent::OpenTeamsSettings
             }
-            CloudAgentTeamRequiredViewAction::OpenAdminPanel => {
-                CloudAgentTeamRequiredViewEvent::OpenAdminPanel
-            }
             CloudAgentTeamRequiredViewAction::BackToTerminal => {
                 CloudAgentTeamRequiredViewEvent::BackToTerminal
             }
@@ -119,15 +83,6 @@ impl View for CloudAgentTeamRequiredView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let user_email = AuthStateProvider::as_ref(app).get().user_email();
-        let is_workspace_admin = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .zip(user_email.as_deref())
-            .is_some_and(|(workspace, email)| workspace.is_workspace_admin(email));
-        let primary_button = match PrimaryCta::for_workspace_admin(is_workspace_admin) {
-            PrimaryCta::OpenTeamsSettings => &self.open_teams_settings_button,
-            PrimaryCta::OpenAdminPanel => &self.open_admin_panel_button,
-        };
 
         let content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -150,7 +105,7 @@ impl View for CloudAgentTeamRequiredView {
                     .with_main_axis_alignment(MainAxisAlignment::Start)
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(8.)
-                    .with_child(ChildView::new(primary_button).finish())
+                    .with_child(ChildView::new(&self.open_teams_settings_button).finish())
                     .with_child(ChildView::new(&self.back_to_terminal_button).finish())
                     .finish(),
             )

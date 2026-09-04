@@ -1,4 +1,4 @@
-use super::{BODY, PrimaryCta, TITLE, should_render};
+use super::{BODY, PRIMARY_CTA_LABEL, TITLE, should_render};
 
 #[test]
 fn blocker_copy_matches_approved_content() {
@@ -19,17 +19,6 @@ fn blocker_renders_over_setup_and_composition_only_when_team_is_required() {
 }
 
 #[test]
-fn member_primary_cta_opens_team_settings() {
-    let cta = PrimaryCta::for_workspace_admin(false);
-
-    assert_eq!(cta, PrimaryCta::OpenTeamsSettings);
-    assert_eq!(cta.label(), "Open Teams settings");
-}
-
-#[test]
-fn workspace_admin_primary_cta_opens_admin_panel() {
-    let cta = PrimaryCta::for_workspace_admin(true);
-
-    assert_eq!(cta, PrimaryCta::OpenAdminPanel);
-    assert_eq!(cta.label(), "Open admin panel");
+fn primary_cta_opens_team_settings() {
+    assert_eq!(PRIMARY_CTA_LABEL, "Open Teams settings");
 }
