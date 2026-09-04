@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 use memo_map::MemoMap;
-use warp_command_signatures::{Argument, DynamicCompletionData, IsArgumentOptional, Signature};
+use warp_command_signatures::{
+    Argument, DynamicCompletionData, IsArgumentOptional, Opt, Signature,
+};
 
 use super::miss_cache::MissCache;
 use crate::completer::{CommandExitStatus, CompletionContext, TopLevelCommandCaseSensitivity};
@@ -234,12 +236,13 @@ impl CommandRegistry {
                 .map(|signature| (signature, self.dynamic_completion_data.get(command)))
         });
 
-        let Some((signature, mut dynamic_completion_data)) = found_signature else {
+        let Some((signature, dynamic_completion_data)) = found_signature else {
             return SignatureResult::None;
         };
 
+        let mut view = CommandView::new(signature, dynamic_completion_data);
+        self.follow_load_spec(&mut view);
         let mut signature_start_idx = 0;
-        let mut curr_signature = signature;
 
         // Iterate through tokens after the top level command
         let mut token_idx = 1;
@@ -252,9 +255,7 @@ impl CommandRegistry {
 
             let token = tokens[token_idx];
             // Check if there is any alias at the current signature.
-            if let Some(alias) =
-                curr_signature.alias(dynamic_completion_data.map(DynamicCompletionData::aliases))
-            {
+            if let Some(alias) = view.alias() {
                 // Get the shell command to execute for getting the alias.
                 let command_to_run = alias.command(&tokens[..token_idx + 1]);
 
@@ -307,19 +308,17 @@ impl CommandRegistry {
                     has_post_whitespace,
                 )
             {
-                curr_signature = replacement_signature;
-                dynamic_completion_data = replacement_completion_data;
+                view = CommandView::new(replacement_signature, replacement_completion_data);
+                self.follow_load_spec(&mut view);
                 signature_start_idx = token_idx;
             } else {
-                match classify_token(
-                    curr_signature,
-                    token,
-                    tokens.len(),
-                    token_idx,
-                    has_post_whitespace,
-                ) {
-                    TokenAction::ResolvedSubcommand { signature } => {
-                        curr_signature = signature;
+                match classify_token(&view, token, tokens.len(), token_idx, has_post_whitespace) {
+                    TokenAction::ResolvedSubcommand {
+                        signature: next,
+                        from_loaded_target,
+                        owner_dcd,
+                    } => {
+                        self.enter_signature(&mut view, next, from_loaded_target, owner_dcd);
                         signature_start_idx = token_idx;
                     }
                     TokenAction::SkippedOption { advance_by } => {
@@ -327,11 +326,9 @@ impl CommandRegistry {
                     }
                     TokenAction::SkippedUnrecognizedFlag => {}
                     TokenAction::VariadicOption | TokenAction::StopAtCurrentToken => {
-                        return SignatureResult::Success(SignatureAtTokenIndex::new(
-                            curr_signature,
-                            dynamic_completion_data,
-                            signature_start_idx,
-                        ));
+                        return SignatureResult::Success(
+                            self.finish_view(view, signature_start_idx),
+                        );
                     }
                 }
             }
@@ -339,11 +336,7 @@ impl CommandRegistry {
             token_idx += 1;
         }
 
-        SignatureResult::Success(SignatureAtTokenIndex::new(
-            curr_signature,
-            dynamic_completion_data,
-            signature_start_idx,
-        ))
+        SignatureResult::Success(self.finish_view(view, signature_start_idx))
     }
 
     /// Finds a signature from a list of tokens--returning the index of the token where the
@@ -357,7 +350,7 @@ impl CommandRegistry {
         let first_token = *tokens.first()?;
 
         // Find the top level signature.
-        let (signature, mut dynamic_completion_data) = self
+        let (signature, dynamic_completion_data) = self
             .signatures
             .get(first_token)
             .map(|signature| (signature, self.dynamic_completion_data.get(first_token)))?;
@@ -382,8 +375,9 @@ impl CommandRegistry {
             return None;
         }
 
+        let mut view = CommandView::new(signature, dynamic_completion_data);
+        self.follow_load_spec(&mut view);
         let mut signature_start_idx = 0;
-        let mut curr_signature = signature;
 
         // Iterate through tokens after the top level command
         let mut token_idx = 1;
@@ -399,19 +393,17 @@ impl CommandRegistry {
                     has_post_whitespace,
                 )
             {
-                curr_signature = replacement_signature;
-                dynamic_completion_data = replacement_completion_data;
+                view = CommandView::new(replacement_signature, replacement_completion_data);
+                self.follow_load_spec(&mut view);
                 signature_start_idx = token_idx;
             } else {
-                match classify_token(
-                    curr_signature,
-                    token,
-                    tokens.len(),
-                    token_idx,
-                    has_post_whitespace,
-                ) {
-                    TokenAction::ResolvedSubcommand { signature } => {
-                        curr_signature = signature;
+                match classify_token(&view, token, tokens.len(), token_idx, has_post_whitespace) {
+                    TokenAction::ResolvedSubcommand {
+                        signature: next,
+                        from_loaded_target,
+                        owner_dcd,
+                    } => {
+                        self.enter_signature(&mut view, next, from_loaded_target, owner_dcd);
                         signature_start_idx = token_idx;
                     }
                     TokenAction::SkippedOption { advance_by } => {
@@ -419,11 +411,7 @@ impl CommandRegistry {
                     }
                     TokenAction::SkippedUnrecognizedFlag => {}
                     TokenAction::VariadicOption | TokenAction::StopAtCurrentToken => {
-                        return Some(SignatureAtTokenIndex::new(
-                            curr_signature,
-                            dynamic_completion_data,
-                            signature_start_idx,
-                        ));
+                        return Some(self.finish_view(view, signature_start_idx));
                     }
                 }
             }
@@ -431,11 +419,7 @@ impl CommandRegistry {
             token_idx += 1;
         }
 
-        Some(SignatureAtTokenIndex::new(
-            curr_signature,
-            dynamic_completion_data,
-            signature_start_idx,
-        ))
+        Some(self.finish_view(view, signature_start_idx))
     }
 
     pub fn signature(&self, name: &str) -> Option<&Signature> {
@@ -452,12 +436,105 @@ impl CommandRegistry {
     pub fn register_signature(&self, signature: Signature) {
         self.signatures.insert(signature);
     }
+
+    fn follow_load_spec<'a>(&'a self, view: &mut CommandView<'a>) {
+        let mut next_target = view.current.load_spec.as_deref();
+        while let Some(target_name) = next_target {
+            if view.load_stack.iter().any(|name| name == target_name) {
+                break;
+            }
+            view.load_stack.push(target_name.to_owned());
+            let Some(target) = self.signatures.get(target_name) else {
+                break;
+            };
+            view.targets.push((
+                target,
+                self.dynamic_completion_data
+                    .get(target.name())
+                    .or_else(|| self.dynamic_completion_data.get(target_name)),
+            ));
+            next_target = target.load_spec.as_deref();
+        }
+    }
+
+    fn enter_signature<'a>(
+        &'a self,
+        view: &mut CommandView<'a>,
+        next: &'a Signature,
+        from_loaded_target: bool,
+        owner_dcd: Option<&'a DynamicCompletionData>,
+    ) {
+        if from_loaded_target {
+            view.inherited_options
+                .push((view.current.options(), view.current_dcd));
+        }
+        view.current = next;
+        view.current_dcd = owner_dcd;
+        view.targets.clear();
+        self.follow_load_spec(view);
+    }
+
+    fn finish_view<'a>(
+        &'a self,
+        view: CommandView<'a>,
+        signature_start_idx: usize,
+    ) -> SignatureAtTokenIndex<'a> {
+        SignatureAtTokenIndex::with_load_spec(
+            view.current,
+            view.current_dcd,
+            signature_start_idx,
+            view.targets,
+            view.inherited_options,
+        )
+    }
+}
+
+struct CommandView<'a> {
+    current: &'a Signature,
+    targets: Vec<(&'a Signature, Option<&'a DynamicCompletionData>)>,
+    inherited_options: Vec<(&'a [Opt], Option<&'a DynamicCompletionData>)>,
+    current_dcd: Option<&'a DynamicCompletionData>,
+    load_stack: Vec<String>,
+}
+
+impl<'a> CommandView<'a> {
+    fn new(current: &'a Signature, current_dcd: Option<&'a DynamicCompletionData>) -> Self {
+        Self {
+            current,
+            targets: Vec::new(),
+            inherited_options: Vec::new(),
+            current_dcd,
+            load_stack: Vec::new(),
+        }
+    }
+
+    fn options(&self) -> impl Iterator<Item = &Opt> {
+        self.inherited_options
+            .iter()
+            .flat_map(|(options, _)| options.iter())
+            .chain(self.current.options())
+            .chain(self.targets.iter().flat_map(|(target, _)| target.options()))
+    }
+
+    fn alias(&self) -> Option<&warp_command_signatures::Alias> {
+        self.current
+            .alias(self.current_dcd.map(DynamicCompletionData::aliases))
+            .or_else(|| {
+                self.targets
+                    .iter()
+                    .find_map(|(target, dcd)| target.alias(dcd.map(DynamicCompletionData::aliases)))
+            })
+    }
 }
 
 /// The result of classifying a single token during signature resolution.
 enum TokenAction<'a> {
     /// The token matched a subcommand of the current signature.
-    ResolvedSubcommand { signature: &'a Signature },
+    ResolvedSubcommand {
+        signature: &'a Signature,
+        from_loaded_target: bool,
+        owner_dcd: Option<&'a DynamicCompletionData>,
+    },
     /// The token matched a recognized option whose last argument is variadic.
     /// The caller should stop walking tokens and return the current signature.
     VariadicOption,
@@ -478,21 +555,48 @@ enum TokenAction<'a> {
 /// handle replacement signatures (e.g. `sudo git`) separately before
 /// invoking this function.
 fn classify_token<'a>(
-    curr_signature: &'a Signature,
+    view: &CommandView<'a>,
     token: &str,
     num_tokens: usize,
     token_idx: usize,
     has_post_whitespace: bool,
 ) -> TokenAction<'a> {
-    if let Some(subcommand) = curr_signature.subcommands().iter().find(|s| {
+    if let Some(subcommand) = view.current.subcommands().iter().find(|s| {
         should_complete_on_subcmd(s.name(), token, num_tokens, token_idx, has_post_whitespace)
     }) {
         return TokenAction::ResolvedSubcommand {
             signature: subcommand,
+            from_loaded_target: false,
+            owner_dcd: view.current_dcd,
         };
     }
 
-    if let Some(option) = find_option_by_name(curr_signature.options(), token) {
+    if let Some((subcommand, owner_dcd)) = view.targets.iter().find_map(|(target, dcd)| {
+        target
+            .subcommands()
+            .iter()
+            .find(|s| {
+                should_complete_on_subcmd(
+                    s.name(),
+                    token,
+                    num_tokens,
+                    token_idx,
+                    has_post_whitespace,
+                )
+            })
+            .map(|subcommand| (subcommand, *dcd))
+    }) {
+        return TokenAction::ResolvedSubcommand {
+            signature: subcommand,
+            from_loaded_target: true,
+            owner_dcd,
+        };
+    }
+
+    if let Some(option) = view
+        .options()
+        .find(|option| option.exact_string.iter().any(|s| s == token))
+    {
         if option.arguments().last().is_some_and(|arg| arg.is_variadic) {
             return TokenAction::VariadicOption;
         }
@@ -511,16 +615,6 @@ fn classify_token<'a>(
     }
 
     TokenAction::StopAtCurrentToken
-}
-
-/// Finds an option by exact name match against the token.
-fn find_option_by_name<'a>(
-    options: &'a [warp_command_signatures::Opt],
-    token: &str,
-) -> Option<&'a warp_command_signatures::Opt> {
-    options
-        .iter()
-        .find(|option| option.exact_string.iter().any(|s| s == token))
 }
 
 /// Returns true iff we should resolve the subcmd as a new [`Signature`].
