@@ -24,6 +24,7 @@ use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::test_util::settings::initialize_settings_for_tests;
@@ -379,10 +380,15 @@ fn team_members_do_not_get_team_ctas() {
 }
 
 #[test]
-fn open_team_with_zero_members_is_joinable() {
+fn native_workspace_open_team_with_zero_members_shows_join_without_create_or_separator() {
     App::test(ASSETS, |mut app| async move {
         initialize_app(&mut app);
+        app.add_singleton_model(PrivacySettings::mock);
+        let workspace = workspace_with_native_policy(true);
+        let workspace_uid = workspace.uid;
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+            user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
             user_workspaces.update_joinable_teams(
                 vec![DiscoverableTeam {
                     team_uid: "joinable-team".to_string(),
@@ -402,9 +408,14 @@ fn open_team_with_zero_members_is_joinable() {
                 index.sections(),
                 &[
                     DriveIndexSection::JoinTeam,
-                    DriveIndexSection::CreateATeam,
                     DriveIndexSection::Space(Space::Personal),
                 ]
+            );
+            assert!(!index.sections().contains(&DriveIndexSection::CreateATeam));
+            assert!(!index.should_show_join_separator());
+            assert_eq!(
+                DriveIndex::join_team_header_text(0),
+                "Join an open team in your workspace."
             );
         });
     });
