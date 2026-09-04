@@ -2992,6 +2992,8 @@ dependencies = [
  "session-sharing-protocol",
  "settings",
  "settings_value",
+ "thiserror 2.0.17",
+ "url",
  "uuid",
  "warp-workflows",
  "warp_cli",

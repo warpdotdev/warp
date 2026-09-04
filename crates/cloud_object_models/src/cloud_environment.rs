@@ -17,6 +17,8 @@ pub enum CodeForge {
     GitHub,
     #[serde(rename = "GITLAB")]
     GitLab,
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
     /// Explicit "no code forge" container value: a repo-less environment
     /// that clones nothing and relies entirely on `setup_commands`.
     #[serde(rename = "NONE")]
@@ -36,6 +38,7 @@ impl CodeForge {
         match self {
             CodeForge::GitHub => "github.com",
             CodeForge::GitLab => "gitlab.com",
+            CodeForge::AzureDevOps => "dev.azure.com",
             CodeForge::None | CodeForge::Unknown => "",
         }
     }
@@ -46,6 +49,7 @@ impl fmt::Display for CodeForge {
         match self {
             CodeForge::GitHub => write!(f, "GitHub"),
             CodeForge::GitLab => write!(f, "GitLab"),
+            CodeForge::AzureDevOps => write!(f, "Azure DevOps"),
             CodeForge::None => write!(f, "None"),
             CodeForge::Unknown => write!(f, "Unknown"),
         }
@@ -74,7 +78,8 @@ impl fmt::Display for GithubRepo {
 
 /// Identifies a repository and the source-control provider that hosts it.
 ///
-/// For GitLab, `owner` contains the full, potentially nested namespace.
+/// For GitLab, `owner` contains the full, potentially nested namespace. For Azure DevOps,
+/// `owner` contains the organization and project separated by `/`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SourceRepo {
     /// The repository's explicit source-control provider.
@@ -90,6 +95,12 @@ pub struct SourceRepo {
     /// use it to start from a pinned base commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout_ref: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum SourceRepoCloneUrlError {
+    #[error("Azure DevOps owner must contain both an organization and a project")]
+    InvalidAzureDevOpsOwner,
 }
 
 impl SourceRepo {
@@ -115,13 +126,29 @@ impl SourceRepo {
         self
     }
 
-    pub fn https_clone_url(&self) -> String {
-        format!(
+    pub fn https_clone_url(&self) -> Result<String, SourceRepoCloneUrlError> {
+        if self.code_forge == Some(CodeForge::AzureDevOps) {
+            let Some((organization, project)) = self.owner.split_once('/') else {
+                return Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner);
+            };
+            if organization.is_empty() || project.is_empty() || project.contains('/') {
+                return Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner);
+            }
+
+            let mut url =
+                url::Url::parse("https://dev.azure.com").expect("Azure DevOps URL is valid");
+            url.path_segments_mut()
+                .expect("Azure DevOps URL supports path segments")
+                .extend([organization, project, "_git", self.repo.as_str()]);
+            return Ok(url.to_string());
+        }
+
+        Ok(format!(
             "https://{}/{}/{}.git",
             self.code_forge.map(CodeForge::host).unwrap_or(""),
             self.owner,
             self.repo
-        )
+        ))
     }
 }
 
@@ -292,7 +319,7 @@ impl AmbientAgentEnvironment {
                     return Vec::new();
                 }
             }
-            primary @ (CodeForge::GitHub | CodeForge::GitLab) => {
+            primary @ (CodeForge::GitHub | CodeForge::GitLab | CodeForge::AzureDevOps) => {
                 if !forges.contains(&primary) {
                     forges.push(primary);
                     forges.sort_by_key(|forge| *forge as u8);
@@ -370,7 +397,11 @@ fn unique_clonable_forges(forges: impl IntoIterator<Item = CodeForge>) -> Vec<Co
     let mut seen = HashSet::new();
     let mut unique = Vec::new();
     for forge in forges {
-        if matches!(forge, CodeForge::GitHub | CodeForge::GitLab) && seen.insert(forge) {
+        if matches!(
+            forge,
+            CodeForge::GitHub | CodeForge::GitLab | CodeForge::AzureDevOps
+        ) && seen.insert(forge)
+        {
             unique.push(forge);
         }
     }

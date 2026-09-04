@@ -1,6 +1,6 @@
 use super::{
     AmbientAgentEnvironment, AwsProviderConfig, BaseImage, CodeForge, EnvironmentSecretRef,
-    GcpProviderConfig, GithubRepo, ProvidersConfig, SourceRepo,
+    GcpProviderConfig, GithubRepo, ProvidersConfig, SourceRepo, SourceRepoCloneUrlError,
 };
 
 #[test]
@@ -153,6 +153,123 @@ fn none_and_unknown_forges_have_no_clonable_host() {
 }
 
 #[test]
+fn azure_devops_forge_serializes_and_deserializes() {
+    assert_eq!(
+        serde_json::to_value(CodeForge::AzureDevOps).unwrap(),
+        "AZURE_DEVOPS"
+    );
+    assert_eq!(
+        serde_json::from_value::<CodeForge>(serde_json::json!("AZURE_DEVOPS")).unwrap(),
+        CodeForge::AzureDevOps
+    );
+}
+
+#[test]
+fn azure_devops_forge_has_expected_host_and_display_name() {
+    assert_eq!(CodeForge::AzureDevOps.host(), "dev.azure.com");
+    assert_eq!(CodeForge::AzureDevOps.to_string(), "Azure DevOps");
+}
+
+#[test]
+fn azure_devops_clone_url_uses_organization_project_path_without_git_suffix() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "safiaabdallla/demo".into(),
+        "demo".into(),
+    );
+
+    let clone_url = repo.https_clone_url().unwrap();
+
+    assert_eq!(
+        clone_url,
+        "https://dev.azure.com/safiaabdallla/demo/_git/demo"
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_encodes_each_path_segment() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "my organization/project name#1".into(),
+        "repo name#1".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url().unwrap(),
+        "https://dev.azure.com/my%20organization/project%20name%231/_git/repo%20name%231"
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_rejects_owner_without_project() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "organization/".into(),
+        "repository".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner)
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_rejects_owner_with_extra_path_component() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "organization/project/extra".into(),
+        "repository".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner)
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_rejects_owner_with_empty_path_component() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "organization//project".into(),
+        "repository".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner)
+    );
+}
+
+#[test]
+fn deserialize_azure_devops_environment_uses_authoritative_source_repos() {
+    let json = serde_json::json!({
+        "name": "azure-env",
+        "code_forge": "AZURE_DEVOPS",
+        "github_repos": [{"owner": "legacy-mirror", "repo": "ignored"}],
+        "source_repos": [{
+            "owner": "safiaabdallla/demo",
+            "repo": "demo"
+        }],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::AzureDevOps);
+    assert_eq!(env.effective_code_forges(), vec![CodeForge::AzureDevOps]);
+    assert_eq!(
+        env.effective_repos(),
+        vec![SourceRepo::new(
+            CodeForge::AzureDevOps,
+            "safiaabdallla/demo".into(),
+            "demo".into()
+        )]
+    );
+}
+
+#[test]
 fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
     let json = serde_json::json!({
         "name": "gitlab-env",
@@ -178,7 +295,7 @@ fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
         )]
     );
     assert_eq!(
-        env.effective_repos()[0].https_clone_url(),
+        env.effective_repos()[0].https_clone_url().unwrap(),
         "https://gitlab.com/platform/backend/api.git"
     );
 }
@@ -244,11 +361,11 @@ fn deserialize_mixed_environment_uses_per_repo_forges() {
     assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
     assert_eq!(repos[1].code_forge, Some(CodeForge::GitLab));
     assert_eq!(
-        repos[0].https_clone_url(),
+        repos[0].https_clone_url().unwrap(),
         "https://github.com/warpdotdev/warp.git"
     );
     assert_eq!(
-        repos[1].https_clone_url(),
+        repos[1].https_clone_url().unwrap(),
         "https://gitlab.com/platform/backend/api.git"
     );
 }
@@ -272,7 +389,7 @@ fn mixed_environment_does_not_fill_omitted_repo_forge() {
     assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
     assert_eq!(repos[1].code_forge, None);
     assert_eq!(
-        repos[1].https_clone_url(),
+        repos[1].https_clone_url().unwrap(),
         "https:///platform/backend/api.git"
     );
 }
@@ -315,7 +432,7 @@ fn singular_code_forge_payload_remains_backward_compatible() {
     assert_eq!(env.code_forges, None);
     assert_eq!(env.effective_code_forges(), vec![CodeForge::GitLab]);
     assert_eq!(
-        env.effective_repos()[0].https_clone_url(),
+        env.effective_repos()[0].https_clone_url().unwrap(),
         "https://gitlab.com/platform/backend/api.git"
     );
 }

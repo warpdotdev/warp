@@ -381,6 +381,45 @@ fn agent_run_parses_repeated_repository_head_override_json() {
 }
 
 #[test]
+fn agent_run_parses_azure_devops_repository_head_override() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-head-override-json",
+        r#"{"code_forge":"AZURE_DEVOPS","repo_owner":"safiaabdallla/demo","repo_name":"demo","head":{"type":"BRANCH","value":"main"}}"#,
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(run_args.repository_head_overrides.len(), 1);
+    assert_eq!(
+        run_args.repository_head_overrides[0].code_forge,
+        RepositoryForge::AzureDevOps
+    );
+    assert_eq!(
+        run_args.repository_head_overrides[0].repo_owner,
+        "safiaabdallla/demo"
+    );
+    assert_eq!(
+        run_args.repository_head_overrides[0].head,
+        RepositoryHeadRef::Branch("main".to_string())
+    );
+    assert_eq!(
+        serde_json::to_string(&run_args.repository_head_overrides[0].code_forge).unwrap(),
+        "\"AZURE_DEVOPS\""
+    );
+}
+
+#[test]
 fn agent_run_parses_remove_repository_origins_without_head_overrides() {
     let args = Args::try_parse_from([
         "warp",

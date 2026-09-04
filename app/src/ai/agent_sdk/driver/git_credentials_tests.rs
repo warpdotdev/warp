@@ -34,6 +34,16 @@ fn write_gh_hosts_yml_uses_gh_cli_filename() -> Result<()> {
 }
 
 #[test]
+fn merged_credentials_include_dev_azure_com() {
+    let content = merge_git_credentials_file_content("", &[azure_devops_credential()]);
+
+    assert_eq!(
+        content,
+        "https://x-access-token:azure-token@dev.azure.com\n"
+    );
+}
+
+#[test]
 fn write_gh_hosts_yml_excludes_gitlab_credentials() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let gh_config_dir = temp_dir.path().join(".config").join("gh");
@@ -98,6 +108,15 @@ fn gitlab_credential() -> GitCredential {
         username: Some("oauth2".to_string()),
         email: None,
         host: "gitlab.com".to_string(),
+    }
+}
+
+fn azure_devops_credential() -> GitCredential {
+    GitCredential {
+        token: "azure-token".to_string(),
+        username: None,
+        email: Some("developer@example.com".to_string()),
+        host: "dev.azure.com".to_string(),
     }
 }
 
