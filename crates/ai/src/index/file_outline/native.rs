@@ -93,7 +93,7 @@ impl Outline {
 
         let mut files_metadata = vec![];
         let mut files_metadata_to_remove = vec![];
-        let gitignore_rules = self.gitignore_rules.clone();
+        let gitignore_operation = self.gitignore_rules.operation();
 
         // Extract paths from TargetFile for removal, filtering out gitignored files
         for target_file in deleted
@@ -114,7 +114,7 @@ impl Outline {
             .filter(|target_file| !target_file.is_ignored)
         {
             if let Some(file_metadata) =
-                self.find_or_insert_path_to_file_tree(&target_file.path, &gitignore_rules)
+                self.find_or_insert_path_to_file_tree(&target_file.path, &gitignore_operation)
             {
                 files_metadata.push(file_metadata.clone());
             }
@@ -135,7 +135,7 @@ impl Outline {
     fn find_or_insert_path_to_file_tree(
         &mut self,
         target_path: &Path,
-        gitignore_rules: &GitignoreRules,
+        gitignore_operation: &repo_metadata::gitignore_cache::GitignoreOperation,
     ) -> Option<&FileMetadata> {
         match &mut self.root {
             Entry::Directory(directory) => {
@@ -161,7 +161,7 @@ impl Outline {
                 // At the end of the iteration we'll have reached the target path.
                 let mut current_parent = directory;
                 for ancestor in ancestors_between_target_and_directory.iter().rev() {
-                    if gitignore_rules.matches(ancestor, ancestor.is_dir(), false)
+                    if gitignore_operation.matches(ancestor, ancestor.is_dir(), false)
                         || ancestor.ends_with(".git")
                     {
                         // Short-circuit if an ancestor is ignored.

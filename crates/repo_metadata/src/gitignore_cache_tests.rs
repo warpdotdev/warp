@@ -1,17 +1,23 @@
 use std::sync::{Arc, Barrier};
 
-use ignore::gitignore::GitignoreBuilder;
 use parking_lot::Mutex;
 
-use super::{Cache, CacheKey, EFFECTIVE_MAX_LIVE_MATCHERS, GitignoreRules};
+use super::{
+    Cache, CacheKey, EFFECTIVE_MAX_LIVE_MATCHERS, GitignoreRules, SourceSnapshot,
+    cache_live_matcher_counts,
+};
 
 fn match_file(
     cache: &mut Cache,
     gitignore_path: &std::path::Path,
     target: &std::path::Path,
 ) -> bool {
-    let content = std::fs::read(gitignore_path).ok();
-    cache.match_file(gitignore_path, content.as_deref(), target, false, true)
+    cache.match_source(
+        &SourceSnapshot::file(gitignore_path.to_path_buf()),
+        target,
+        false,
+        true,
+    )
 }
 
 #[test]
@@ -175,7 +181,11 @@ fn over_cap_concurrent_rule_sets_stay_within_live_matcher_budget() {
             let target = target.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                assert!(!rules.matches_with_cache(&cache, &target, false, false));
+                assert!(
+                    !rules
+                        .operation()
+                        .matches_with_cache(&cache, &target, false, false)
+                );
             })
         })
         .collect();
@@ -187,21 +197,75 @@ fn over_cap_concurrent_rule_sets_stay_within_live_matcher_budget() {
     let cache = cache.lock();
     assert!(cache.entries.len() <= EFFECTIVE_MAX_LIVE_MATCHERS);
     assert!(cache.peak_live_matchers <= EFFECTIVE_MAX_LIVE_MATCHERS);
-    assert_eq!(cache.parse_count, 80);
+    assert!(cache.parse_count >= 10);
 }
 
 #[test]
-fn refreshing_global_rules_replaces_the_cached_matcher() {
-    let mut cache = Cache::default();
-    let mut first = GitignoreBuilder::new("");
-    first.add_line(None, "first").unwrap();
-    cache.refresh_global_with(|| first.build().unwrap());
-    assert!(cache.match_global(std::path::Path::new("first"), false, false));
-    let mut second = GitignoreBuilder::new("");
-    second.add_line(None, "second").unwrap();
-    cache.refresh_global_with(|| second.build().unwrap());
+fn public_matches_refreshes_global_rules_for_long_lived_rule_sets() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let global_path = temp_dir.path().join("global-ignore");
+    let rules = GitignoreRules::default()
+        .with_global_source(global_path.clone(), temp_dir.path().to_path_buf());
 
-    assert!(!cache.match_global(std::path::Path::new("first"), false, false));
-    assert!(cache.match_global(std::path::Path::new("second"), false, false));
-    assert!(cache.entries.len() <= EFFECTIVE_MAX_LIVE_MATCHERS);
+    std::fs::write(&global_path, "first\n").unwrap();
+    assert!(rules.matches(&temp_dir.path().join("first"), false, false));
+
+    std::fs::write(&global_path, "second\n").unwrap();
+    assert!(!rules.matches(&temp_dir.path().join("first"), false, false));
+    assert!(rules.matches(&temp_dir.path().join("second"), false, false));
+}
+
+#[test]
+fn operation_reads_each_source_only_once() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let paths = (0..10)
+        .map(|index| {
+            let path = temp_dir.path().join(format!("gitignore_{index}"));
+            std::fs::write(&path, format!("ignored_{index}\n")).unwrap();
+            path
+        })
+        .collect();
+    let operation = GitignoreRules::default()
+        .with_cached_paths(paths)
+        .operation();
+
+    for index in 0..100 {
+        assert!(!operation.matches(
+            &temp_dir.path().join(format!("unmatched_{index}")),
+            false,
+            false,
+        ));
+    }
+
+    assert_eq!(operation.source_read_count(), 10);
+}
+
+#[test]
+fn over_cap_repository_watch_operations_do_not_retain_matchers() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let operations = (0..10)
+        .map(|index| {
+            let root = temp_dir.path().join(format!("repo_{index}"));
+            std::fs::create_dir(&root).unwrap();
+            std::fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
+            std::fs::create_dir(root.join("ignored")).unwrap();
+            (
+                root.clone(),
+                GitignoreRules::for_directory(&root).operation(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (root, operation) in &operations {
+        assert!(!crate::entry::should_watch_repo_directory_with_operation(
+            &root.join("ignored"),
+            root,
+            operation,
+            &[],
+        ));
+    }
+
+    let (live, peak) = cache_live_matcher_counts();
+    assert!(live <= EFFECTIVE_MAX_LIVE_MATCHERS);
+    assert!(peak <= EFFECTIVE_MAX_LIVE_MATCHERS);
 }

@@ -1,10 +1,9 @@
 //! A process-wide cache of parsed `.gitignore` matchers with scoped access.
 //!
-//! Cache-owned matchers never escape as `Arc`s. Parsing and matching are serialized through the
-//! cache mutex, and a slot is reserved before a matcher is compiled. Consequently, the cache and
-//! all concurrent source-backed operations own at most [`MAX_LIVE_MATCHERS`] compiled matchers.
-//! Callers retain source paths between operations and materialize only one applicable matcher at a
-//! time while evaluating a path.
+//! Each source is read at most once per matching operation, outside the cache mutex.
+//! Cache-owned matchers never escape as `Arc`s, and a slot is reserved before a matcher is
+//! compiled. Consequently, the cache and all concurrent source-backed operations own at most
+//! [`MAX_LIVE_MATCHERS`] compiled matchers.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -12,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use ignore::gitignore::Gitignore;
+use ignore::gitignore::{Gitignore, GitignoreBuilder, gitconfig_excludes_path};
 use parking_lot::Mutex;
 
 #[cfg(not(test))]
@@ -31,6 +30,71 @@ const EFFECTIVE_MAX_LIVE_MATCHERS: usize = MAX_LIVE_MATCHERS;
 enum CacheKey {
     File(PathBuf),
     Global,
+}
+
+#[derive(Debug, Clone)]
+struct SourceSnapshot {
+    key: CacheKey,
+    source_path: PathBuf,
+    matcher_root: PathBuf,
+    content: Option<Arc<[u8]>>,
+    content_digest: u64,
+}
+
+impl SourceSnapshot {
+    fn file(path: PathBuf) -> Self {
+        let matcher_root = path.parent().unwrap_or(Path::new("/")).to_path_buf();
+        Self::read(CacheKey::File(path.clone()), path, matcher_root)
+    }
+
+    fn global(
+        #[cfg(test)] path_override: Option<&Path>,
+        #[cfg(test)] root_override: Option<&Path>,
+    ) -> Self {
+        let source_path = {
+            #[cfg(test)]
+            if let Some(path) = path_override {
+                path.to_path_buf()
+            } else {
+                gitconfig_excludes_path().unwrap_or_default()
+            }
+            #[cfg(not(test))]
+            {
+                gitconfig_excludes_path().unwrap_or_default()
+            }
+        };
+        let matcher_root = {
+            #[cfg(test)]
+            if let Some(root) = root_override {
+                root.to_path_buf()
+            } else {
+                std::env::current_dir().unwrap_or_default()
+            }
+            #[cfg(not(test))]
+            {
+                std::env::current_dir().unwrap_or_default()
+            }
+        };
+        Self::read(CacheKey::Global, source_path, matcher_root)
+    }
+
+    fn read(key: CacheKey, source_path: PathBuf, matcher_root: PathBuf) -> Self {
+        let content = std::fs::read(&source_path).ok().map(Arc::from);
+        let content_digest = source_digest(&source_path, &matcher_root, content.as_deref());
+        Self {
+            key,
+            source_path,
+            matcher_root,
+            content,
+            content_digest,
+        }
+    }
+
+    fn source_len(&self) -> u64 {
+        self.content
+            .as_ref()
+            .map_or(0, |content| content.len() as u64)
+    }
 }
 
 struct CacheEntry {
@@ -107,17 +171,16 @@ impl Cache {
 
     fn cached_match(
         &mut self,
-        key: &CacheKey,
-        content_digest: u64,
+        source: &SourceSnapshot,
         path: &Path,
         is_dir: bool,
         check_ancestors: bool,
     ) -> Option<bool> {
-        if self.entries.get(key)?.content_digest != content_digest {
+        if self.entries.get(&source.key)?.content_digest != source.content_digest {
             return None;
         }
         let tick = self.next_tick();
-        let entry = self.entries.get_mut(key)?;
+        let entry = self.entries.get_mut(&source.key)?;
         entry.last_used = tick;
         Some(matcher_ignores(
             &entry.gitignore,
@@ -127,45 +190,36 @@ impl Cache {
         ))
     }
 
-    fn match_file(
+    fn match_source(
         &mut self,
-        gitignore_path: &Path,
-        content: Option<&[u8]>,
+        source: &SourceSnapshot,
         path: &Path,
         is_dir: bool,
         check_ancestors: bool,
     ) -> bool {
-        let key = CacheKey::File(gitignore_path.to_path_buf());
-        let Some(content) = content else {
-            self.remove(&key);
-            self.reserve_for(0);
-            self.record_live_matchers(1);
-            self.record_parse();
-            let (gitignore, _) = Gitignore::new(gitignore_path);
-            return matcher_ignores(&gitignore, path, is_dir, check_ancestors);
+        let Some(content) = source.content.as_deref() else {
+            self.remove(&source.key);
+            return false;
         };
-        let content_digest = content_digest(content);
-        if let Some(is_ignored) =
-            self.cached_match(&key, content_digest, path, is_dir, check_ancestors)
-        {
+        if let Some(is_ignored) = self.cached_match(source, path, is_dir, check_ancestors) {
             return is_ignored;
         }
 
-        self.remove(&key);
-        let source_len = content.len() as u64;
+        self.remove(&source.key);
+        let source_len = source.source_len();
         self.reserve_for(source_len);
         self.record_live_matchers(1);
         self.record_parse();
-        let (gitignore, error) = Gitignore::new(gitignore_path);
-        if error.is_some() || source_len > MAX_CACHED_SOURCE_BYTES {
+        let (gitignore, has_error) = compile_source(source, content);
+        if has_error || source_len > MAX_CACHED_SOURCE_BYTES {
             return matcher_ignores(&gitignore, path, is_dir, check_ancestors);
         }
 
         let last_used = self.next_tick();
         self.entries.insert(
-            key.clone(),
+            source.key.clone(),
             CacheEntry {
-                content_digest,
+                content_digest: source.content_digest,
                 gitignore,
                 source_len,
                 last_used,
@@ -173,51 +227,43 @@ impl Cache {
         );
         self.total_source_bytes += source_len;
         self.record_live_matchers(0);
-        self.cached_match(&key, content_digest, path, is_dir, check_ancestors)
-            .unwrap_or(false)
-    }
-
-    fn refresh_global(&mut self) {
-        self.refresh_global_with(|| Gitignore::global().0);
-    }
-
-    fn refresh_global_with(&mut self, load: impl FnOnce() -> Gitignore) {
-        self.remove(&CacheKey::Global);
-        self.reserve_for(0);
-        self.record_live_matchers(1);
-        self.record_parse();
-        let gitignore = load();
-        if gitignore.is_empty() {
-            return;
-        }
-        let last_used = self.next_tick();
-        self.entries.insert(
-            CacheKey::Global,
-            CacheEntry {
-                content_digest: 0,
-                gitignore,
-                source_len: 0,
-                last_used,
-            },
-        );
-        self.record_live_matchers(0);
-    }
-
-    fn match_global(&mut self, path: &Path, is_dir: bool, check_ancestors: bool) -> bool {
-        if !self.entries.contains_key(&CacheKey::Global) {
-            self.refresh_global();
-        }
-        self.cached_match(&CacheKey::Global, 0, path, is_dir, check_ancestors)
+        self.cached_match(source, path, is_dir, check_ancestors)
             .unwrap_or(false)
     }
 }
 
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
 
-fn content_digest(content: &[u8]) -> u64 {
+fn source_digest(source_path: &Path, matcher_root: &Path, content: Option<&[u8]>) -> u64 {
     let mut hasher = DefaultHasher::new();
+    source_path.hash(&mut hasher);
+    matcher_root.hash(&mut hasher);
     content.hash(&mut hasher);
     hasher.finish()
+}
+
+fn compile_source(source: &SourceSnapshot, content: &[u8]) -> (Gitignore, bool) {
+    let mut builder = GitignoreBuilder::new(&source.matcher_root);
+    let mut has_error = false;
+    for (index, line) in content.split(|byte| *byte == b'\n').enumerate() {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Ok(line) = std::str::from_utf8(line) else {
+            has_error = true;
+            break;
+        };
+        let line = if index == 0 {
+            line.trim_start_matches('\u{feff}')
+        } else {
+            line
+        };
+        has_error |= builder
+            .add_line(Some(source.source_path.clone()), line)
+            .is_err();
+    }
+    match builder.build() {
+        Ok(gitignore) => (gitignore, has_error),
+        Err(_) => (Gitignore::empty(), true),
+    }
 }
 
 fn matcher_ignores(
@@ -241,29 +287,53 @@ fn matcher_ignores(
     }
 }
 
-/// Source-backed Gitignore rules that do not retain compiled matchers between evaluations.
+/// Source-backed Gitignore rules that do not retain compiled matchers between operations.
 #[derive(Debug, Clone, Default)]
 pub struct GitignoreRules {
     cached_paths: Arc<Vec<PathBuf>>,
     #[cfg(test)]
     persistent_matchers: Arc<Vec<Arc<Gitignore>>>,
     include_global: bool,
+    #[cfg(test)]
+    global_path_override: Option<PathBuf>,
+    #[cfg(test)]
+    global_root_override: Option<PathBuf>,
 }
 
 impl GitignoreRules {
-    /// Creates rules that consult the current configured global Gitignore.
+    /// Creates rules that consult the configured global Gitignore.
     pub fn global() -> Self {
-        CACHE.lock().refresh_global();
         Self {
             include_global: true,
             ..Self::default()
         }
     }
 
+    pub(crate) fn for_directory(directory: &Path) -> Self {
+        let mut rules = Self::global();
+        rules.add_cached_path(directory.join(".gitignore"));
+        rules
+    }
+
+    /// Reads and fingerprints each source once for a matching operation.
+    pub fn operation(&self) -> GitignoreOperation {
+        GitignoreOperation::new(self.clone())
+    }
+
     #[cfg(test)]
     fn with_cached_paths(self, cached_paths: Vec<PathBuf>) -> Self {
         Self {
             cached_paths: Arc::new(cached_paths),
+            ..self
+        }
+    }
+
+    #[cfg(test)]
+    fn with_global_source(self, source_path: PathBuf, matcher_root: PathBuf) -> Self {
+        Self {
+            include_global: true,
+            global_path_override: Some(source_path),
+            global_root_override: Some(matcher_root),
             ..self
         }
     }
@@ -276,8 +346,63 @@ impl GitignoreRules {
 
     /// Returns whether any applicable rule ignores `path`.
     pub fn matches(&self, path: &Path, is_dir: bool, check_ancestors: bool) -> bool {
+        self.operation().matches(path, is_dir, check_ancestors)
+    }
+}
+
+/// Source snapshots reused for one tree build, watcher classification scope, or outline update.
+#[derive(Debug)]
+pub struct GitignoreOperation {
+    rules: GitignoreRules,
+    sources: Vec<SourceSnapshot>,
+    global_source: Option<SourceSnapshot>,
+    #[cfg(test)]
+    source_read_count: usize,
+}
+
+impl GitignoreOperation {
+    fn new(rules: GitignoreRules) -> Self {
+        let sources = rules
+            .cached_paths
+            .iter()
+            .cloned()
+            .map(SourceSnapshot::file)
+            .collect::<Vec<_>>();
+        let global_source = rules.include_global.then(|| {
+            SourceSnapshot::global(
+                #[cfg(test)]
+                rules.global_path_override.as_deref(),
+                #[cfg(test)]
+                rules.global_root_override.as_deref(),
+            )
+        });
+        #[cfg(test)]
+        let source_read_count = sources.len() + usize::from(global_source.is_some());
+        Self {
+            rules,
+            sources,
+            global_source,
+            #[cfg(test)]
+            source_read_count,
+        }
+    }
+
+    pub(crate) fn add_cached_path(&mut self, path: PathBuf) {
+        if !self.rules.cached_paths.contains(&path) {
+            self.rules.add_cached_path(path.clone());
+            self.sources.push(SourceSnapshot::file(path));
+            #[cfg(test)]
+            {
+                self.source_read_count += 1;
+            }
+        }
+    }
+
+    /// Returns whether any source captured for this operation ignores `path`.
+    pub fn matches(&self, path: &Path, is_dir: bool, check_ancestors: bool) -> bool {
         #[cfg(test)]
         if self
+            .rules
             .persistent_matchers
             .iter()
             .any(|matcher| matcher_ignores(matcher, path, is_dir, check_ancestors))
@@ -285,23 +410,27 @@ impl GitignoreRules {
             return true;
         }
 
-        let mut cache = CACHE.lock();
-        if self.include_global && cache.match_global(path, is_dir, check_ancestors) {
+        if self.global_source.as_ref().is_some_and(|source| {
+            CACHE
+                .lock()
+                .match_source(source, path, is_dir, check_ancestors)
+        }) {
             return true;
         }
-        self.cached_paths.iter().any(|gitignore_path| {
-            let applies = gitignore_path
+        self.sources.iter().any(|source| {
+            let applies = source
+                .source_path
                 .parent()
                 .is_some_and(|root| path.starts_with(root));
             applies
-                && cache.match_file(
-                    gitignore_path,
-                    std::fs::read(gitignore_path).ok().as_deref(),
-                    path,
-                    is_dir,
-                    check_ancestors,
-                )
+                && CACHE
+                    .lock()
+                    .match_source(source, path, is_dir, check_ancestors)
         })
+    }
+
+    pub(crate) fn into_rules(self) -> GitignoreRules {
+        self.rules
     }
 
     #[cfg(test)]
@@ -312,16 +441,16 @@ impl GitignoreRules {
         is_dir: bool,
         check_ancestors: bool,
     ) -> bool {
-        let mut cache = cache.lock();
-        self.cached_paths.iter().any(|gitignore_path| {
-            cache.match_file(
-                gitignore_path,
-                std::fs::read(gitignore_path).ok().as_deref(),
-                path,
-                is_dir,
-                check_ancestors,
-            )
+        self.sources.iter().any(|source| {
+            cache
+                .lock()
+                .match_source(source, path, is_dir, check_ancestors)
         })
+    }
+
+    #[cfg(test)]
+    fn source_read_count(&self) -> usize {
+        self.source_read_count
     }
 }
 
@@ -333,6 +462,12 @@ impl From<Vec<Arc<Gitignore>>> for GitignoreRules {
             ..Self::default()
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn cache_live_matcher_counts() -> (usize, usize) {
+    let cache = CACHE.lock();
+    (cache.entries.len(), cache.peak_live_matchers)
 }
 
 #[cfg(test)]

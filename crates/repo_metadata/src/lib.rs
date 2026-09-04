@@ -47,9 +47,11 @@ mod telemetry;
 pub mod watcher;
 pub mod wrapper_model;
 
+#[cfg(test)]
+pub use entry::gitignores_for_directory;
 pub use entry::{
-    BuildTreeError, DirectoryEntry, Entry, FileId, FileMetadata, gitignores_for_directory,
-    matches_gitignores, should_ignore_git_path,
+    BuildTreeError, DirectoryEntry, Entry, FileId, FileMetadata, matches_gitignores,
+    should_ignore_git_path,
 };
 pub use gitignore_cache::GitignoreRules;
 // Re-export the local model's event under its original name for backward compatibility.

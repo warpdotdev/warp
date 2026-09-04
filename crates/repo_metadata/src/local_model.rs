@@ -48,6 +48,7 @@ use crate::entry::{
     BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
     matches_force_included_path,
 };
+use crate::gitignore_cache::GitignoreOperation;
 #[cfg(test)]
 use crate::matches_gitignores;
 use crate::repository::Repository;
@@ -567,7 +568,11 @@ impl LocalRepoMetadataModel {
                 watcher.update(ctx, |watcher, _ctx| {
                     std::mem::drop(watcher.register_path(
                         target_dir,
-                        repo_watch_filter(target_dir.clone(), Vec::new(), Vec::new()),
+                        repo_watch_filter(
+                            target_dir.clone(),
+                            GitignoreRules::default(),
+                            Vec::new(),
+                        ),
                         RecursiveMode::NonRecursive,
                     ));
                 });
@@ -963,7 +968,7 @@ impl LocalRepoMetadataModel {
                 // path list so the descend filter prunes gitignored subtrees
                 // while still watching registered force-included paths (e.g.
                 // skills).
-                let gitignores = crate::gitignores_for_directory(&watch_path);
+                let gitignore_rules = GitignoreRules::for_directory(&watch_path);
                 let force_included_paths = self.force_included_paths.clone();
                 let had_previous = previous.is_some();
                 let previous_extra: Vec<PathBuf> = previous
@@ -983,7 +988,11 @@ impl LocalRepoMetadataModel {
                     }
                     std::mem::drop(watcher.register_path(
                         &watch_path,
-                        repo_watch_filter(watch_path.clone(), gitignores, force_included_paths),
+                        repo_watch_filter(
+                            watch_path.clone(),
+                            gitignore_rules,
+                            force_included_paths,
+                        ),
                         recursive_mode,
                     ));
                 });
@@ -1137,12 +1146,13 @@ impl LocalRepoMetadataModel {
                 // across descendants that are not materialized in the lazy file tree.
                 let mut files = Vec::new();
                 let mut file_limit = MAX_FILES_PER_REPO;
-                let mut gitignore_rules = GitignoreRules::global();
+                let gitignore_rules = GitignoreRules::global();
+                let mut gitignore_operation = gitignore_rules.operation();
                 let mut standing_results = StandingQueryResults::default();
-                let result = Entry::build_tree_with_standing_queries(
+                let result = Entry::build_tree_with_standing_queries_and_operation(
                     &local_path,
                     &mut files,
-                    &mut gitignore_rules,
+                    &mut gitignore_operation,
                     Some(&mut file_limit),
                     BuildTreeOptions {
                         max_depth: 1, // Only first level.
@@ -1156,6 +1166,7 @@ impl LocalRepoMetadataModel {
                     &standing_query_definitions,
                 )
                 .await;
+                let gitignore_rules = gitignore_operation.into_rules();
                 (path_for_build, result, standing_results, gitignore_rules)
             },
             move |model, (path, build_result, standing_results, gitignore_rules), ctx| {
@@ -1424,7 +1435,7 @@ impl LocalRepoMetadataModel {
         let Some(local_path) = dir_path.to_local_path() else {
             return;
         };
-        let gitignores = crate::gitignores_for_directory(&local_path);
+        let gitignore_rules = GitignoreRules::for_directory(&local_path);
         let force_included_paths = self.force_included_paths.clone();
         if let Some(repo_watch) = self.repo_watches.get_mut(repo_root) {
             repo_watch.extra_dirs.insert(dir_path.clone());
@@ -1433,7 +1444,7 @@ impl LocalRepoMetadataModel {
             watcher.update(ctx, |watcher, _ctx| {
                 std::mem::drop(watcher.register_path(
                     &local_path,
-                    repo_watch_filter(local_path.clone(), gitignores, force_included_paths),
+                    repo_watch_filter(local_path.clone(), gitignore_rules, force_included_paths),
                     RecursiveMode::NonRecursive,
                 ));
             });
@@ -1533,6 +1544,7 @@ impl LocalRepoMetadataModel {
         let mut mutations = Vec::new();
         let mut standing_results = StandingQueryResults::default();
         let mut removed_roots = Vec::new();
+        let mut gitignore_operation = gitignore_rules.operation();
 
         // Removals for deleted and moved-from paths
         for path_to_remove in update.deleted.iter().chain(update.moved.values()) {
@@ -1554,7 +1566,8 @@ impl LocalRepoMetadataModel {
                 continue;
             }
 
-            let is_ignored = Self::path_is_ignored_with_rules(path_to_add, &gitignore_rules);
+            let is_ignored =
+                Self::path_is_ignored_with_operation(path_to_add, &gitignore_operation);
 
             if path_to_add.is_dir() {
                 if lazy_load {
@@ -1579,10 +1592,10 @@ impl LocalRepoMetadataModel {
 
                 let mut files = Vec::new();
                 let mut file_limit = MAX_FILES_PER_REPO;
-                match Entry::build_tree_with_standing_queries(
+                match Entry::build_tree_with_standing_queries_and_operation(
                     path_to_add,
                     &mut files,
-                    &mut gitignore_rules,
+                    &mut gitignore_operation,
                     Some(&mut file_limit),
                     BuildTreeOptions {
                         max_depth: MAX_TREE_DEPTH,
@@ -1637,6 +1650,7 @@ impl LocalRepoMetadataModel {
             }
         }
 
+        gitignore_rules = gitignore_operation.into_rules();
         (mutations, standing_results, removed_roots, gitignore_rules)
     }
 
@@ -1847,6 +1861,19 @@ impl LocalRepoMetadataModel {
         gitignore_rules.matches(path, path.is_dir(), true)
     }
 
+    fn path_is_ignored_with_operation(
+        path: &Path,
+        gitignore_operation: &GitignoreOperation,
+    ) -> bool {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == ".git")
+        {
+            return true;
+        }
+        gitignore_operation.matches(path, path.is_dir(), true)
+    }
+
     /// Fully indexes a local directory after registering it with the directory watcher.
     #[cfg(feature = "local_fs")]
     pub fn index_directory_path(
@@ -1958,7 +1985,7 @@ impl LocalRepoMetadataModel {
         let build_handle = ctx.spawn(
             async move {
                 let mut files: Vec<crate::entry::FileMetadata> = Vec::new();
-                let mut gitignore_rules = gitignore_rules;
+                let mut gitignore_operation = gitignore_rules.operation();
                 let mut standing_results = StandingQueryResults::default();
 
                 // Budget for non-ignored files. When it is exhausted the builder
@@ -1969,10 +1996,10 @@ impl LocalRepoMetadataModel {
                 // both are handled inside the builder.
                 let mut file_limit = MAX_FILES_PER_REPO;
 
-                let build_result = Entry::build_tree_with_standing_queries(
+                let build_result = Entry::build_tree_with_standing_queries_and_operation(
                     &repo_path_for_build,
                     &mut files,
-                    &mut gitignore_rules,
+                    &mut gitignore_operation,
                     Some(&mut file_limit),
                     BuildTreeOptions {
                         max_depth: MAX_TREE_DEPTH,
@@ -1995,7 +2022,7 @@ impl LocalRepoMetadataModel {
                 (
                     build_result,
                     files,
-                    gitignore_rules,
+                    gitignore_operation.into_rules(),
                     repo_path_str_for_log,
                     std_path_for_completion,
                     repository_handle_for_completion,
