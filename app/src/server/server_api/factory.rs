@@ -112,6 +112,7 @@ impl FactoryClient for ServerApi {
 }
 
 impl ServerApi {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     async fn upsert_runner(
         &self,
         input: UpsertRunnerInput,
