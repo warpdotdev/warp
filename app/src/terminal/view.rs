@@ -4536,7 +4536,9 @@ impl TerminalView {
 
         // Forward RemoteServerManager setup events into the terminal event stream
         // so the ModelEventDispatcher can gate session initialization on them.
-        if FeatureFlag::remote_server_backend_enabled() {
+        if FeatureFlag::remote_server_backend_enabled()
+            && ctx.has_singleton_model::<RemoteServerManager>()
+        {
             let mgr_handle = RemoteServerManager::handle(ctx);
             ctx.subscribe_to_model(&mgr_handle, |me, _, event, ctx| {
                 #[cfg(all(unix, feature = "local_tty"))]
@@ -13011,7 +13013,10 @@ impl TerminalView {
                 // multiplexed channel on the ControlMaster so the foreground
                 // ssh can exit cleanly instead of hanging.
                 #[cfg(not(target_family = "wasm"))]
-                if FeatureFlag::remote_server_backend_enabled() {
+                if FeatureFlag::remote_server_backend_enabled()
+                    && ctx
+                        .has_singleton_model::<crate::remote_server::manager::RemoteServerManager>()
+                {
                     use crate::remote_server::manager::RemoteServerManager;
                     RemoteServerManager::handle(ctx).update(
                         ctx,

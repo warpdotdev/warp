@@ -175,7 +175,9 @@ impl Sessions {
         // (see `new_command_executor_for_local_tty_session`) so we no
         // longer need to wire it here on connect/disconnect.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::remote_server_backend_enabled() {
+        if FeatureFlag::remote_server_backend_enabled()
+            && ctx.has_singleton_model::<RemoteServerManager>()
+        {
             let mgr = RemoteServerManager::handle(ctx);
             ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
@@ -408,8 +410,9 @@ impl Sessions {
         #[cfg(feature = "local_tty")]
         if matches!(
             session_info.session_type,
-            BootstrapSessionType::WarpifiedRemote
-        ) && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
+            BootstrapSessionType::WarpifiedRemote,
+        ) && ctx.has_singleton_model::<RemoteServerManager>()
+            && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
         {
             session.set_remote_host_id(Some(host_id.clone()));
         }

@@ -340,7 +340,7 @@ impl ModelEventDispatcher {
             || crate::terminal::model::session::session_origin_uses_remote_server(&session_info);
         #[cfg(not(feature = "local_tty"))]
         let notify_remote_server = self.should_use_ssh_remote_server(is_ssh_wrapper_session);
-        if notify_remote_server {
+        if notify_remote_server && ctx.has_singleton_model::<RemoteServerManager>() {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
                     session_id,
