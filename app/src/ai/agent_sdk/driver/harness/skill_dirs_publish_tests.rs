@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
+use virtual_fs::VirtualFS;
 
 use super::*;
 
@@ -325,8 +326,7 @@ fn publish_skill_dirs_prefers_most_specific_directory_on_name_collision() {
     let skill_root = TempDir::new().unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[specific_dir, general_dir], false);
-
-    assert_eq!(published, 2);
+    assert_eq!(published.len(), 2);
     assert_eq!(
         fs::read_link(skill_root.path().join("github")).unwrap(),
         specific_github
@@ -351,8 +351,7 @@ fn publish_skill_dirs_in_a_sandbox_overrides_an_existing_environment_skill_and_p
     fs::write(existing_target.join("SKILL.md"), "pre-existing skill").unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[source_dir], true);
-
-    assert_eq!(published, 1);
+    assert_eq!(published.len(), 1);
     // The published skill wins under the real name...
     assert_eq!(
         fs::read_link(skill_root.path().join("github")).unwrap(),
@@ -375,8 +374,7 @@ fn publish_skill_dirs_skips_entries_without_skill_md() {
     let skill_root = TempDir::new().unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[source_dir], false);
-
-    assert_eq!(published, 1);
+    assert_eq!(published.len(), 1);
     assert!(skill_root.path().join("github").exists());
     assert!(!skill_root.path().join("not-a-skill").exists());
 }
@@ -386,7 +384,7 @@ fn publish_skill_dirs_is_a_noop_for_empty_source_dirs() {
     let outer = TempDir::new().unwrap();
     let skill_root = outer.path().join("skills");
 
-    assert_eq!(publish_skill_dirs(&skill_root, &[], false), 0);
+    assert!(publish_skill_dirs(&skill_root, &[], false).is_empty());
     // Doesn't even create the skill root when there's nothing to publish.
     assert!(!skill_root.exists());
 }
@@ -401,7 +399,57 @@ fn publish_skill_dirs_recovers_from_missing_source_directory() {
     let skill_root = TempDir::new().unwrap();
 
     let published = publish_skill_dirs(skill_root.path(), &[missing_dir, present_dir], false);
-
-    assert_eq!(published, 1);
+    assert_eq!(published.len(), 1);
     assert!(skill_root.path().join("github").exists());
+}
+
+#[test]
+fn git_exclude_pattern_anchors_and_escapes_git_metacharacters() {
+    let pattern = git_exclude_pattern(Path::new(".agents/skills/name with *?[brackets]")).unwrap();
+
+    assert_eq!(pattern, r"/.agents/skills/name\ with\ \*\?\[brackets\]");
+}
+
+#[cfg(unix)]
+#[test]
+fn git_exclude_pattern_escapes_a_literal_backslash_on_unix() {
+    let pattern = git_exclude_pattern(Path::new(r".agents/skills/name\with\backslashes")).unwrap();
+
+    assert_eq!(pattern, r"/.agents/skills/name\\with\\backslashes");
+}
+
+#[test]
+fn git_exclude_pattern_rejects_line_separators() {
+    for line_separator in ['\n', '\r'] {
+        let path = format!(".agents/skills/first{line_separator}/injected");
+
+        assert!(git_exclude_pattern(Path::new(&path)).is_err());
+    }
+}
+
+#[test]
+fn write_published_skill_paths_to_git_exclude_is_idempotent_and_preserves_existing_content() {
+    VirtualFS::test(
+        "write_published_skill_paths_to_git_exclude",
+        |dirs, _sandbox| {
+            let repository = git2::Repository::init(dirs.tests()).unwrap();
+            let repository_root = repository.workdir().unwrap();
+            let exclude_path = repository.commondir().join("info").join("exclude");
+            fs::write(&exclude_path, "existing-pattern").unwrap();
+            let github = repository_root.join(".claude/skills/github");
+            let linear = repository_root.join(".claude/skills/linear");
+
+            write_published_skill_paths_to_git_exclude(
+                repository_root,
+                std::slice::from_ref(&github),
+            )
+            .unwrap();
+            write_published_skill_paths_to_git_exclude(repository_root, &[github, linear]).unwrap();
+
+            assert_eq!(
+                fs::read_to_string(exclude_path).unwrap(),
+                "existing-pattern\n/.claude/skills/github\n/.claude/skills/linear\n"
+            );
+        },
+    );
 }
