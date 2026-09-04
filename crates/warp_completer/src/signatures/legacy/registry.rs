@@ -438,7 +438,7 @@ impl CommandRegistry {
     }
 
     fn follow_load_spec<'a>(&'a self, view: &mut CommandView<'a>) {
-        let mut next_target = view.wrapper.load_spec.as_deref();
+        let mut next_target = view.current.load_spec.as_deref();
         while let Some(target_name) = next_target {
             if view.load_stack.iter().any(|name| name == target_name) {
                 break;
@@ -466,10 +466,10 @@ impl CommandRegistry {
     ) {
         if from_loaded_target {
             view.inherited_options
-                .push((view.wrapper.options(), view.wrapper_dcd));
+                .push((view.current.options(), view.current_dcd));
         }
-        view.wrapper = next;
-        view.wrapper_dcd = owner_dcd;
+        view.current = next;
+        view.current_dcd = owner_dcd;
         view.targets.clear();
         self.follow_load_spec(view);
     }
@@ -480,8 +480,8 @@ impl CommandRegistry {
         signature_start_idx: usize,
     ) -> SignatureAtTokenIndex<'a> {
         SignatureAtTokenIndex::with_load_spec(
-            view.wrapper,
-            view.wrapper_dcd,
+            view.current,
+            view.current_dcd,
             signature_start_idx,
             view.targets,
             view.inherited_options,
@@ -490,20 +490,20 @@ impl CommandRegistry {
 }
 
 struct CommandView<'a> {
-    wrapper: &'a Signature,
+    current: &'a Signature,
     targets: Vec<(&'a Signature, Option<&'a DynamicCompletionData>)>,
     inherited_options: Vec<(&'a [Opt], Option<&'a DynamicCompletionData>)>,
-    wrapper_dcd: Option<&'a DynamicCompletionData>,
+    current_dcd: Option<&'a DynamicCompletionData>,
     load_stack: Vec<String>,
 }
 
 impl<'a> CommandView<'a> {
-    fn new(wrapper: &'a Signature, wrapper_dcd: Option<&'a DynamicCompletionData>) -> Self {
+    fn new(current: &'a Signature, current_dcd: Option<&'a DynamicCompletionData>) -> Self {
         Self {
-            wrapper,
+            current,
             targets: Vec::new(),
             inherited_options: Vec::new(),
-            wrapper_dcd,
+            current_dcd,
             load_stack: Vec::new(),
         }
     }
@@ -512,13 +512,13 @@ impl<'a> CommandView<'a> {
         self.inherited_options
             .iter()
             .flat_map(|(options, _)| options.iter())
-            .chain(self.wrapper.options())
+            .chain(self.current.options())
             .chain(self.targets.iter().flat_map(|(target, _)| target.options()))
     }
 
     fn alias(&self) -> Option<&warp_command_signatures::Alias> {
-        self.wrapper
-            .alias(self.wrapper_dcd.map(DynamicCompletionData::aliases))
+        self.current
+            .alias(self.current_dcd.map(DynamicCompletionData::aliases))
             .or_else(|| {
                 self.targets
                     .iter()
@@ -561,13 +561,13 @@ fn classify_token<'a>(
     token_idx: usize,
     has_post_whitespace: bool,
 ) -> TokenAction<'a> {
-    if let Some(subcommand) = view.wrapper.subcommands().iter().find(|s| {
+    if let Some(subcommand) = view.current.subcommands().iter().find(|s| {
         should_complete_on_subcmd(s.name(), token, num_tokens, token_idx, has_post_whitespace)
     }) {
         return TokenAction::ResolvedSubcommand {
             signature: subcommand,
             from_loaded_target: false,
-            owner_dcd: view.wrapper_dcd,
+            owner_dcd: view.current_dcd,
         };
     }
 
