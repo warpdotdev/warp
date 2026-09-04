@@ -244,12 +244,22 @@ fn git_exclude_pattern(relative_path: &Path) -> Result<String> {
             relative_path.display()
         )
     })?;
+    if relative_path
+        .chars()
+        .any(|character| matches!(character, '\n' | '\r'))
+    {
+        anyhow::bail!("published skill path contains a line separator");
+    }
     let mut pattern = String::from("/");
-    for character in relative_path.replace('\\', "/").chars() {
-        if matches!(character, '\\' | ' ' | '*' | '?' | '[' | ']') {
+    for character in relative_path.chars() {
+        if character == std::path::MAIN_SEPARATOR {
+            pattern.push('/');
+        } else if matches!(character, '\\' | ' ' | '*' | '?' | '[' | ']') {
             pattern.push('\\');
+            pattern.push(character);
+        } else {
+            pattern.push(character);
         }
-        pattern.push(character);
     }
     Ok(pattern)
 }

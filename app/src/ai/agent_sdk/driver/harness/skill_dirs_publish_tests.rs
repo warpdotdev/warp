@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
+use virtual_fs::VirtualFS;
 
 use super::*;
 
@@ -400,4 +401,55 @@ fn publish_skill_dirs_recovers_from_missing_source_directory() {
     let published = publish_skill_dirs(skill_root.path(), &[missing_dir, present_dir], false);
     assert_eq!(published.len(), 1);
     assert!(skill_root.path().join("github").exists());
+}
+
+#[test]
+fn git_exclude_pattern_anchors_and_escapes_git_metacharacters() {
+    let pattern = git_exclude_pattern(Path::new(".agents/skills/name with *?[brackets]")).unwrap();
+
+    assert_eq!(pattern, r"/.agents/skills/name\ with\ \*\?\[brackets\]");
+}
+
+#[cfg(unix)]
+#[test]
+fn git_exclude_pattern_escapes_a_literal_backslash_on_unix() {
+    let pattern = git_exclude_pattern(Path::new(r".agents/skills/name\with\backslashes")).unwrap();
+
+    assert_eq!(pattern, r"/.agents/skills/name\\with\\backslashes");
+}
+
+#[test]
+fn git_exclude_pattern_rejects_line_separators() {
+    for line_separator in ['\n', '\r'] {
+        let path = format!(".agents/skills/first{line_separator}/injected");
+
+        assert!(git_exclude_pattern(Path::new(&path)).is_err());
+    }
+}
+
+#[test]
+fn write_published_skill_paths_to_git_exclude_is_idempotent_and_preserves_existing_content() {
+    VirtualFS::test(
+        "write_published_skill_paths_to_git_exclude",
+        |dirs, _sandbox| {
+            let repository = git2::Repository::init(dirs.tests()).unwrap();
+            let repository_root = repository.workdir().unwrap();
+            let exclude_path = repository.commondir().join("info").join("exclude");
+            fs::write(&exclude_path, "existing-pattern").unwrap();
+            let github = repository_root.join(".claude/skills/github");
+            let linear = repository_root.join(".claude/skills/linear");
+
+            write_published_skill_paths_to_git_exclude(
+                repository_root,
+                std::slice::from_ref(&github),
+            )
+            .unwrap();
+            write_published_skill_paths_to_git_exclude(repository_root, &[github, linear]).unwrap();
+
+            assert_eq!(
+                fs::read_to_string(exclude_path).unwrap(),
+                "existing-pattern\n/.claude/skills/github\n/.claude/skills/linear\n"
+            );
+        },
+    );
 }
