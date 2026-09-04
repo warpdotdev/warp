@@ -69,10 +69,12 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                         return;
                     }
                 };
-                crate::server::cloud_objects::update_manager::UpdateManager::handle(ctx)
-                    .update(ctx, |update_manager, ctx| {
-                        update_manager.apply_scoped_refresh(response, ctx)
-                    });
+                crate::server::cloud_objects::update_manager::UpdateManager::handle(ctx).update(
+                    ctx,
+                    |update_manager, ctx| {
+                        update_manager.apply_scoped_refresh(response, request_team_scope, ctx)
+                    },
+                );
 
                 let loaded_file = match args.config_file.file.as_deref() {
                     Some(path) => match super::config_file::load_config_file(path) {
@@ -606,10 +608,12 @@ fn list(
                         return;
                     }
                 };
-                crate::server::cloud_objects::update_manager::UpdateManager::handle(ctx)
-                    .update(ctx, |update_manager, ctx| {
-                        update_manager.apply_scoped_refresh(response, ctx)
-                    });
+                crate::server::cloud_objects::update_manager::UpdateManager::handle(ctx).update(
+                    ctx,
+                    |update_manager, ctx| {
+                        update_manager.apply_scoped_refresh(response, request_team_scope, ctx)
+                    },
+                );
 
                 let mut schedules: Vec<_> = manager
                     .list_schedules(ctx)

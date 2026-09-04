@@ -274,7 +274,7 @@ pub fn refresh_warp_drive_for_scope(
     ctx: &AppContext,
 ) -> impl Future<Output = anyhow::Result<InitialLoadResponse>> + Send + 'static + use<> {
     let server_api = ServerApiProvider::as_ref(ctx).get();
-    let objects_to_update = CloudModel::as_ref(ctx).get_versions_for_all_objects(ctx);
+    let objects_to_update = CloudModel::as_ref(ctx).get_versions_for_request_scope(team_scope, ctx);
     async move {
         server_api
             .fetch_changed_objects_for_scope(objects_to_update, false, team_scope)
