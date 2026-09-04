@@ -17,6 +17,7 @@ bench = false
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
+libc.workspace = true
 
 [[bench]]
 name = "push_bench"

@@ -13213,6 +13213,7 @@ name = "sum_tree_bench"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "libc",
  "sum_tree",
 ]
 
