@@ -386,12 +386,14 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
-            if let Err(err) =
-                super::common::validate_team_scope(&args.scope.team_selection, ctx)
-            {
-                super::report_fatal_error(err, ctx);
-                return;
-            }
+            let team_scope =
+                match super::common::resolve_team_scope(&args.scope.team_selection, ctx) {
+                    Ok(team_scope) => team_scope,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
 
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment
@@ -402,8 +404,11 @@ impl AmbientAgentRunner {
                     environment_args.environment = Some(environment_id);
                 }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
+            let environment_id = match EnvironmentChoice::resolve_for_create(
+                environment_args,
+                &team_scope,
+                ctx,
+            ) {
                 Ok(EnvironmentChoice::None) => {
                     eprintln!("Agent will run without an environment.");
                     None
