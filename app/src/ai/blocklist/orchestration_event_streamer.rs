@@ -210,6 +210,8 @@ struct ConversationStreamState {
     /// metadata, so this lets us recognize dormant local Claude children
     /// without relying on `ServerAIConversationMetadata`.
     harness: Option<Harness>,
+    /// Whether a task request to resolve the execution harness is in progress.
+    harness_fetch_in_flight: bool,
     /// Active SSE connection, if one is open.
     sse_connection: Option<SseConnectionState>,
     /// Active wake-only listener for dormant local Claude children, if one is
@@ -1732,7 +1734,7 @@ impl OrchestrationEventStreamer {
         if self
             .streams
             .get(&conversation_id)
-            .is_some_and(|stream| stream.harness.is_some())
+            .is_some_and(|stream| stream.harness.is_some() || stream.harness_fetch_in_flight)
         {
             return;
         }
@@ -1747,10 +1749,17 @@ impl OrchestrationEventStreamer {
             .get(&conversation_id)
             .map(|stream| stream.event_cursor)
             .unwrap_or(0);
+        self.streams
+            .entry(conversation_id)
+            .or_default()
+            .harness_fetch_in_flight = true;
         let ai_client = self.ai_client.clone();
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
             move |me, result, ctx| {
+                if let Some(stream) = me.streams.get_mut(&conversation_id) {
+                    stream.harness_fetch_in_flight = false;
+                }
                 let task = match result {
                     Ok(task) => task,
                     Err(err) => {
