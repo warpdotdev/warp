@@ -355,7 +355,7 @@ pub enum CodeReviewAction {
 pub struct FileState {
     pub file_diff: FileDiff,
     pub editor_state: Option<CodeReviewEditorState>,
-    editor_deferred: bool,
+    deferred_editor_load: DeferredEditorLoad,
     pub is_expanded: bool,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
@@ -364,6 +364,21 @@ pub struct FileState {
     discard_button: ViewHandle<ActionButton>,
     add_context_button: ViewHandle<ActionButton>,
     copy_path_button: ViewHandle<ActionButton>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+enum DeferredEditorLoad {
+    #[default]
+    NotDeferred,
+    Ready,
+    Loading(u64),
+    Failed(String),
+}
+
+impl DeferredEditorLoad {
+    fn is_deferred(&self) -> bool {
+        !matches!(self, Self::NotDeferred)
+    }
 }
 
 pub(crate) struct LoadedState {
@@ -676,6 +691,7 @@ pub struct CodeReviewView {
     git_repo_status: Option<ModelHandle<GitRepoStatusModel>>,
     /// Per-repo GitHub-info model for the current repository, if any.
     github_repo_model: Option<ModelHandle<GitHubRepoModel>>,
+    next_deferred_editor_load_id: u64,
 }
 
 impl CodeReviewView {
@@ -1366,6 +1382,7 @@ impl CodeReviewView {
             git_dialog: None,
             git_repo_status: None,
             github_repo_model: None,
+            next_deferred_editor_load_id: 0,
         };
         view.set_active_repo_comment_model(comment_batch_model, ctx);
         if has_repo {
@@ -1816,11 +1833,25 @@ impl CodeReviewView {
                 let CodeReviewViewState::Loaded(state) = self.state() else {
                     return;
                 };
-                let Some(editor_state) = state
+                let Some(file_state) = state
                     .file_states
                     .get_index(editor_index)
-                    .and_then(|(_, file)| file.editor_state.as_ref())
+                    .map(|(_, file)| file)
                 else {
+                    report_error!(
+                        "CodeReviewView could not fetch file for comment",
+                        extra: { "file_path" => ?absolute_file_path }
+                    );
+                    return;
+                };
+                let Some(editor_state) = file_state.editor_state.as_ref() else {
+                    if matches!(
+                        file_state.deferred_editor_load,
+                        DeferredEditorLoad::Loading(_)
+                    ) {
+                        self.pending_edit_comment = Some(*comment_id);
+                        return;
+                    }
                     report_error!(
                         "CodeReviewView could not fetch editor for file",
                         extra: { "file_path" => ?absolute_file_path }
@@ -2143,35 +2174,6 @@ impl CodeReviewView {
         }
     }
 
-    fn reconstruct_base_content(current_content: &str, file_diff: &FileDiff) -> Option<String> {
-        let mut lines = current_content
-            .split_inclusive('\n')
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-
-        for hunk in file_diff.hunks.iter().rev() {
-            let start = hunk.new_start_line.saturating_sub(1);
-            let end = start.checked_add(hunk.new_line_count)?;
-            if end > lines.len() {
-                return None;
-            }
-
-            let old_lines = hunk.lines.iter().filter_map(|line| match line.line_type {
-                DiffLineType::Context | DiffLineType::Delete => {
-                    let mut text = line.text.clone();
-                    if !line.no_trailing_newline {
-                        text.push('\n');
-                    }
-                    Some(text)
-                }
-                DiffLineType::Add | DiffLineType::HunkHeader => None,
-            });
-            lines.splice(start..end, old_lines);
-        }
-
-        Some(lines.concat())
-    }
-
     /// Applies vertical scrolling to bring a match into view vertically
     fn vertically_scroll_to_match(
         &mut self,
@@ -2422,6 +2424,7 @@ impl CodeReviewView {
         updated_diff: Option<Arc<FileDiffAndContent>>,
         ctx: &mut ViewContext<Self>,
     ) {
+        let can_defer_editor_construction = self.can_defer_editor_construction();
         let mut diff_data = {
             let Some(repo) = self.active_repo.as_mut() else {
                 return;
@@ -2461,8 +2464,19 @@ impl CodeReviewView {
                         .unwrap_or(true);
                     if should_apply {
                         current.file_diff = file.file_diff.clone();
-                        if current.editor_state.is_none() {
-                            current.editor_deferred = Self::file_supports_editor(file);
+                        if current.editor_state.is_none()
+                            && !matches!(
+                                current.deferred_editor_load,
+                                DeferredEditorLoad::Loading(_)
+                            )
+                        {
+                            current.deferred_editor_load = if can_defer_editor_construction
+                                && Self::file_supports_editor(file)
+                            {
+                                DeferredEditorLoad::Ready
+                            } else {
+                                DeferredEditorLoad::NotDeferred
+                            };
                         }
                     }
                     self.viewported_list_state
@@ -2638,17 +2652,23 @@ impl CodeReviewView {
         } else {
             "Discard changes".to_string()
         };
+        let can_defer_editor_construction = self.can_defer_editor_construction();
 
         let mut file_states = vec![];
         for file in files {
             let is_expanded = self.should_auto_expand_file(&file.file_diff);
-            let should_create_editor = is_expanded || cfg!(target_family = "wasm");
+            let should_create_editor = is_expanded || !can_defer_editor_construction;
             let editor_state = should_create_editor
                 .then(|| self.create_code_review_editor(file, ctx))
                 .flatten();
             let file_diff = file.file_diff.clone();
             let file_line = file_line_for_open(&file_diff);
-            let editor_deferred = !should_create_editor && Self::file_supports_editor(file);
+            let deferred_editor_load = if !should_create_editor && Self::file_supports_editor(file)
+            {
+                DeferredEditorLoad::Ready
+            } else {
+                DeferredEditorLoad::NotDeferred
+            };
             let file_path = file_diff.file_path.clone();
 
             let chevron_path = file_path.clone();
@@ -2732,7 +2752,7 @@ impl CodeReviewView {
             file_states.push(FileState {
                 file_diff,
                 editor_state,
-                editor_deferred,
+                deferred_editor_load,
                 is_expanded,
                 chevron_button,
                 open_in_tab_button,
@@ -2749,6 +2769,21 @@ impl CodeReviewView {
             self.viewported_list_state.add_item();
         }
         file_states
+    }
+
+    fn can_defer_editor_construction(&self) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            match self.repo_path() {
+                Some(LocalOrRemotePath::Local(_)) => true,
+                // Remote diff state has no authoritative per-file base-content request.
+                Some(LocalOrRemotePath::Remote(_)) | None => false,
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            false
+        }
     }
 
     fn file_supports_editor(file: &FileDiffAndContent) -> bool {
@@ -2789,8 +2824,11 @@ impl CodeReviewView {
     }
 
     fn ensure_editor_for_file(&mut self, file_index: usize, ctx: &mut ViewContext<Self>) -> bool {
-        let file_diff = {
+        let (repo_path, file_path, diff_mode, load_id) = {
             let Some(repo) = self.active_repo.as_mut() else {
+                return false;
+            };
+            let Some(repo_path) = repo.repo_path.to_local_path().map(Path::to_path_buf) else {
                 return false;
             };
             let CodeReviewViewState::Loaded(state) = &mut repo.state else {
@@ -2802,60 +2840,146 @@ impl CodeReviewView {
             if file.editor_state.is_some() {
                 return true;
             }
-            if !file.editor_deferred {
-                return false;
+            match file.deferred_editor_load {
+                DeferredEditorLoad::Ready | DeferredEditorLoad::Failed(_) => {}
+                DeferredEditorLoad::Loading(_) | DeferredEditorLoad::NotDeferred => return false,
             }
-            file.editor_deferred = false;
-            file.file_diff.clone()
+            self.next_deferred_editor_load_id = self.next_deferred_editor_load_id.wrapping_add(1);
+            let load_id = self.next_deferred_editor_load_id;
+            file.deferred_editor_load = DeferredEditorLoad::Loading(load_id);
+            (
+                repo_path,
+                file.file_diff.file_path.clone(),
+                self.diff_state_model.as_ref(ctx).diff_mode(ctx),
+                load_id,
+            )
         };
-
-        let editor_state = self.create_deferred_code_review_editor(&file_diff, ctx);
-        {
-            let Some(repo) = self.active_repo.as_mut() else {
-                return false;
-            };
-            let CodeReviewViewState::Loaded(state) = &mut repo.state else {
-                return false;
-            };
-            let Some((_, file)) = state.file_states.get_index_mut(file_index) else {
-                return false;
-            };
-
-            if let Some(editor_state) = editor_state {
-                file.editor_state = Some(editor_state);
-                true
-            } else {
-                file.editor_deferred = true;
-                false
-            }
-        }
+        let absolute_file_path = repo_path.join(&file_path);
+        let completion_file_path = file_path.clone();
+        ctx.spawn(
+            async move {
+                let merge_base = match diff_mode {
+                    DiffMode::Head => None,
+                    DiffMode::MainBranch | DiffMode::OtherBranch(_) => Some(
+                        crate::code_review::diff_state::LocalDiffStateModel::compute_merge_base(
+                            &repo_path, &diff_mode,
+                        )
+                        .await?,
+                    ),
+                };
+                let (_, file) =
+                    crate::code_review::diff_state::LocalDiffStateModel::retrieve_diff_state(
+                        &repo_path,
+                        &absolute_file_path,
+                        &diff_mode,
+                        merge_base.as_deref(),
+                    )
+                    .await?;
+                file.ok_or_else(|| anyhow::anyhow!("file is no longer part of the diff"))
+            },
+            move |me, result, ctx| {
+                me.finish_deferred_editor_load(&completion_file_path, load_id, result, ctx);
+            },
+        );
+        false
     }
 
-    fn create_deferred_code_review_editor(
-        &self,
-        file_diff: &FileDiff,
+    fn finish_deferred_editor_load(
+        &mut self,
+        file_path: &str,
+        load_id: u64,
+        result: anyhow::Result<Arc<FileDiffAndContent>>,
         ctx: &mut ViewContext<Self>,
-    ) -> Option<CodeReviewEditorState> {
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let content_at_head = match &file_diff.status {
-                GitFileStatus::Deleted => Self::reconstruct_base_content("", file_diff),
-                GitFileStatus::New | GitFileStatus::Untracked => Some(String::new()),
-                GitFileStatus::Modified
-                | GitFileStatus::Renamed { .. }
-                | GitFileStatus::Copied { .. }
-                | GitFileStatus::Conflicted => None,
-            };
-            let file = FileDiffAndContent {
-                file_diff: file_diff.clone(),
-                content_at_head,
-            };
-            self.create_code_review_model_with_global_buffer(&file, ctx)
+    ) {
+        let is_current_and_expanded = match self.state() {
+            CodeReviewViewState::Loaded(state) => {
+                state.file_states.get(file_path).is_some_and(|file| {
+                    file.is_expanded
+                        && file.deferred_editor_load == DeferredEditorLoad::Loading(load_id)
+                })
+            }
+            CodeReviewViewState::None
+            | CodeReviewViewState::Error(_)
+            | CodeReviewViewState::NoRepoFound => false,
+        };
+        if !is_current_and_expanded {
+            return;
         }
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = (file_diff, ctx);
-            None
+
+        let file = match result {
+            Ok(file) if Self::file_supports_editor(&file) => file,
+            Ok(_) => {
+                self.fail_deferred_editor_load(
+                    file_path,
+                    load_id,
+                    "No renderable base content was returned".to_string(),
+                    ctx,
+                );
+                return;
+            }
+            Err(error) => {
+                self.fail_deferred_editor_load(file_path, load_id, error.to_string(), ctx);
+                return;
+            }
+        };
+        let Some(editor_state) = self.create_code_review_editor(&file, ctx) else {
+            self.fail_deferred_editor_load(
+                file_path,
+                load_id,
+                "Unable to construct the file editor".to_string(),
+                ctx,
+            );
+            return;
+        };
+
+        let Some(repo) = self.active_repo.as_mut() else {
+            return;
+        };
+        let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+            return;
+        };
+        let Some(file_index) = state.file_states.get_index_of(file_path) else {
+            return;
+        };
+        let Some(file_state) = state.file_states.get_mut(file_path) else {
+            return;
+        };
+        if file_state.deferred_editor_load != DeferredEditorLoad::Loading(load_id) {
+            return;
+        }
+        file_state.file_diff = file.file_diff.clone();
+        file_state.editor_state = Some(editor_state);
+        file_state.deferred_editor_load = DeferredEditorLoad::NotDeferred;
+        self.viewported_list_state
+            .invalidate_height_for_index(file_index);
+        self.update_editor_comment_markers(ctx);
+        ctx.notify();
+    }
+
+    fn fail_deferred_editor_load(
+        &mut self,
+        file_path: &str,
+        load_id: u64,
+        error: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(repo) = self.active_repo.as_mut() else {
+            return;
+        };
+        let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+            return;
+        };
+        let Some(file_index) = state.file_states.get_index_of(file_path) else {
+            return;
+        };
+        let Some(file) = state.file_states.get_mut(file_path) else {
+            return;
+        };
+        if file.deferred_editor_load == DeferredEditorLoad::Loading(load_id) {
+            file.deferred_editor_load = DeferredEditorLoad::Failed(error);
+            self.viewported_list_state
+                .invalidate_height_for_index(file_index);
+            ctx.notify();
         }
     }
 
@@ -2882,6 +3006,9 @@ impl CodeReviewView {
             };
             let (_, file) = state.file_states.get_index_mut(file_index)?;
             file.is_expanded = is_expanded;
+            if !is_expanded && file.deferred_editor_load.is_deferred() {
+                file.deferred_editor_load = DeferredEditorLoad::Ready;
+            }
             if persist_preference {
                 repo.file_expanded
                     .insert(file.file_diff.file_path.clone(), is_expanded);
@@ -3296,13 +3423,7 @@ impl CodeReviewView {
                 }
             });
 
-            if file.content_at_head.is_some() {
-                Some(CodeReviewEditorState::new(local_code_view))
-            } else {
-                Some(CodeReviewEditorState::new_with_deferred_base(
-                    local_code_view,
-                ))
-            }
+            Some(CodeReviewEditorState::new(local_code_view))
         }
     }
 
@@ -3584,48 +3705,6 @@ impl CodeReviewView {
             return;
         };
 
-        let deferred_base = match self.state() {
-            CodeReviewViewState::Loaded(loaded_state) => loaded_state
-                .file_states
-                .get_index(file_index)
-                .and_then(|(_, file_state)| {
-                    let editor_state = file_state.editor_state.as_ref()?;
-                    editor_state
-                        .needs_base_reconstruction()
-                        .then(|| (editor_state.editor().clone(), file_state.file_diff.clone()))
-                }),
-            _ => return,
-        };
-
-        let base_reconstructed = if let Some((editor, file_diff)) = deferred_base {
-            let current_content = editor
-                .as_ref(ctx)
-                .editor()
-                .as_ref(ctx)
-                .text(ctx)
-                .into_string();
-            if let Some(content_at_head) =
-                Self::reconstruct_base_content(&current_content, &file_diff)
-            {
-                let file = FileDiffAndContent {
-                    file_diff,
-                    content_at_head: Some(content_at_head),
-                };
-                Self::apply_diff_to_code_editor(
-                    &editor,
-                    &file,
-                    true,
-                    &self.comment_line_numbers_for_file(file_location, ctx),
-                    ctx,
-                );
-                true
-            } else {
-                report_error!("Could not reconstruct deferred code review base content");
-                false
-            }
-        } else {
-            false
-        };
         let Some(repo) = self.active_repo.as_mut() else {
             return;
         };
@@ -3637,9 +3716,6 @@ impl CodeReviewView {
         if let Some((_, file_state)) = loaded_state.file_states.get_index_mut(file_index)
             && let Some(editor_state) = &mut file_state.editor_state
         {
-            if base_reconstructed {
-                editor_state.mark_base_reconstructed();
-            }
             editor_state.set_loaded();
         }
 
@@ -3680,7 +3756,7 @@ impl CodeReviewView {
                     .editor_state
                     .as_ref()
                     .is_none_or(CodeReviewEditorState::is_loaded)
-                    && !file_state.editor_deferred
+                    && !file_state.deferred_editor_load.is_deferred()
             })
     }
 
@@ -3814,7 +3890,7 @@ impl CodeReviewView {
                     .as_ref()
                     .map(CodeReviewEditorState::editor)
                 else {
-                    if !file_state.editor_deferred {
+                    if !file_state.deferred_editor_load.is_deferred() {
                         comment.outdated = true;
                     }
                     return comment;
@@ -5541,6 +5617,28 @@ impl CodeReviewView {
                     appearance.monospace_font_size(),
                 )
                 .with_color(theme.main_text_color(theme.background()).into())
+                .finish(),
+                theme,
+            )
+        } else if let DeferredEditorLoad::Failed(error) = &file.deferred_editor_load {
+            Self::styled_file_content_container(
+                Text::new(
+                    format!("Unable to load file content: {error}. Collapse and expand to retry."),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+                theme,
+            )
+        } else if file.deferred_editor_load.is_deferred() {
+            Self::styled_file_content_container(
+                Text::new(
+                    "Loading file content…",
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
                 .finish(),
                 theme,
             )

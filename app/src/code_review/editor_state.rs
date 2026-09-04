@@ -10,7 +10,6 @@ pub struct CodeReviewEditorState {
     /// Whether the buffer content has been loaded from disk (for global buffer mode).
     /// This is set to true when LocalCodeEditorEvent::DelayedRenderingFlushed or FailedToLoad fires.
     is_loaded: bool,
-    needs_base_reconstruction: bool,
 }
 
 impl CodeReviewEditorState {
@@ -21,18 +20,6 @@ impl CodeReviewEditorState {
             unsaved_changes_mouse_state: MouseStateHandle::default(),
             editor_mouse_state: MouseStateHandle::default(),
             is_loaded: false,
-            needs_base_reconstruction: false,
-        }
-    }
-
-    #[cfg(not(target_family = "wasm"))]
-    pub fn new_with_deferred_base(editor: ViewHandle<LocalCodeEditorView>) -> Self {
-        Self {
-            editor,
-            unsaved_changes_mouse_state: MouseStateHandle::default(),
-            editor_mouse_state: MouseStateHandle::default(),
-            is_loaded: false,
-            needs_base_reconstruction: true,
         }
     }
 
@@ -44,7 +31,6 @@ impl CodeReviewEditorState {
             unsaved_changes_mouse_state: MouseStateHandle::default(),
             editor_mouse_state: MouseStateHandle::default(),
             is_loaded: true,
-            needs_base_reconstruction: false,
         }
     }
 
@@ -56,13 +42,6 @@ impl CodeReviewEditorState {
     /// Marks the editor as loaded.
     pub fn set_loaded(&mut self) {
         self.is_loaded = true;
-    }
-    pub fn needs_base_reconstruction(&self) -> bool {
-        self.needs_base_reconstruction
-    }
-
-    pub fn mark_base_reconstructed(&mut self) {
-        self.needs_base_reconstruction = false;
     }
 
     pub fn editor(&self) -> &ViewHandle<LocalCodeEditorView> {

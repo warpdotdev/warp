@@ -191,18 +191,6 @@ fn test_parse_unified_diff_header_malformed() {
 }
 
 #[test]
-fn test_parse_diff_hunks_marks_line_without_trailing_newline() {
-    let diff =
-        "@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n";
-    let hunks = LocalDiffStateModel::parse_diff_hunks(diff).unwrap();
-
-    assert_eq!(hunks.len(), 1);
-    assert_eq!(hunks[0].lines.len(), 2);
-    assert!(hunks[0].lines[0].no_trailing_newline);
-    assert!(hunks[0].lines[1].no_trailing_newline);
-}
-
-#[test]
 fn test_parse_git_status_modified_file_with_spaces() {
     // Porcelain v2 output for a modified file with spaces in the name.
     // Format: 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
