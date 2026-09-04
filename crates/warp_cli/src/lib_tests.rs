@@ -9,6 +9,7 @@ use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
+use crate::provider::ProviderCommand;
 use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
@@ -21,6 +22,106 @@ fn identifies_worker_subcommands() {
     #[cfg(feature = "plugin_host")]
     assert!(is_worker_invocation("--plugin-host"));
     assert!(!is_worker_invocation("--prompt"));
+}
+
+#[test]
+fn integration_commands_parse_team_selection() {
+    let cases = [
+        (
+            vec!["warp", "integration", "list", "--team=team-list"],
+            "team-list",
+        ),
+        (
+            vec![
+                "warp",
+                "integration",
+                "create",
+                "slack",
+                "--team=team-create",
+            ],
+            "team-create",
+        ),
+        (
+            vec![
+                "warp",
+                "integration",
+                "update",
+                "linear",
+                "--team=team-update",
+            ],
+            "team-update",
+        ),
+    ];
+
+    for (command, expected_team_uid) in cases {
+        let args = Args::try_parse_from(command).expect("integration team scope should parse");
+        let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+            panic!("Expected an integration command");
+        };
+        let team_selection = match boxed_cmd.as_ref() {
+            CliCommand::Integration(IntegrationCommand::List { team_selection }) => team_selection,
+            CliCommand::Integration(IntegrationCommand::Create(args)) => &args.team_selection,
+            CliCommand::Integration(IntegrationCommand::Update(args)) => &args.team_selection,
+            _ => panic!("Expected an integration command"),
+        };
+
+        assert_eq!(team_selection.requested_team_uid(), Some(expected_team_uid));
+    }
+}
+
+#[test]
+fn integration_list_distinguishes_default_and_bare_team_selection() {
+    for (command, expected_team) in [
+        (vec!["warp", "integration", "list"], None),
+        (vec!["warp", "integration", "list", "--team"], Some(None)),
+    ] {
+        let args = Args::try_parse_from(command).expect("integration list scope should parse");
+        let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+            panic!("Expected `warp integration list` command");
+        };
+        let CliCommand::Integration(IntegrationCommand::List { team_selection }) =
+            boxed_cmd.as_ref()
+        else {
+            panic!("Expected `warp integration list` command");
+        };
+
+        assert_eq!(team_selection.team, expected_team);
+    }
+}
+
+#[test]
+fn provider_setup_parses_object_scope() {
+    let team = Args::try_parse_from(["warp", "provider", "setup", "slack", "--team=team-provider"])
+        .expect("provider team scope should parse");
+    let Some(Command::CommandLine(boxed_cmd)) = team.command else {
+        panic!("Expected `warp provider setup` command");
+    };
+    let CliCommand::Provider(ProviderCommand::Setup(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp provider setup` command");
+    };
+    assert_eq!(args.scope.requested_team_uid(), Some("team-provider"));
+    assert!(!args.scope.personal);
+
+    let personal = Args::try_parse_from(["warp", "provider", "setup", "slack", "--personal"])
+        .expect("provider personal scope should parse");
+    let Some(Command::CommandLine(boxed_cmd)) = personal.command else {
+        panic!("Expected `warp provider setup` command");
+    };
+    let CliCommand::Provider(ProviderCommand::Setup(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp provider setup` command");
+    };
+    assert!(args.scope.personal);
+    assert!(!args.scope.is_team());
+
+    Args::try_parse_from([
+        "warp",
+        "provider",
+        "setup",
+        "slack",
+        "--personal",
+        "--team=team-provider",
+    ])
+    .expect_err("provider scopes should be mutually exclusive");
 }
 
 /// Pins that each pair of constants names the same variable under both prefixes. A typo in

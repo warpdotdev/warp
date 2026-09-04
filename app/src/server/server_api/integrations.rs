@@ -37,6 +37,7 @@ use super::ServerApi;
 use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::server::team_scope::RequestTeamScope;
 
 #[cfg(not(target_family = "wasm"))]
 pub trait IntegrationsClientBounds: Send + Sync {}
@@ -79,6 +80,7 @@ pub trait IntegrationsClient: 'static + IntegrationsClientBounds {
     #[allow(clippy::too_many_arguments)]
     async fn create_or_update_simple_integration(
         &self,
+        team_scope: RequestTeamScope,
         integration_type: String,
         is_update: bool,
         environment_uid: Option<String>,
@@ -96,6 +98,7 @@ pub trait IntegrationsClient: 'static + IntegrationsClientBounds {
     /// regardless of whether the connection or integration currently exists.
     async fn list_simple_integrations(
         &self,
+        team_scope: RequestTeamScope,
         providers: Vec<String>,
     ) -> Result<SimpleIntegrationsOutput>;
 
@@ -167,6 +170,7 @@ impl IntegrationsClient for ServerApi {
     #[allow(clippy::too_many_arguments)]
     async fn create_or_update_simple_integration(
         &self,
+        team_scope: RequestTeamScope,
         integration_type: String,
         is_update: bool,
         environment_uid: Option<String>,
@@ -193,7 +197,9 @@ impl IntegrationsClient for ServerApi {
         };
 
         let operation = CreateSimpleIntegration::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_team_scoped_graphql_request(operation, None, team_scope)
+            .await?;
         match response.create_simple_integration {
             CreateSimpleIntegrationResult::CreateSimpleIntegrationOutput(output) => Ok(output),
             CreateSimpleIntegrationResult::UserFacingError(error) => {
@@ -232,6 +238,7 @@ impl IntegrationsClient for ServerApi {
 
     async fn list_simple_integrations(
         &self,
+        team_scope: RequestTeamScope,
         providers: Vec<String>,
     ) -> Result<SimpleIntegrationsOutput> {
         let variables = SimpleIntegrationsVariables {
@@ -240,7 +247,9 @@ impl IntegrationsClient for ServerApi {
         };
 
         let operation = SimpleIntegrations::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_team_scoped_graphql_request(operation, None, team_scope)
+            .await?;
 
         match response.simple_integrations {
             SimpleIntegrationsResult::SimpleIntegrationsOutput(output) => Ok(output),

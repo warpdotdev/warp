@@ -10,9 +10,11 @@ use http::StatusCode;
 use warp_graphql::client::{GraphQLError, RequestOptions};
 use warp_server_auth::auth_state::AuthState;
 
-use super::send_graphql_request;
+use super::{apply_request_team_scope, send_graphql_request};
 use crate::auth::AuthEvent;
-use crate::base_client::{AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig};
+use crate::base_client::{
+    AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig, TEAM_UID_HEADER,
+};
 
 fn base_client(auth_state: AuthState) -> (BaseClient, async_channel::Receiver<AuthEvent>) {
     let (event_sender, event_receiver) = async_channel::unbounded();
@@ -28,6 +30,29 @@ fn base_client(auth_state: AuthState) -> (BaseClient, async_channel::Receiver<Au
         ),
         event_receiver,
     )
+}
+
+#[test]
+fn team_scoped_request_options_preserve_authentication_and_set_team_header() {
+    let options = RequestOptions {
+        auth_token: Some("daemon-token".to_string()),
+        ..RequestOptions::default()
+    };
+
+    let options = apply_request_team_scope(options, Some("team-uid-123".to_string()));
+
+    assert_eq!(options.auth_token.as_deref(), Some("daemon-token"));
+    assert_eq!(
+        options.headers.get(TEAM_UID_HEADER).map(String::as_str),
+        Some("team-uid-123")
+    );
+}
+
+#[test]
+fn teamless_request_options_omit_team_header() {
+    let options = apply_request_team_scope(RequestOptions::default(), None);
+
+    assert!(!options.headers.contains_key(TEAM_UID_HEADER));
 }
 
 #[test]

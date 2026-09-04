@@ -8,7 +8,7 @@ use warp_graphql::client::{GraphQLError, Operation, RequestOptions};
 use warpui_core::r#async::BoxFuture;
 
 use crate::auth::AuthEvent;
-use crate::base_client::BaseClient;
+use crate::base_client::{BaseClient, TEAM_UID_HEADER};
 
 /// Sends a GraphQL operation through a base client supplied by the application.
 ///
@@ -24,6 +24,35 @@ where
 {
     Box::pin(async move {
         let options = base_client.graphql_request_options(timeout).await?;
+        send_graphql_request_with_options(base_client, operation, options).await
+    })
+}
+
+fn apply_request_team_scope(
+    mut options: RequestOptions,
+    team_uid: Option<String>,
+) -> RequestOptions {
+    if let Some(team_uid) = team_uid {
+        options
+            .headers
+            .insert(TEAM_UID_HEADER.to_string(), team_uid);
+    }
+    options
+}
+pub fn send_team_scoped_graphql_request<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    team_uid: Option<String>,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
+    Box::pin(async move {
+        let options = apply_request_team_scope(
+            base_client.graphql_request_options(timeout).await?,
+            team_uid,
+        );
         send_graphql_request_with_options(base_client, operation, options).await
     })
 }

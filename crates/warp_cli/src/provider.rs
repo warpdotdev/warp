@@ -1,4 +1,6 @@
-use clap::{ArgGroup, Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
+
+use crate::scope::ObjectScope;
 
 /// Provider-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -53,15 +55,10 @@ impl ProviderType {
 }
 
 #[derive(Debug, Clone, Args)]
-#[command(group(ArgGroup::new("scope").required(false)))]
 pub struct SetupArgs {
     /// The type of provider to setup.
     pub provider_type: ProviderType,
 
-    /// Setup provider for a team
-    #[arg(long, group = "scope")]
-    pub team: bool,
-    /// Setup provider for a personal account
-    #[arg(long, conflicts_with = "team", group = "scope")]
-    pub personal: bool,
+    #[command(flatten)]
+    pub scope: ObjectScope,
 }
