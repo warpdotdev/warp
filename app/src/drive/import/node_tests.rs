@@ -1,8 +1,66 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::{FileId, FileNode, FileType, FileUploadState, FolderId, FolderNode, ImportedNode};
+use async_io::block_on;
+use tempfile::TempDir;
+
+use super::{
+    FileContent, FileId, FileNode, FileType, FileUploadState, FolderId, FolderNode, ImportedNode,
+    MAX_IMPORT_FILE_BYTES, parse_file,
+};
 use crate::drive::import::nodes::{UploadResult, UploadStatus};
+
+fn write_file(dir: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, contents).expect("write temp file");
+    path
+}
+
+#[test]
+fn parse_file_reads_notebook_under_limit() {
+    let dir = TempDir::new().expect("create tempdir");
+    let path = write_file(&dir, "notes.md", b"# Title\nBody");
+
+    let content = block_on(parse_file(path, FileType::Notebook)).expect("should read notebook");
+    let FileContent::Notebook(data) = content else {
+        panic!("expected Notebook content");
+    };
+    assert_eq!(data, "# Title\nBody");
+}
+
+#[test]
+fn parse_file_rejects_oversized_notebook() {
+    // Regression for APP-4801: an oversized notebook file must be rejected up front, not read
+    // wholesale into memory.
+    let dir = TempDir::new().expect("create tempdir");
+    let path = write_file(
+        &dir,
+        "big.md",
+        &vec![b'a'; (MAX_IMPORT_FILE_BYTES + 1) as usize],
+    );
+
+    let error = match block_on(parse_file(path, FileType::Notebook)) {
+        Ok(_) => panic!("expected an oversized notebook read to be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("too large"), "got: {error}");
+}
+
+#[test]
+fn parse_file_rejects_oversized_workflow() {
+    let dir = TempDir::new().expect("create tempdir");
+    let path = write_file(
+        &dir,
+        "big.yaml",
+        &vec![b'a'; (MAX_IMPORT_FILE_BYTES + 1) as usize],
+    );
+
+    let error = match block_on(parse_file(path, FileType::Workflow)) {
+        Ok(_) => panic!("expected an oversized workflow read to be rejected"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("too large"), "got: {error}");
+}
 
 fn mock_tree() -> FileUploadState {
     let mut folder_id_to_node = HashMap::new();

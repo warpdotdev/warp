@@ -18,7 +18,10 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui::App;
 
 use super::super::subscribers::SkillRepositoryMessage;
-use super::{SkillWatcher, parse_project_skill_contents};
+use super::{
+    REMOTE_CONTEXT_MAX_FILE_BYTES, SkillWatcher, parse_project_skill_contents,
+    read_local_project_skill_contents,
+};
 use crate::ai::skills::skill_manager::SkillWatcherEvent;
 
 /// Helper function for creating a single skill file
@@ -103,6 +106,31 @@ fn parse_project_skill_contents_preserves_remote_paths() {
     assert_eq!(skills[1].path, second_path);
     assert_eq!(skills[1].name, "second");
     assert_eq!(skills[1].content, second_content);
+}
+
+#[test]
+fn read_local_project_skill_contents_skips_oversized_skill_file() {
+    // Regression for APP-4801 review: `read_local_project_skill_contents` used to be a
+    // synchronous `fs::read_to_string` with the same unbounded-reservation issue that
+    // motivated APP-4801 (this test fails against that implementation, which had no cap at
+    // all). An oversized skill file must be skipped, and a valid neighbor must still load.
+    let dir = TempDir::new().unwrap();
+    let oversized_skill = create_skill_file(
+        &dir,
+        "oversized",
+        "Oversized skill",
+        &"a".repeat((REMOTE_CONTEXT_MAX_FILE_BYTES + 1) as usize),
+    );
+    let ok_skill = create_skill_file(&dir, "ok", "OK skill", "fine");
+
+    let contents = async_io::block_on(read_local_project_skill_contents(vec![
+        oversized_skill.path.clone(),
+        ok_skill.path.clone(),
+    ]));
+
+    assert_eq!(contents.len(), 1);
+    assert_eq!(contents[0].0, ok_skill.path);
+    assert_eq!(contents[0].1, ok_skill.content);
 }
 
 #[test]

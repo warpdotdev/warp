@@ -356,4 +356,73 @@ fn test_a_failed_open_registers_no_watcher() {
     });
 }
 
+/// Regression for APP-4801: `FileModel::open`'s read must be rejected up front for an oversized
+/// file, not read wholesale into memory.
+#[test]
+fn test_load_oversized_file_reports_error_not_content() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(app, &files);
+
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("big.txt");
+        std::fs::write(&path, vec![b'a'; (MAX_EDITOR_FILE_BYTES + 1) as usize])
+            .expect("write oversized file");
+
+        files.update(app, |model, ctx| {
+            model.open(&path, false, ctx);
+        });
+
+        match receiver.recv().await.expect("Could not receive the result") {
+            TestFileModelEvent::FailedToLoad(err) => {
+                assert!(err.contains("too large"), "got: {err}");
+                assert!(!err.contains("NotFound"), "got: {err}");
+            }
+            event => panic!("Expected the oversized read to fail, got {event:?}"),
+        }
+    });
+}
+
+/// Regression for APP-4801: `read_content_for_file` must reject an oversized file, and must
+/// keep that distinct from a genuinely missing file (`FileLoadError::DoesNotExist`).
+#[test]
+fn test_read_content_for_file_rejects_oversized_file_distinctly_from_missing() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let oversized_path = directory.path().join("big.txt");
+    std::fs::write(
+        &oversized_path,
+        vec![b'a'; (MAX_EDITOR_FILE_BYTES + 1) as usize],
+    )
+    .expect("write oversized file");
+
+    let oversized_error = block_on(FileModel::read_content_for_file(&oversized_path))
+        .expect_err("should reject an oversized file");
+    assert!(!matches!(oversized_error, FileLoadError::DoesNotExist));
+
+    let missing_path = directory.path().join("does-not-exist.txt");
+    let missing_error = block_on(FileModel::read_content_for_file(&missing_path))
+        .expect_err("should fail for a missing file");
+    assert!(matches!(missing_error, FileLoadError::DoesNotExist));
+}
+
+/// Regression for APP-4801: the autoreload loop's read helper must skip an oversized file
+/// without failing the batch, matching the existing "skip files that fail to read" behavior.
+#[test]
+fn read_reload_contents_skips_oversized_file() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let oversized_path = directory.path().join("big.txt");
+    std::fs::write(
+        &oversized_path,
+        vec![b'a'; (MAX_EDITOR_FILE_BYTES + 1) as usize],
+    )
+    .expect("write oversized file");
+    let ok_path = directory.path().join("small.txt");
+    std::fs::write(&ok_path, "fine").expect("write small file");
+
+    let contents = block_on(read_reload_contents(vec![oversized_path, ok_path.clone()]));
+
+    assert_eq!(contents, vec![(ok_path, "fine".to_string())]);
+}
+
 static TEST_FILE_CONTENT: &[u8] = include_bytes!("../test_data/test_file.rs");

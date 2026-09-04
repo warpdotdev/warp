@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use ai::skills::{
@@ -1055,7 +1054,7 @@ fn read_project_skill_contents(
 ) -> Option<ProjectSkillContentsFuture> {
     match skill_paths.first()? {
         LocalOrRemotePath::Local(_) => Some(Box::pin(async move {
-            Ok(read_local_project_skill_contents(skill_paths))
+            Ok(read_local_project_skill_contents(skill_paths).await)
         })),
         LocalOrRemotePath::Remote(_) => Some(read_remote_text_file_contents(
             skill_paths,
@@ -1072,16 +1071,31 @@ async fn read_and_parse_project_skills(
     Ok(parse_project_skill_contents(read_skill_contents.await?))
 }
 
-fn read_local_project_skill_contents(
+/// Local counterpart of the remote read path above; capped at the same
+/// `REMOTE_CONTEXT_MAX_FILE_BYTES` so a pathologically large project skill file can't balloon
+/// memory usage locally when it would have been rejected remotely (APP-4801).
+async fn read_local_project_skill_contents(
     skill_paths: Vec<LocalOrRemotePath>,
 ) -> Vec<(LocalOrRemotePath, String)> {
-    skill_paths
-        .into_iter()
-        .filter_map(|path| {
-            let content = fs::read_to_string(path.to_local_path()?).ok()?;
-            Some((path, content))
-        })
-        .collect()
+    let mut contents = Vec::with_capacity(skill_paths.len());
+    for path in skill_paths {
+        let Some(local_path) = path.to_local_path().map(Path::to_path_buf) else {
+            continue;
+        };
+        match warp_util::file::read_to_string_capped(
+            &local_path,
+            REMOTE_CONTEXT_MAX_FILE_BYTES as u64,
+        )
+        .await
+        {
+            Ok(content) => contents.push((path, content)),
+            Err(error) => log::debug!(
+                "Failed to read project skill file {}: {error}",
+                local_path.display()
+            ),
+        }
+    }
+    contents
 }
 
 fn parse_project_skill_contents(
