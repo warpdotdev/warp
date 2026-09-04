@@ -147,8 +147,7 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
     }
 }
 
-/// The team a CLI command's policy reads are scoped to, resolved from the same `--team` the
-/// object's owner is resolved from so the two cannot disagree.
+/// The team a CLI command's policy reads are scoped to.
 fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
@@ -179,10 +178,12 @@ pub fn validate_agent_mode_base_model_id_for_scope(
     if is_model_allowed_for_scope(prefs, llm, &team_scope, ctx) {
         return Ok(llm_id);
     }
+    let scope = team_scope.team_uid().map_or_else(
+        || "your personal scope".to_string(),
+        |team_uid| format!("team {team_uid}"),
+    );
     Err(anyhow::anyhow!(
-        "Model '{model_id}' is one of your own custom endpoints, which team {} does not allow its \
-         members to use.",
-        team_scope.team_uid().expect("a CLI scope names a team")
+        "Model '{model_id}' is one of your own custom endpoints, which {scope} does not allow."
     ))
 }
 
@@ -204,24 +205,11 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
             user_uid: current_user_uid(ctx)?,
         });
     }
-
-    if scope.is_team() {
-        let team_scope = resolve_team_scope(&scope.team_selection, ctx)?;
-        return Ok(Owner::Team {
-            team_uid: team_scope
-                .team_uid()
-                .expect("a CLI team scope always names a team"),
-        });
-    }
-
-    match UserWorkspaces::as_ref(ctx).sole_team_uid() {
-        Ok(team_uid) => Ok(Owner::Team { team_uid }),
-        Err(SoleTeamError::NoTeam) => Ok(Owner::User {
+    match resolve_team_scope(&scope.team_selection, ctx)?.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
             user_uid: current_user_uid(ctx)?,
         }),
-        Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => {
-            Err(describe_sole_team_error(error, ctx))
-        }
     }
 }
 

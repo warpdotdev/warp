@@ -97,10 +97,10 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-/// The team a headless CLI invocation acts as, named on the command line instead of resolved
-/// from a window.
+/// The team a headless CLI invocation acts as, resolved from its command-line selection and
+/// memberships instead of from a window.
 #[cfg(not(target_family = "wasm"))]
-pub struct TeamScopeForCli(ServerId);
+pub struct TeamScopeForCli(Option<ServerId>);
 
 #[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}
@@ -108,7 +108,7 @@ impl sealed::Sealed for TeamScopeForCli {}
 #[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
-        Some(self.0)
+        self.0
     }
 }
 
@@ -211,18 +211,28 @@ impl UserWorkspaces {
         &self,
         team_selection: &TeamSelection,
     ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
-        let team_uid = match team_selection.requested_team_uid() {
-            Some(team_uid) => ServerId::try_from(team_uid).map_err(|err| {
+        let team_uid = match &team_selection.team {
+            None => match self.sole_team_uid() {
+                Ok(team_uid) => Some(team_uid),
+                Err(SoleTeamError::NoTeam) => None,
+                Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => {
+                    return Err(error.into());
+                }
+            },
+            Some(None) => Some(self.sole_team_uid()?),
+            Some(Some(team_uid)) => Some(ServerId::try_from(team_uid.as_str()).map_err(|err| {
                 TeamScopeForCliError::InvalidTeamUid {
                     team_uid: team_uid.to_string(),
                     message: err.to_string(),
                 }
-            })?,
-            None => self.sole_team_uid()?,
+            })?),
         };
-        self.is_member_of_team(team_uid)
-            .then_some(TeamScopeForCli(team_uid))
-            .ok_or_else(|| NotATeamMemberError { team_uid }.into())
+        if let Some(team_uid) = team_uid
+            && !self.is_member_of_team(team_uid)
+        {
+            return Err(NotATeamMemberError { team_uid }.into());
+        }
+        Ok(TeamScopeForCli(team_uid))
     }
 
     pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {
