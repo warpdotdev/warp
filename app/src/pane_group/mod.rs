@@ -4291,17 +4291,6 @@ impl PaneGroup {
         self.terminal_session_by_pane_index(pane_index)
             .map(|session| session.terminal_view(ctx))
     }
-    /// Returns the Settings view for the visible pane at `pane_index`.
-    #[cfg(any(test, feature = "integration_tests"))]
-    pub fn settings_view_at_pane_index(
-        &self,
-        pane_index: usize,
-        ctx: &AppContext,
-    ) -> Option<ViewHandle<SettingsView>> {
-        self.content_by_pane_index(pane_index)
-            .and_then(|pane| pane.as_any().downcast_ref::<SettingsPane>())
-            .map(|pane| pane.settings_view(ctx))
-    }
 
     /// Gets the pane ID for the pane at `pane_index`, if any.
     /// Only considers visible panes (excludes panes hidden for close, move, job, etc.).
@@ -4324,6 +4313,18 @@ impl PaneGroup {
 
     pub fn has_pane_id(&self, pane_id: PaneId) -> bool {
         self.pane_contents.contains_key(&pane_id)
+    }
+
+    /// Gets the Settings view at `pane_index`, if it is a settings pane.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn settings_view_at_pane_index(
+        &self,
+        pane_index: usize,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<crate::settings_view::SettingsView>> {
+        self.content_by_pane_index(pane_index)
+            .and_then(|pane| pane.as_any().downcast_ref::<SettingsPane>())
+            .map(|pane| pane.settings_view(ctx))
     }
 
     /// Get the notebook view within the pane at `pane_index`.
@@ -8487,6 +8488,7 @@ impl View for PaneGroup {
     ) {
         let pane_group_id = ctx.view_id();
 
+        // Hidden panes are retained for undo and must not be re-registered as live singletons.
         let settings_pane_ids: Vec<PaneId> = self
             .panes_of::<SettingsPane>()
             .filter(|pane| !self.is_pane_hidden_for_close(pane.id()))

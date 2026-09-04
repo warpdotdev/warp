@@ -25,7 +25,8 @@ use warp::integration_testing::terminal::{
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
-    command_palette_view, pane_group_view, settings_view_in_pane, terminal_view, workspace_view,
+    command_palette_view, pane_group_view, settings_view_at_pane_index, terminal_view,
+    workspace_view,
 };
 use warp::integration_testing::window::{
     add_and_save_window, assert_num_windows_open, save_active_window_id,
@@ -1750,7 +1751,7 @@ fn click_rules_button_in_settings_step(
         let window_id = *data
             .get::<_, WindowId>(window_key)
             .expect("saved window id should exist");
-        let settings_view = settings_view_in_pane(app, window_id, 0, 0);
+        let settings_view = settings_view_at_pane_index(app, window_id, 0, 0);
         settings_view.update(app, |_, ctx| {
             ctx.emit(SettingsViewEvent::OpenAIFactCollection);
         });
