@@ -46,6 +46,16 @@ fn list_accepts_explicit_team_selection() {
 }
 
 #[test]
+fn list_accepts_bare_team_selection() {
+    let command = parse_command(&["list", "--team"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+
+    assert_eq!(args.team_selection.team, Some(None));
+}
+
+#[test]
 fn create_requires_expiration_decision() {
     let err = parse_create_err(&["ci-key"]);
     assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
@@ -59,8 +69,16 @@ fn create_rejects_multiple_expiration_decisions() {
 
 #[test]
 fn create_accepts_expires_in() {
-    let args = parse_create(&["ci-key", "--expires-in", "30d", "--agent", "agent-123"]);
+    let args = parse_create(&[
+        "ci-key",
+        "--team=team-uid",
+        "--expires-in",
+        "30d",
+        "--agent",
+        "agent-123",
+    ]);
     assert_eq!(args.name, "ci-key");
+    assert_eq!(args.team_selection.team, Some(Some("team-uid".to_string())));
     assert_eq!(args.agent_uid.as_deref(), Some("agent-123"));
     assert!(args.expiration.expires_in.is_some());
     assert!(args.expiration.expires_at.is_none());
@@ -69,8 +87,9 @@ fn create_accepts_expires_in() {
 
 #[test]
 fn create_accepts_no_expiration() {
-    let args = parse_create(&["ci-key", "--no-expiration"]);
+    let args = parse_create(&["ci-key", "--team", "--no-expiration"]);
     assert_eq!(args.name, "ci-key");
+    assert_eq!(args.team_selection.team, Some(None));
     assert!(args.expiration.expires_in.is_none());
     assert!(args.expiration.expires_at.is_none());
     assert!(args.expiration.no_expiration);
@@ -80,6 +99,7 @@ fn create_accepts_no_expiration() {
 fn create_accepts_rfc3339_expiration() {
     let args = parse_create(&["ci-key", "--expires-at", "2026-06-01T12:00:00Z"]);
     assert_eq!(args.name, "ci-key");
+    assert_eq!(args.team_selection.team, None);
     assert!(args.expiration.expires_in.is_none());
     assert!(args.expiration.expires_at.is_some());
     assert!(!args.expiration.no_expiration);

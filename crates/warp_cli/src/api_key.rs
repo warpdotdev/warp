@@ -47,6 +47,8 @@ pub struct ListApiKeysArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct CreateApiKeyArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Name of the API key to create.
     pub name: String,
 

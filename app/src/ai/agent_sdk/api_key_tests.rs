@@ -17,18 +17,6 @@ fn key_with_uid(uid: &str, name: &str, scope: &str, created_at: DateTime<Utc>) -
 }
 
 #[test]
-fn api_key_uid_accepts_server_uid() {
-    let uid = ServerId::from(123).uid();
-
-    assert_eq!(api_key_uid(&uid), Some(uid));
-}
-
-#[test]
-fn api_key_uid_rejects_name() {
-    assert_eq!(api_key_uid("deploy-key"), None);
-}
-
-#[test]
 fn sort_api_keys_sorts_by_name_ascending() {
     let created_at = Utc::now();
     let mut keys = vec![
@@ -88,6 +76,24 @@ fn resolve_api_key_identifier_falls_back_to_name_match() {
             .unwrap()
             .unwrap(),
         keys[0].clone()
+    );
+}
+
+#[test]
+fn resolve_api_key_identifier_accepts_uid_shaped_name() {
+    let created_at = Utc::now();
+    let key = key_with_uid(
+        "different-key-uid",
+        "abcdefghijklmnopqrstuv",
+        "Team",
+        created_at,
+    );
+
+    assert_eq!(
+        resolve_api_key_identifier(std::slice::from_ref(&key), "abcdefghijklmnopqrstuv")
+            .unwrap()
+            .unwrap(),
+        key
     );
 }
 
