@@ -1,5 +1,4 @@
 //! Provider command for linking third-party services.
-use std::future::Future;
 
 use comfy_table::Cell;
 use serde::Serialize;
@@ -39,16 +38,6 @@ impl ProviderCommandRunner {
     // This shouldn't need to be done, it's usually done as part of create
     fn setup(&self, provider_type: ProviderType, scope: ObjectScope, ctx: &mut ModelContext<Self>) {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
-        self.setup_after_workspace_metadata_refresh(refresh_future, provider_type, scope, ctx);
-    }
-
-    fn setup_after_workspace_metadata_refresh(
-        &self,
-        refresh_future: impl Future<Output = anyhow::Result<()>> + Send + 'static,
-        provider_type: ProviderType,
-        scope: ObjectScope,
-        ctx: &mut ModelContext<Self>,
-    ) {
         ctx.spawn(refresh_future, move |runner, result, ctx| {
             if let Err(err) = result {
                 super::report_fatal_error(err, ctx);

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use futures::future;
 use warp_cli::GlobalOptions;
 use warp_cli::integration::{CreateIntegrationArgs, IntegrationCommand, UpdateIntegrationArgs};
@@ -15,7 +13,6 @@ use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::integration_output;
 use super::oauth_flow::poll_oauth_until_terminal;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::server_api::integrations::IntegrationsClient;
 use crate::server::team_scope::RequestTeamScope;
 
 pub fn run(
@@ -23,9 +20,7 @@ pub fn run(
     global_options: GlobalOptions,
     command: IntegrationCommand,
 ) -> anyhow::Result<()> {
-    let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
-    let runner =
-        ctx.add_singleton_model(move |_ctx| IntegrationCommandRunner::new(integrations_client));
+    let runner = ctx.add_singleton_model(|_ctx| IntegrationCommandRunner);
     match command {
         IntegrationCommand::Create(args) => {
             runner.update(ctx, |runner, ctx| runner.create(args, ctx));
@@ -42,9 +37,7 @@ pub fn run(
     Ok(())
 }
 
-struct IntegrationCommandRunner {
-    integrations_client: Arc<dyn IntegrationsClient>,
-}
+struct IntegrationCommandRunner;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct IntegrationRetryState {
     request_team_scope: RequestTeamScope,
@@ -65,15 +58,26 @@ impl IntegrationRetryState {
             ..self
         }
     }
+
+    fn continue_after_oauth(
+        self,
+        poll_result: anyhow::Result<OauthConnectTxStatus>,
+    ) -> anyhow::Result<Self> {
+        match poll_result {
+            Ok(OauthConnectTxStatus::Completed) => Ok(self.next()),
+            Ok(OauthConnectTxStatus::Failed) => Err(anyhow::anyhow!("OAuth authorization failed.")),
+            Ok(OauthConnectTxStatus::Expired) => {
+                Err(anyhow::anyhow!("OAuth authorization expired."))
+            }
+            Ok(OauthConnectTxStatus::Pending) | Ok(OauthConnectTxStatus::InProgress) => Err(
+                anyhow::anyhow!("Unexpected non-terminal OAuth status returned"),
+            ),
+            Err(err) => Err(anyhow::anyhow!("Error polling OAuth status: {err}")),
+        }
+    }
 }
 
 impl IntegrationCommandRunner {
-    fn new(integrations_client: Arc<dyn IntegrationsClient>) -> Self {
-        Self {
-            integrations_client,
-        }
-    }
-
     fn list(
         &self,
         global_options: GlobalOptions,
@@ -81,7 +85,7 @@ impl IntegrationCommandRunner {
         ctx: &mut ModelContext<Self>,
     ) {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
-        ctx.spawn(refresh_future, move |runner, result, ctx| {
+        ctx.spawn(refresh_future, move |_, result, ctx| {
             if let Err(err) = result {
                 super::report_fatal_error(err, ctx);
                 return;
@@ -98,7 +102,7 @@ impl IntegrationCommandRunner {
                 .into_iter()
                 .map(|provider| provider.slug())
                 .collect();
-            let integrations_client = runner.integrations_client.clone();
+            let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
             let list_future = async move {
                 integrations_client
                     .list_simple_integrations(request_team_scope, provider_slugs)
@@ -287,7 +291,7 @@ impl IntegrationCommandRunner {
             return;
         }
 
-        let integrations_client = self.integrations_client.clone();
+        let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
 
         let future_integration_type = integration_type.clone();
         let future_environment_uid = environment_uid.clone();
@@ -317,7 +321,7 @@ impl IntegrationCommandRunner {
 
         ctx.spawn(
             create_future,
-            move |runner, result: anyhow::Result<CreateSimpleIntegrationOutput>, ctx| {
+            move |_runner, result: anyhow::Result<CreateSimpleIntegrationOutput>, ctx| {
                 match result {
                     Ok(output) => {
                         println!("{}", output.message);
@@ -331,7 +335,8 @@ impl IntegrationCommandRunner {
                                 println!("Authorize the provider here: {auth_url}\n");
                                 ctx.open_url(&auth_url);
 
-                                let integrations_client = runner.integrations_client.clone();
+                                let integrations_client =
+                                    ServerApiProvider::as_ref(ctx).get_integrations_client();
                                 let tx_id = tx_id.into_inner();
 
                                 let poll_future =
@@ -350,13 +355,11 @@ impl IntegrationCommandRunner {
                                 ctx.spawn(
                                     poll_future,
                                     move |runner, poll_result, ctx| {
-                                        match poll_result {
-                                            Ok(OauthConnectTxStatus::Completed) => {
-                                                // Inner loop done; try create or update again (outer loop).
-                                                // This may happen multiple times if the user needs to authorize multiple services.
+                                        match retry_state.continue_after_oauth(poll_result) {
+                                            Ok(next_retry_state) => {
                                                 runner.start_create_or_update_flow(
                                                     ctx,
-                                                    retry_state.next(),
+                                                    next_retry_state,
                                                     next_integration_type,
                                                     next_environment_uid,
                                                     next_base_prompt,
@@ -368,30 +371,10 @@ impl IntegrationCommandRunner {
                                                     next_is_update,
                                                 );
                                             }
-                                            Ok(OauthConnectTxStatus::Failed) => {
-                                                ctx.terminate_app(
-                                                    TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("OAuth authorization failed."))),
-                                                );
-                                            }
-                                            Ok(OauthConnectTxStatus::Expired) => {
-                                                ctx.terminate_app(
-                                                    TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("OAuth authorization expired."))),
-                                                );
-                                            }
-                                            Ok(OauthConnectTxStatus::Pending)
-                                            | Ok(OauthConnectTxStatus::InProgress) => {
-                                                // Should not be returned by poll_oauth_until_terminal.
-                                                ctx.terminate_app(
-                                                    TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("Unexpected non-terminal OAuth status returned"))),
-                                                );
-                                            }
                                             Err(err) => {
                                                 ctx.terminate_app(
                                                     TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("Error polling OAuth status: {err}"))),
+                                                    Some(Err(err)),
                                                 );
                                             }
                                         }
