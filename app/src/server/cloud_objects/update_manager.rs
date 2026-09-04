@@ -1099,6 +1099,14 @@ impl UpdateManager {
         }
     }
 
+    pub(crate) fn apply_scoped_refresh(
+        &mut self,
+        response: InitialLoadResponse,
+        ctx: &mut ModelContext<UpdateManager>,
+    ) {
+        self.on_changed_objects_fetched(response, false, ctx);
+    }
+
     fn handle_team_memberships_changed(&mut self, ctx: &mut ModelContext<UpdateManager>) {
         // Immediately check for updates in workspace metadata
         TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {

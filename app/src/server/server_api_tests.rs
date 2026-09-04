@@ -1,8 +1,83 @@
+use std::borrow::Cow;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use cynic::GraphQlResponse;
 use futures::executor::block_on;
 use mockito::Server;
+use warp_graphql::client::{GraphQLError, Operation, RequestOptions};
+use warp_server_client::base_client::TEAM_UID_HEADER;
 
 use super::*;
+use crate::server::ids::ServerId;
 use crate::server::retry_strategies::is_transient_http_error;
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
+
+struct HeaderCapturingOperation {
+    expected_team_uid: Option<String>,
+}
+
+impl Operation<()> for HeaderCapturingOperation {
+    fn operation_name(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed("HeaderCapturingOperation"))
+    }
+
+    fn send_request(
+        self,
+        _client: Arc<http_client::Client>,
+        options: RequestOptions,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = std::result::Result<GraphQlResponse<()>, GraphQLError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        Box::pin(async move {
+            assert_eq!(
+                options.headers.get(TEAM_UID_HEADER),
+                self.expected_team_uid.as_ref()
+            );
+            Ok(GraphQlResponse {
+                data: Some(()),
+                errors: None,
+            })
+        })
+    }
+}
+
+#[test]
+fn team_scoped_graphql_request_sends_selected_team_header() {
+    let team_uid = ServerId::from(123);
+    let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let server_api = ServerApi::new_for_test();
+
+    block_on(server_api.send_graphql_request_with_options_and_team_scope(
+        HeaderCapturingOperation {
+            expected_team_uid: Some(team_uid.uid().to_string()),
+        },
+        RequestOptions::default(),
+        team_scope,
+    ))
+    .unwrap();
+}
+
+#[test]
+fn team_scoped_graphql_request_omits_header_for_teamless_scope() {
+    let team_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+    let server_api = ServerApi::new_for_test();
+
+    block_on(server_api.send_graphql_request_with_options_and_team_scope(
+        HeaderCapturingOperation {
+            expected_team_uid: None,
+        },
+        RequestOptions::default(),
+        team_scope,
+    ))
+    .unwrap();
+}
 
 /// Sends a GET request to a mock endpoint returning `status`/`headers`/`body`, then feeds the
 /// resulting response through [`ServerApi::error_from_response`].

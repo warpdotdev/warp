@@ -567,6 +567,53 @@ impl ServerApi {
         )
     }
 
+    fn send_graphql_request_with_team_scope<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        timeout: Option<Duration>,
+        team_scope: RequestTeamScope,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        Box::pin(async move {
+            let options = self.graphql_request_options(timeout).await?;
+            self.send_graphql_request_with_options_and_team_scope(operation, options, team_scope)
+                .await
+        })
+    }
+
+    fn send_graphql_request_with_options_and_team_scope<
+        'a,
+        QF,
+        O: warp_graphql::client::Operation<QF> + Send + 'a,
+    >(
+        &'a self,
+        operation: O,
+        mut options: warp_graphql::client::RequestOptions,
+        team_scope: RequestTeamScope,
+    ) -> BoxFuture<'a, Result<QF>>
+    where
+        QF: 'a,
+    {
+        if let Some(team_uid) = team_scope.team_uid() {
+            options
+                .headers
+                .insert(TEAM_UID_HEADER.to_string(), team_uid.uid().to_string());
+        }
+        Box::pin(
+            warp_server_client::graphql_helpers::send_graphql_request_with_options(
+                &self.base_client,
+                operation,
+                options,
+            ),
+        )
+    }
+
     /// Opens an SSE stream to the agent event-push endpoint.
     ///
     /// The returned `EventSourceStream` yields `reqwest_eventsource::Event`
