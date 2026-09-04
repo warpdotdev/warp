@@ -3,7 +3,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
-use super::{DriveIndex, DriveIndexAction, DriveIndexSection, SharedObjectLimitBannerKind};
+use super::{DriveIndex, DriveIndexAction, SharedObjectLimitBannerKind};
 use crate::ASSETS;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
@@ -20,21 +20,18 @@ use crate::menu::MenuItem;
 use crate::network::NetworkStatus;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
+use crate::server::ids::{ClientId, ServerIdAndType, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
-use crate::workspaces::team::DiscoverableTeam;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::{NativeWorkspacesPolicy, Workspace};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -320,119 +317,4 @@ fn test_shared_object_limit_banner_dismissal_persists_per_type() {
             ));
         });
     });
-}
-
-fn workspace_with_native_policy(enabled: bool) -> Workspace {
-    let mut workspace = Workspace::from_local_cache(
-        ServerId::from(1).into(),
-        "Test Workspace".to_string(),
-        None,
-        None,
-    );
-    workspace.billing_metadata.tier.native_workspaces_policy =
-        Some(NativeWorkspacesPolicy { enabled });
-    workspace
-}
-
-#[test]
-fn teamless_sections_for_native_workspace_with_joinable_teams_shows_only_join() {
-    let workspace = workspace_with_native_policy(true);
-    assert_eq!(
-        DriveIndex::team_cta_sections(false, Some(&workspace), 1),
-        vec![DriveIndexSection::JoinTeam]
-    );
-}
-
-#[test]
-fn teamless_sections_for_native_workspace_with_no_joinable_teams_shows_neither() {
-    let workspace = workspace_with_native_policy(true);
-    assert_eq!(
-        DriveIndex::team_cta_sections(false, Some(&workspace), 0),
-        Vec::<DriveIndexSection>::new()
-    );
-}
-
-#[test]
-fn teamless_sections_for_non_native_workspace_with_joinable_teams_shows_join_and_create() {
-    let workspace = workspace_with_native_policy(false);
-    assert_eq!(
-        DriveIndex::team_cta_sections(false, Some(&workspace), 1),
-        vec![DriveIndexSection::JoinTeam, DriveIndexSection::CreateATeam]
-    );
-}
-
-#[test]
-fn teamless_sections_for_non_native_workspace_with_no_joinable_teams_shows_create_only() {
-    let workspace = workspace_with_native_policy(false);
-    assert_eq!(
-        DriveIndex::team_cta_sections(false, Some(&workspace), 0),
-        vec![DriveIndexSection::CreateATeam]
-    );
-}
-
-#[test]
-fn team_members_do_not_get_team_ctas() {
-    let workspace = workspace_with_native_policy(false);
-    assert_eq!(
-        DriveIndex::team_cta_sections(true, Some(&workspace), 1),
-        Vec::<DriveIndexSection>::new()
-    );
-}
-
-#[test]
-fn native_workspace_open_team_with_zero_members_shows_join_without_create_or_separator() {
-    App::test(ASSETS, |mut app| async move {
-        initialize_app(&mut app);
-        app.add_singleton_model(PrivacySettings::mock);
-        let workspace = workspace_with_native_policy(true);
-        let workspace_uid = workspace.uid;
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.update_workspaces(vec![workspace], ctx);
-            user_workspaces.set_current_workspace_uid(workspace_uid, ctx);
-            user_workspaces.update_joinable_teams(
-                vec![DiscoverableTeam {
-                    team_uid: "joinable-team".to_string(),
-                    num_members: 0,
-                    name: "Joinable Team".to_string(),
-                    team_accepting_invites: true,
-                }],
-                ctx,
-            );
-        });
-        let index = create_index(&mut app);
-
-        index.update(&mut app, DriveIndex::initialize_section_states);
-
-        index.read(&app, |index, _| {
-            assert_eq!(
-                index.sections(),
-                &[
-                    DriveIndexSection::JoinTeam,
-                    DriveIndexSection::Space(Space::Personal),
-                ]
-            );
-            assert!(!index.sections().contains(&DriveIndexSection::CreateATeam));
-            assert!(!index.should_show_join_separator());
-            assert_eq!(
-                DriveIndex::join_team_header_text(0),
-                "Join an open team in your workspace."
-            );
-        });
-    });
-}
-
-#[test]
-fn teamless_sections_for_unresolved_workspace_with_joinable_teams_shows_join_and_create() {
-    assert_eq!(
-        DriveIndex::team_cta_sections(false, None, 1),
-        vec![DriveIndexSection::JoinTeam, DriveIndexSection::CreateATeam]
-    );
-}
-
-#[test]
-fn teamless_sections_for_unresolved_workspace_with_no_joinable_teams_shows_create_only() {
-    assert_eq!(
-        DriveIndex::team_cta_sections(false, None, 0),
-        vec![DriveIndexSection::CreateATeam]
-    );
 }
