@@ -13,6 +13,13 @@ const TREE_BASE: usize = 2;
 #[cfg(not(feature = "test-util"))]
 const TREE_BASE: usize = 6;
 
+/// Item slots in every leaf.
+///
+/// The `test-util` feature lowers `TREE_BASE`, so a build with it enabled has 4 slots where a
+/// production build has 12. Anything measuring how densely items pack into leaves has to read this
+/// rather than assume the production figure.
+pub const ITEMS_PER_LEAF: usize = 2 * TREE_BASE;
+
 pub trait Item: Clone + fmt::Debug {
     type Summary: for<'a> AddAssign<&'a Self::Summary> + Default + Clone + fmt::Debug;
 

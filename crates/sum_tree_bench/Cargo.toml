@@ -1,0 +1,23 @@
+[package]
+authors.workspace = true
+name = "sum_tree_bench"
+version = "0.1.0"
+edition = "2024"
+publish.workspace = true
+license.workspace = true
+
+# Deliberately depends on `sum_tree` without `test-util`, and takes no dev-dependency on it, so a
+# measurement build links against production leaf geometry.
+[dependencies]
+sum_tree.workspace = true
+
+# Without this the default libtest bench target also runs, and rejects criterion's arguments.
+[lib]
+bench = false
+
+[dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
+
+[[bench]]
+name = "push_bench"
+harness = false
