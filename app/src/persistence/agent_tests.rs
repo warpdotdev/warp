@@ -58,9 +58,6 @@ fn last_modified_column(conn: &mut SqliteConnection, conversation: &str) -> Naiv
 fn cursor_and_full_writes_preserve_latest_sequence_and_task_snapshot() {
     let mut conn = test_connection();
 
-    update_agent_conversation_event_sequence(&mut conn, "conv-1", 42)
-        .expect("cursor-only write should create conversation metadata");
-
     let first_task = task_with_user_query("task-1", "First query", "First title");
     let mut first_data = empty_conversation_data();
     first_data.server_conversation_token = Some("server-token".to_string());
@@ -108,6 +105,33 @@ fn cursor_and_full_writes_preserve_latest_sequence_and_task_snapshot() {
         panic!("persisted task should contain a user query");
     };
     assert_eq!(query.query, "Latest query");
+}
+
+#[test]
+fn cursor_write_does_not_create_or_resurrect_conversation() {
+    let mut conn = test_connection();
+
+    update_agent_conversation_event_sequence(&mut conn, "conv-1", 42)
+        .expect("missing-row cursor write should be a no-op");
+    assert!(
+        read_agent_conversation_by_id(&mut conn, "conv-1")
+            .expect("conversation read should succeed")
+            .is_none()
+    );
+
+    let task = task_with_user_query("task-1", "Query", "Title");
+    upsert_agent_conversation(&mut conn, "conv-1", [&task], empty_conversation_data())
+        .expect("full snapshot should succeed");
+    delete_agent_conversations(&mut conn, vec!["conv-1".to_string()])
+        .expect("conversation deletion should succeed");
+
+    update_agent_conversation_event_sequence(&mut conn, "conv-1", 50)
+        .expect("post-deletion cursor write should be a no-op");
+    assert!(
+        read_agent_conversation_by_id(&mut conn, "conv-1")
+            .expect("conversation read should succeed")
+            .is_none()
+    );
 }
 
 #[test]

@@ -171,28 +171,13 @@ pub(super) fn update_agent_conversation_event_sequence(
             .first::<String>(conn)
             .optional()?;
 
-        let serialized_conversation_data = if let Some(data) = persisted_conversation_data {
-            let mut data = serde_json::from_str::<AgentConversationData>(&data)?;
-            data.last_event_sequence =
-                Some(data.last_event_sequence.unwrap_or(sequence).max(sequence));
-            serde_json::to_string(&data)?
-        } else {
-            serde_json::json!({
-                "server_conversation_token": null,
-                "last_event_sequence": sequence,
-            })
-            .to_string()
+        let Some(data) = persisted_conversation_data else {
+            return Ok(());
         };
-
-        let inserted_conversation = NewAgentConversation {
-            conversation_id: conversation_id_param.to_owned(),
-            conversation_data: serialized_conversation_data.clone(),
-            summary: None,
-        };
-        diesel::insert_into(agent_conversations::table())
-            .values(&inserted_conversation)
-            .on_conflict(conversation_id)
-            .do_update()
+        let mut data = serde_json::from_str::<AgentConversationData>(&data)?;
+        data.last_event_sequence = Some(data.last_event_sequence.unwrap_or(sequence).max(sequence));
+        let serialized_conversation_data = serde_json::to_string(&data)?;
+        diesel::update(agent_conversations.filter(conversation_id.eq(conversation_id_param)))
             .set(conversation_data.eq(serialized_conversation_data))
             .execute(conn)?;
 
