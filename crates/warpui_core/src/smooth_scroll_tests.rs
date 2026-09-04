@@ -10,18 +10,6 @@ use super::{
 const INVERSE_DELTA_MAX_DURATION: Duration = Duration::from_millis(200);
 const INVERSE_DELTA_MIN_DURATION: Duration = Duration::from_millis(100);
 
-// NOTE: this suite replaces the previous ease-out-cubic / additive-independent-contributions
-// model's tests wholesale, rather than deleting coverage quietly. The two models make
-// incompatible promises about what a same-direction composition looks like:
-//   - Old model: each notch eased independently; the displayed position was the sum of every
-//     active contribution's own eased progress, and `target()` was simply the sum of deltas.
-//   - New model (this file): a single running segment is *retargeted* on each same-direction
-//     notch, reshaping its curve to preserve the outgoing velocity instead of layering another
-//     independent ease on top.
-// Tests below pin the new contract's equivalents of the old guarantees (exact landing on
-// target, no lost movement across a burst) plus its new one (velocity continuity across a
-// retarget), rather than the old "sum of independently-eased contributions" behavior.
-
 #[test]
 fn ease_in_out_reaches_exact_target_without_overshoot() {
     let start = Instant::now();
@@ -44,9 +32,9 @@ fn ease_in_out_reaches_exact_target_without_overshoot() {
 
 #[test]
 fn fresh_segment_eases_in_from_zero_velocity() {
-    // A defining difference from the old ease-out-only model: motion starts slow and ramps up,
-    // rather than launching at peak velocity. Early in the animation, displayed progress should
-    // be well behind the halfway point of elapsed *time* progress.
+    // Motion starts slow and ramps up, rather than launching at peak velocity. Early in the
+    // animation, displayed progress should be well behind the halfway point of elapsed *time*
+    // progress.
     let start = Instant::now();
     let mut controller = SmoothScrollController::new(0.0);
     controller.add_delta(120.0, start);
@@ -115,8 +103,7 @@ fn same_direction_retarget_lands_exactly_on_the_combined_target() {
 
 #[test]
 fn same_direction_retarget_preserves_velocity_across_the_seam() {
-    // The new model's central promise, replacing the old "independent stacked eases" behavior:
-    // a retarget must not create a velocity discontinuity. Sample displayed position on a fine
+    // A retarget must not create a velocity discontinuity. Sample displayed position on a fine
     // grid straddling the retarget instant and check the local slope (an approximation of
     // velocity) doesn't jump abruptly.
     let start = Instant::now();
@@ -135,9 +122,8 @@ fn same_direction_retarget_preserves_velocity_across_the_seam() {
     let just_after = controller.displayed_position(retarget_at + step);
     let velocity_after = (just_after - at_retarget) / step.as_secs_f32();
 
-    // Velocity right after the retarget should be close to velocity right before it -- not
-    // reset to zero (which the old independent-contribution model didn't do either, but which a
-    // naive "always restart at rest" retarget would) and not discontinuously larger.
+    // Velocity right after the retarget should be close to velocity right before it, not reset
+    // to zero and not discontinuously larger.
     let relative_difference = (velocity_after - velocity_before).abs() / velocity_before.abs();
     assert!(
         relative_difference < 0.15,
