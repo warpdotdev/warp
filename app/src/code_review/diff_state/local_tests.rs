@@ -282,6 +282,75 @@ fn test_parse_git_status_file_without_spaces_still_works() {
     assert_eq!(result[0].1, GitFileStatus::Modified);
 }
 
+#[test]
+fn parse_git_numstat_preserves_ordinary_paths_and_special_characters() {
+    let output = concat!(
+        "3\t1\tordinary.txt\0",
+        "4\t2\tpath with spaces/[braces] => tab\tand\nnewline.txt\0",
+    );
+    let metadata = LocalDiffStateModel::parse_git_numstat(output);
+
+    assert_eq!(metadata.len(), 2);
+    let ordinary = metadata.get("ordinary.txt").expect("ordinary path");
+    assert_eq!(ordinary.lines_added, 3);
+    assert_eq!(ordinary.lines_removed, 1);
+    let special = metadata
+        .get("path with spaces/[braces] => tab\tand\nnewline.txt")
+        .expect("path with special characters");
+    assert_eq!(special.lines_added, 4);
+    assert_eq!(special.lines_removed, 2);
+}
+
+#[test]
+fn parse_git_numstat_keys_rename_and_copy_records_by_destination_path() {
+    let output = concat!(
+        "5\t3\t\0rename source.txt\0rename destination.txt\0",
+        "7\t2\t\0copy source.txt\0copy destination.txt\0",
+    );
+
+    let metadata = LocalDiffStateModel::parse_git_numstat(output);
+
+    assert_eq!(metadata.len(), 2);
+    assert!(!metadata.contains_key("rename source.txt"));
+    assert!(!metadata.contains_key("copy source.txt"));
+    let renamed = metadata
+        .get("rename destination.txt")
+        .expect("renamed destination");
+    assert_eq!(renamed.lines_added, 5);
+    assert_eq!(renamed.lines_removed, 3);
+    let copied = metadata
+        .get("copy destination.txt")
+        .expect("copied destination");
+    assert_eq!(copied.lines_added, 7);
+    assert_eq!(copied.lines_removed, 2);
+}
+
+#[test]
+fn parse_git_numstat_recognizes_binary_records() {
+    let metadata = LocalDiffStateModel::parse_git_numstat("-\t-\tbinary.dat\0");
+
+    let binary = metadata.get("binary.dat").expect("binary path");
+    assert_eq!(binary.lines_added, 0);
+    assert_eq!(binary.lines_removed, 0);
+    assert!(binary.is_binary_file);
+}
+
+#[test]
+fn parse_git_numstat_ignores_malformed_and_partial_records() {
+    let output = concat!(
+        "2\t1\tvalid.txt\0",
+        "missing fields\0",
+        "invalid\t2\tbad additions.txt\0",
+        "1\t-\tmixed binary markers.txt\0",
+        "3\t4\t\0only old path.txt\0",
+    );
+
+    let metadata = LocalDiffStateModel::parse_git_numstat(output);
+
+    assert_eq!(metadata.len(), 1);
+    assert!(metadata.contains_key("valid.txt"));
+}
+
 #[tokio::test]
 async fn untracked_directory_diff_is_empty_and_non_binary() {
     let repo_dir = tempfile::tempdir().expect("create temp repo dir");
@@ -636,6 +705,95 @@ async fn materialize_with_aggregate_cap_uses_numstat_for_skipped_files_totals() 
         "a skipped file's additions must come from numstat, not be dropped"
     );
     assert_eq!(total_deletions, 7);
+}
+
+#[tokio::test]
+async fn materialize_with_aggregate_cap_preserves_skipped_rename_totals() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+    let old_path = "old.txt";
+    let new_path = "new => name with spaces.txt";
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    std::fs::write(
+        repo_path.join(old_path),
+        "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n",
+    )
+    .expect("write old file");
+    run_git_command(repo_path, &["add", old_path])
+        .await
+        .expect("git add old file");
+    run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("git commit");
+    run_git_command(repo_path, &["mv", old_path, new_path])
+        .await
+        .expect("git mv");
+    std::fs::write(
+        repo_path.join(new_path),
+        "one\ntwo\nthree\nfour\nFIVE\nsix\nseven\neight\nnine\nten\n",
+    )
+    .expect("modify renamed file");
+
+    let numstat = LocalDiffStateModel::get_diff_metadata_using_numstat(repo_path, "HEAD")
+        .await
+        .expect("get numstat metadata");
+    let (_, total_additions, total_deletions) =
+        LocalDiffStateModel::materialize_with_aggregate_cap(
+            repo_path,
+            vec![(
+                new_path.to_string(),
+                GitFileStatus::Renamed {
+                    old_path: old_path.to_string(),
+                },
+            )],
+            &numstat,
+            0,
+            usize::MAX,
+            |file_path, status, _is_binary| async move {
+                Ok(Some(trivial_file_diff(file_path, status)))
+            },
+        )
+        .await
+        .expect("materialize_with_aggregate_cap should not error");
+
+    assert_eq!(total_additions, 1);
+    assert_eq!(total_deletions, 1);
+}
+
+#[tokio::test]
+async fn materialize_with_aggregate_cap_preserves_skipped_copy_totals() {
+    let numstat = LocalDiffStateModel::parse_git_numstat("9\t4\t\0source.txt\0destination.txt\0");
+
+    let (_, total_additions, total_deletions) =
+        LocalDiffStateModel::materialize_with_aggregate_cap(
+            std::path::Path::new("."),
+            vec![(
+                "destination.txt".to_string(),
+                GitFileStatus::Copied {
+                    old_path: "source.txt".to_string(),
+                },
+            )],
+            &numstat,
+            0,
+            usize::MAX,
+            |file_path, status, _is_binary| async move {
+                Ok(Some(trivial_file_diff(file_path, status)))
+            },
+        )
+        .await
+        .expect("materialize_with_aggregate_cap should not error");
+
+    assert_eq!(total_additions, 9);
+    assert_eq!(total_deletions, 4);
 }
 
 /// `git diff --numstat` never reports untracked files (they aren't part of

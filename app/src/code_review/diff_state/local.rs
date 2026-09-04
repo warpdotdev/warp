@@ -2937,47 +2937,71 @@ impl LocalDiffStateModel {
         Ok(files)
     }
 
-    /// Get binary files using git diff --numstat against a specific commit
+    /// Gets per-file line counts and binary metadata against a specific commit.
     async fn get_diff_metadata_using_numstat(
         repo_path: &Path,
         commit: &str,
     ) -> Result<HashMap<String, GitNumStatMetadata>> {
         log::debug!(
-            "[GIT OPERATION] local.rs get_diff_metadata_using_numstat git diff --numstat {commit}"
+            "[GIT OPERATION] local.rs get_diff_metadata_using_numstat git diff --numstat -z {commit}"
         );
-        let numstat_output = match run_git_command(repo_path, &["diff", "--numstat", commit]).await
-        {
-            Ok(output) => output,
-            Err(_) => {
-                // If numstat fails, return empty set
-                return Ok(HashMap::new());
-            }
-        };
+        let numstat_output =
+            match run_git_command(repo_path, &["diff", "--numstat", "-z", commit]).await {
+                Ok(output) => output,
+                Err(_) => {
+                    // If numstat fails, return empty set
+                    return Ok(HashMap::new());
+                }
+            };
+        Ok(Self::parse_git_numstat(&numstat_output))
+    }
 
-        let mut diff_metadata = std::collections::HashMap::new();
+    fn parse_git_numstat(numstat_output: &str) -> HashMap<String, GitNumStatMetadata> {
+        let mut diff_metadata = HashMap::new();
+        let mut records = numstat_output.split('\0');
 
-        for line in numstat_output.lines() {
-            if line.is_empty() {
+        while let Some(record) = records.next() {
+            let Some((additions, remainder)) = record.split_once('\t') else {
                 continue;
-            }
+            };
+            let Some((deletions, path)) = remainder.split_once('\t') else {
+                continue;
+            };
 
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 3 {
-                let additions = parts[0];
-                let deletions = parts[1];
-                let filename = parts[2];
-
-                let metadata = GitNumStatMetadata {
-                    lines_added: additions.parse().unwrap_or(0),
-                    lines_removed: deletions.parse().unwrap_or(0),
-                    is_binary_file: additions == "-" && deletions == "-",
+            let path = if path.is_empty() {
+                let (Some(old_path), Some(new_path)) = (records.next(), records.next()) else {
+                    break;
                 };
+                if old_path.is_empty() || new_path.is_empty() {
+                    continue;
+                }
+                new_path
+            } else {
+                path
+            };
 
-                diff_metadata.insert(filename.to_string(), metadata);
-            }
+            let metadata = if additions == "-" && deletions == "-" {
+                GitNumStatMetadata {
+                    lines_added: 0,
+                    lines_removed: 0,
+                    is_binary_file: true,
+                }
+            } else {
+                let (Ok(lines_added), Ok(lines_removed)) = (additions.parse(), deletions.parse())
+                else {
+                    continue;
+                };
+                GitNumStatMetadata {
+                    lines_added,
+                    lines_removed,
+                    is_binary_file: false,
+                }
+            };
+
+            diff_metadata.insert(path.to_string(), metadata);
         }
 
-        Ok(diff_metadata)
+        diff_metadata
     }
 
     /// Gets the file content at a specific commit
