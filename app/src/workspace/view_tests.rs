@@ -4340,6 +4340,212 @@ fn test_tab_mru_order() {
 }
 
 #[test]
+fn test_activate_tab_or_group_by_number_uses_top_level_visual_order() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            // Build this top-level layout:
+            // 1. ungrouped tab
+            // 2. group A (three tabs)
+            // 3. ungrouped tab
+            // 4. group B (two tabs)
+            for _ in 0..6 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            let group_a = TabGroup::new();
+            let group_a_id = group_a.id;
+            workspace.tab_groups.insert(group_a_id, group_a);
+            for index in 1..=3 {
+                workspace.tabs[index].group_id = Some(group_a_id);
+            }
+
+            let group_b = TabGroup::new();
+            let group_b_id = group_b.id;
+            workspace.tab_groups.insert(group_b_id, group_b);
+            for index in 5..=6 {
+                workspace.tabs[index].group_id = Some(group_b_id);
+            }
+
+            // Establish a preferred member for each group, then leave focus on
+            // the ungrouped tab between them.
+            workspace.activate_tab(2, ctx);
+            workspace.activate_tab(5, ctx);
+            workspace.activate_tab(4, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabOrGroupByNumber(1), ctx);
+            assert_eq!(workspace.active_tab_index(), 0);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabOrGroupByNumber(2), ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabOrGroupByNumber(3), ctx);
+            assert_eq!(workspace.active_tab_index(), 4);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabOrGroupByNumber(4), ctx);
+            assert_eq!(workspace.active_tab_index(), 5);
+        });
+    });
+}
+
+#[test]
+fn test_activate_last_tab_or_group_uses_group_mru() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..3 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[2].group_id = Some(group_id);
+            workspace.tabs[3].group_id = Some(group_id);
+
+            workspace.activate_tab(2, ctx);
+            workspace.activate_tab(0, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateLastTabOrGroup, ctx);
+
+            assert_eq!(workspace.active_tab_index(), 2);
+        });
+    });
+}
+
+#[test]
+fn test_activate_tab_or_group_by_number_out_of_range_is_noop() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabOrGroupByNumber(8), ctx);
+
+            assert_eq!(workspace.active_tab_index(), 0);
+        });
+    });
+}
+
+#[test]
+fn test_activate_tab_in_active_group_by_number_uses_group_relative_order() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..4 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            for index in 1..=3 {
+                workspace.tabs[index].group_id = Some(group_id);
+            }
+            workspace.activate_tab(2, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabInActiveGroupByNumber(1), ctx);
+            assert_eq!(workspace.active_tab_index(), 1);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabInActiveGroupByNumber(2), ctx);
+            assert_eq!(workspace.active_tab_index(), 2);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabInActiveGroupByNumber(3), ctx);
+            assert_eq!(workspace.active_tab_index(), 3);
+        });
+    });
+}
+
+#[test]
+fn test_activate_last_tab_in_active_group_uses_last_group_member() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..3 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            for index in 1..=3 {
+                workspace.tabs[index].group_id = Some(group_id);
+            }
+            workspace.activate_tab(1, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateLastTabInActiveGroup, ctx);
+
+            assert_eq!(workspace.active_tab_index(), 3);
+        });
+    });
+}
+
+#[test]
+fn test_activate_tab_in_active_group_without_group_is_noop() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.activate_tab(0, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabInActiveGroupByNumber(1), ctx);
+
+            assert_eq!(workspace.active_tab_index(), 0);
+        });
+    });
+}
+
+#[test]
+fn test_activate_tab_in_active_group_by_number_out_of_range_is_noop() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+
+            let group = TabGroup::new();
+            let group_id = group.id;
+            workspace.tab_groups.insert(group_id, group);
+            workspace.tabs[0].group_id = Some(group_id);
+            workspace.tabs[1].group_id = Some(group_id);
+            workspace.activate_tab(0, ctx);
+
+            workspace.handle_action(&WorkspaceAction::ActivateTabInActiveGroupByNumber(8), ctx);
+
+            assert_eq!(workspace.active_tab_index(), 0);
+        });
+    });
+}
+
+#[test]
 fn test_create_new_tab_group_groups_active_tab() {
     let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
 

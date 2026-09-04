@@ -5354,6 +5354,94 @@ impl Workspace {
         ctx.notify();
     }
 
+    fn top_level_tab_or_group_indices(&self) -> Vec<usize> {
+        let mut previous_group_id = None;
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                let group_id = tab
+                    .group_id
+                    .filter(|group_id| self.tab_groups.contains_key(group_id));
+                let starts_top_level_item = group_id.is_none() || group_id != previous_group_id;
+                previous_group_id = group_id;
+                starts_top_level_item.then_some(index)
+            })
+            .collect()
+    }
+
+    fn preferred_tab_index_for_top_level_item(&self, index: usize) -> Option<usize> {
+        let tab = self.tabs.get(index)?;
+        let Some(group_id) = tab
+            .group_id
+            .filter(|group_id| self.tab_groups.contains_key(group_id))
+        else {
+            return Some(index);
+        };
+
+        self.tab_mru_order
+            .iter()
+            .find_map(|pane_group_id| {
+                self.tabs.iter().position(|tab| {
+                    tab.group_id == Some(group_id) && tab.pane_group.id() == *pane_group_id
+                })
+            })
+            .or(Some(index))
+    }
+
+    fn activate_tab_or_group_by_number(&mut self, number: usize, ctx: &mut ViewContext<Self>) {
+        let Some(index) = self
+            .top_level_tab_or_group_indices()
+            .get(number.saturating_sub(1))
+            .and_then(|index| self.preferred_tab_index_for_top_level_item(*index))
+        else {
+            return;
+        };
+        self.activate_tab(index, ctx);
+    }
+
+    fn activate_last_tab_or_group(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(index) = self
+            .top_level_tab_or_group_indices()
+            .into_iter()
+            .last()
+            .and_then(|index| self.preferred_tab_index_for_top_level_item(index))
+        else {
+            return;
+        };
+        self.activate_tab(index, ctx);
+    }
+
+    fn active_tab_group_id(&self) -> Option<TabGroupId> {
+        self.tabs
+            .get(self.active_tab_index)?
+            .group_id
+            .filter(|group_id| self.tab_groups.contains_key(group_id))
+    }
+
+    fn activate_tab_in_active_group_by_number(
+        &mut self,
+        number: usize,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(index) = self.active_tab_group_id().and_then(|group_id| {
+            group_member_indices(&self.tabs, group_id).nth(number.saturating_sub(1))
+        }) else {
+            return;
+        };
+        self.activate_tab(index, ctx);
+    }
+
+    fn activate_last_tab_in_active_group(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(index) = self
+            .active_tab_group_id()
+            .and_then(|group_id| group_member_indices(&self.tabs, group_id).last())
+        else {
+            return;
+        };
+        self.activate_tab(index, ctx);
+    }
+
     /// This function is meant to be used by other actions to perform the logic to update the
     /// view's state. It's not meant to be invoked directly by an action.
     pub fn activate_tab_internal(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -23859,6 +23947,12 @@ impl TypedActionView for Workspace {
                     state.set_key_held(*key_code, *pressed, ctx);
                 });
             }
+            ActivateTabOrGroupByNumber(num) => self.activate_tab_or_group_by_number(*num, ctx),
+            ActivateLastTabOrGroup => self.activate_last_tab_or_group(ctx),
+            ActivateTabInActiveGroupByNumber(num) => {
+                self.activate_tab_in_active_group_by_number(*num, ctx)
+            }
+            ActivateLastTabInActiveGroup => self.activate_last_tab_in_active_group(ctx),
             ActivatePrevTab => self.activate_prev_tab(ctx),
             OpenLaunchConfigSaveModal => self.open_launch_config_save_modal(ctx),
             ActivateNextTab => self.activate_next_tab(ctx),
