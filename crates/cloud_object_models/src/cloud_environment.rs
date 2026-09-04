@@ -6,6 +6,7 @@ use cloud_objects::cloud_object::{
 };
 use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{JsonModel, JsonSerializer};
 
@@ -126,12 +127,17 @@ impl SourceRepo {
         // organization/project pair and the repository, and no `.git` suffix:
         // https://dev.azure.com/{organization}/{project}/_git/{repository}.
         if self.code_forge == Some(CodeForge::AzureDevOps) {
-            return format!(
-                "https://{}/{}/_git/{}",
-                CodeForge::AzureDevOps.host(),
-                self.owner,
-                self.repo
-            );
+            let mut clone_url =
+                Url::parse("https://dev.azure.com").expect("valid Azure DevOps URL");
+            {
+                let mut path_segments = clone_url
+                    .path_segments_mut()
+                    .expect("Azure DevOps URL supports path segments");
+                path_segments.extend(self.owner.split('/'));
+                path_segments.push("_git");
+                path_segments.push(&self.repo);
+            }
+            return clone_url.into();
         }
         format!(
             "https://{}/{}/{}.git",

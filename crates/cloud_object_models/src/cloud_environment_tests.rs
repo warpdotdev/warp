@@ -185,6 +185,34 @@ fn deserialize_azure_devops_environment_builds_git_segment_clone_urls() {
 }
 
 #[test]
+fn azure_devops_clone_url_encodes_owner_segments() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "Warp Organization/Test Project".into(),
+        "warp".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        "https://dev.azure.com/Warp%20Organization/Test%20Project/_git/warp"
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_encodes_repository_segment() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "warpdotdev/test-project".into(),
+        "Warp Repo".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        "https://dev.azure.com/warpdotdev/test-project/_git/Warp%20Repo"
+    );
+}
+
+#[test]
 fn deserialize_gitlab_environment_uses_authoritative_source_repos() {
     let json = serde_json::json!({
         "name": "gitlab-env",
