@@ -156,6 +156,16 @@ pub(super) fn resolve_team_scope(
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
+pub(super) fn resolve_environment_team_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    if scope.personal {
+        Ok(TeamScopeForCli::personal())
+    } else {
+        resolve_team_scope(&scope.team_selection, ctx)
+    }
+}
 
 /// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
 /// member use.

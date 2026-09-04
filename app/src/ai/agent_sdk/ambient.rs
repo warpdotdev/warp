@@ -386,14 +386,13 @@ impl AmbientAgentRunner {
                 vec![]
             };
 
-            let team_scope =
-                match super::common::resolve_team_scope(&args.scope.team_selection, ctx) {
-                    Ok(team_scope) => team_scope,
-                    Err(err) => {
-                        super::report_fatal_error(err, ctx);
-                        return;
-                    }
-                };
+            let team_scope = match super::common::resolve_environment_team_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             let mut environment_args = args.environment;
             if environment_args.environment.is_none() && !environment_args.no_environment

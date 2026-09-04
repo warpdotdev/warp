@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use warp_cli::environment::EnvironmentCreateArgs;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warpui::App;
 
 use super::{
     EnvironmentChoice, classify_agent_mode_base_model_id, environment_is_visible_to_scope,
-    parse_ambient_task_id, validate_agent_mode_base_model_id,
+    parse_ambient_task_id, resolve_environment_team_scope, validate_agent_mode_base_model_id,
 };
 use crate::LaunchMode;
 use crate::ai::cloud_environments::{
@@ -26,10 +27,11 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{
-    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+    TeamContextForOperation, TeamScope, TeamlessScopeForTest, UserWorkspaces,
 };
 
 fn environment_with_owner(
@@ -94,28 +96,67 @@ fn environment_scope_includes_personal_and_matching_team_environments() {
 }
 
 #[test]
-fn teamless_environment_scope_includes_only_personal_environments() {
-    let personal_environment = environment_with_owner(
-        SyncId::ServerId(ServerId::from(1)),
-        "Personal",
-        Owner::mock_current_user(),
-    );
-    let team_environment = environment_with_owner(
-        SyncId::ServerId(ServerId::from(2)),
-        "Team",
-        Owner::Team {
-            team_uid: ServerId::from(123),
-        },
-    );
+fn multi_team_personal_scope_includes_only_personal_environments() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(PrivacySettings::mock);
+        let user_workspaces = app.add_singleton_model(UserWorkspaces::default_mock);
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    let mut second_team = workspace.teams[0].clone();
+                    second_team.uid = ServerId::from(456);
+                    second_team.name = "Second team".to_string();
+                    workspace.teams.push(second_team);
+                },
+                ctx,
+            );
+        });
+        let implicit_scope = app.read(|ctx| {
+            resolve_environment_team_scope(
+                &ObjectScope {
+                    team_selection: TeamSelection { team: None },
+                    personal: false,
+                },
+                ctx,
+            )
+        });
+        let personal_scope = app
+            .read(|ctx| {
+                resolve_environment_team_scope(
+                    &ObjectScope {
+                        team_selection: TeamSelection { team: None },
+                        personal: true,
+                    },
+                    ctx,
+                )
+            })
+            .expect("explicit personal scope should not require a sole team");
+        let personal_environment = environment_with_owner(
+            SyncId::ServerId(ServerId::from(1)),
+            "Personal",
+            Owner::mock_current_user(),
+        );
+        let team_environment = environment_with_owner(
+            SyncId::ServerId(ServerId::from(2)),
+            "Team",
+            Owner::Team {
+                team_uid: ServerId::from(123),
+            },
+        );
 
-    assert!(environment_is_visible_to_scope(
-        &personal_environment,
-        &TeamlessScopeForTest
-    ));
-    assert!(!environment_is_visible_to_scope(
-        &team_environment,
-        &TeamlessScopeForTest
-    ));
+        assert!(implicit_scope.is_err());
+        assert_eq!(personal_scope.team_uid(), None);
+        assert!(environment_is_visible_to_scope(
+            &personal_environment,
+            &personal_scope
+        ));
+        assert!(!environment_is_visible_to_scope(
+            &team_environment,
+            &personal_scope
+        ));
+    });
 }
 
 #[test]
