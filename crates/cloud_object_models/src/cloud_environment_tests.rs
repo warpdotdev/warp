@@ -190,13 +190,13 @@ fn azure_devops_clone_url_uses_organization_project_path_without_git_suffix() {
 fn azure_devops_clone_url_encodes_each_path_segment() {
     let repo = SourceRepo::new(
         CodeForge::AzureDevOps,
-        "my organization/project/name".into(),
+        "my organization/project name#1".into(),
         "repo name#1".into(),
     );
 
     assert_eq!(
         repo.https_clone_url().unwrap(),
-        "https://dev.azure.com/my%20organization/project%2Fname/_git/repo%20name%231"
+        "https://dev.azure.com/my%20organization/project%20name%231/_git/repo%20name%231"
     );
 }
 
@@ -205,6 +205,34 @@ fn azure_devops_clone_url_rejects_owner_without_project() {
     let repo = SourceRepo::new(
         CodeForge::AzureDevOps,
         "organization/".into(),
+        "repository".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner)
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_rejects_owner_with_extra_path_component() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "organization/project/extra".into(),
+        "repository".into(),
+    );
+
+    assert_eq!(
+        repo.https_clone_url(),
+        Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner)
+    );
+}
+
+#[test]
+fn azure_devops_clone_url_rejects_owner_with_empty_path_component() {
+    let repo = SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "organization//project".into(),
         "repository".into(),
     );
 

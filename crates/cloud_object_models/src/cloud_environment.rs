@@ -131,7 +131,7 @@ impl SourceRepo {
             let Some((organization, project)) = self.owner.split_once('/') else {
                 return Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner);
             };
-            if organization.is_empty() || project.is_empty() {
+            if organization.is_empty() || project.is_empty() || project.contains('/') {
                 return Err(SourceRepoCloneUrlError::InvalidAzureDevOpsOwner);
             }
 
