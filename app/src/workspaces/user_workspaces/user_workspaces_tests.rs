@@ -55,7 +55,9 @@ use warpui_extras::user_preferences;
 use super::*;
 use crate::ai::blocklist::is_agent_mode_autonomy_allowed;
 use crate::ai::execution_profiles::ActionPermission;
-use crate::ai::llms::{LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY};
+use crate::ai::llms::{
+    AvailableLLMs, LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature,
+};
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, CloudObjectGuest};
@@ -1079,6 +1081,82 @@ fn cli_scope_explicit_team_validates_the_uid_and_membership() {
                 not_a_member,
                 Err(team_workspace_settings::TeamScopeForCliError::NotAMember(_))
             ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_reads_the_selected_teams_model_choices() {
+    let (mut first_team, mut second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    first_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "first-team-model".into(),
+            vec![LLMInfo::new_for_test("first-team-model")],
+            None,
+        )
+        .expect("first team model choices should be valid"),
+        ..Default::default()
+    };
+    second_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "second-team-model".into(),
+            vec![LLMInfo::new_for_test("second-team-model")],
+            None,
+        )
+        .expect("second team model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("the selected team should resolve");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(
+                models.info_for_id(&"second-team-model".into()).is_some(),
+                "the selected team's model should be available"
+            );
+            assert!(
+                models.info_for_id(&"first-team-model".into()).is_none(),
+                "another team's model should not be available"
+            );
+        });
+    })
+}
+
+#[test]
+fn teamless_cli_scope_reads_personal_workspace_model_choices() {
+    let mut workspace = workspace_for_teams(vec![]);
+    workspace.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "personal-model".into(),
+            vec![LLMInfo::new_for_test("personal-model")],
+            None,
+        )
+        .expect("personal model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(None))
+                .expect("a teamless user should retain personal scope");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(models.info_for_id(&"personal-model".into()).is_some());
         });
     })
 }
