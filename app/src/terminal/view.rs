@@ -6949,12 +6949,24 @@ impl TerminalView {
         conversation_id: &AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        let can_resume = BlocklistAIHistoryModel::as_ref(ctx)
+        let status = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(conversation_id)
-            .is_some_and(|conversation| conversation.status().is_manually_resumable());
-        if !can_resume {
+            .map(|conversation| conversation.status().clone());
+        let Some(status) = status else {
+            log::warn!(
+                "[conversation-resume] Ignoring manual resume because the conversation was not found: conversation_id={conversation_id:?}"
+            );
+            return;
+        };
+        if !status.is_manually_resumable() {
+            log::info!(
+                "[conversation-resume] Ignoring manual resume because the conversation status is not resumable: conversation_id={conversation_id:?} status={status:?}"
+            );
             return;
         }
+        log::info!(
+            "[conversation-resume] Accepting manual resume: conversation_id={conversation_id:?} status={status:?}"
+        );
         // If `AgentView` is enabled, this button is only rendered when the agent view is already
         // active for the selected conversation, so this call is redundant.
         if !FeatureFlag::AgentView.is_enabled() {
@@ -27884,16 +27896,29 @@ impl TypedActionView for TerminalView {
             ResumeConversation => {
                 // With Agent View, we want to resume the conversation the user is currently viewing,
                 // not necessarily the most recently created one.
-                let conversation_id = if FeatureFlag::AgentView.is_enabled() {
-                    self.agent_view_controller
-                        .as_ref(ctx)
-                        .agent_view_state()
-                        .active_conversation_id()
+                let (target_source, conversation_id) = if FeatureFlag::AgentView.is_enabled() {
+                    (
+                        "agent_view",
+                        self.agent_view_controller
+                            .as_ref(ctx)
+                            .agent_view_state()
+                            .active_conversation_id(),
+                    )
                 } else {
-                    BlocklistAIHistoryModel::as_ref(ctx).last_conversation_id(self.id())
+                    (
+                        "conversation_history",
+                        BlocklistAIHistoryModel::as_ref(ctx).last_conversation_id(self.id()),
+                    )
                 };
                 if let Some(conversation_id) = conversation_id {
+                    log::info!(
+                        "[conversation-resume] Selected manual resume target: conversation_id={conversation_id:?} target_source={target_source}"
+                    );
                     self.handle_resume_conversation(&conversation_id, ctx)
+                } else {
+                    log::warn!(
+                        "[conversation-resume] Ignoring manual resume because no target conversation was found: target_source={target_source}"
+                    );
                 }
             }
             ForkConversationFromLastKnownGoodState => {
