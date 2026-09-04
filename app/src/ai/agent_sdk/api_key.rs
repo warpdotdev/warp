@@ -17,6 +17,7 @@ use warp_graphql::mutations::expire_api_key::ExpireApiKeyResult;
 use warp_graphql::mutations::generate_api_key::GenerateApiKeyResult;
 use warp_graphql::queries::api_keys::ApiKeyProperties;
 use warp_graphql::scalars::Time;
+use warp_server_client::auth::RequestTeamScope;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
@@ -77,13 +78,13 @@ impl ApiKeyCommandRunner {
                     return;
                 }
             };
-            let team_uid = team_scope.team_uid().map(|uid| uid.uid());
+            let request_team_scope = RequestTeamScope::from_resolved_team(team_scope.team_uid());
             let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
             ctx.spawn(
                 async move {
                     let mut keys: Vec<_> = auth_client
-                        .list_api_keys(team_uid)
+                        .list_api_keys(request_team_scope)
                         .await?
                         .into_iter()
                         .map(ApiKeyInfo::from)
@@ -177,13 +178,14 @@ impl ApiKeyCommandRunner {
                     return;
                 }
             };
-            let team_uid = team_scope.team_uid().map(|uid| uid.uid());
+            let request_team_scope =
+                RequestTeamScope::from_resolved_team(team_scope.team_uid());
             let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
             ctx.spawn(
                 async move {
                     let keys = auth_client
-                        .list_api_keys(team_uid)
+                        .list_api_keys(request_team_scope)
                         .await?
                         .into_iter()
                         .map(ApiKeyInfo::from)
