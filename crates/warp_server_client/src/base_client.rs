@@ -253,6 +253,14 @@ impl BaseClient {
         *self.ambient_agent_task_id.write() = task_id;
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_ambient_workload_token_for_test(&self, token: &str) {
+        *self.ambient_workload_token.lock() = Some(warp_isolation_platform::WorkloadToken {
+            token: token.to_string(),
+            expires_at: None,
+        });
+    }
+
     /// Returns an ambient agent workload token when the current runtime can issue one.
     pub async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
         if cfg!(target_family = "wasm") {

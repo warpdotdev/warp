@@ -13,6 +13,7 @@ use super::common::{EnvironmentChoice, ResolveConfigurationError};
 use super::integration_output;
 use super::oauth_flow::poll_oauth_until_terminal;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 
 pub fn run(
     ctx: &mut AppContext,
@@ -27,41 +28,103 @@ pub fn run(
         IntegrationCommand::Update(args) => {
             runner.update(ctx, |runner, ctx| runner.update(args, ctx));
         }
-        IntegrationCommand::List => {
-            runner.update(ctx, |runner, ctx| runner.list(global_options, ctx));
+        IntegrationCommand::List { team_selection } => {
+            runner.update(ctx, |runner, ctx| {
+                runner.list(global_options, team_selection, ctx)
+            });
         }
     }
     Ok(())
 }
 
 struct IntegrationCommandRunner;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct IntegrationRetryState {
+    request_team_scope: RequestTeamScope,
+    attempt: u32,
+}
+
+impl IntegrationRetryState {
+    fn new(request_team_scope: RequestTeamScope) -> Self {
+        Self {
+            request_team_scope,
+            attempt: 1,
+        }
+    }
+
+    fn next(self) -> Self {
+        Self {
+            attempt: self.attempt + 1,
+            ..self
+        }
+    }
+
+    fn continue_after_oauth(
+        self,
+        poll_result: anyhow::Result<OauthConnectTxStatus>,
+    ) -> anyhow::Result<Self> {
+        match poll_result {
+            Ok(OauthConnectTxStatus::Completed) => Ok(self.next()),
+            Ok(OauthConnectTxStatus::Failed) => Err(anyhow::anyhow!("OAuth authorization failed.")),
+            Ok(OauthConnectTxStatus::Expired) => {
+                Err(anyhow::anyhow!("OAuth authorization expired."))
+            }
+            Ok(OauthConnectTxStatus::Pending) | Ok(OauthConnectTxStatus::InProgress) => Err(
+                anyhow::anyhow!("Unexpected non-terminal OAuth status returned"),
+            ),
+            Err(err) => Err(anyhow::anyhow!("Error polling OAuth status: {err}")),
+        }
+    }
+}
 
 impl IntegrationCommandRunner {
-    fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
-        // Hardcoded set of providers that this client knows how to render.
-        let providers = vec![ProviderType::Linear, ProviderType::Slack];
-        let provider_slugs: Vec<String> = providers.into_iter().map(|p| p.slug()).collect();
-
-        let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
-
-        let list_future = async move {
-            integrations_client
-                .list_simple_integrations(provider_slugs)
-                .await
-        };
-
-        ctx.spawn(
-            list_future,
-            move |_, result: anyhow::Result<SimpleIntegrationsOutput>, ctx| match result {
-                Ok(output) => {
-                    integration_output::print_integrations(&output, global_options.output_format);
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                }
+    fn list(
+        &self,
+        global_options: GlobalOptions,
+        team_selection: TeamSelection,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |_, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            let team_scope = match super::common::resolve_team_scope(&team_selection, ctx) {
+                Ok(team_scope) => team_scope,
                 Err(err) => {
-                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                    super::report_fatal_error(err, ctx);
+                    return;
                 }
-            },
-        );
+            };
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
+            let provider_slugs = [ProviderType::Linear, ProviderType::Slack]
+                .into_iter()
+                .map(|provider| provider.slug())
+                .collect();
+            let integrations_client = ServerApiProvider::as_ref(ctx).get_integrations_client();
+            let list_future = async move {
+                integrations_client
+                    .list_simple_integrations(request_team_scope, provider_slugs)
+                    .await
+            };
+
+            ctx.spawn(
+                list_future,
+                move |_, result: anyhow::Result<SimpleIntegrationsOutput>, ctx| match result {
+                    Ok(output) => {
+                        integration_output::print_integrations(
+                            &output,
+                            global_options.output_format,
+                        );
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    }
+                    Err(err) => {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                    }
+                },
+            );
+        });
     }
 
     fn create(&self, args: CreateIntegrationArgs, ctx: &mut ModelContext<Self>) {
@@ -74,14 +137,14 @@ impl IntegrationCommandRunner {
                 ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
                 return;
             }
-            let team_scope =
-                match super::common::resolve_team_scope(&TeamSelection { team: None }, ctx) {
-                    Ok(team_scope) => team_scope,
-                    Err(err) => {
-                        ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
-                        return;
-                    }
-                };
+            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
+                    return;
+                }
+            };
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
 
             let loaded_file = match args.config_file.file.as_deref() {
                 Some(path) => match super::config_file::load_config_file(path) {
@@ -186,6 +249,7 @@ impl IntegrationCommandRunner {
 
             runner.start_create_or_update_flow(
                 ctx,
+                IntegrationRetryState::new(request_team_scope),
                 integration_type,
                 environment_uid,
                 base_prompt,
@@ -195,7 +259,6 @@ impl IntegrationCommandRunner {
                 worker_host,
                 enabled,
                 is_update,
-                1,
             );
         });
     }
@@ -204,6 +267,7 @@ impl IntegrationCommandRunner {
     fn start_create_or_update_flow(
         &self,
         ctx: &mut ModelContext<Self>,
+        retry_state: IntegrationRetryState,
         integration_type: String,
         environment_uid: Option<String>,
         base_prompt: Option<String>,
@@ -213,12 +277,10 @@ impl IntegrationCommandRunner {
         worker_host: Option<String>,
         enabled: bool,
         is_update: bool,
-        attempt: u32,
     ) {
         const MAX_CREATE_ATTEMPTS: u32 = 8;
         let action = if is_update { "update" } else { "creation" };
-
-        if attempt > MAX_CREATE_ATTEMPTS {
+        if retry_state.attempt > MAX_CREATE_ATTEMPTS {
             ctx.terminate_app(
                 TerminationMode::ForceTerminate,
                 Some(Err(anyhow::anyhow!(
@@ -243,6 +305,7 @@ impl IntegrationCommandRunner {
         let create_future = async move {
             integrations_client
                 .create_or_update_simple_integration(
+                    retry_state.request_team_scope,
                     future_integration_type,
                     future_is_update,
                     future_environment_uid,
@@ -272,8 +335,8 @@ impl IntegrationCommandRunner {
                                 println!("Authorize the provider here: {auth_url}\n");
                                 ctx.open_url(&auth_url);
 
-                                let integrations_client = ServerApiProvider::as_ref(ctx)
-                                    .get_integrations_client();
+                                let integrations_client =
+                                    ServerApiProvider::as_ref(ctx).get_integrations_client();
                                 let tx_id = tx_id.into_inner();
 
                                 let poll_future =
@@ -288,17 +351,15 @@ impl IntegrationCommandRunner {
                                 let next_worker_host = worker_host.clone();
                                 let next_enabled = enabled;
                                 let next_is_update = is_update;
-                                let next_attempt = attempt + 1;
 
                                 ctx.spawn(
                                     poll_future,
                                     move |runner, poll_result, ctx| {
-                                        match poll_result {
-                                            Ok(OauthConnectTxStatus::Completed) => {
-                                                // Inner loop done; try create or update again (outer loop).
-                                                // This may happen multiple times if the user needs to authorize multiple services.
+                                        match retry_state.continue_after_oauth(poll_result) {
+                                            Ok(next_retry_state) => {
                                                 runner.start_create_or_update_flow(
                                                     ctx,
+                                                    next_retry_state,
                                                     next_integration_type,
                                                     next_environment_uid,
                                                     next_base_prompt,
@@ -308,33 +369,12 @@ impl IntegrationCommandRunner {
                                                     next_worker_host,
                                                     next_enabled,
                                                     next_is_update,
-                                                    next_attempt,
-                                                );
-                                            }
-                                            Ok(OauthConnectTxStatus::Failed) => {
-                                                ctx.terminate_app(
-                                                    TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("OAuth authorization failed."))),
-                                                );
-                                            }
-                                            Ok(OauthConnectTxStatus::Expired) => {
-                                                ctx.terminate_app(
-                                                    TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("OAuth authorization expired."))),
-                                                );
-                                            }
-                                            Ok(OauthConnectTxStatus::Pending)
-                                            | Ok(OauthConnectTxStatus::InProgress) => {
-                                                // Should not be returned by poll_oauth_until_terminal.
-                                                ctx.terminate_app(
-                                                    TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("Unexpected non-terminal OAuth status returned"))),
                                                 );
                                             }
                                             Err(err) => {
                                                 ctx.terminate_app(
                                                     TerminationMode::ForceTerminate,
-                                                    Some(Err(anyhow::anyhow!("Error polling OAuth status: {err}"))),
+                                                    Some(Err(err)),
                                                 );
                                             }
                                         }
@@ -395,6 +435,14 @@ impl IntegrationCommandRunner {
                 ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(err)));
                 return;
             }
+            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
+            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
 
             let loaded_file = match args.config_file.file.as_deref() {
                 Some(path) => match super::config_file::load_config_file(path) {
@@ -499,6 +547,7 @@ impl IntegrationCommandRunner {
                 // Explicitly requested to update without an environment.
                 runner.start_create_or_update_flow(
                     ctx,
+                    IntegrationRetryState::new(request_team_scope),
                     integration_type,
                     Some(String::new()),
                     base_prompt,
@@ -508,7 +557,6 @@ impl IntegrationCommandRunner {
                     worker_host,
                     enabled,
                     is_update,
-                    1,
                 );
                 return;
             }
@@ -517,6 +565,7 @@ impl IntegrationCommandRunner {
 
             runner.start_create_or_update_flow(
                 ctx,
+                IntegrationRetryState::new(request_team_scope),
                 integration_type,
                 environment_uid,
                 base_prompt,
@@ -526,7 +575,6 @@ impl IntegrationCommandRunner {
                 worker_host,
                 enabled,
                 is_update,
-                1,
             );
         });
     }
@@ -536,3 +584,7 @@ impl warpui::Entity for IntegrationCommandRunner {
     type Event = ();
 }
 impl SingletonEntity for IntegrationCommandRunner {}
+
+#[cfg(test)]
+#[path = "integration_tests.rs"]
+mod tests;

@@ -1,15 +1,17 @@
 //! Provider command for linking third-party services.
+
 use comfy_table::Cell;
 use serde::Serialize;
 use warp_cli::GlobalOptions;
 use warp_cli::provider::{ProviderCommand, ProviderType};
+use warp_cli::scope::ObjectScope;
 use warp_core::channel::ChannelState;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent_sdk::common::describe_sole_team_error;
 use crate::ai::agent_sdk::output::{self, TableFormat};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope};
 
 /// Handle provider-related CLI commands.
 pub fn run(
@@ -19,9 +21,12 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| ProviderCommandRunner);
     match command {
-        ProviderCommand::Setup(args) => runner.update(ctx, |runner, ctx| {
-            runner.setup(args.provider_type, args.team, args.personal, ctx)
-        }),
+        ProviderCommand::Setup(args) => {
+            runner.update(ctx, |runner, ctx| {
+                runner.setup(args.provider_type, args.scope, ctx)
+            });
+            Ok(())
+        }
         ProviderCommand::List => runner.update(ctx, |runner, ctx| runner.list(global_options, ctx)),
     }
 }
@@ -31,18 +36,30 @@ struct ProviderCommandRunner;
 
 impl ProviderCommandRunner {
     // This shouldn't need to be done, it's usually done as part of create
-    fn setup(
+    fn setup(&self, provider_type: ProviderType, scope: ObjectScope, ctx: &mut ModelContext<Self>) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |runner, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            if let Err(err) = runner.finish_setup(provider_type, scope, ctx) {
+                super::report_fatal_error(err, ctx);
+            }
+        });
+    }
+
+    fn finish_setup(
         &self,
         provider_type: ProviderType,
-        team: bool,
-        personal: bool,
+        scope: ObjectScope,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
         // Construct the OAuth connect URL
         let server_url = ChannelState::server_root_url();
 
-        let mut use_team_auth = team;
-        if !team && !personal {
+        let mut use_team_auth = scope.is_team();
+        if !scope.is_team() && !scope.personal {
             if provider_type.allowed_in_team_context()
                 && provider_type.allowed_in_personal_context()
             {
@@ -52,16 +69,17 @@ impl ProviderCommandRunner {
                 ));
             }
             use_team_auth = provider_type.allowed_in_team_context();
-        } else if personal {
+        } else if scope.personal {
             use_team_auth = false;
         }
 
         // TODO(bens): initiate the OAuth flow and use the login-less auth URL
         let slug = provider_type.slug();
         let url = if use_team_auth {
-            let team_uid = UserWorkspaces::as_ref(ctx)
-                .sole_team_uid()
-                .map_err(|err| describe_sole_team_error(err, ctx))?;
+            let team_scope = super::common::resolve_team_scope(&scope.team_selection, ctx)?;
+            let team_uid = team_scope
+                .team_uid()
+                .ok_or_else(|| describe_sole_team_error(SoleTeamError::NoTeam, ctx))?;
             format!("{server_url}/oauth/connect/{slug}?principalType=team&principalId={team_uid}")
         } else {
             format!("{server_url}/oauth/connect/{slug}")
@@ -153,3 +171,7 @@ impl TableFormat for ProviderInfo {
         ]
     }
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod tests;

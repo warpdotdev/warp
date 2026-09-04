@@ -5,6 +5,7 @@ use crate::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
 use crate::provider::ProviderType;
+use crate::scope::TeamSelection;
 
 /// Integration-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -15,7 +16,10 @@ pub enum IntegrationCommand {
     /// Update an integration.
     Update(UpdateIntegrationArgs),
     /// List simple integrations and their connection status.
-    List,
+    List {
+        #[command(flatten)]
+        team_selection: TeamSelection,
+    },
 }
 
 impl IntegrationCommand {
@@ -23,7 +27,7 @@ impl IntegrationCommand {
         match self {
             IntegrationCommand::Create(_) => "integration create",
             IntegrationCommand::Update(_) => "integration update",
-            IntegrationCommand::List => "integration list",
+            IntegrationCommand::List { .. } => "integration list",
         }
     }
 }
@@ -33,6 +37,8 @@ pub struct CreateIntegrationArgs {
     /// Provider to create the integration for.
     #[arg(value_enum)]
     pub provider: ProviderType,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,
@@ -68,6 +74,8 @@ pub struct UpdateIntegrationArgs {
     /// Provider to update the integration for.
     #[arg(value_enum)]
     pub provider: ProviderType,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,
