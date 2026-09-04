@@ -754,6 +754,83 @@ fn load_spec_resolves_generators_and_filters_from_owning_signature() {
 }
 
 #[test]
+fn load_spec_uses_target_dcd_on_loaded_target_child() {
+    let analyze = with_dynamic_option(
+        signature_with_name("analyze"),
+        "--jobs",
+        "jobs_gen",
+        "jobs_filter",
+    );
+    let flutter = with_subcommand(signature_with_name("flutter"), analyze);
+    let fvm = with_subcommand(
+        with_dynamic_option(
+            signature_with_name("fvm"),
+            "--wrap",
+            "wrap_gen",
+            "wrap_filter",
+        ),
+        with_load_spec(signature_with_name("flutter"), "flutter"),
+    );
+    let generators = HashMap::from([
+        CommandSignatureGenerators::new("fvm")
+            .add_generator(
+                "wrap_gen",
+                Generator::script(CommandBuilder::single_command("echo wrap"), |_| {
+                    Default::default()
+                }),
+            )
+            .add_generator(
+                "jobs_gen",
+                Generator::script(CommandBuilder::single_command("echo fvm-jobs"), |_| {
+                    Default::default()
+                }),
+            )
+            .add_filter("wrap_filter", TemplateFilter(identity_filter))
+            .into(),
+        CommandSignatureGenerators::new("flutter")
+            .add_generator(
+                "jobs_gen",
+                Generator::script(CommandBuilder::single_command("echo flutter-jobs"), |_| {
+                    Default::default()
+                }),
+            )
+            .add_filter("jobs_filter", TemplateFilter(identity_filter))
+            .into(),
+    ]);
+    let registry = super::CommandRegistry::new(|_| None, generators);
+    registry.register_signature(fvm);
+    registry.register_signature(flutter);
+
+    let found = registry
+        .signature_from_line(
+            "fvm flutter analyze ",
+            TopLevelCommandCaseSensitivity::CaseSensitive,
+        )
+        .expect("analyze");
+    assert_eq!(found.signature.name(), "analyze");
+    let jobs = found
+        .options()
+        .find(|opt| opt.has_name("--jobs"))
+        .expect("jobs option");
+    let jobs_dcd = found.completion_data_for_option(jobs).expect("jobs dcd");
+    assert!(
+        jobs_dcd
+            .filters()
+            .contains_key(&FilterTemplateSuggestion::from("jobs_filter"))
+    );
+    assert!(
+        jobs_dcd
+            .generators()
+            .contains_key(&GeneratorName::new("jobs_gen"))
+    );
+    assert!(
+        !jobs_dcd
+            .generators()
+            .contains_key(&GeneratorName::new("wrap_gen"))
+    );
+}
+
+#[test]
 fn load_spec_alias_expansion_path_enters_loaded_target() {
     let flutter = with_subcommand(
         signature_with_name("flutter"),

@@ -316,8 +316,9 @@ impl CommandRegistry {
                     TokenAction::ResolvedSubcommand {
                         signature: next,
                         from_loaded_target,
+                        owner_dcd,
                     } => {
-                        self.enter_signature(&mut view, next, from_loaded_target);
+                        self.enter_signature(&mut view, next, from_loaded_target, owner_dcd);
                         signature_start_idx = token_idx;
                     }
                     TokenAction::SkippedOption { advance_by } => {
@@ -400,8 +401,9 @@ impl CommandRegistry {
                     TokenAction::ResolvedSubcommand {
                         signature: next,
                         from_loaded_target,
+                        owner_dcd,
                     } => {
-                        self.enter_signature(&mut view, next, from_loaded_target);
+                        self.enter_signature(&mut view, next, from_loaded_target, owner_dcd);
                         signature_start_idx = token_idx;
                     }
                     TokenAction::SkippedOption { advance_by } => {
@@ -460,12 +462,14 @@ impl CommandRegistry {
         view: &mut CommandView<'a>,
         next: &'a Signature,
         from_loaded_target: bool,
+        owner_dcd: Option<&'a DynamicCompletionData>,
     ) {
         if from_loaded_target {
             view.inherited_options
                 .push((view.wrapper.options(), view.wrapper_dcd));
         }
         view.wrapper = next;
+        view.wrapper_dcd = owner_dcd;
         view.targets.clear();
         self.follow_load_spec(view);
     }
@@ -529,6 +533,7 @@ enum TokenAction<'a> {
     ResolvedSubcommand {
         signature: &'a Signature,
         from_loaded_target: bool,
+        owner_dcd: Option<&'a DynamicCompletionData>,
     },
     /// The token matched a recognized option whose last argument is variadic.
     /// The caller should stop walking tokens and return the current signature.
@@ -562,17 +567,29 @@ fn classify_token<'a>(
         return TokenAction::ResolvedSubcommand {
             signature: subcommand,
             from_loaded_target: false,
+            owner_dcd: view.wrapper_dcd,
         };
     }
 
-    if let Some(subcommand) = view.targets.iter().find_map(|(target, _)| {
-        target.subcommands().iter().find(|s| {
-            should_complete_on_subcmd(s.name(), token, num_tokens, token_idx, has_post_whitespace)
-        })
+    if let Some((subcommand, owner_dcd)) = view.targets.iter().find_map(|(target, dcd)| {
+        target
+            .subcommands()
+            .iter()
+            .find(|s| {
+                should_complete_on_subcmd(
+                    s.name(),
+                    token,
+                    num_tokens,
+                    token_idx,
+                    has_post_whitespace,
+                )
+            })
+            .map(|subcommand| (subcommand, *dcd))
     }) {
         return TokenAction::ResolvedSubcommand {
             signature: subcommand,
             from_loaded_target: true,
+            owner_dcd,
         };
     }
 
