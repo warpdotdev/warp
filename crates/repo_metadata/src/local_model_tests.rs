@@ -3123,12 +3123,14 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
             let expected_ignored = {
                 let mut files = Vec::new();
                 let mut gitignores = gitignores.clone();
+                let mut gitignore_paths = Vec::new();
                 let mut budget = 100_000usize;
                 let mut standing_results = crate::StandingQueryResults::default();
                 let root = block_on(Entry::build_tree_with_standing_queries(
                     &repo_local,
                     &mut files,
                     &mut gitignores,
+                    &mut gitignore_paths,
                     Some(&mut budget),
                     BuildTreeOptions {
                         max_depth: 64,

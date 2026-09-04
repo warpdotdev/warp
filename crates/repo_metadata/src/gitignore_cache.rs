@@ -14,8 +14,8 @@
 //! small and page-cached after the first traversal, so this stays cheap relative to the parse
 //! it guards.
 //!
-//! Eviction is source-byte-bounded LRU rather than count-bounded (see
-//! [`MAX_CACHED_SOURCE_BYTES`]).
+//! Eviction is bounded by both source bytes and matcher count (see
+//! [`MAX_CACHED_SOURCE_BYTES`] and [`MAX_CACHED_MATCHERS`]).
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -35,6 +35,62 @@ const MAX_CACHED_SOURCE_BYTES: u64 = 384 * 1024;
 /// Small in tests so eviction can be exercised without huge fixtures.
 #[cfg(test)]
 const MAX_CACHED_SOURCE_BYTES: u64 = 24;
+/// Maximum number of compiled matchers retained process-wide.
+pub const MAX_CACHED_MATCHERS: usize = 64;
+/// Small in tests so count-based eviction can be exercised with small fixtures.
+#[cfg(test)]
+pub(crate) const EFFECTIVE_MAX_CACHED_MATCHERS: usize = 3;
+#[cfg(not(test))]
+const EFFECTIVE_MAX_CACHED_MATCHERS: usize = MAX_CACHED_MATCHERS;
+
+/// Gitignore sources that can materialize compiled matchers for an operation without retaining
+/// cache-managed matchers between operations.
+#[derive(Debug, Clone, Default)]
+pub struct GitignoreRules {
+    cached_paths: Arc<Vec<PathBuf>>,
+    persistent_matchers: Arc<Vec<Arc<Gitignore>>>,
+}
+static GLOBAL_GITIGNORE: LazyLock<Option<Arc<Gitignore>>> = LazyLock::new(|| {
+    let (global_gitignore, _) = Gitignore::global();
+    (!global_gitignore.is_empty()).then(|| Arc::new(global_gitignore))
+});
+
+impl GitignoreRules {
+    /// Returns rules containing the global gitignore when one is configured.
+    pub fn global() -> Self {
+        let persistent_matchers = GLOBAL_GITIGNORE.iter().cloned().collect();
+        Self {
+            cached_paths: Arc::default(),
+            persistent_matchers: Arc::new(persistent_matchers),
+        }
+    }
+
+    /// Replaces the cache-managed source paths while preserving persistent matchers.
+    pub fn with_cached_paths(self, cached_paths: Vec<PathBuf>) -> Self {
+        Self {
+            cached_paths: Arc::new(cached_paths),
+            ..self
+        }
+    }
+
+    /// Materializes matchers for one operation.
+    pub fn matchers(&self) -> Vec<Arc<Gitignore>> {
+        self.persistent_matchers
+            .iter()
+            .cloned()
+            .chain(self.cached_paths.iter().map(|path| get_or_parse(path)))
+            .collect()
+    }
+}
+
+impl From<Vec<Arc<Gitignore>>> for GitignoreRules {
+    fn from(persistent_matchers: Vec<Arc<Gitignore>>) -> Self {
+        Self {
+            cached_paths: Arc::default(),
+            persistent_matchers: Arc::new(persistent_matchers),
+        }
+    }
+}
 
 struct CacheEntry {
     content_digest: u64,
@@ -95,10 +151,11 @@ impl Cache {
         self.evict_if_over_budget();
     }
 
-    /// Evicts least-recently-used entries until the cache is back under
-    /// [`MAX_CACHED_SOURCE_BYTES`].
+    /// Evicts least-recently-used entries until the cache is under both retention limits.
     fn evict_if_over_budget(&mut self) {
-        if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES {
+        if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES
+            && self.entries.len() <= EFFECTIVE_MAX_CACHED_MATCHERS
+        {
             return;
         }
         let mut by_last_used: Vec<(PathBuf, u64, u64)> = self
@@ -108,7 +165,9 @@ impl Cache {
             .collect();
         by_last_used.sort_by_key(|(_, last_used, _)| *last_used);
         for (path, _, source_len) in by_last_used {
-            if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES {
+            if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES
+                && self.entries.len() <= EFFECTIVE_MAX_CACHED_MATCHERS
+            {
                 break;
             }
             self.entries.remove(&path);
@@ -133,7 +192,7 @@ fn content_digest(content: &[u8]) -> u64 {
 /// transient read failure or a parse error is returned directly without touching the cache, so
 /// a stale or partial result can never shadow a later, successful parse (e.g. after a
 /// permissions fix or an edit that corrects a malformed glob line).
-pub(crate) fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
+pub fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
     let Ok(content) = std::fs::read(gitignore_path) else {
         // Can't fingerprint a file we can't read right now. Parse directly — `Gitignore::new`
         // fails open the same way on an unreadable file — without disturbing any existing
@@ -175,6 +234,7 @@ pub(crate) fn clear_for_test() {
     let mut cache = CACHE.lock();
     cache.entries.clear();
     cache.total_source_bytes = 0;
+    cache.next_tick = 0;
 }
 
 #[cfg(test)]

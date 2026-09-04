@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use ignore::gitignore::Gitignore;
 use itertools::Itertools;
+use repo_metadata::GitignoreRules;
 use serde::{Deserialize, Serialize};
 
 use crate::index::{Entry, FileId};
@@ -32,8 +33,8 @@ pub struct Outline {
     /// Mapping the leaf file nodes to their outline.
     file_id_to_outline: HashMap<FileId, FileOutline>,
 
-    /// List of gitignore patterns.
-    gitignores: Vec<Arc<Gitignore>>,
+    /// Gitignore rules used by incremental outline updates.
+    gitignore_rules: GitignoreRules,
 }
 
 impl Outline {
@@ -129,7 +130,7 @@ impl Outline {
     }
 
     pub fn gitignores(&self) -> Vec<Arc<Gitignore>> {
-        self.gitignores.clone()
+        self.gitignore_rules.matchers()
     }
 }
 

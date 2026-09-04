@@ -7,7 +7,7 @@ use warp_util::standardized_path::StandardizedPath;
 use warpui_core::ModelHandle;
 
 use crate::file_tree_store::file_tree_state::FileTreeMapStore;
-use crate::{BuildTreeError, Entry, FileId, FileMetadata, Repository};
+use crate::{BuildTreeError, Entry, FileId, FileMetadata, GitignoreRules, Repository};
 
 #[derive(Debug, Clone)]
 pub struct FileTreeEntry {
@@ -368,7 +368,7 @@ pub struct FileTreeState {
     /// The entry representing the file tree structure.
     pub entry: FileTreeEntry,
     /// Gitignore rules applicable to this repository.
-    pub gitignores: Arc<Vec<Arc<Gitignore>>>,
+    pub gitignore_rules: GitignoreRules,
 
     /// Handle to the backing repository (None for lazily-loaded standalone paths).
     #[expect(unused)]
@@ -379,12 +379,12 @@ impl FileTreeState {
     /// Creates a new FileTreeState.
     pub fn new(
         entry: Entry,
-        gitignores: Vec<Arc<Gitignore>>,
+        gitignore_rules: impl Into<GitignoreRules>,
         repository: Option<ModelHandle<Repository>>,
     ) -> Self {
         Self {
             entry: entry.into(),
-            gitignores: Arc::new(gitignores),
+            gitignore_rules: gitignore_rules.into(),
             repository,
         }
     }
@@ -393,7 +393,7 @@ impl FileTreeState {
     pub fn new_lazy_loaded(entry: Entry) -> Self {
         Self {
             entry: entry.into(),
-            gitignores: Arc::new(vec![]),
+            gitignore_rules: GitignoreRules::default(),
             repository: None,
         }
     }
@@ -405,7 +405,7 @@ impl FileTreeState {
     pub fn from_file_tree_entry(entry: FileTreeEntry) -> Self {
         Self {
             entry,
-            gitignores: Arc::new(vec![]),
+            gitignore_rules: GitignoreRules::default(),
             repository: None,
         }
     }

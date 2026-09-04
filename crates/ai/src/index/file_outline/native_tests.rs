@@ -194,3 +194,37 @@ fmt.Println("Helper function")
     assert_eq!(symbols[4].name, "helperFunction");
     assert_eq!(symbols[4].type_prefix, Some("func".to_owned()));
 }
+
+#[test]
+fn build_outline_reuses_repo_metadata_gitignore_cache() {
+    let temp_dir = TempDir::new().unwrap();
+    let gitignore_path = temp_dir.path().join(".gitignore");
+    std::fs::write(&gitignore_path, "ignored.rs\n").unwrap();
+    create_test_file(&temp_dir, "included.rs", "fn included() {}\n");
+
+    let cached = repo_metadata::gitignore_cache::get_or_parse(&gitignore_path);
+    let outline = futures::executor::block_on(build_outline(temp_dir.path(), None)).unwrap();
+    let outline_matcher = outline
+        .gitignores()
+        .into_iter()
+        .find(|gitignore| gitignore.path() == temp_dir.path())
+        .expect("outline should include the repository gitignore");
+
+    assert!(
+        std::sync::Arc::ptr_eq(&cached, &outline_matcher),
+        "outline construction should reuse the shared compiled matcher"
+    );
+
+    drop(outline_matcher);
+    assert_eq!(
+        std::sync::Arc::strong_count(&cached),
+        2,
+        "only the cache and test witness should retain the matcher"
+    );
+    assert!(
+        outline
+            .gitignores()
+            .into_iter()
+            .any(|gitignore| gitignore.matched("ignored.rs", false).is_ignore())
+    );
+}

@@ -9,8 +9,8 @@ use futures::channel::oneshot;
 use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use rayon::prelude::*;
-use repo_metadata::RepositoryUpdate;
 use repo_metadata::entry::{BudgetExceededBehavior, IgnoredPathStrategy, is_file_parsable};
+use repo_metadata::{GitignoreRules, RepositoryUpdate};
 use streaming_iterator::StreamingIterator;
 use syntax_tree::TextSlice;
 use warp_errors::report_error;
@@ -32,27 +32,18 @@ pub async fn build_outline(
     max_num_files_limit: Option<usize>,
 ) -> anyhow::Result<Outline> {
     const MAX_DEPTH: usize = 200;
-    let mut gitignores = vec![];
-
-    // Add global gitignore, if it exists
-    let (global_gitignore, _) = Gitignore::global();
-    if !global_gitignore.is_empty() {
-        gitignores.push(Arc::new(global_gitignore));
-    }
-
-    let gitignore_path = path.join(".gitignore");
-    if gitignore_path.exists() {
-        let (gitignore, _) = Gitignore::new(gitignore_path);
-        gitignores.push(Arc::new(gitignore));
-    }
+    let gitignore_rules = GitignoreRules::global();
+    let mut gitignores = gitignore_rules.matchers();
+    let mut gitignore_paths = Vec::new();
 
     // First traverse the repo path to retrieve all files we want to parse.
     let mut files = Vec::new();
     let mut remaining_file_quotas = max_num_files_limit;
-    let entry = Entry::build_tree(
+    let entry = Entry::build_tree_with_gitignore_paths(
         path,
         &mut files,
         &mut gitignores,
+        &mut gitignore_paths,
         remaining_file_quotas.as_mut(),
         MAX_DEPTH,
         0,
@@ -95,7 +86,7 @@ pub async fn build_outline(
     Ok(Outline {
         root: entry,
         file_id_to_outline,
-        gitignores,
+        gitignore_rules: gitignore_rules.with_cached_paths(gitignore_paths),
     })
 }
 
@@ -113,6 +104,7 @@ impl Outline {
 
         let mut files_metadata = vec![];
         let mut files_metadata_to_remove = vec![];
+        let gitignores = self.gitignore_rules.matchers();
 
         // Extract paths from TargetFile for removal, filtering out gitignored files
         for target_file in deleted
@@ -132,7 +124,9 @@ impl Outline {
             .chain(moved.keys().cloned())
             .filter(|target_file| !target_file.is_ignored)
         {
-            if let Some(file_metadata) = self.find_or_insert_path_to_file_tree(&target_file.path) {
+            if let Some(file_metadata) =
+                self.find_or_insert_path_to_file_tree(&target_file.path, &gitignores)
+            {
                 files_metadata.push(file_metadata.clone());
             }
         }
@@ -149,7 +143,11 @@ impl Outline {
     /// Returns the `FileMetadata` for the file corresponding to the given target path.
     ///
     /// If the target path corresponds to a directory, returns `None`.
-    fn find_or_insert_path_to_file_tree(&mut self, target_path: &Path) -> Option<&FileMetadata> {
+    fn find_or_insert_path_to_file_tree(
+        &mut self,
+        target_path: &Path,
+        gitignores: &[Arc<Gitignore>],
+    ) -> Option<&FileMetadata> {
         match &mut self.root {
             Entry::Directory(directory) => {
                 let dir_local = directory.path.to_local_path_lossy();
@@ -177,7 +175,7 @@ impl Outline {
                     if matches_gitignores(
                         ancestor,
                         ancestor.is_dir(),
-                        &self.gitignores,
+                        gitignores,
                         false, /* check_ancestors */
                     ) || ancestor.ends_with(".git")
                     {

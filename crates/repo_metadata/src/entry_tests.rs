@@ -502,6 +502,7 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
 
         let mut files = Vec::new();
         let mut gitignores = Vec::new();
+        let mut gitignore_paths = Vec::new();
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
@@ -509,6 +510,7 @@ fn standing_queries_report_skills_below_an_ignored_directory() {
             &repo,
             &mut files,
             &mut gitignores,
+            &mut gitignore_paths,
             None,
             super::BuildTreeOptions {
                 max_depth: 200,
@@ -558,6 +560,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
 
             let mut files = Vec::new();
             let mut gitignores = Vec::new();
+            let mut gitignore_paths = Vec::new();
             let mut results = StandingQueryResults::default();
             let mut definitions = StandingQueryDefinitions::default();
             definitions
@@ -566,6 +569,7 @@ fn standing_queries_report_symlinked_skills_without_materializing_symlinked_dire
                 &repo,
                 &mut files,
                 &mut gitignores,
+                &mut gitignore_paths,
                 None,
                 super::BuildTreeOptions {
                     max_depth: 200,
@@ -605,11 +609,13 @@ fn standing_queries_do_not_report_rules_below_an_unloaded_shallow_directory() {
 
         let mut files = Vec::new();
         let mut gitignores = Vec::new();
+        let mut gitignore_paths = Vec::new();
         let mut results = StandingQueryResults::default();
         let tree = run(Entry::build_tree_with_standing_queries(
             &repo,
             &mut files,
             &mut gitignores,
+            &mut gitignore_paths,
             None,
             super::BuildTreeOptions {
                 max_depth: 1,
@@ -658,6 +664,7 @@ fn shallow_tree_expands_force_included_skill_branch_only() {
 
         let mut files = Vec::new();
         let mut gitignores = Vec::new();
+        let mut gitignore_paths = Vec::new();
         let mut results = StandingQueryResults::default();
         let mut definitions = StandingQueryDefinitions::default();
         definitions.set_project_skill_provider_paths([std::path::PathBuf::from(".agents/skills")]);
@@ -665,6 +672,7 @@ fn shallow_tree_expands_force_included_skill_branch_only() {
             &workspace,
             &mut files,
             &mut gitignores,
+            &mut gitignore_paths,
             None,
             super::BuildTreeOptions {
                 max_depth: 1,

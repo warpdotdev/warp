@@ -21,6 +21,26 @@ fn reuses_cached_entry_for_unchanged_file() {
     );
 }
 
+#[test]
+fn evicts_least_recently_used_entry_over_matcher_count_limit() {
+    let mut cache = super::Cache::default();
+    for index in 0..=super::EFFECTIVE_MAX_CACHED_MATCHERS {
+        cache.insert(
+            format!("gitignore_{index}").into(),
+            index as u64,
+            Arc::new(ignore::gitignore::Gitignore::empty()),
+            0,
+        );
+    }
+
+    assert_eq!(cache.entries.len(), super::EFFECTIVE_MAX_CACHED_MATCHERS);
+    assert!(
+        !cache
+            .entries
+            .contains_key(std::path::Path::new("gitignore_0"))
+    );
+}
+
 /// A same-length edit that lands within the filesystem's mtime resolution must still be
 /// detected: content hashing must not mistake it for an unchanged file.
 #[test]
@@ -126,27 +146,20 @@ fn does_not_cache_a_failed_parse() {
 /// Exceeding the cache's byte budget evicts the least-recently-used entry first.
 #[test]
 fn evicts_least_recently_used_entry_over_capacity() {
-    super::clear_for_test();
-    let temp_dir = tempfile::tempdir().unwrap();
+    let mut cache = super::Cache::default();
+    for index in 0..3 {
+        cache.insert(
+            format!("gitignore_{index}").into(),
+            index,
+            Arc::new(ignore::gitignore::Gitignore::empty()),
+            9,
+        );
+    }
 
-    // Each file is 8 bytes ("target/\n"), so under the test budget of 24 source bytes, three
-    // files fit (24) but a fourth does not (32) and forces an eviction.
-    let paths: Vec<_> = (0..3)
-        .map(|i| {
-            let path = temp_dir.path().join(format!("gitignore_{i}"));
-            std::fs::write(&path, "target/\n").unwrap();
-            path
-        })
-        .collect();
-    let first_instances: Vec<_> = paths.iter().map(|path| get_or_parse(path)).collect();
-
-    let fourth_path = temp_dir.path().join("gitignore_3");
-    std::fs::write(&fourth_path, "target/\n").unwrap();
-    get_or_parse(&fourth_path);
-
-    let refetched_first = get_or_parse(&paths[0]);
+    assert_eq!(cache.total_source_bytes, 18);
     assert!(
-        !Arc::ptr_eq(&first_instances[0], &refetched_first),
-        "the least-recently-used entry should have been evicted and re-parsed"
+        !cache
+            .entries
+            .contains_key(std::path::Path::new("gitignore_0"))
     );
 }

@@ -2,8 +2,11 @@ use std::sync::Arc;
 
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::entry::{DirectoryEntry, Entry, FileId, FileMetadata};
-use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState};
+use crate::entry::{
+    BudgetExceededBehavior, DirectoryEntry, Entry, FileId, FileMetadata, IgnoredPathStrategy,
+};
+use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
+use crate::{GitignoreRules, matches_gitignores};
 
 fn std_path(s: &str) -> StandardizedPath {
     StandardizedPath::try_new(s).expect("test path should be valid")
@@ -196,4 +199,54 @@ fn test_rename_directory_parent_child_link_consistency() {
         new_child.as_str(),
         "Child path in parent_to_child_map should match the renamed child path"
     );
+}
+
+#[test]
+fn file_tree_state_does_not_retain_matchers_and_rematerializes_nested_rules() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(temp_dir.path()).unwrap();
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    let root_gitignore = root.join(".gitignore");
+    let nested_gitignore = nested.join(".gitignore");
+    std::fs::write(&root_gitignore, "root-only/\n").unwrap();
+    std::fs::write(&nested_gitignore, "secret.txt\n").unwrap();
+    std::fs::write(nested.join("secret.txt"), "").unwrap();
+    let mut files = Vec::new();
+    let mut active_matchers = Vec::new();
+    let mut gitignore_paths = Vec::new();
+    let entry = futures::executor::block_on(Entry::build_tree_with_gitignore_paths(
+        &root,
+        &mut files,
+        &mut active_matchers,
+        &mut gitignore_paths,
+        None,
+        20,
+        0,
+        &IgnoredPathStrategy::Include,
+        BudgetExceededBehavior::StopAndLazyLoad,
+    ))
+    .unwrap();
+
+    let retained = crate::gitignore_cache::get_or_parse(&nested_gitignore);
+    let state = FileTreeState::new(
+        entry,
+        GitignoreRules::default().with_cached_paths(gitignore_paths),
+        None,
+    );
+    drop(active_matchers);
+    assert_eq!(
+        Arc::strong_count(&retained),
+        2,
+        "only the cache and test witness should retain the matcher"
+    );
+    drop(retained);
+
+    let matchers = state.gitignore_rules.matchers();
+    assert!(matches_gitignores(
+        &nested.join("secret.txt"),
+        false,
+        &matchers,
+        false
+    ));
 }

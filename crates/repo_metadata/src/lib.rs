@@ -36,7 +36,7 @@ pub enum RepoMetadataError {
 pub mod entry;
 pub mod file_tree_store;
 pub mod file_tree_update;
-mod gitignore_cache;
+pub mod gitignore_cache;
 pub mod local_model;
 pub mod remote_model;
 pub mod repositories;
@@ -51,6 +51,7 @@ pub use entry::{
     BuildTreeError, DirectoryEntry, Entry, FileId, FileMetadata, gitignores_for_directory,
     matches_gitignores, should_ignore_git_path,
 };
+pub use gitignore_cache::GitignoreRules;
 // Re-export the local model's event under its original name for backward compatibility.
 pub use local_model::RepositoryMetadataEvent;
 pub use repository::{Repository, RepositoryWatchMode};
