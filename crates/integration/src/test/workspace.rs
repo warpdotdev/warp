@@ -25,7 +25,8 @@ use warp::integration_testing::terminal::{
     wait_until_bootstrapped_single_pane_for_tab,
 };
 use warp::integration_testing::view_getters::{
-    command_palette_view, pane_group_view, terminal_view, workspace_view,
+    command_palette_view, pane_group_view, settings_view_at_pane_index, terminal_view,
+    workspace_view,
 };
 use warp::integration_testing::window::{
     add_and_save_window, assert_num_windows_open, save_active_window_id,
@@ -35,7 +36,7 @@ use warp::integration_testing::workspace::{
 };
 use warp::search::command_palette::mixer::CommandPaletteItemAction;
 use warp::settings::PaneSettings;
-use warp::settings_view::{SettingsView, SettingsViewEvent};
+use warp::settings_view::SettingsViewEvent;
 use warp::terminal::shell::ShellType;
 use warp::themes::theme::AnsiColorIdentifier;
 use warp::workspace::tab_settings::{TabSettings, VerticalTabsDisplayGranularity};
@@ -1741,7 +1742,9 @@ fn open_settings_step(step_name: &'static str, window_key: &'static str) -> Test
     })
 }
 
-/// Emits the Settings view event because the Rules button has no cached test position.
+/// Emits the Settings view event because the Rules button has no cached test
+/// position. Resolves the view via the owning pane, not `views_of_type`,
+/// since the window can also hold an unused native `SettingsView`.
 fn click_rules_button_in_settings_step(
     step_name: &'static str,
     window_key: &'static str,
@@ -1750,12 +1753,7 @@ fn click_rules_button_in_settings_step(
         let window_id = *data
             .get::<_, WindowId>(window_key)
             .expect("saved window id should exist");
-        let settings_view = app
-            .views_of_type::<SettingsView>(window_id)
-            .expect("settings view should exist in the window")
-            .first()
-            .expect("settings view should exist in the window")
-            .clone();
+        let settings_view = settings_view_at_pane_index(app, window_id, 0, 0);
         settings_view.update(app, |_, ctx| {
             ctx.emit(SettingsViewEvent::OpenAIFactCollection);
         });

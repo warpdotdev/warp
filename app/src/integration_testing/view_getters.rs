@@ -208,6 +208,34 @@ pub fn pane_group_view(app: &App, window_id: WindowId, tab_index: usize) -> View
     })
 }
 
+/// Gets the Settings view hosted by the pane at the given tab and pane index.
+///
+/// Resolves via the pane group's own pane content rather than
+/// `App::views_of_type` (see the [`settings_view`] singleton getter below),
+/// because a window can contain more than one `SettingsView` at once: its
+/// own native per-window singleton (created eagerly for every workspace, see
+/// `Workspace::build_native_settings_view`) plus a different, transferred
+/// `SettingsView` if a Settings pane was dragged in from another window (see
+/// APP-5311). Picking "the first" `SettingsView` found in the window would
+/// be ambiguous in that case; resolving through the specific visible pane is
+/// not.
+pub fn settings_view_at_pane_index(
+    app: &App,
+    window_id: WindowId,
+    tab_index: usize,
+    pane_index: usize,
+) -> ViewHandle<SettingsView> {
+    pane_group_view(app, window_id, tab_index).read(app, |pane_group, ctx| {
+        pane_group
+            .settings_view_at_pane_index(pane_index, ctx)
+            .unwrap_or_else(|| {
+                panic!(
+                    "settings view should exist for window_id={window_id}, tab_index={tab_index}, pane_index={pane_index}"
+                )
+            })
+    })
+}
+
 /// Panics if there isn't a single theme chooser view in the view hierarchy.
 pub fn theme_chooser_view(app: &App, window_id: WindowId) -> ViewHandle<ThemeChooser> {
     singleton_view_of_type(app, window_id)

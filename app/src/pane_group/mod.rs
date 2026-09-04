@@ -4315,6 +4315,20 @@ impl PaneGroup {
         self.pane_contents.contains_key(&pane_id)
     }
 
+    /// Get the Settings view within the pane at `pane_index`, if that pane is:
+    /// 1. In bounds
+    /// 2. A settings pane
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn settings_view_at_pane_index(
+        &self,
+        pane_index: usize,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<crate::settings_view::SettingsView>> {
+        self.content_by_pane_index(pane_index)
+            .and_then(|pane| pane.as_any().downcast_ref::<SettingsPane>())
+            .map(|pane| pane.settings_view(ctx))
+    }
+
     /// Get the notebook view within the pane at `pane_index`.
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn notebook_view_at_pane_index(
@@ -8476,9 +8490,16 @@ impl View for PaneGroup {
     ) {
         let pane_group_id = ctx.view_id();
 
+        // Undo-close keeps a closed pane's contents in `pane_contents` (hidden
+        // from the visible tree) so it can be restored. Such a pane can still
+        // be transferred along with the rest of the tab's data, but it must
+        // not be re-registered as the live singleton for its kind -- it isn't
+        // visible and the transfer should not resurrect it as the tracked
+        // Settings/Rules pane for either window.
         let settings_pane_ids: Vec<PaneId> = self
             .panes_of::<SettingsPane>()
             .map(|pane| pane.id())
+            .filter(|pane_id| !self.is_pane_hidden_for_close(*pane_id))
             .collect();
         for pane_id in settings_pane_ids {
             if let Some(pane) = self.downcast_pane_by_id::<SettingsPane>(pane_id) {
@@ -8509,9 +8530,13 @@ impl View for PaneGroup {
             }
         }
 
+        // Same reasoning as the Settings loop above: skip panes hidden for
+        // undo-close so a transfer cannot re-register a closed Rules pane as
+        // the live singleton.
         let ai_fact_pane_ids: Vec<PaneId> = self
             .panes_of::<AIFactPane>()
             .map(|pane| pane.id())
+            .filter(|pane_id| !self.is_pane_hidden_for_close(*pane_id))
             .collect();
         for pane_id in ai_fact_pane_ids {
             if let Some(pane) = self.downcast_pane_by_id::<AIFactPane>(pane_id) {
