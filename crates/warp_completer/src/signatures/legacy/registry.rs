@@ -445,8 +445,12 @@ impl CommandRegistry {
             let Some(target) = self.signatures.get(target_name) else {
                 break;
             };
-            view.target_dcd = self.dynamic_completion_data.get(target.name());
-            view.targets.push(target);
+            view.targets.push((
+                target,
+                self.dynamic_completion_data
+                    .get(target.name())
+                    .or_else(|| self.dynamic_completion_data.get(target_name)),
+            ));
             next_target = target.load_spec.as_deref();
         }
     }
@@ -458,11 +462,11 @@ impl CommandRegistry {
         from_loaded_target: bool,
     ) {
         if from_loaded_target {
-            view.inherited_options.push(view.wrapper.options());
+            view.inherited_options
+                .push((view.wrapper.options(), view.wrapper_dcd));
         }
         view.wrapper = next;
         view.targets.clear();
-        view.target_dcd = None;
         self.follow_load_spec(view);
     }
 
@@ -475,19 +479,17 @@ impl CommandRegistry {
             view.wrapper,
             view.wrapper_dcd,
             signature_start_idx,
-            &view.targets,
-            &view.inherited_options,
-            view.target_dcd,
+            view.targets,
+            view.inherited_options,
         )
     }
 }
 
 struct CommandView<'a> {
     wrapper: &'a Signature,
-    targets: Vec<&'a Signature>,
-    inherited_options: Vec<&'a [Opt]>,
+    targets: Vec<(&'a Signature, Option<&'a DynamicCompletionData>)>,
+    inherited_options: Vec<(&'a [Opt], Option<&'a DynamicCompletionData>)>,
     wrapper_dcd: Option<&'a DynamicCompletionData>,
-    target_dcd: Option<&'a DynamicCompletionData>,
     load_stack: Vec<String>,
 }
 
@@ -498,7 +500,6 @@ impl<'a> CommandView<'a> {
             targets: Vec::new(),
             inherited_options: Vec::new(),
             wrapper_dcd,
-            target_dcd: None,
             load_stack: Vec::new(),
         }
     }
@@ -506,19 +507,18 @@ impl<'a> CommandView<'a> {
     fn options(&self) -> impl Iterator<Item = &Opt> {
         self.inherited_options
             .iter()
-            .copied()
-            .flatten()
+            .flat_map(|(options, _)| options.iter())
             .chain(self.wrapper.options())
-            .chain(self.targets.iter().flat_map(|target| target.options()))
+            .chain(self.targets.iter().flat_map(|(target, _)| target.options()))
     }
 
     fn alias(&self) -> Option<&warp_command_signatures::Alias> {
         self.wrapper
             .alias(self.wrapper_dcd.map(DynamicCompletionData::aliases))
             .or_else(|| {
-                self.targets.last().and_then(|target| {
-                    target.alias(self.target_dcd.map(DynamicCompletionData::aliases))
-                })
+                self.targets
+                    .iter()
+                    .find_map(|(target, dcd)| target.alias(dcd.map(DynamicCompletionData::aliases)))
             })
     }
 }
@@ -565,7 +565,7 @@ fn classify_token<'a>(
         };
     }
 
-    if let Some(subcommand) = view.targets.iter().find_map(|target| {
+    if let Some(subcommand) = view.targets.iter().find_map(|(target, _)| {
         target.subcommands().iter().find(|s| {
             should_complete_on_subcmd(s.name(), token, num_tokens, token_idx, has_post_whitespace)
         })

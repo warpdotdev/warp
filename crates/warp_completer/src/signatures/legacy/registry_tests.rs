@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use warp_command_signatures::{
-    Argument, CommandSignatureGenerators, IsArgumentOptional, Opt, Priority, Signature,
+    Argument, ArgumentType, CommandBuilder, CommandSignatureGenerators, FilterTemplateSuggestion,
+    Generator, GeneratorName, IsArgumentOptional, Opt, Priority, Signature, Template,
+    TemplateFilter, TemplateType,
 };
 use warp_core::channel::Channel;
 
@@ -615,35 +617,140 @@ fn load_spec_keeps_wrapper_options_on_loaded_target_subcommands() {
 }
 
 #[test]
-fn load_spec_uses_target_dynamic_completion_data() {
-    let flutter = with_subcommand(
-        signature_with_name("flutter"),
-        signature_with_name("analyze"),
+fn load_spec_follows_five_nested_references() {
+    let f = with_subcommand(signature_with_name("f"), signature_with_name("deep"));
+    let e = with_load_spec(signature_with_name("e"), "f");
+    let d = with_load_spec(signature_with_name("d"), "e");
+    let c = with_load_spec(signature_with_name("c"), "d");
+    let b = with_load_spec(signature_with_name("b"), "c");
+    let a = with_load_spec(signature_with_name("a"), "b");
+    let registry = create_test_command_registry([a, b, c, d, e, f]);
+    let found = registry
+        .signature_from_line("a ", TopLevelCommandCaseSensitivity::CaseSensitive)
+        .expect("a");
+    assert_eq!(subcommand_names(&found), vec!["deep"]);
+}
+
+fn with_dynamic_option(
+    mut signature: Signature,
+    flag: &str,
+    generator: &str,
+    filter: &str,
+) -> Signature {
+    signature.options.get_or_insert_with(Vec::new).push(Opt {
+        exact_string: vec![flag.to_string()],
+        description: None,
+        arguments: Some(vec![Argument {
+            display_name: Some("val".to_string()),
+            description: None,
+            is_variadic: false,
+            is_command: false,
+            argument_types: vec![
+                ArgumentType::Generator(GeneratorName::new(generator)),
+                ArgumentType::Template(Template {
+                    type_name: TemplateType::Files { must_exist: true },
+                    filter_name: Some(FilterTemplateSuggestion(filter.to_string())),
+                }),
+            ],
+            optional: IsArgumentOptional::Required,
+            skip_generator_validation: false,
+        }]),
+        required: false,
+        priority: Priority::default(),
+    });
+    signature
+}
+
+fn identity_filter(
+    suggestion: warp_command_signatures::Suggestion,
+    _: warp_command_signatures::PathSuggestionType,
+) -> Option<warp_command_signatures::Suggestion> {
+    Some(suggestion)
+}
+
+#[test]
+fn load_spec_resolves_generators_and_filters_from_owning_signature() {
+    let target = with_dynamic_option(
+        signature_with_name("target"),
+        "--tgt",
+        "tgt_gen",
+        "tgt_filter",
     );
-    let fvm = with_subcommand(
-        signature_with_name("fvm"),
-        with_load_spec(signature_with_name("flutter"), "flutter"),
+    let wrapper = with_dynamic_option(
+        with_load_spec(signature_with_name("wrap"), "target"),
+        "--wrap",
+        "wrap_gen",
+        "wrap_filter",
     );
     let generators = HashMap::from([
-        CommandSignatureGenerators::new("fvm").into(),
-        CommandSignatureGenerators::new("flutter").into(),
+        CommandSignatureGenerators::new("wrap")
+            .add_generator(
+                "wrap_gen",
+                Generator::script(CommandBuilder::single_command("echo wrap"), |_| {
+                    Default::default()
+                }),
+            )
+            .add_filter("wrap_filter", TemplateFilter(identity_filter))
+            .into(),
+        CommandSignatureGenerators::new("target")
+            .add_generator(
+                "tgt_gen",
+                Generator::script(CommandBuilder::single_command("echo tgt"), |_| {
+                    Default::default()
+                }),
+            )
+            .add_filter("tgt_filter", TemplateFilter(identity_filter))
+            .into(),
     ]);
     let registry = super::CommandRegistry::new(|_| None, generators);
-    registry.register_signature(fvm);
-    registry.register_signature(flutter);
+    registry.register_signature(wrapper);
+    registry.register_signature(target);
 
     let found = registry
-        .signature_from_line(
-            "fvm flutter ",
-            TopLevelCommandCaseSensitivity::CaseSensitive,
-        )
-        .expect("flutter");
-    assert!(found.dynamic_completion_data.is_some());
-    assert!(found.generator_completion_data().is_some());
-    assert!(!std::ptr::eq(
-        found.dynamic_completion_data.unwrap() as *const _,
-        found.generator_completion_data().unwrap() as *const _
-    ));
+        .signature_from_line("wrap ", TopLevelCommandCaseSensitivity::CaseSensitive)
+        .expect("wrap");
+    let wrap_opt = found
+        .options()
+        .find(|opt| opt.has_name("--wrap"))
+        .expect("wrap option");
+    let tgt_opt = found
+        .options()
+        .find(|opt| opt.has_name("--tgt"))
+        .expect("target option");
+    let wrap_dcd = found
+        .completion_data_for_option(wrap_opt)
+        .expect("wrap dcd");
+    let tgt_dcd = found.completion_data_for_option(tgt_opt).expect("tgt dcd");
+    assert!(
+        wrap_dcd
+            .generators()
+            .contains_key(&GeneratorName::new("wrap_gen"))
+    );
+    assert!(
+        wrap_dcd
+            .filters()
+            .contains_key(&FilterTemplateSuggestion::from("wrap_filter"))
+    );
+    assert!(
+        !wrap_dcd
+            .generators()
+            .contains_key(&GeneratorName::new("tgt_gen"))
+    );
+    assert!(
+        tgt_dcd
+            .generators()
+            .contains_key(&GeneratorName::new("tgt_gen"))
+    );
+    assert!(
+        tgt_dcd
+            .filters()
+            .contains_key(&FilterTemplateSuggestion::from("tgt_filter"))
+    );
+    assert!(
+        !tgt_dcd
+            .generators()
+            .contains_key(&GeneratorName::new("wrap_gen"))
+    );
 }
 
 #[test]

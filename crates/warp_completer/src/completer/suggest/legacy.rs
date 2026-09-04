@@ -49,8 +49,11 @@ pub(super) async fn completion_results_from_locations(
                 }
             }
             LocationType::Flag { .. } => {
-                let results =
-                    engine::flag_suggestions(options.match_strategy, &location, found_signature);
+                let results = engine::flag_suggestions(
+                    options.match_strategy,
+                    &location,
+                    found_signature.clone(),
+                );
                 completion_results_by_type
                     .entry(SuggestionTypeName::Option)
                     .or_default()
@@ -64,7 +67,7 @@ pub(super) async fn completion_results_from_locations(
                         line,
                         tokens_from_command,
                         classified_command.clone(),
-                        found_signature,
+                        found_signature.clone(),
                         &location,
                         parsed_token,
                         session_env_vars,

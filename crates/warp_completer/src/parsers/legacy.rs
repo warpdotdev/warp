@@ -17,19 +17,26 @@ use crate::parsers::{
 };
 use crate::signatures::CommandRegistry;
 
-const MAX_LOAD_SPEC_DEPTH: usize = 4;
+#[derive(Clone)]
+struct LoadedSpec<'a> {
+    signature: &'a Signature,
+    dynamic_completion_data: Option<&'a DynamicCompletionData>,
+}
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+struct InheritedOptions<'a> {
+    options: &'a [Opt],
+    dynamic_completion_data: Option<&'a DynamicCompletionData>,
+}
+
+#[derive(Clone)]
 /// A `Signature` (and its corresponding generator) contained at a given index.
 pub struct SignatureAtTokenIndex<'a> {
     pub signature: &'a Signature,
     pub dynamic_completion_data: Option<&'a DynamicCompletionData>,
     pub token_index: usize,
-    loaded_targets: [Option<&'a Signature>; MAX_LOAD_SPEC_DEPTH],
-    loaded_target_count: u8,
-    inherited_options: [Option<&'a [Opt]>; MAX_LOAD_SPEC_DEPTH],
-    inherited_options_count: u8,
-    target_dynamic_completion_data: Option<&'a DynamicCompletionData>,
+    loaded_targets: Vec<LoadedSpec<'a>>,
+    inherited_options: Vec<InheritedOptions<'a>>,
 }
 
 impl<'a> SignatureAtTokenIndex<'a> {
@@ -38,42 +45,34 @@ impl<'a> SignatureAtTokenIndex<'a> {
         dynamic_completion_data: Option<&'a DynamicCompletionData>,
         index: usize,
     ) -> Self {
-        Self::with_load_spec(signature, dynamic_completion_data, index, &[], &[], None)
+        Self::with_load_spec(signature, dynamic_completion_data, index, [], [])
     }
 
     pub fn with_load_spec(
         signature: &'a Signature,
         dynamic_completion_data: Option<&'a DynamicCompletionData>,
         index: usize,
-        loaded_targets: &[&'a Signature],
-        inherited_options: &[&'a [Opt]],
-        target_dynamic_completion_data: Option<&'a DynamicCompletionData>,
+        loaded_targets: impl IntoIterator<Item = (&'a Signature, Option<&'a DynamicCompletionData>)>,
+        inherited_options: impl IntoIterator<Item = (&'a [Opt], Option<&'a DynamicCompletionData>)>,
     ) -> Self {
-        let mut targets = [None; MAX_LOAD_SPEC_DEPTH];
-        let target_count = loaded_targets.len().min(MAX_LOAD_SPEC_DEPTH);
-        for (slot, target) in targets
-            .iter_mut()
-            .zip(loaded_targets.iter().take(target_count))
-        {
-            *slot = Some(*target);
-        }
-        let mut inherited = [None; MAX_LOAD_SPEC_DEPTH];
-        let inherited_count = inherited_options.len().min(MAX_LOAD_SPEC_DEPTH);
-        for (slot, options) in inherited
-            .iter_mut()
-            .zip(inherited_options.iter().take(inherited_count))
-        {
-            *slot = Some(*options);
-        }
         SignatureAtTokenIndex {
             signature,
             dynamic_completion_data,
             token_index: index,
-            loaded_targets: targets,
-            loaded_target_count: target_count as u8,
-            inherited_options: inherited,
-            inherited_options_count: inherited_count as u8,
-            target_dynamic_completion_data,
+            loaded_targets: loaded_targets
+                .into_iter()
+                .map(|(signature, dynamic_completion_data)| LoadedSpec {
+                    signature,
+                    dynamic_completion_data,
+                })
+                .collect(),
+            inherited_options: inherited_options
+                .into_iter()
+                .map(|(options, dynamic_completion_data)| InheritedOptions {
+                    options,
+                    dynamic_completion_data,
+                })
+                .collect(),
         }
     }
 
@@ -81,9 +80,9 @@ impl<'a> SignatureAtTokenIndex<'a> {
         if !self.signature.arguments().is_empty() {
             return self.signature.arguments();
         }
-        for target in self.loaded_targets() {
-            if !target.arguments().is_empty() {
-                return target.arguments();
+        for target in &self.loaded_targets {
+            if !target.signature.arguments().is_empty() {
+                return target.signature.arguments();
             }
         }
         &[]
@@ -92,34 +91,54 @@ impl<'a> SignatureAtTokenIndex<'a> {
     pub fn options(&self) -> impl Iterator<Item = &'a Opt> + '_ {
         self.inherited_options
             .iter()
-            .take(self.inherited_options_count as usize)
-            .filter_map(|options| *options)
-            .flatten()
+            .flat_map(|inherited| inherited.options.iter())
             .chain(self.signature.options())
-            .chain(self.loaded_targets().flat_map(Signature::options))
+            .chain(
+                self.loaded_targets
+                    .iter()
+                    .flat_map(|target| target.signature.options()),
+            )
     }
 
     pub fn subcommands(&self) -> impl Iterator<Item = &'a Signature> + '_ {
-        self.signature
-            .subcommands()
-            .iter()
-            .chain(self.loaded_targets().flat_map(Signature::subcommands))
+        self.signature.subcommands().iter().chain(
+            self.loaded_targets
+                .iter()
+                .flat_map(|target| target.signature.subcommands()),
+        )
     }
 
     pub fn parser_directives(&self) -> &ParserDirectives {
         &self.signature.parser_directives
     }
 
-    pub fn generator_completion_data(&self) -> Option<&'a DynamicCompletionData> {
-        self.target_dynamic_completion_data
-            .or(self.dynamic_completion_data)
+    pub fn completion_data_for_arguments(&self) -> Option<&'a DynamicCompletionData> {
+        if !self.signature.arguments().is_empty() {
+            return self.dynamic_completion_data;
+        }
+        for target in &self.loaded_targets {
+            if !target.signature.arguments().is_empty() {
+                return target.dynamic_completion_data;
+            }
+        }
+        self.dynamic_completion_data
     }
 
-    fn loaded_targets(&self) -> impl Iterator<Item = &'a Signature> + '_ {
-        self.loaded_targets
-            .iter()
-            .take(self.loaded_target_count as usize)
-            .filter_map(|target| *target)
+    pub fn completion_data_for_option(&self, opt: &Opt) -> Option<&'a DynamicCompletionData> {
+        for inherited in &self.inherited_options {
+            if slice_contains_ptr(inherited.options, opt) {
+                return inherited.dynamic_completion_data;
+            }
+        }
+        if slice_contains_ptr(self.signature.options(), opt) {
+            return self.dynamic_completion_data;
+        }
+        for target in &self.loaded_targets {
+            if slice_contains_ptr(target.signature.options(), opt) {
+                return target.dynamic_completion_data;
+            }
+        }
+        self.dynamic_completion_data
     }
 
     pub fn short_hand_flags(&self) -> impl Iterator<Item = AnnotatedFlag<'a>> + '_ {
@@ -149,6 +168,10 @@ fn is_short_hand_flag(name: &str) -> bool {
 
 fn is_long_hand_flag(name: &str) -> bool {
     name.starts_with('-') && !is_short_hand_flag(name)
+}
+
+fn slice_contains_ptr<T>(slice: &[T], item: &T) -> bool {
+    slice.iter().any(|candidate| std::ptr::eq(candidate, item))
 }
 
 fn annotated_flag<'a>(opt: &'a Opt, name: &'a str) -> AnnotatedFlag<'a> {
@@ -229,7 +252,7 @@ fn parse_internal_command(
     while idx < lite_cmd.parts.len() {
         if lite_cmd.parts[idx].item.starts_with('-') && lite_cmd.parts[idx].item.len() > 1 {
             let (named_types, err) =
-                get_flag_signature_spec(found_signature, &internal_command, &lite_cmd.parts[idx]);
+                get_flag_signature_spec(&found_signature, &internal_command, &lite_cmd.parts[idx]);
 
             if err.is_none() {
                 for FlagSignature {
@@ -443,7 +466,7 @@ impl From<&Opt> for FlagArgumentsCardinality {
 }
 
 fn get_flag_signature_spec<'a>(
-    found_signature: SignatureAtTokenIndex<'a>,
+    found_signature: &SignatureAtTokenIndex<'a>,
     cmd: &'a ShellCommand,
     arg: &'a Spanned<String>,
 ) -> (Vec<FlagSignature<'a>>, Option<ParseError>) {
