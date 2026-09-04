@@ -262,6 +262,8 @@ struct OrchestratorStreamState {
     /// cursor, so a replay does not generate spurious `ChildSpawned` events
     /// for already-known children.
     seeded: bool,
+    /// `true` while the cold-start REST seed request is in progress.
+    seed_fetch_in_flight: bool,
     /// Observer-mode child tracker for this orchestrator family. `None` until
     /// the family drain creates one on the first batch it handles.
     tracker: Option<OrchestrationChildTracker>,
@@ -1236,7 +1238,11 @@ impl OrchestrationEventStreamer {
             entry
                 .consumers
                 .insert(consumer_id, orchestrator_placeholder_conv_id);
-            needs_seed = !entry.seeded && entry.sse_connection.is_none();
+            needs_seed =
+                !entry.seeded && !entry.seed_fetch_in_flight && entry.sse_connection.is_none();
+            if needs_seed {
+                entry.seed_fetch_in_flight = true;
+            }
         }
         // Hydrate the orchestrator placeholder's persisted cursor into the
         // per-orchestrator entry so a restart-from-disk picks up where the
@@ -1378,13 +1384,14 @@ impl OrchestrationEventStreamer {
         result: anyhow::Result<Vec<crate::ai::ambient_agents::task::AmbientAgentTask>>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !self.viewer_mode_orchestrators.contains_key(&parent_task_id) {
+        let Some(entry) = self.viewer_mode_orchestrators.get_mut(&parent_task_id) else {
             log::warn!(
                 "[orch-viewer-streamer] ancestor seed fetch completed but viewer-mode entry \
                  for parent_task_id={parent_task_id} is gone; dropping"
             );
             return;
         };
+        entry.seed_fetch_in_flight = false;
         match result {
             Ok(tasks) => {
                 let tasks_received = tasks.len();
