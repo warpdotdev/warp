@@ -47,6 +47,14 @@ impl FileTreeEntry {
         &self.root_path
     }
 
+    /// Strong-count of the underlying map store's `Arc`. `1` means this is the
+    /// only live reference, so the next mutation's `Arc::make_mut` will not
+    /// deep-clone.
+    #[cfg(test)]
+    pub(crate) fn state_map_strong_count(&self) -> usize {
+        Arc::strong_count(&self.state_map)
+    }
+
     pub fn rename_path(&mut self, path: &StandardizedPath, new_path: &StandardizedPath) -> bool {
         Arc::make_mut(&mut self.state_map).rename_path(path, new_path)
     }
