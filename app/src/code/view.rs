@@ -207,6 +207,7 @@ struct TabDataMouseStateHandles {
 #[derive(Clone)]
 pub struct TabData {
     location: Option<LocalOrRemotePath>,
+    source: CodeSource,
     editor_view: Option<ViewHandle<LocalCodeEditorView>>,
     mouse_state_handles: TabDataMouseStateHandles,
     preview: bool,
@@ -220,9 +221,10 @@ pub enum PendingSaveIntent {
 }
 
 impl TabData {
-    fn unloaded(location: Option<LocalOrRemotePath>) -> Self {
+    fn unloaded(location: Option<LocalOrRemotePath>, source: CodeSource) -> Self {
         Self {
             location,
+            source,
             editor_view: None,
             mouse_state_handles: Default::default(),
             preview: false,
@@ -332,7 +334,7 @@ impl CodeView {
         source: CodeSource,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let mut view = Self::new_internal(source, ctx);
+        let mut view = Self::new_internal(source.clone(), ctx);
         let clamped_index = if tabs.is_empty() {
             0
         } else {
@@ -342,9 +344,9 @@ impl CodeView {
         for (index, tab_snapshot) in tabs.iter().enumerate() {
             let location = tab_snapshot.path.clone().map(LocalOrRemotePath::Local);
             let tab_data = if index == clamped_index {
-                view.build_tab_data(location, false, ctx)
+                view.build_tab_data(location, source.clone(), false, ctx)
             } else {
-                TabData::unloaded(location)
+                TabData::unloaded(location, source.clone())
             };
             view.tab_group.push(tab_data);
         }
@@ -476,6 +478,7 @@ impl CodeView {
     fn build_tab_data(
         &mut self,
         location: Option<LocalOrRemotePath>,
+        source: CodeSource,
         preview: bool,
         ctx: &mut ViewContext<Self>,
     ) -> TabData {
@@ -501,8 +504,8 @@ impl CodeView {
         });
 
         // For new files (CodeSource::New), mark the editor as a new file and set default directory
-        if tab_location.is_none() && matches!(self.source, CodeSource::New { .. }) {
-            let default_directory = self.source.default_directory().cloned();
+        if tab_location.is_none() && matches!(source, CodeSource::New { .. }) {
+            let default_directory = source.default_directory().cloned();
             code_editor.update(ctx, |local_editor, _ctx| {
                 local_editor.set_new_file(true);
                 local_editor.set_default_directory(default_directory);
@@ -510,14 +513,13 @@ impl CodeView {
         }
 
         // Bundled skills cannot be edited.
-        if self.source.is_bundled_skill() {
+        if source.is_bundled_skill() {
             editor.update(ctx, |editor, ctx| {
                 editor.set_interaction_state(InteractionState::Selectable, ctx);
             });
         }
         ctx.subscribe_to_view(&code_editor, |me, _, event, ctx| match event {
             LocalCodeEditorEvent::FileLoaded => {
-                me.sync_active_tab_location(ctx);
                 me.set_title_after_content_update(ctx);
                 #[cfg(feature = "local_fs")]
                 me.update_markdown_mode_segmented_control(ctx);
@@ -640,6 +642,7 @@ impl CodeView {
 
         TabData {
             location: tab_location,
+            source,
             editor_view: Some(code_editor),
             mouse_state_handles: Default::default(),
             preview,
@@ -719,8 +722,12 @@ impl CodeView {
 
         // Find the existing preview tab (if any) and replace it with a new GlobalBuffer-backed editor
         if let Some((preview_index, _)) = self.preview_tab() {
-            let new_tab =
-                self.build_tab_data(Some(LocalOrRemotePath::Local(path.clone())), true, ctx);
+            let new_tab = self.build_tab_data(
+                Some(LocalOrRemotePath::Local(path.clone())),
+                self.source.clone(),
+                true,
+                ctx,
+            );
             self.tab_group[preview_index] = new_tab;
 
             GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
@@ -732,7 +739,12 @@ impl CodeView {
         }
 
         // Create a new preview tab
-        let new_tab = self.build_tab_data(Some(LocalOrRemotePath::Local(path.clone())), true, ctx);
+        let new_tab = self.build_tab_data(
+            Some(LocalOrRemotePath::Local(path.clone())),
+            self.source.clone(),
+            true,
+            ctx,
+        );
 
         self.tab_group.push(new_tab);
         let active_tab_index = self.tab_group.len() - 1;
@@ -842,7 +854,7 @@ impl CodeView {
         line_col: Option<LineAndColumnArg>,
         ctx: &mut ViewContext<Self>,
     ) {
-        let new_tab = self.build_tab_data(location.clone(), false, ctx);
+        let new_tab = self.build_tab_data(location.clone(), self.source.clone(), false, ctx);
         self.tab_group.push(new_tab);
         let active_tab_index = self.tab_group.len() - 1;
 
@@ -1459,8 +1471,9 @@ impl CodeView {
         }
 
         let location = tab.location.clone();
+        let source = tab.source.clone();
         let preview = tab.preview;
-        let loaded_tab = self.build_tab_data(location, preview, ctx);
+        let loaded_tab = self.build_tab_data(location, source, preview, ctx);
         if let Some(tab) = self.tab_group.get_mut(index) {
             tab.editor_view = loaded_tab.editor_view;
         }
