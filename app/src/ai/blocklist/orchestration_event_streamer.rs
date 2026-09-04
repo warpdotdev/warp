@@ -1410,8 +1410,9 @@ impl OrchestrationEventStreamer {
                             continue;
                         }
                         let run_id = task.task_id.to_string();
-                        entry.known_children.insert(run_id.clone());
-                        seeded_run_ids.push(run_id);
+                        if entry.known_children.insert(run_id.clone()) {
+                            seeded_run_ids.push(run_id);
+                        }
                         if let Some(seq) = task.last_event_sequence {
                             seed = seed.max(seq);
                         }
