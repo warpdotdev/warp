@@ -691,6 +691,18 @@ impl ServerApi {
     where
         B: Serialize,
     {
+        self.post_public_api_response_impl(path, body, None).await
+    }
+
+    async fn post_public_api_response_impl<B>(
+        &self,
+        path: &str,
+        body: &B,
+        team_scope: Option<RequestTeamScope>,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -701,6 +713,9 @@ impl ServerApi {
         let mut request = self.base_client.http_client().post(&url).json(body);
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
+        }
+        if let Some(team_uid) = team_scope.and_then(RequestTeamScope::team_uid) {
+            request = request.header(TEAM_UID_HEADER, team_uid.uid());
         }
 
         for (name, value) in self.ambient_agent_headers().await? {
@@ -718,6 +733,65 @@ impl ServerApi {
             self.observe_iap_challenge(&response);
             Err(Self::error_from_response(response).await)
         }
+    }
+
+    async fn get_public_api_for_team_scope<R>(
+        &self,
+        path: &str,
+        team_scope: RequestTeamScope,
+    ) -> Result<R>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+        let url = format!("{}/api/v1/{path}", ChannelState::server_root_url());
+        let mut request = self.base_client.http_client().get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+        if let Some(team_uid) = team_scope.team_uid() {
+            request = request.header(TEAM_UID_HEADER, team_uid.uid());
+        }
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+        if !response.status().is_success() {
+            self.observe_iap_challenge(&response);
+            return Err(Self::error_from_response(response).await);
+        }
+
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
+    async fn post_public_api_for_team_scope<B, R>(
+        &self,
+        path: &str,
+        body: &B,
+        team_scope: RequestTeamScope,
+    ) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self
+            .post_public_api_response_impl(path, body, Some(team_scope))
+            .await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
     }
 
     /// Converts a non-success public API response into the most specific client error

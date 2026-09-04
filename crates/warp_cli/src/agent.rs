@@ -12,7 +12,7 @@ use crate::environment::EnvironmentCreateArgs;
 use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::share::ShareArgs;
 use crate::skill::SkillSpec;
 
@@ -799,6 +799,8 @@ pub enum AgentSortByArg {
 /// Arguments for listing named agents.
 #[derive(Debug, Clone, Args)]
 pub struct AgentListArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Sort field. Only supported for pretty, text, and ndjson output.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<AgentSortByArg>,
@@ -826,6 +828,8 @@ pub struct AgentGetArgs {
 /// Arguments for creating a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentCreateArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Name of the agent.
     #[arg(long = "name", short = 'n')]
     pub name: String,
@@ -971,6 +975,8 @@ pub struct AgentDeleteArgs {
 /// Arguments for listing available agent skills.
 #[derive(Debug, Clone, Args)]
 pub struct ListAgentSkillsArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// List skills from a specific GitHub repository.
     ///
     /// Format: `owner/repo` or `https://github.com/owner/repo`

@@ -4,8 +4,9 @@ use serde::Serialize;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::memory_store::{
-    CreateMemoryArgs, DeleteMemoryArgs, GetStoreArgs, ListMemoriesArgs, ListStoreAgentsArgs,
-    ListVersionsArgs, MemoryCommand, MemoryStoreCommand, UpdateMemoryArgs, UpdateStoreArgs,
+    CreateMemoryArgs, DeleteMemoryArgs, GetStoreArgs, ListMemoriesArgs, ListMemoryStoresArgs,
+    ListStoreAgentsArgs, ListVersionsArgs, MemoryCommand, MemoryStoreCommand, UpdateMemoryArgs,
+    UpdateStoreArgs,
 };
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
@@ -27,9 +28,9 @@ pub fn run(
 ) -> Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| MemoryStoreCommandRunner);
     match command {
-        MemoryStoreCommand::List => {
+        MemoryStoreCommand::List(args) => {
             runner.update(ctx, |runner, ctx| {
-                runner.list_stores(global_options.output_format, ctx)
+                runner.list_stores(global_options.output_format, args, ctx)
             });
             Ok(())
         }
@@ -98,12 +99,25 @@ pub fn run_memory(
 struct MemoryStoreCommandRunner;
 
 impl MemoryStoreCommandRunner {
-    fn list_stores(&self, output_format: OutputFormat, ctx: &mut ModelContext<Self>) {
+    fn list_stores(
+        &self,
+        output_format: OutputFormat,
+        args: ListMemoryStoresArgs,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let server_api = ServerApiProvider::as_ref(ctx).get();
+        let team_scope = match super::common::request_team_scope_for_cli(&args.team_selection, ctx)
+        {
+            Ok(team_scope) => team_scope,
+            Err(err) => {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+        };
 
         ctx.spawn(
             async move {
-                let stores = server_api.list_memory_stores().await?;
+                let stores = server_api.list_memory_stores(team_scope).await?;
                 print_memory_stores(stores, output_format);
                 Ok(())
             },
