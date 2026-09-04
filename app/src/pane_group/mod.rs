@@ -4315,6 +4315,18 @@ impl PaneGroup {
         self.pane_contents.contains_key(&pane_id)
     }
 
+    /// Gets the Settings view within the visible pane at `pane_index`.
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub fn settings_view_at_pane_index(
+        &self,
+        pane_index: usize,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<crate::settings_view::SettingsView>> {
+        self.content_by_pane_index(pane_index)
+            .and_then(|pane| pane.as_any().downcast_ref::<SettingsPane>())
+            .map(|pane| pane.settings_view(ctx))
+    }
+
     /// Get the notebook view within the pane at `pane_index`.
     #[cfg(any(test, feature = "integration_tests"))]
     pub fn notebook_view_at_pane_index(
