@@ -355,6 +355,7 @@ pub enum CodeReviewAction {
 pub struct FileState {
     pub file_diff: FileDiff,
     pub editor_state: Option<CodeReviewEditorState>,
+    deferred_editor_source: Option<DeferredEditorSource>,
     pub is_expanded: bool,
     sidebar_mouse_state: MouseStateHandle,
     header_mouse_state: MouseStateHandle,
@@ -363,6 +364,25 @@ pub struct FileState {
     discard_button: ViewHandle<ActionButton>,
     add_context_button: ViewHandle<ActionButton>,
     copy_path_button: ViewHandle<ActionButton>,
+}
+enum DeferredEditorSource {
+    DiffSnapshot {
+        diff_data: Arc<GitDiffWithBaseContent>,
+        file_index: usize,
+    },
+    SingleFile(Arc<FileDiffAndContent>),
+}
+
+impl DeferredEditorSource {
+    fn file(&self) -> &FileDiffAndContent {
+        match self {
+            Self::DiffSnapshot {
+                diff_data,
+                file_index,
+            } => &diff_data.files[*file_index],
+            Self::SingleFile(file) => file,
+        }
+    }
 }
 
 pub(crate) struct LoadedState {
@@ -649,6 +669,8 @@ pub struct CodeReviewView {
     pending_precise_scroll: Option<PendingPreciseScroll>,
     /// Comment to scroll to once the view finishes loading.
     pending_jump_to_comment: Option<CommentId>,
+    /// Comment to edit once its deferred editor finishes loading.
+    pending_edit_comment: Option<CommentId>,
 
     active_comment_model: Option<ModelHandle<ReviewCommentBatch>>,
 
@@ -1352,6 +1374,7 @@ impl CodeReviewView {
             comment_composer: None,
             pending_precise_scroll: None,
             pending_jump_to_comment: None,
+            pending_edit_comment: None,
             active_comment_model: None,
             init_project_button,
             #[cfg(not(target_family = "wasm"))]
@@ -1792,17 +1815,13 @@ impl CodeReviewView {
             report_error!("Couldn't find code review comment by ID");
             return;
         };
-
-        let CodeReviewViewState::Loaded(state) = self.state() else {
-            return;
-        };
         match &comment.target {
             AttachedReviewCommentTarget::Line {
                 absolute_file_path,
                 line,
                 ..
             } => {
-                let Some((editor_index, file_state)) = self.editor_for_comment(&comment, state)
+                let Some(editor_index) = self.file_state_index_for_location(absolute_file_path)
                 else {
                     log::warn!(
                         "Couldn't find editor for file: {}",
@@ -1810,14 +1829,26 @@ impl CodeReviewView {
                     );
                     return;
                 };
+                self.set_file_expanded(editor_index, true, ctx);
 
-                let Some(editor_state) = &file_state.editor_state.as_ref() else {
+                let CodeReviewViewState::Loaded(state) = self.state() else {
+                    return;
+                };
+                let Some(editor_state) = state
+                    .file_states
+                    .get_index(editor_index)
+                    .and_then(|(_, file)| file.editor_state.as_ref())
+                else {
                     report_error!(
                         "CodeReviewView could not fetch editor for file",
-                        extra: { "file_path" => ?file_state.file_diff.file_path }
+                        extra: { "file_path" => ?absolute_file_path }
                     );
                     return;
                 };
+                if !editor_state.is_loaded() {
+                    self.pending_edit_comment = Some(*comment_id);
+                    return;
+                }
 
                 editor_state.editor().update(ctx, |local_editor, ctx| {
                     local_editor.editor().update(ctx, |editor, ctx| {
@@ -1862,17 +1893,17 @@ impl CodeReviewView {
             comment_list.scroll_to_comment(*comment_id, ctx);
         });
 
-        let CodeReviewViewState::Loaded(state) = &self.state() else {
+        if !matches!(self.state(), CodeReviewViewState::Loaded(_)) {
             self.pending_jump_to_comment = Some(*comment_id);
             return;
-        };
+        }
 
         match &comment.target {
             AttachedReviewCommentTarget::Line {
                 absolute_file_path, ..
             }
             | AttachedReviewCommentTarget::File { absolute_file_path } => {
-                let Some((editor_index, _file_state)) = self.editor_for_comment(&comment, state)
+                let Some(editor_index) = self.file_state_index_for_location(absolute_file_path)
                 else {
                     log::warn!(
                         "Couldn't find editor for file: {}",
@@ -1880,8 +1911,21 @@ impl CodeReviewView {
                     );
                     return;
                 };
+                self.set_file_expanded(editor_index, true, ctx);
 
                 if let AttachedReviewCommentTarget::Line { line, .. } = &comment.target {
+                    let is_loaded = match self.state() {
+                        CodeReviewViewState::Loaded(state) => state
+                            .file_states
+                            .get_index(editor_index)
+                            .and_then(|(_, file)| file.editor_state.as_ref())
+                            .is_some_and(CodeReviewEditorState::is_loaded),
+                        _ => false,
+                    };
+                    if !is_loaded {
+                        self.pending_jump_to_comment = Some(*comment_id);
+                        return;
+                    }
                     self.scroll_to_line(editor_index, line, 0.0, ctx);
                 } else {
                     self.viewported_list_state
@@ -1893,31 +1937,6 @@ impl CodeReviewView {
             }
         }
     }
-
-    fn editor_for_comment<'a>(
-        &self,
-        comment: &AttachedReviewComment,
-        state: &'a LoadedState,
-    ) -> Option<(usize, &'a FileState)> {
-        let file_path = match &comment.target {
-            AttachedReviewCommentTarget::Line {
-                absolute_file_path, ..
-            }
-            | AttachedReviewCommentTarget::File { absolute_file_path } => absolute_file_path,
-            AttachedReviewCommentTarget::General => return None,
-        };
-        let repo_path = self.repo_path()?;
-
-        state
-            .file_states
-            .values()
-            .enumerate()
-            .find(|(_, file_state)| {
-                let editor_file = repo_path.join(&file_state.file_diff.file_path);
-                file_path == &editor_file
-            })
-    }
-
     fn scroll_to_line(
         &mut self,
         editor_index: usize,
@@ -2316,7 +2335,7 @@ impl CodeReviewView {
                 diffs,
                 load_duration,
             } => {
-                self.invalidate_all(diffs.as_ref().map(|d| d.as_ref()), *load_duration, ctx);
+                self.invalidate_all(diffs.clone(), *load_duration, ctx);
                 if FeatureFlag::GitOperationsInCodeReview.is_enabled() {
                     self.update_git_operations_ui(ctx);
                 }
@@ -2406,17 +2425,19 @@ impl CodeReviewView {
 
         match (existing_index, updated_diff) {
             (Some(index), Some(diff)) => {
-                let diff = diff.as_ref();
+                let file = diff.as_ref();
                 let status_changed = file_status_changed_deleted_state(
                     &diff_data.file_states[index].file_diff.status,
-                    &diff.file_diff.status,
+                    &file.file_diff.status,
                 );
 
                 if status_changed {
                     diff_data.file_states.shift_remove_index(index);
                     self.viewported_list_state.remove(index);
-                    let new_states =
-                        self.build_view_state_for_file_diffs(std::slice::from_ref(diff), ctx);
+                    let new_states = self.build_view_state_for_file_diffs(
+                        std::iter::once(DeferredEditorSource::SingleFile(diff)),
+                        ctx,
+                    );
                     diff_data.file_states.extend(
                         new_states
                             .into_iter()
@@ -2430,7 +2451,11 @@ impl CodeReviewView {
                         .map(|es| !es.has_unsaved_changes(ctx))
                         .unwrap_or(true);
                     if should_apply {
-                        current.file_diff = diff.file_diff.clone();
+                        current.file_diff = file.file_diff.clone();
+                        if current.editor_state.is_none() {
+                            current.deferred_editor_source = Self::file_supports_editor(file)
+                                .then(|| DeferredEditorSource::SingleFile(diff.clone()));
+                        }
                     }
                     self.viewported_list_state
                         .invalidate_height_for_index(index);
@@ -2441,8 +2466,10 @@ impl CodeReviewView {
                 self.viewported_list_state.remove(index);
             }
             (None, Some(diff)) => {
-                let new_states =
-                    self.build_view_state_for_file_diffs(std::slice::from_ref(diff.as_ref()), ctx);
+                let new_states = self.build_view_state_for_file_diffs(
+                    std::iter::once(DeferredEditorSource::SingleFile(diff)),
+                    ctx,
+                );
                 diff_data.file_states.extend(
                     new_states
                         .into_iter()
@@ -2466,7 +2493,7 @@ impl CodeReviewView {
     /// Updates state for the view when new git diffs come in.
     fn invalidate_all(
         &mut self,
-        diff_data: Option<&GitDiffWithBaseContent>,
+        diff_data: Option<Arc<GitDiffWithBaseContent>>,
         load_duration: Option<Duration>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -2536,7 +2563,13 @@ impl CodeReviewView {
         // Create a new list state for this update
         self.viewported_list_state = Self::create_list_state(ctx);
 
-        let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
+        let file_states_vec = self.build_view_state_for_file_diffs(
+            (0..diff_data.files.len()).map(|file_index| DeferredEditorSource::DiffSnapshot {
+                diff_data: diff_data.clone(),
+                file_index,
+            }),
+            ctx,
+        );
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
 
@@ -2570,11 +2603,14 @@ impl CodeReviewView {
             self.reposition_comments_in_file(&diff_mode, ctx);
         }
 
-        self.update_editor_comment_markers(ctx);
-
+        if let Some(comment_id) = self.pending_edit_comment.take() {
+            self.handle_edit_comment(&comment_id, ctx);
+        }
         if let Some(comment_id) = self.pending_jump_to_comment.take() {
             self.handle_jump_to_comment_location(&comment_id, ctx);
         }
+
+        self.update_editor_comment_markers(ctx);
 
         ctx.notify();
     }
@@ -2582,7 +2618,7 @@ impl CodeReviewView {
     /// Builds view state for the given file diffs, returning the list of newly created file states.
     fn build_view_state_for_file_diffs(
         &self,
-        files: &[FileDiffAndContent],
+        files: impl IntoIterator<Item = DeferredEditorSource>,
         ctx: &mut ViewContext<Self>,
     ) -> Vec<FileState> {
         let git_operation_blocked = self
@@ -2596,30 +2632,17 @@ impl CodeReviewView {
         };
 
         let mut file_states = vec![];
-        for file in files {
-            let editor_state = {
-                // `LocalCodeEditorView::new_with_global_buffer` natively
-                // supports both `LocalOrRemotePath::Local` and `Remote`
-                // (it sets language by extension and skips local-only
-                // wiring like LSP for remote files), so we always go
-                // through the global-buffer path when we have a repo.
-                #[cfg(not(target_family = "wasm"))]
-                {
-                    if self.repo_path().is_some() {
-                        self.create_code_review_model_with_global_buffer(file, ctx)
-                    } else {
-                        self.create_code_review_model(file, ctx)
-                    }
-                }
-                #[cfg(target_family = "wasm")]
-                {
-                    self.create_code_review_model(file, ctx)
-                }
-            };
+        for source in files {
+            let file = source.file();
             let is_expanded = self.should_auto_expand_file(&file.file_diff);
-
-            let file_path = file.file_diff.file_path.clone();
-            let file_line = file_line_for_open(&file.file_diff);
+            let editor_state = is_expanded
+                .then(|| self.create_code_review_editor(file, ctx))
+                .flatten();
+            let file_diff = file.file_diff.clone();
+            let file_line = file_line_for_open(&file_diff);
+            let deferred_editor_source =
+                (!is_expanded && Self::file_supports_editor(file)).then_some(source);
+            let file_path = file_diff.file_path.clone();
 
             let chevron_path = file_path.clone();
             let initial_icon = if is_expanded {
@@ -2655,7 +2678,7 @@ impl CodeReviewView {
                     })
             });
 
-            let discard_path = file.file_diff.file_path.clone();
+            let discard_path = file_diff.file_path.clone();
             let discard_tooltip = discard_tooltip_text.clone();
             let discard_button = ctx.add_typed_action_view(move |ctx| {
                 let mut button = ActionButton::new("", NakedTheme)
@@ -2675,7 +2698,7 @@ impl CodeReviewView {
                 button
             });
 
-            let context_path = file.file_diff.file_path.clone();
+            let context_path = file_diff.file_path.clone();
             let add_context_button = ctx.add_typed_action_view(move |_ctx| {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Paperclip)
@@ -2688,7 +2711,7 @@ impl CodeReviewView {
                     })
             });
 
-            let copy_path = file.file_diff.file_path.clone();
+            let copy_path = file_diff.file_path.clone();
             let copy_path_button = ctx.add_typed_action_view(move |_ctx| {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Copy)
@@ -2700,8 +2723,9 @@ impl CodeReviewView {
             });
 
             file_states.push(FileState {
-                file_diff: file.file_diff.clone(),
+                file_diff,
                 editor_state,
+                deferred_editor_source,
                 is_expanded,
                 chevron_button,
                 open_in_tab_button,
@@ -2718,6 +2742,147 @@ impl CodeReviewView {
             self.viewported_list_state.add_item();
         }
         file_states
+    }
+
+    fn file_supports_editor(file: &FileDiffAndContent) -> bool {
+        if file.file_diff.is_binary {
+            return false;
+        }
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            file.content_at_head.is_some()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            true
+        }
+    }
+
+    fn create_code_review_editor(
+        &self,
+        file: &FileDiffAndContent,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<CodeReviewEditorState> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if self.repo_path().is_some() {
+                self.create_code_review_model_with_global_buffer(file, ctx)
+            } else {
+                self.create_code_review_model(file, ctx)
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            self.create_code_review_model(file, ctx)
+        }
+    }
+
+    fn ensure_editor_for_file(&mut self, file_index: usize, ctx: &mut ViewContext<Self>) -> bool {
+        let source = {
+            let Some(repo) = self.active_repo.as_mut() else {
+                return false;
+            };
+            let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+                return false;
+            };
+            let Some((_, file)) = state.file_states.get_index_mut(file_index) else {
+                return false;
+            };
+            if file.editor_state.is_some() {
+                return true;
+            }
+            file.deferred_editor_source.take()
+        };
+
+        let Some(source) = source else {
+            return false;
+        };
+        let editor_state = self.create_code_review_editor(source.file(), ctx);
+        let was_created = {
+            let Some(repo) = self.active_repo.as_mut() else {
+                return false;
+            };
+            let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+                return false;
+            };
+            let Some((_, file)) = state.file_states.get_index_mut(file_index) else {
+                return false;
+            };
+
+            if let Some(editor_state) = editor_state {
+                file.editor_state = Some(editor_state);
+                true
+            } else {
+                file.deferred_editor_source = Some(source);
+                false
+            }
+        };
+
+        was_created
+    }
+
+    fn set_file_expanded(
+        &mut self,
+        file_index: usize,
+        is_expanded: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<bool> {
+        let was_expanded = match self.state() {
+            CodeReviewViewState::Loaded(state) => {
+                state.file_states.get_index(file_index)?.1.is_expanded
+            }
+            _ => return None,
+        };
+
+        let editor_was_created = is_expanded && self.ensure_editor_for_file(file_index, ctx);
+
+        let chevron_button = {
+            let repo = self.active_repo.as_mut()?;
+            let CodeReviewViewState::Loaded(state) = &mut repo.state else {
+                return None;
+            };
+            let (_, file) = state.file_states.get_index_mut(file_index)?;
+            file.is_expanded = is_expanded;
+            let file_path = file.file_diff.file_path.clone();
+            repo.file_expanded.insert(file_path.clone(), is_expanded);
+            file.chevron_button.clone()
+        };
+
+        let icon = if is_expanded {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        };
+        chevron_button.update(ctx, |button, ctx| {
+            button.set_icon(Some(icon), ctx);
+        });
+        if !was_expanded && editor_was_created {
+            if self.all_editors_loaded() {
+                let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
+                self.reposition_comments_in_file(&diff_mode, ctx);
+            }
+            self.update_editor_comment_markers(ctx);
+        }
+
+        self.viewported_list_state
+            .invalidate_height_for_index(file_index);
+        if !is_expanded && self.viewported_list_state.is_scrolled_to_item(file_index) {
+            self.viewported_list_state.scroll_to(file_index);
+        }
+
+        if !was_expanded
+            && is_expanded
+            && self.find_model.as_ref(ctx).is_find_bar_open()
+            && FeatureFlag::CodeReviewFind.is_enabled()
+        {
+            self.find_model.update(ctx, |model, model_ctx| {
+                model.run_search(self.editor_handles(), model_ctx);
+            });
+        }
+
+        ctx.notify();
+        Some(was_expanded)
     }
 
     fn render_diff_at_index(
@@ -3390,11 +3555,16 @@ impl CodeReviewView {
             let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
             self.reposition_comments_in_file(&diff_mode, ctx);
         }
+
+        if let Some(comment_id) = self.pending_edit_comment.take() {
+            self.handle_edit_comment(&comment_id, ctx);
+        }
+        if let Some(comment_id) = self.pending_jump_to_comment.take() {
+            self.handle_jump_to_comment_location(&comment_id, ctx);
+        }
     }
 
-    /// Returns true if all editors with editor_state have finished loading their buffer content.
-    /// For global buffer mode, this checks the is_loaded flag on each CodeReviewEditorState.
-    /// Returns true if there are no file states or if global buffer is not enabled.
+    /// Returns true if every expanded editor has finished loading its buffer content.
     fn all_editors_loaded(&self) -> bool {
         let Some(repo) = self.active_repo.as_ref() else {
             return true;
@@ -3404,12 +3574,17 @@ impl CodeReviewView {
             return true;
         };
 
-        // Check if all editors with editor_state are loaded
         loaded_state
             .file_states
             .values()
-            .filter_map(|file_state| file_state.editor_state.as_ref())
-            .all(|editor_state| editor_state.is_loaded())
+            .filter(|file_state| file_state.is_expanded)
+            .all(|file_state| {
+                file_state
+                    .editor_state
+                    .as_ref()
+                    .is_none_or(CodeReviewEditorState::is_loaded)
+                    && file_state.deferred_editor_source.is_none()
+            })
     }
 
     fn apply_diff_to_code_editor(
@@ -3500,8 +3675,8 @@ impl CodeReviewView {
     ///
     /// This is a pure function that takes comments and returns updated comments without mutation.
     /// For each `Line` comment, it finds the matching editor via file path and computes the new
-    /// target location. Comments without matching editors or without matching line content are
-    /// marked as outdated.
+    /// target location. Comments for files without renderable editors or without matching line
+    /// content are marked as outdated; comments awaiting deferred editors remain unchanged.
     ///
     /// Returns a tuple of (all_comments_with_updated_targets, fallback_count).
     fn relocate_comments(
@@ -3511,7 +3686,6 @@ impl CodeReviewView {
         ctx: &mut ViewContext<Self>,
     ) -> RelocateCommentsResult {
         let mut fallback_count = 0;
-        let editor_file_paths = state.editor_absolute_file_paths(repo_path);
 
         let relocated_comments = comments
             .into_iter()
@@ -3521,21 +3695,31 @@ impl CodeReviewView {
                     return comment;
                 };
 
-                let matching_editor = match &comment.target {
+                let matching_file = match &comment.target {
                     AttachedReviewCommentTarget::Line {
                         absolute_file_path, ..
                     }
-                    | AttachedReviewCommentTarget::File { absolute_file_path } => editor_file_paths
-                        .iter()
-                        .find(|(_, editor_path)| editor_path == absolute_file_path)
-                        .map(|(editor, _)| editor),
+                    | AttachedReviewCommentTarget::File { absolute_file_path } => {
+                        state.file_states.values().find(|file_state| {
+                            repo_path.join(&file_state.file_diff.file_path) == *absolute_file_path
+                        })
+                    }
                     AttachedReviewCommentTarget::General => None,
                 };
-
-                let Some(editor_view) = matching_editor else {
+                let Some(file_state) = matching_file else {
                     // If there's no matching editor, mark the comment as outdated.
                     // The comment retains its original content so it can still be displayed.
                     comment.outdated = true;
+                    return comment;
+                };
+                let Some(editor_view) = file_state
+                    .editor_state
+                    .as_ref()
+                    .map(CodeReviewEditorState::editor)
+                else {
+                    if file_state.deferred_editor_source.is_none() {
+                        comment.outdated = true;
+                    }
                     return comment;
                 };
 
@@ -7198,53 +7382,16 @@ impl TypedActionView for CodeReviewView {
                 }
             }
             CodeReviewAction::ToggleFileExpanded(path) => {
-                let (file_index, now_expanded, chevron_button) = {
-                    let Some(repo) = self.active_repo.as_mut() else {
-                        return;
+                let Some((file_index, now_expanded)) = (|| {
+                    let CodeReviewViewState::Loaded(state) = self.state() else {
+                        return None;
                     };
-
-                    if let CodeReviewViewState::Loaded(state) = &mut repo.state {
-                        if let Some(index) = state.file_states.get_index_of(path) {
-                            let file = &mut state.file_states[index];
-                            file.is_expanded = !file.is_expanded;
-                            let now_expanded = file.is_expanded;
-                            repo.file_expanded
-                                .insert(file.file_diff.file_path.clone(), now_expanded);
-                            (index, now_expanded, file.chevron_button.clone())
-                        } else {
-                            return;
-                        }
-                    } else {
-                        return;
-                    }
+                    let file_index = state.file_states.get_index_of(path)?;
+                    Some((file_index, !state.file_states[file_index].is_expanded))
+                })() else {
+                    return;
                 };
-
-                // Update the chevron button icon based on expanded state
-                chevron_button.update(ctx, |button, ctx| {
-                    let icon = if now_expanded {
-                        Icon::ChevronDown
-                    } else {
-                        Icon::ChevronRight
-                    };
-                    button.set_icon(Some(icon), ctx);
-                });
-
-                self.viewported_list_state
-                    .invalidate_height_for_index(file_index);
-                // If the file gets collapsed and had a sticky header, then we scroll to make the header in view.
-                if !now_expanded && self.viewported_list_state.is_scrolled_to_item(file_index) {
-                    self.viewported_list_state.scroll_to(file_index);
-                }
-
-                if self.find_model.as_ref(ctx).is_find_bar_open()
-                    && FeatureFlag::CodeReviewFind.is_enabled()
-                {
-                    self.find_model.update(ctx, |model, model_ctx| {
-                        model.run_search(self.editor_handles(), model_ctx);
-                    });
-                }
-
-                ctx.notify();
+                self.set_file_expanded(file_index, now_expanded, ctx);
             }
             CodeReviewAction::SetDiffMode(mode) => {
                 self.apply_diff_mode(mode.clone(), ctx);
@@ -7264,36 +7411,9 @@ impl TypedActionView for CodeReviewView {
                 ctx.notify();
             }
             CodeReviewAction::FileSelected(file_index) => {
-                // Early-return when repo/state/file is missing to avoid calling
-                // invalidate_height_for_index or scroll_to with an invalid index.
-                let was_expanded = {
-                    let Some(repo) = self.active_repo.as_mut() else {
-                        return;
-                    };
-                    let CodeReviewViewState::Loaded(state) = &mut repo.state else {
-                        return;
-                    };
-                    let Some((_, file)) = state.file_states.get_index_mut(*file_index) else {
-                        return;
-                    };
-                    let was_expanded = file.is_expanded;
-                    file.is_expanded = true;
-                    was_expanded
-                };
-
-                self.viewported_list_state
-                    .invalidate_height_for_index(*file_index);
-
-                if !was_expanded
-                    && self.find_model.as_ref(ctx).is_find_bar_open()
-                    && FeatureFlag::CodeReviewFind.is_enabled()
-                {
-                    self.find_model.update(ctx, |model, model_ctx| {
-                        model.run_search(self.editor_handles(), model_ctx);
-                    });
+                if self.set_file_expanded(*file_index, true, ctx).is_none() {
+                    return;
                 }
-
-                ctx.notify();
 
                 self.viewported_list_state.scroll_to(*file_index);
                 ctx.notify();
