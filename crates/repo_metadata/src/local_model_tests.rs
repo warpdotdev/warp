@@ -68,7 +68,7 @@ fn empty_repo_state(repo_path: &StandardizedPath) -> FileTreeState {
         ignored: false,
         loaded: true,
     });
-    FileTreeState::new(root, Vec::new(), None)
+    FileTreeState::new(root, crate::GitignoreRules::default(), None)
 }
 
 fn build_task_key(
@@ -601,7 +601,11 @@ fn test_get_repo_contents() {
                     )
                     .unwrap()
             });
-            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], Some(repo_handle));
+            let state = FileTreeState::new(
+                root,
+                crate::GitignoreRules::from(vec![Arc::new(gitignore)]),
+                Some(repo_handle),
+            );
 
             let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
 
@@ -657,7 +661,7 @@ fn test_get_repo_contents_truncates_to_max_results() {
         ignored: false,
         loaded: true,
     });
-    let state = FileTreeState::new(root, Vec::new(), None);
+    let state = FileTreeState::new(root, crate::GitignoreRules::default(), None);
 
     let mut model = LocalRepoMetadataModel::new_for_test();
     model
@@ -701,7 +705,7 @@ fn test_get_repo_contents_filter_applies_before_cap() {
         ignored: false,
         loaded: true,
     });
-    let state = FileTreeState::new(root, Vec::new(), None);
+    let state = FileTreeState::new(root, crate::GitignoreRules::default(), None);
 
     let mut model = LocalRepoMetadataModel::new_for_test();
     model
@@ -1188,7 +1192,11 @@ fn test_get_repo_contents_include_ignored() {
                     )
                     .unwrap()
             });
-            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], Some(repo_handle));
+            let state = FileTreeState::new(
+                root,
+                crate::GitignoreRules::from(vec![Arc::new(gitignore)]),
+                Some(repo_handle),
+            );
 
             let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
 
@@ -1376,9 +1384,9 @@ fn test_update_file_tree_entry_respects_gitignore() {
 
         // Compute mutations on the "background thread" then apply on the "main thread".
         let standing_query_definitions = Default::default();
-        let (mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+        let (mutations, _, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
-            &gitignores,
+            crate::GitignoreRules::from(gitignores.clone()),
             &[],
             &standing_query_definitions,
             false,
@@ -1875,10 +1883,10 @@ fn added_symlinked_skill_directory_refreshes_provider_without_canonical_tree_mut
             added: vec![linked_skill.clone()],
             ..Default::default()
         };
-        let (mutations, discovered, removed_roots) =
+        let (mutations, discovered, removed_roots, _) =
             block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                 &update,
-                &[],
+                crate::GitignoreRules::default(),
                 &[],
                 &definitions,
                 false,
@@ -1918,9 +1926,9 @@ fn unrelated_skill_support_file_does_not_refresh_project_skills() {
             added: vec![support_file],
             ..Default::default()
         };
-        let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+        let (_, discovered, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
-            &[],
+            crate::GitignoreRules::default(),
             &[],
             &definitions,
             false,
@@ -1942,9 +1950,9 @@ fn removed_direct_skill_child_refreshes_provider_for_possible_symlink_removal() 
             deleted: vec![provider.join("removed-skill")],
             ..Default::default()
         };
-        let (_, discovered, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+        let (_, discovered, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
             &update,
-            &[],
+            crate::GitignoreRules::default(),
             &[],
             &definitions,
             false,
@@ -2508,7 +2516,11 @@ fn test_repository_operations_with_standardized_paths() {
                         )
                         .unwrap()
                 });
-                let state = FileTreeState::new(root, vec![Arc::new(gitignore)], Some(repo_handle));
+                let state = FileTreeState::new(
+                    root,
+                    crate::GitignoreRules::from(vec![Arc::new(gitignore)]),
+                    Some(repo_handle),
+                );
 
                 // Test adding repository using different path representations
                 model_handle.update(&mut app, |model, ctx| {
@@ -3122,15 +3134,13 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
             // ancestor propagates down into `.agents/skills`.
             let expected_ignored = {
                 let mut files = Vec::new();
-                let mut gitignores = gitignores.clone();
-                let mut gitignore_paths = Vec::new();
+                let mut gitignore_rules = crate::GitignoreRules::from(gitignores.clone());
                 let mut budget = 100_000usize;
                 let mut standing_results = crate::StandingQueryResults::default();
                 let root = block_on(Entry::build_tree_with_standing_queries(
                     &repo_local,
                     &mut files,
-                    &mut gitignores,
-                    &mut gitignore_paths,
+                    &mut gitignore_rules,
                     Some(&mut budget),
                     BuildTreeOptions {
                         max_depth: 64,
@@ -3165,10 +3175,10 @@ fn incremental_force_included_dir_under_ignored_parent_matches_initial_index() {
                 added: vec![skills_local.clone()],
                 ..Default::default()
             };
-            let (mutations, _standing_results, _removed) =
+            let (mutations, _standing_results, _removed, _) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                     &update,
-                    &gitignores,
+                    crate::GitignoreRules::from(gitignores),
                     &force_included,
                     &definitions,
                     false, /* lazy_load */
@@ -3245,10 +3255,10 @@ fn incremental_deep_event_under_unloaded_ignored_dir_is_collapsed() {
                 added: vec![deep_dir_local, deep_file_local],
                 ..Default::default()
             };
-            let (mutations, _standing_results, _removed) =
+            let (mutations, _standing_results, _removed, _) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                     &update,
-                    &gitignores,
+                    crate::GitignoreRules::from(gitignores.clone()),
                     &[], /* force_included_paths */
                     &definitions,
                     false, /* lazy_load */
@@ -3324,10 +3334,10 @@ fn incremental_event_under_expanded_ignored_dir_keeps_it_loaded() {
                 added: vec![new_file_local],
                 ..Default::default()
             };
-            let (mutations, _standing_results, _removed) =
+            let (mutations, _standing_results, _removed, _) =
                 block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                     &update,
-                    &gitignores,
+                    crate::GitignoreRules::from(gitignores.clone()),
                     &[], /* force_included_paths */
                     &definitions,
                     false, /* lazy_load */
@@ -3383,7 +3393,11 @@ fn load_directory_watches_expanded_gitignored_dir_for_git_repo() {
                 ignored: false,
                 loaded: true,
             });
-            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], None);
+            let state = FileTreeState::new(
+                root,
+                crate::GitignoreRules::from(vec![Arc::new(gitignore)]),
+                None,
+            );
 
             model_handle.update(&mut app, |model, ctx| {
                 model
@@ -3442,7 +3456,11 @@ fn remove_repository_clears_extra_dir_watches() {
                 ignored: false,
                 loaded: true,
             });
-            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], None);
+            let state = FileTreeState::new(
+                root,
+                crate::GitignoreRules::from(vec![Arc::new(gitignore)]),
+                None,
+            );
 
             model_handle.update(&mut app, |model, ctx| {
                 model
@@ -3635,13 +3653,14 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
         // Lazy root: the new directory is an unloaded placeholder and its
         // subtree is not materialized.
         let mut lazy_root = make_root();
-        let (lazy_mutations, _, _) = block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
-            &update,
-            &[],
-            &[],
-            &definitions,
-            true,
-        ));
+        let (lazy_mutations, _, _, _) =
+            block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
+                &update,
+                crate::GitignoreRules::default(),
+                &[],
+                &definitions,
+                true,
+            ));
         LocalRepoMetadataModel::apply_file_tree_mutations(
             &mut lazy_root,
             lazy_mutations,
@@ -3663,10 +3682,10 @@ fn lazy_root_created_directory_inserted_as_placeholder() {
 
         // Eager root: the same directory is fully materialized.
         let mut eager_root = make_root();
-        let (eager_mutations, _, _) =
+        let (eager_mutations, _, _, _) =
             block_on(LocalRepoMetadataModel::compute_file_tree_mutations(
                 &update,
-                &[],
+                crate::GitignoreRules::default(),
                 &[],
                 &definitions,
                 false,

@@ -1,21 +1,10 @@
-//! A small process-wide cache of parsed `.gitignore` files.
+//! A process-wide cache of parsed `.gitignore` matchers with scoped access.
 //!
-//! Constructing a [`Gitignore`] compiles a fresh `regex_automata` regex, and that regex owns
-//! its own thread-safe `Pool` of per-thread search caches (see
-//! `regex_automata::util::pool::Pool`). Re-parsing the same `.gitignore` file on every
-//! file-tree traversal — which happens on every watcher-triggered rebuild — creates a fresh
-//! pool each time. This cache reuses a parsed, `Arc`-shared [`Gitignore`] across traversals as
-//! long as the file's content is unchanged, so a given `.gitignore` path compiles its regex
-//! (and allocates its pool) at most once until the file is actually edited.
-//!
-//! Invalidation is keyed by a hash of the file's content, so an edit is detected even when it
-//! preserves the file's mtime and byte length. Hashing means an extra read on every call (in
-//! addition to the read `Gitignore::new` itself does on a miss), but `.gitignore` files are
-//! small and page-cached after the first traversal, so this stays cheap relative to the parse
-//! it guards.
-//!
-//! Eviction is bounded by both source bytes and matcher count (see
-//! [`MAX_CACHED_SOURCE_BYTES`] and [`MAX_CACHED_MATCHERS`]).
+//! Cache-owned matchers never escape as `Arc`s. Parsing and matching are serialized through the
+//! cache mutex, and a slot is reserved before a matcher is compiled. Consequently, the cache and
+//! all concurrent source-backed operations own at most [`MAX_LIVE_MATCHERS`] compiled matchers.
+//! Callers retain source paths between operations and materialize only one applicable matcher at a
+//! time while evaluating a path.
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -26,87 +15,40 @@ use std::sync::{Arc, LazyLock};
 use ignore::gitignore::Gitignore;
 use parking_lot::Mutex;
 
-/// Total `.gitignore` source bytes the cache may hold before evicting least-recently-used
-/// entries, bounding memory regardless of `.gitignore` count. A compiled matcher can retain up
-/// to ~163x its source size in the worst case observed, so this bounds worst-case retained
-/// heap to roughly 60 MiB.
 #[cfg(not(test))]
 const MAX_CACHED_SOURCE_BYTES: u64 = 384 * 1024;
-/// Small in tests so eviction can be exercised without huge fixtures.
 #[cfg(test)]
 const MAX_CACHED_SOURCE_BYTES: u64 = 24;
-/// Maximum number of compiled matchers retained process-wide.
-pub const MAX_CACHED_MATCHERS: usize = 64;
-/// Small in tests so count-based eviction can be exercised with small fixtures.
+
+/// Maximum number of concurrently live matchers owned by the scoped source-backed cache.
+pub const MAX_LIVE_MATCHERS: usize = 64;
 #[cfg(test)]
-pub(crate) const EFFECTIVE_MAX_CACHED_MATCHERS: usize = 3;
+const EFFECTIVE_MAX_LIVE_MATCHERS: usize = 3;
 #[cfg(not(test))]
-const EFFECTIVE_MAX_CACHED_MATCHERS: usize = MAX_CACHED_MATCHERS;
+const EFFECTIVE_MAX_LIVE_MATCHERS: usize = MAX_LIVE_MATCHERS;
 
-/// Gitignore sources that can materialize compiled matchers for an operation without retaining
-/// cache-managed matchers between operations.
-#[derive(Debug, Clone, Default)]
-pub struct GitignoreRules {
-    cached_paths: Arc<Vec<PathBuf>>,
-    persistent_matchers: Arc<Vec<Arc<Gitignore>>>,
-}
-static GLOBAL_GITIGNORE: LazyLock<Option<Arc<Gitignore>>> = LazyLock::new(|| {
-    let (global_gitignore, _) = Gitignore::global();
-    (!global_gitignore.is_empty()).then(|| Arc::new(global_gitignore))
-});
-
-impl GitignoreRules {
-    /// Returns rules containing the global gitignore when one is configured.
-    pub fn global() -> Self {
-        let persistent_matchers = GLOBAL_GITIGNORE.iter().cloned().collect();
-        Self {
-            cached_paths: Arc::default(),
-            persistent_matchers: Arc::new(persistent_matchers),
-        }
-    }
-
-    /// Replaces the cache-managed source paths while preserving persistent matchers.
-    pub fn with_cached_paths(self, cached_paths: Vec<PathBuf>) -> Self {
-        Self {
-            cached_paths: Arc::new(cached_paths),
-            ..self
-        }
-    }
-
-    /// Materializes matchers for one operation.
-    pub fn matchers(&self) -> Vec<Arc<Gitignore>> {
-        self.persistent_matchers
-            .iter()
-            .cloned()
-            .chain(self.cached_paths.iter().map(|path| get_or_parse(path)))
-            .collect()
-    }
-}
-
-impl From<Vec<Arc<Gitignore>>> for GitignoreRules {
-    fn from(persistent_matchers: Vec<Arc<Gitignore>>) -> Self {
-        Self {
-            cached_paths: Arc::default(),
-            persistent_matchers: Arc::new(persistent_matchers),
-        }
-    }
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+enum CacheKey {
+    File(PathBuf),
+    Global,
 }
 
 struct CacheEntry {
     content_digest: u64,
-    gitignore: Arc<Gitignore>,
+    gitignore: Gitignore,
     source_len: u64,
-    /// Tick from [`Cache::next_tick`] as of the last hit or insert; the LRU eviction key (the
-    /// entry with the smallest tick is evicted first).
     last_used: u64,
 }
 
 #[derive(Default)]
 struct Cache {
-    entries: HashMap<PathBuf, CacheEntry>,
+    entries: HashMap<CacheKey, CacheEntry>,
     total_source_bytes: u64,
-    /// Recency counter, only ever accessed while `CACHE`'s mutex is held.
     next_tick: u64,
+    #[cfg(test)]
+    peak_live_matchers: usize,
+    #[cfg(test)]
+    parse_count: usize,
 }
 
 impl Cache {
@@ -116,63 +58,157 @@ impl Cache {
         tick
     }
 
-    /// Returns the cached matcher for `path` if its content digest matches `content_digest`.
-    fn lookup(&mut self, path: &Path, content_digest: u64) -> Option<Arc<Gitignore>> {
-        if self.entries.get(path)?.content_digest != content_digest {
+    fn remove(&mut self, key: &CacheKey) {
+        if let Some(entry) = self.entries.remove(key) {
+            self.total_source_bytes -= entry.source_len;
+        }
+    }
+
+    fn evict_lru(&mut self) -> bool {
+        let Some(key) = self
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone())
+        else {
+            return false;
+        };
+        self.remove(&key);
+        true
+    }
+
+    fn reserve_for(&mut self, source_len: u64) {
+        while self.entries.len() >= EFFECTIVE_MAX_LIVE_MATCHERS
+            || self.total_source_bytes.saturating_add(source_len) > MAX_CACHED_SOURCE_BYTES
+        {
+            if !self.evict_lru() {
+                break;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn record_live_matchers(&mut self, transient_matchers: usize) {
+        self.peak_live_matchers = self
+            .peak_live_matchers
+            .max(self.entries.len() + transient_matchers);
+    }
+
+    #[cfg(not(test))]
+    fn record_live_matchers(&mut self, _transient_matchers: usize) {}
+
+    #[cfg(test)]
+    fn record_parse(&mut self) {
+        self.parse_count += 1;
+    }
+
+    #[cfg(not(test))]
+    fn record_parse(&mut self) {}
+
+    fn cached_match(
+        &mut self,
+        key: &CacheKey,
+        content_digest: u64,
+        path: &Path,
+        is_dir: bool,
+        check_ancestors: bool,
+    ) -> Option<bool> {
+        if self.entries.get(key)?.content_digest != content_digest {
             return None;
         }
         let tick = self.next_tick();
-        let entry = self.entries.get_mut(path)?;
+        let entry = self.entries.get_mut(key)?;
         entry.last_used = tick;
-        Some(entry.gitignore.clone())
+        Some(matcher_ignores(
+            &entry.gitignore,
+            path,
+            is_dir,
+            check_ancestors,
+        ))
     }
 
-    /// Inserts a freshly parsed matcher for `path`, replacing any previous entry.
-    fn insert(
+    fn match_file(
         &mut self,
-        path: PathBuf,
-        content_digest: u64,
-        gitignore: Arc<Gitignore>,
-        source_len: u64,
-    ) {
+        gitignore_path: &Path,
+        content: Option<&[u8]>,
+        path: &Path,
+        is_dir: bool,
+        check_ancestors: bool,
+    ) -> bool {
+        let key = CacheKey::File(gitignore_path.to_path_buf());
+        let Some(content) = content else {
+            self.remove(&key);
+            self.reserve_for(0);
+            self.record_live_matchers(1);
+            self.record_parse();
+            let (gitignore, _) = Gitignore::new(gitignore_path);
+            return matcher_ignores(&gitignore, path, is_dir, check_ancestors);
+        };
+        let content_digest = content_digest(content);
+        if let Some(is_ignored) =
+            self.cached_match(&key, content_digest, path, is_dir, check_ancestors)
+        {
+            return is_ignored;
+        }
+
+        self.remove(&key);
+        let source_len = content.len() as u64;
+        self.reserve_for(source_len);
+        self.record_live_matchers(1);
+        self.record_parse();
+        let (gitignore, error) = Gitignore::new(gitignore_path);
+        if error.is_some() || source_len > MAX_CACHED_SOURCE_BYTES {
+            return matcher_ignores(&gitignore, path, is_dir, check_ancestors);
+        }
+
         let last_used = self.next_tick();
-        if let Some(previous) = self.entries.insert(
-            path,
+        self.entries.insert(
+            key.clone(),
             CacheEntry {
                 content_digest,
                 gitignore,
                 source_len,
                 last_used,
             },
-        ) {
-            self.total_source_bytes -= previous.source_len;
-        }
+        );
         self.total_source_bytes += source_len;
-        self.evict_if_over_budget();
+        self.record_live_matchers(0);
+        self.cached_match(&key, content_digest, path, is_dir, check_ancestors)
+            .unwrap_or(false)
     }
 
-    /// Evicts least-recently-used entries until the cache is under both retention limits.
-    fn evict_if_over_budget(&mut self) {
-        if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES
-            && self.entries.len() <= EFFECTIVE_MAX_CACHED_MATCHERS
-        {
+    fn refresh_global(&mut self) {
+        self.refresh_global_with(|| Gitignore::global().0);
+    }
+
+    fn refresh_global_with(&mut self, load: impl FnOnce() -> Gitignore) {
+        self.remove(&CacheKey::Global);
+        self.reserve_for(0);
+        self.record_live_matchers(1);
+        self.record_parse();
+        let gitignore = load();
+        if gitignore.is_empty() {
             return;
         }
-        let mut by_last_used: Vec<(PathBuf, u64, u64)> = self
-            .entries
-            .iter()
-            .map(|(path, entry)| (path.clone(), entry.last_used, entry.source_len))
-            .collect();
-        by_last_used.sort_by_key(|(_, last_used, _)| *last_used);
-        for (path, _, source_len) in by_last_used {
-            if self.total_source_bytes <= MAX_CACHED_SOURCE_BYTES
-                && self.entries.len() <= EFFECTIVE_MAX_CACHED_MATCHERS
-            {
-                break;
-            }
-            self.entries.remove(&path);
-            self.total_source_bytes -= source_len;
+        let last_used = self.next_tick();
+        self.entries.insert(
+            CacheKey::Global,
+            CacheEntry {
+                content_digest: 0,
+                gitignore,
+                source_len: 0,
+                last_used,
+            },
+        );
+        self.record_live_matchers(0);
+    }
+
+    fn match_global(&mut self, path: &Path, is_dir: bool, check_ancestors: bool) -> bool {
+        if !self.entries.contains_key(&CacheKey::Global) {
+            self.refresh_global();
         }
+        self.cached_match(&CacheKey::Global, 0, path, is_dir, check_ancestors)
+            .unwrap_or(false)
     }
 }
 
@@ -184,57 +220,119 @@ fn content_digest(content: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// Returns a cached, parsed `.gitignore` matcher for `gitignore_path`, reusing the previous
-/// parse when the file's content is unchanged and re-parsing (and caching the fresh result)
-/// otherwise.
-///
-/// Never caches a result that doesn't reflect the file's current, complete contents: a
-/// transient read failure or a parse error is returned directly without touching the cache, so
-/// a stale or partial result can never shadow a later, successful parse (e.g. after a
-/// permissions fix or an edit that corrects a malformed glob line).
-pub fn get_or_parse(gitignore_path: &Path) -> Arc<Gitignore> {
-    let Ok(content) = std::fs::read(gitignore_path) else {
-        // Can't fingerprint a file we can't read right now. Parse directly — `Gitignore::new`
-        // fails open the same way on an unreadable file — without disturbing any existing
-        // cache entry, so a later, readable call still finds (or repopulates) a correct entry.
-        let (gitignore, _) = Gitignore::new(gitignore_path);
-        return Arc::new(gitignore);
+fn matcher_ignores(
+    gitignore: &Gitignore,
+    path: &Path,
+    is_dir: bool,
+    check_ancestors: bool,
+) -> bool {
+    let Ok(relative_path) = path.strip_prefix(gitignore.path()) else {
+        return false;
     };
-    let content_digest = content_digest(&content);
+    if relative_path.has_root() && (cfg!(windows) || gitignore.path() != Path::new("")) {
+        return false;
+    }
+    if check_ancestors {
+        gitignore
+            .matched_path_or_any_parents(relative_path, is_dir)
+            .is_ignore()
+    } else {
+        gitignore.matched(relative_path, is_dir).is_ignore()
+    }
+}
 
-    if let Some(gitignore) = CACHE.lock().lookup(gitignore_path, content_digest) {
-        return gitignore;
+/// Source-backed Gitignore rules that do not retain compiled matchers between evaluations.
+#[derive(Debug, Clone, Default)]
+pub struct GitignoreRules {
+    cached_paths: Arc<Vec<PathBuf>>,
+    #[cfg(test)]
+    persistent_matchers: Arc<Vec<Arc<Gitignore>>>,
+    include_global: bool,
+}
+
+impl GitignoreRules {
+    /// Creates rules that consult the current configured global Gitignore.
+    pub fn global() -> Self {
+        CACHE.lock().refresh_global();
+        Self {
+            include_global: true,
+            ..Self::default()
+        }
     }
 
-    // Parse outside the lock (`Gitignore::new` does its own blocking file I/O) so a slow parse
-    // doesn't block unrelated cache lookups. A concurrent caller parsing the same path at the
-    // same time is a harmless, rare race: the last insert wins and both callers still get a
-    // valid, usable matcher.
-    let (gitignore, error) = Gitignore::new(gitignore_path);
-    if error.is_some() {
-        // A parse error (e.g. one malformed glob line) means this instance doesn't fully
-        // represent the file. Don't cache it, so a later call — after the file is fixed, but
-        // with the same content otherwise — isn't shadowed by this partial result.
-        return Arc::new(gitignore);
+    #[cfg(test)]
+    fn with_cached_paths(self, cached_paths: Vec<PathBuf>) -> Self {
+        Self {
+            cached_paths: Arc::new(cached_paths),
+            ..self
+        }
     }
-    let gitignore = Arc::new(gitignore);
-    let source_len = content.len() as u64;
 
-    CACHE.lock().insert(
-        gitignore_path.to_path_buf(),
-        content_digest,
-        gitignore.clone(),
-        source_len,
-    );
-    gitignore
+    pub(crate) fn add_cached_path(&mut self, path: PathBuf) {
+        if !self.cached_paths.contains(&path) {
+            Arc::make_mut(&mut self.cached_paths).push(path);
+        }
+    }
+
+    /// Returns whether any applicable rule ignores `path`.
+    pub fn matches(&self, path: &Path, is_dir: bool, check_ancestors: bool) -> bool {
+        #[cfg(test)]
+        if self
+            .persistent_matchers
+            .iter()
+            .any(|matcher| matcher_ignores(matcher, path, is_dir, check_ancestors))
+        {
+            return true;
+        }
+
+        let mut cache = CACHE.lock();
+        if self.include_global && cache.match_global(path, is_dir, check_ancestors) {
+            return true;
+        }
+        self.cached_paths.iter().any(|gitignore_path| {
+            let applies = gitignore_path
+                .parent()
+                .is_some_and(|root| path.starts_with(root));
+            applies
+                && cache.match_file(
+                    gitignore_path,
+                    std::fs::read(gitignore_path).ok().as_deref(),
+                    path,
+                    is_dir,
+                    check_ancestors,
+                )
+        })
+    }
+
+    #[cfg(test)]
+    fn matches_with_cache(
+        &self,
+        cache: &Mutex<Cache>,
+        path: &Path,
+        is_dir: bool,
+        check_ancestors: bool,
+    ) -> bool {
+        let mut cache = cache.lock();
+        self.cached_paths.iter().any(|gitignore_path| {
+            cache.match_file(
+                gitignore_path,
+                std::fs::read(gitignore_path).ok().as_deref(),
+                path,
+                is_dir,
+                check_ancestors,
+            )
+        })
+    }
 }
 
 #[cfg(test)]
-pub(crate) fn clear_for_test() {
-    let mut cache = CACHE.lock();
-    cache.entries.clear();
-    cache.total_source_bytes = 0;
-    cache.next_tick = 0;
+impl From<Vec<Arc<Gitignore>>> for GitignoreRules {
+    fn from(persistent_matchers: Vec<Arc<Gitignore>>) -> Self {
+        Self {
+            persistent_matchers: Arc::new(persistent_matchers),
+            ..Self::default()
+        }
+    }
 }
 
 #[cfg(test)]

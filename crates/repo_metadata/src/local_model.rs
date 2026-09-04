@@ -48,12 +48,14 @@ use crate::entry::{
     BudgetExceededBehavior, BuildTreeError, BuildTreeOptions, Entry, FileId, IgnoredPathStrategy,
     matches_force_included_path,
 };
+#[cfg(test)]
+use crate::matches_gitignores;
 use crate::repository::Repository;
 use crate::standing_queries::{
     StandingQueryDefinitions, StandingQueryResults, StandingQueryResultsDelta,
 };
 use crate::telemetry::RepoMetadataTelemetryEvent;
-use crate::{GitignoreRules, RepoMetadataError, matches_gitignores};
+use crate::{GitignoreRules, RepoMetadataError};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use notify_debouncer_full::notify::RecursiveMode;
@@ -68,6 +70,7 @@ cfg_if::cfg_if! {
     }
 }
 
+#[cfg(test)]
 use ignore::gitignore::Gitignore;
 use warpui_core::ModelContext;
 
@@ -628,7 +631,7 @@ impl LocalRepoMetadataModel {
         for (repo_path, repo_scoped_update) in repo_updates {
             if let Some(IndexedRepoState::Indexed(state)) = self.repositories.get(&repo_path) {
                 let repo_path_clone = repo_path.clone();
-                let gitignores = state.gitignore_rules.matchers();
+                let gitignore_rules = state.gitignore_rules.clone();
                 let force_included_paths = self.force_included_paths.clone();
                 let standing_query_definitions = self.standing_query_definitions.clone();
                 let lazy_load = self.lazy_loaded_paths.contains_key(&repo_path);
@@ -637,10 +640,10 @@ impl LocalRepoMetadataModel {
                 let task_future_id_for_completion = task_future_id.clone();
                 let update_handle = ctx.spawn(
                     async move {
-                        let (mutations, standing_results, removed_roots) =
+                        let (mutations, standing_results, removed_roots, gitignore_rules) =
                             Self::compute_file_tree_mutations(
                                 &repo_scoped_update,
-                                &gitignores,
+                                gitignore_rules,
                                 &force_included_paths,
                                 &standing_query_definitions,
                                 lazy_load,
@@ -652,10 +655,18 @@ impl LocalRepoMetadataModel {
                             removed_roots,
                             repo_path_clone,
                             lazy_load,
+                            gitignore_rules,
                         )
                     },
                     move |model,
-                          (mutations, discovered_results, removed_roots, repo_path, lazy_load),
+                          (
+                        mutations,
+                        discovered_results,
+                        removed_roots,
+                        repo_path,
+                        lazy_load,
+                        gitignore_rules,
+                    ),
                           ctx| {
                         if model
                             .finish_watcher_update_task(
@@ -670,6 +681,7 @@ impl LocalRepoMetadataModel {
                         if let Some(IndexedRepoState::Indexed(state)) =
                             model.repositories.get_mut(&repo_path)
                         {
+                            state.gitignore_rules = gitignore_rules;
                             let mut update = Self::apply_file_tree_mutations(
                                 &mut state.entry,
                                 mutations,
@@ -1125,14 +1137,12 @@ impl LocalRepoMetadataModel {
                 // across descendants that are not materialized in the lazy file tree.
                 let mut files = Vec::new();
                 let mut file_limit = MAX_FILES_PER_REPO;
-                let mut gitignores = vec![];
-                let mut gitignore_paths = vec![];
+                let mut gitignore_rules = GitignoreRules::global();
                 let mut standing_results = StandingQueryResults::default();
                 let result = Entry::build_tree_with_standing_queries(
                     &local_path,
                     &mut files,
-                    &mut gitignores,
-                    &mut gitignore_paths,
+                    &mut gitignore_rules,
                     Some(&mut file_limit),
                     BuildTreeOptions {
                         max_depth: 1, // Only first level.
@@ -1146,9 +1156,9 @@ impl LocalRepoMetadataModel {
                     &standing_query_definitions,
                 )
                 .await;
-                (path_for_build, result, standing_results)
+                (path_for_build, result, standing_results, gitignore_rules)
             },
-            move |model, (path, build_result, standing_results), ctx| {
+            move |model, (path, build_result, standing_results, gitignore_rules), ctx| {
                 if model
                     .finish_build_task(
                         &task_key_for_completion,
@@ -1164,7 +1174,7 @@ impl LocalRepoMetadataModel {
 
                 match build_result {
                     Ok(root_entry) => {
-                        let state = FileTreeState::new_lazy_loaded(root_entry);
+                        let state = FileTreeState::new(root_entry, gitignore_rules, None);
                         model
                             .standing_results
                             .insert(path.clone(), standing_results);
@@ -1269,8 +1279,7 @@ impl LocalRepoMetadataModel {
             }
             _ => None,
         };
-        // Tree building mutates the gitignore stack as it descends, so this needs an owned Vec.
-        let mut gitignores = state.gitignore_rules.matchers();
+        let mut gitignore_rules = state.gitignore_rules.clone();
         let dir_path_for_build = dir_path.to_local_path_lossy();
         let repo_root_for_build = repo_root.clone();
         let dir_path_for_completion = dir_path.clone();
@@ -1282,10 +1291,10 @@ impl LocalRepoMetadataModel {
             async move {
                 let mut remaining_file_quota = LAZY_LOAD_FILE_LIMIT;
                 let mut files = Vec::new();
-                let result = Entry::build_tree_with_ignored_ancestor(
+                let result = Entry::build_tree_with_gitignore_rules_and_ignored_ancestor(
                     dir_path_for_build,
                     &mut files,
-                    &mut gitignores,
+                    &mut gitignore_rules,
                     Some(&mut remaining_file_quota),
                     1, /* max_depth */
                     0, /* current_depth */
@@ -1293,9 +1302,14 @@ impl LocalRepoMetadataModel {
                     ancestor_is_ignored,
                 )
                 .await;
-                (repo_root_for_build, dir_path_for_completion, result)
+                (
+                    repo_root_for_build,
+                    dir_path_for_completion,
+                    result,
+                    gitignore_rules,
+                )
             },
-            move |model, (repo_root, dir_path, build_result), ctx| {
+            move |model, (repo_root, dir_path, build_result, gitignore_rules), ctx| {
                 let completion = if let Some(task) = model.finish_build_task(
                     &task_key_for_completion,
                     task_future_id_for_completion.get(),
@@ -1305,6 +1319,7 @@ impl LocalRepoMetadataModel {
                             if let Some(IndexedRepoState::Indexed(state)) =
                                 model.repositories.get_mut(&repo_root)
                             {
+                                state.gitignore_rules = gitignore_rules;
                                 let target_still_accepts_load =
                                     if let Some(expected_path) = &target_unloaded_directory_path {
                                         matches!(
@@ -1482,7 +1497,7 @@ impl LocalRepoMetadataModel {
         let Some(local) = dir_path.to_local_path() else {
             return false;
         };
-        Self::path_is_ignored(&local, &state.gitignore_rules.matchers())
+        Self::path_is_ignored_with_rules(&local, &state.gitignore_rules)
     }
 
     /// Checks whether the parent directory of `path` is loaded in the given entry.
@@ -1505,7 +1520,7 @@ impl LocalRepoMetadataModel {
     /// (and watched) on demand when the user expands it via `load_directory`.
     async fn compute_file_tree_mutations(
         update: &RepoUpdate,
-        gitignores: &[Arc<Gitignore>],
+        mut gitignore_rules: GitignoreRules,
         force_included_paths: &[PathBuf],
         standing_query_definitions: &StandingQueryDefinitions,
         lazy_load: bool,
@@ -1513,6 +1528,7 @@ impl LocalRepoMetadataModel {
         Vec<FileTreeMutation>,
         StandingQueryResults,
         Vec<StandardizedPath>,
+        GitignoreRules,
     ) {
         let mut mutations = Vec::new();
         let mut standing_results = StandingQueryResults::default();
@@ -1538,7 +1554,7 @@ impl LocalRepoMetadataModel {
                 continue;
             }
 
-            let is_ignored = Self::path_is_ignored(path_to_add, gitignores);
+            let is_ignored = Self::path_is_ignored_with_rules(path_to_add, &gitignore_rules);
 
             if path_to_add.is_dir() {
                 if lazy_load {
@@ -1562,14 +1578,11 @@ impl LocalRepoMetadataModel {
                 }
 
                 let mut files = Vec::new();
-                let mut gitignores = gitignores.to_owned();
-                let mut gitignore_paths = Vec::new();
                 let mut file_limit = MAX_FILES_PER_REPO;
                 match Entry::build_tree_with_standing_queries(
                     path_to_add,
                     &mut files,
-                    &mut gitignores,
-                    &mut gitignore_paths,
+                    &mut gitignore_rules,
                     Some(&mut file_limit),
                     BuildTreeOptions {
                         max_depth: MAX_TREE_DEPTH,
@@ -1624,7 +1637,7 @@ impl LocalRepoMetadataModel {
             }
         }
 
-        (mutations, standing_results, removed_roots)
+        (mutations, standing_results, removed_roots, gitignore_rules)
     }
 
     /// Phase 2: Applies pre-computed mutations to the file tree on the main thread.
@@ -1809,6 +1822,7 @@ impl LocalRepoMetadataModel {
     }
 
     /// Checks if a path matches any of the gitignore patterns
+    #[cfg(test)]
     fn path_is_ignored(path: &Path, gitignores: &[Arc<Gitignore>]) -> bool {
         // Check if any component of the path is .git
         if path
@@ -1821,6 +1835,16 @@ impl LocalRepoMetadataModel {
         // Check if path matches any gitignore patterns
         let is_dir = path.is_dir();
         matches_gitignores(path, is_dir, gitignores, true)
+    }
+
+    fn path_is_ignored_with_rules(path: &Path, gitignore_rules: &GitignoreRules) -> bool {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == ".git")
+        {
+            return true;
+        }
+        gitignore_rules.matches(path, path.is_dir(), true)
     }
 
     /// Fully indexes a local directory after registering it with the directory watcher.
@@ -1923,7 +1947,6 @@ impl LocalRepoMetadataModel {
 
         // Build the complete file tree for the repository asynchronously
         let repo_path_for_build = local_path;
-        let gitignores_for_build = gitignore_rules.matchers();
         let force_included_paths = self.force_included_paths.clone();
         let standing_query_definitions = self.standing_query_definitions.clone();
         let repo_path_str_for_log = std_path.to_string();
@@ -1935,8 +1958,7 @@ impl LocalRepoMetadataModel {
         let build_handle = ctx.spawn(
             async move {
                 let mut files: Vec<crate::entry::FileMetadata> = Vec::new();
-                let mut gitignores_for_build = gitignores_for_build;
-                let mut gitignore_paths = Vec::new();
+                let mut gitignore_rules = gitignore_rules;
                 let mut standing_results = StandingQueryResults::default();
 
                 // Budget for non-ignored files. When it is exhausted the builder
@@ -1950,8 +1972,7 @@ impl LocalRepoMetadataModel {
                 let build_result = Entry::build_tree_with_standing_queries(
                     &repo_path_for_build,
                     &mut files,
-                    &mut gitignores_for_build,
-                    &mut gitignore_paths,
+                    &mut gitignore_rules,
                     Some(&mut file_limit),
                     BuildTreeOptions {
                         max_depth: MAX_TREE_DEPTH,
@@ -1974,7 +1995,7 @@ impl LocalRepoMetadataModel {
                 (
                     build_result,
                     files,
-                    gitignore_rules.with_cached_paths(gitignore_paths),
+                    gitignore_rules,
                     repo_path_str_for_log,
                     std_path_for_completion,
                     repository_handle_for_completion,

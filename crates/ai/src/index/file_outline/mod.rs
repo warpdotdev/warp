@@ -9,9 +9,7 @@ cfg_if::cfg_if! {
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use ignore::gitignore::Gitignore;
 use itertools::Itertools;
 use repo_metadata::GitignoreRules;
 use serde::{Deserialize, Serialize};
@@ -127,10 +125,6 @@ impl Outline {
 
     pub fn file_count(&self) -> usize {
         self.file_id_to_outline.len()
-    }
-
-    pub fn gitignores(&self) -> Vec<Arc<Gitignore>> {
-        self.gitignore_rules.matchers()
     }
 }
 

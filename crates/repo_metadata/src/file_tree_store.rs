@@ -379,12 +379,12 @@ impl FileTreeState {
     /// Creates a new FileTreeState.
     pub fn new(
         entry: Entry,
-        gitignore_rules: impl Into<GitignoreRules>,
+        gitignore_rules: GitignoreRules,
         repository: Option<ModelHandle<Repository>>,
     ) -> Self {
         Self {
             entry: entry.into(),
-            gitignore_rules: gitignore_rules.into(),
+            gitignore_rules,
             repository,
         }
     }

@@ -14,7 +14,7 @@ use thiserror::Error;
 use warp_errors::{ErrorExt, register_error, report_error};
 use warp_util::standardized_path::StandardizedPath;
 
-use crate::gitignore_cache;
+use crate::GitignoreRules;
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
 
 /// Maximum file size allowed for treesitter parsing (3MB).
@@ -163,23 +163,54 @@ impl Entry {
         )
         .await
     }
-    /// Builds a tree while recording the `.gitignore` source paths discovered during traversal.
     #[allow(clippy::too_many_arguments)]
-    pub async fn build_tree_with_gitignore_paths(
+    pub(crate) async fn build_tree_with_gitignore_rules_and_ignored_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Arc<Gitignore>>,
-        gitignore_paths: &mut Vec<PathBuf>,
+        gitignore_rules: &mut GitignoreRules,
+        remaining_file_quota: Option<&mut usize>,
+        max_depth: usize,
+        current_depth: usize,
+        ignored_path_strategy: &IgnoredPathStrategy,
+        ancestor_is_ignored: bool,
+    ) -> Result<Self, BuildTreeError> {
+        let mut gitignores = Vec::new();
+        Self::build_tree_with_force_included_paths_and_ancestor(
+            path,
+            files,
+            &mut gitignores,
+            remaining_file_quota,
+            BuildTreeOptions {
+                max_depth,
+                current_depth,
+                ignored_path_strategy,
+                force_included_paths: &[],
+                budget_exceeded_behavior: BudgetExceededBehavior::StopAndLazyLoad,
+            },
+            ancestor_is_ignored,
+            Some(gitignore_rules),
+            None,
+        )
+        .await
+    }
+
+    /// Builds a tree with source-backed Gitignore rules.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_tree_with_gitignore_rules(
+        path: impl Into<PathBuf>,
+        files: &mut Vec<FileMetadata>,
+        gitignore_rules: &mut GitignoreRules,
         remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
         ignored_path_strategy: &IgnoredPathStrategy,
         budget_exceeded_behavior: BudgetExceededBehavior,
     ) -> Result<Self, BuildTreeError> {
+        let mut gitignores = Vec::new();
         Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
-            gitignores,
+            &mut gitignores,
             remaining_file_quota,
             BuildTreeOptions {
                 max_depth,
@@ -189,7 +220,7 @@ impl Entry {
                 budget_exceeded_behavior,
             },
             false,
-            Some(gitignore_paths),
+            Some(gitignore_rules),
             None,
         )
         .await
@@ -200,8 +231,7 @@ impl Entry {
     pub(crate) async fn build_tree_with_standing_queries(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Arc<Gitignore>>,
-        gitignore_paths: &mut Vec<PathBuf>,
+        gitignore_rules: &mut GitignoreRules,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
         ancestor_is_ignored: bool,
@@ -212,14 +242,15 @@ impl Entry {
             results: standing_results,
             definitions,
         };
+        let mut gitignores = Vec::new();
         Self::build_tree_with_force_included_paths_and_ancestor(
             path,
             files,
-            gitignores,
+            &mut gitignores,
             remaining_file_quota,
             options,
             ancestor_is_ignored,
-            Some(gitignore_paths),
+            Some(gitignore_rules),
             Some(&mut standing_queries),
         )
         .await
@@ -287,7 +318,7 @@ impl Entry {
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
         ancestor_is_ignored: bool,
-        mut gitignore_paths: Option<&mut Vec<PathBuf>>,
+        mut gitignore_rules: Option<&mut GitignoreRules>,
         mut standing_queries: Option<&mut StandingQueryBuildState<'_>>,
     ) -> Result<Self, BuildTreeError> {
         let root_path: PathBuf = path.into();
@@ -319,7 +350,7 @@ impl Entry {
             &options,
             options.current_depth,
             ancestor_is_ignored,
-            gitignore_paths.as_deref_mut(),
+            gitignore_rules.as_deref_mut(),
         )? {
             EvaluatedEntry::File { ignored } => {
                 if quota == Some(0)
@@ -426,7 +457,7 @@ impl Entry {
                             &options,
                             child_depth,
                             job.ignored,
-                            gitignore_paths.as_deref_mut(),
+                            gitignore_rules.as_deref_mut(),
                         ) {
                             Ok(EvaluatedEntry::File { ignored }) => {
                                 if quota == Some(0)
@@ -624,7 +655,7 @@ fn evaluate_entry(
     options: &BuildTreeOptions<'_>,
     current_depth: usize,
     ancestor_is_ignored: bool,
-    gitignore_paths: Option<&mut Vec<PathBuf>>,
+    mut gitignore_rules: Option<&mut GitignoreRules>,
 ) -> Result<EvaluatedEntry, BuildTreeError> {
     let is_dir = curr_path.is_dir();
 
@@ -634,23 +665,20 @@ fn evaluate_entry(
     }
 
     let gitignore_path = curr_path.join(".gitignore");
-    let already_loaded = gitignore_paths
-        .as_deref()
-        .is_some_and(|paths| paths.contains(&gitignore_path));
-    if gitignore_path.exists() && !already_loaded {
-        gitignores.push(gitignore_cache::get_or_parse(&gitignore_path));
-        if let Some(paths) = gitignore_paths {
-            paths.push(gitignore_path);
+    if gitignore_path.exists() {
+        if let Some(rules) = gitignore_rules.as_deref_mut() {
+            rules.add_cached_path(gitignore_path);
+        } else {
+            let (gitignore, _) = Gitignore::new(gitignore_path);
+            gitignores.push(Arc::new(gitignore));
         }
     }
 
     let path_is_ignored = ancestor_is_ignored
         || is_git_internal_path(curr_path)
-        || matches_gitignores(
-            curr_path,
-            is_dir,
-            &*gitignores,
-            false, /* check_ancestors */
+        || gitignore_rules.as_deref().map_or_else(
+            || matches_gitignores(curr_path, is_dir, &*gitignores, false),
+            |rules| rules.matches(curr_path, is_dir, false),
         );
 
     let force_included = matches_force_included_path(curr_path, options.force_included_paths);
@@ -1147,7 +1175,8 @@ pub fn gitignores_for_directory(directory_path: &Path) -> Vec<Arc<Gitignore>> {
     let mut gitignores = Vec::new();
     let gitignore_path = directory_path.join(".gitignore");
     if gitignore_path.exists() {
-        gitignores.push(gitignore_cache::get_or_parse(&gitignore_path));
+        let (gitignore, _) = Gitignore::new(gitignore_path);
+        gitignores.push(Arc::new(gitignore));
     }
     let (global_gitignore, _) = Gitignore::global();
     if !global_gitignore.is_empty() {

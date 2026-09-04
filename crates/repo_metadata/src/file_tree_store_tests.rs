@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use warp_util::standardized_path::StandardizedPath;
 
+use crate::GitignoreRules;
 use crate::entry::{
     BudgetExceededBehavior, DirectoryEntry, Entry, FileId, FileMetadata, IgnoredPathStrategy,
 };
 use crate::file_tree_store::{FileTreeEntry, FileTreeEntryState, FileTreeState};
-use crate::{GitignoreRules, matches_gitignores};
 
 fn std_path(s: &str) -> StandardizedPath {
     StandardizedPath::try_new(s).expect("test path should be valid")
@@ -213,13 +213,11 @@ fn file_tree_state_does_not_retain_matchers_and_rematerializes_nested_rules() {
     std::fs::write(&nested_gitignore, "secret.txt\n").unwrap();
     std::fs::write(nested.join("secret.txt"), "").unwrap();
     let mut files = Vec::new();
-    let mut active_matchers = Vec::new();
-    let mut gitignore_paths = Vec::new();
-    let entry = futures::executor::block_on(Entry::build_tree_with_gitignore_paths(
+    let mut gitignore_rules = GitignoreRules::default();
+    let entry = futures::executor::block_on(Entry::build_tree_with_gitignore_rules(
         &root,
         &mut files,
-        &mut active_matchers,
-        &mut gitignore_paths,
+        &mut gitignore_rules,
         None,
         20,
         0,
@@ -228,25 +226,10 @@ fn file_tree_state_does_not_retain_matchers_and_rematerializes_nested_rules() {
     ))
     .unwrap();
 
-    let retained = crate::gitignore_cache::get_or_parse(&nested_gitignore);
-    let state = FileTreeState::new(
-        entry,
-        GitignoreRules::default().with_cached_paths(gitignore_paths),
-        None,
+    let state = FileTreeState::new(entry, gitignore_rules, None);
+    assert!(
+        state
+            .gitignore_rules
+            .matches(&nested.join("secret.txt"), false, false)
     );
-    drop(active_matchers);
-    assert_eq!(
-        Arc::strong_count(&retained),
-        2,
-        "only the cache and test witness should retain the matcher"
-    );
-    drop(retained);
-
-    let matchers = state.gitignore_rules.matchers();
-    assert!(matches_gitignores(
-        &nested.join("secret.txt"),
-        false,
-        &matchers,
-        false
-    ));
 }

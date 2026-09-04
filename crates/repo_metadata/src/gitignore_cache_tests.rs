@@ -1,165 +1,207 @@
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 
-use super::get_or_parse;
+use ignore::gitignore::GitignoreBuilder;
+use parking_lot::Mutex;
 
-/// Reading the same unchanged `.gitignore` twice must return the exact same `Arc<Gitignore>`
-/// instance (not merely an equal one), since a distinct instance means a distinct compiled
-/// regex and pool were allocated.
+use super::{Cache, CacheKey, EFFECTIVE_MAX_LIVE_MATCHERS, GitignoreRules};
+
+fn match_file(
+    cache: &mut Cache,
+    gitignore_path: &std::path::Path,
+    target: &std::path::Path,
+) -> bool {
+    let content = std::fs::read(gitignore_path).ok();
+    cache.match_file(gitignore_path, content.as_deref(), target, false, true)
+}
+
 #[test]
 fn reuses_cached_entry_for_unchanged_file() {
-    super::clear_for_test();
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().join(".gitignore");
     std::fs::write(&path, "target/\n").unwrap();
+    let mut cache = Cache::default();
 
-    let first = get_or_parse(&path);
-    let second = get_or_parse(&path);
+    assert!(match_file(
+        &mut cache,
+        &path,
+        &temp_dir.path().join("target/file")
+    ));
+    assert!(match_file(
+        &mut cache,
+        &path,
+        &temp_dir.path().join("target/file")
+    ));
 
-    assert!(
-        Arc::ptr_eq(&first, &second),
-        "an unchanged .gitignore should reuse the cached Gitignore instance"
-    );
+    assert_eq!(cache.parse_count, 1);
 }
 
 #[test]
 fn evicts_least_recently_used_entry_over_matcher_count_limit() {
-    let mut cache = super::Cache::default();
-    for index in 0..=super::EFFECTIVE_MAX_CACHED_MATCHERS {
-        cache.insert(
-            format!("gitignore_{index}").into(),
-            index as u64,
-            Arc::new(ignore::gitignore::Gitignore::empty()),
-            0,
-        );
-    }
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut cache = Cache::default();
+    let paths: Vec<_> = (0..=EFFECTIVE_MAX_LIVE_MATCHERS)
+        .map(|index| {
+            let path = temp_dir.path().join(format!("gitignore_{index}"));
+            std::fs::write(&path, format!("i{index}\n")).unwrap();
+            match_file(&mut cache, &path, &temp_dir.path().join("unmatched"));
+            path
+        })
+        .collect();
 
-    assert_eq!(cache.entries.len(), super::EFFECTIVE_MAX_CACHED_MATCHERS);
+    assert_eq!(cache.entries.len(), EFFECTIVE_MAX_LIVE_MATCHERS);
     assert!(
         !cache
             .entries
-            .contains_key(std::path::Path::new("gitignore_0"))
+            .contains_key(&CacheKey::File(paths[0].clone()))
     );
+    assert!(cache.peak_live_matchers <= EFFECTIVE_MAX_LIVE_MATCHERS);
 }
 
-/// A same-length edit that lands within the filesystem's mtime resolution must still be
-/// detected: content hashing must not mistake it for an unchanged file.
 #[test]
 fn rebuilds_when_content_changes_at_the_same_length() {
-    super::clear_for_test();
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().join(".gitignore");
     std::fs::write(&path, "target/\n").unwrap();
     let original_mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+    let mut cache = Cache::default();
 
-    let before = get_or_parse(&path);
-    assert!(before.matched("target", true).is_ignore());
-
-    let replacement = "assets/\n";
-    assert_eq!(
-        replacement.len(),
-        "target/\n".len(),
-        "the replacement content must keep the file's byte length unchanged \
-         to exercise the same-size case"
-    );
-    std::fs::write(&path, replacement).unwrap();
-    // Force the mtime back to its original value so this test deterministically exercises the
-    // same-mtime case regardless of the filesystem's actual clock resolution. `set_modified`
-    // requires a handle opened for write on Windows (a read-only handle lacks
-    // FILE_WRITE_ATTRIBUTES), even though the same call succeeds on a read-only handle on Unix.
+    assert!(match_file(
+        &mut cache,
+        &path,
+        &temp_dir.path().join("target/file")
+    ));
+    std::fs::write(&path, "assets/\n").unwrap();
     std::fs::File::options()
         .write(true)
         .open(&path)
         .unwrap()
         .set_modified(original_mtime)
         .unwrap();
-    let after = get_or_parse(&path);
 
-    assert!(
-        !Arc::ptr_eq(&before, &after),
-        "a same-length content change must not reuse the stale cached instance"
-    );
-    assert!(after.matched("assets", true).is_ignore());
-    assert!(!after.matched("target", true).is_ignore());
+    assert!(match_file(
+        &mut cache,
+        &path,
+        &temp_dir.path().join("assets/file")
+    ));
+    assert!(!match_file(
+        &mut cache,
+        &path,
+        &temp_dir.path().join("target/file")
+    ));
+    assert_eq!(cache.parse_count, 2);
 }
 
-/// A `.gitignore` first touched while transiently unreadable (e.g. a permissions race during
-/// checkout) must not cache the resulting empty matcher: a failed read must never be cached,
-/// regardless of the file's later content.
 #[cfg(unix)]
 #[test]
 fn recovers_after_a_transient_read_failure() {
     use std::os::unix::fs::PermissionsExt;
 
-    super::clear_for_test();
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().join(".gitignore");
+    let target = temp_dir.path().join("target/file");
     std::fs::write(&path, "target/\n").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     if std::fs::read(&path).is_ok() {
-        // Running as a user (e.g. root) that ignores permission bits: the failure this test
-        // exercises can't be reproduced here.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         return;
     }
+    let mut cache = Cache::default();
 
-    // The very first access happens while the file is unreadable: it must fail open (an empty
-    // matcher) without poisoning the cache with that result.
-    let during_failure = get_or_parse(&path);
-    assert!(!during_failure.matched("target", true).is_ignore());
-
+    assert!(!match_file(&mut cache, &path, &target));
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    let after_recovery = get_or_parse(&path);
-    assert!(
-        after_recovery.matched("target", true).is_ignore(),
-        "a transient read failure on first access must not permanently cache \
-         an empty result"
-    );
+    assert!(match_file(&mut cache, &path, &target));
 }
 
-/// A `.gitignore` with a malformed line (`[z-a]` is an invalid character range) makes
-/// `Gitignore::new` report a partial error. That result must never be cached: two calls
-/// against the same still-broken content must each produce an independent parse, and fixing
-/// the line must not be shadowed by a previously cached partial result.
 #[test]
 fn does_not_cache_a_failed_parse() {
-    super::clear_for_test();
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().join(".gitignore");
+    let target = temp_dir.path().join("target/file");
     std::fs::write(&path, "target/\n[z-a]\n").unwrap();
+    let mut cache = Cache::default();
 
-    let first = get_or_parse(&path);
-    let second = get_or_parse(&path);
-    assert!(
-        !Arc::ptr_eq(&first, &second),
-        "a result from a file with a parse error must never be cached"
-    );
+    match_file(&mut cache, &path, &target);
+    match_file(&mut cache, &path, &target);
+    assert_eq!(cache.parse_count, 2);
+    assert!(!cache.entries.contains_key(&CacheKey::File(path.clone())));
 
     std::fs::write(&path, "target/\n").unwrap();
-    let fixed = get_or_parse(&path);
-    let fixed_again = get_or_parse(&path);
-    assert!(
-        Arc::ptr_eq(&fixed, &fixed_again),
-        "once the error is fixed, the valid result should be cached normally"
-    );
+    assert!(match_file(&mut cache, &path, &target));
+    assert!(match_file(&mut cache, &path, &target));
+    assert_eq!(cache.parse_count, 3);
 }
 
-/// Exceeding the cache's byte budget evicts the least-recently-used entry first.
 #[test]
-fn evicts_least_recently_used_entry_over_capacity() {
-    let mut cache = super::Cache::default();
-    for index in 0..3 {
-        cache.insert(
-            format!("gitignore_{index}").into(),
-            index,
-            Arc::new(ignore::gitignore::Gitignore::empty()),
-            9,
-        );
-    }
+fn evicts_least_recently_used_entry_over_source_byte_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut cache = Cache::default();
+    let paths: Vec<_> = (0..3)
+        .map(|index| {
+            let path = temp_dir.path().join(format!("gitignore_{index}"));
+            std::fs::write(&path, "target/\n\n").unwrap();
+            match_file(&mut cache, &path, &temp_dir.path().join("unmatched"));
+            path
+        })
+        .collect();
 
     assert_eq!(cache.total_source_bytes, 18);
     assert!(
         !cache
             .entries
-            .contains_key(std::path::Path::new("gitignore_0"))
+            .contains_key(&CacheKey::File(paths[0].clone()))
     );
+}
+
+#[test]
+fn over_cap_concurrent_rule_sets_stay_within_live_matcher_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let paths: Vec<_> = (0..10)
+        .map(|index| {
+            let path = temp_dir.path().join(format!("gitignore_{index}"));
+            std::fs::write(&path, format!("i{index}\n")).unwrap();
+            path
+        })
+        .collect();
+    let rules = Arc::new(GitignoreRules::default().with_cached_paths(paths));
+    let cache = Arc::new(Mutex::new(Cache::default()));
+    let barrier = Arc::new(Barrier::new(9));
+    let target = Arc::new(temp_dir.path().join("unmatched"));
+
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let rules = rules.clone();
+            let cache = cache.clone();
+            let barrier = barrier.clone();
+            let target = target.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                assert!(!rules.matches_with_cache(&cache, &target, false, false));
+            })
+        })
+        .collect();
+    barrier.wait();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+
+    let cache = cache.lock();
+    assert!(cache.entries.len() <= EFFECTIVE_MAX_LIVE_MATCHERS);
+    assert!(cache.peak_live_matchers <= EFFECTIVE_MAX_LIVE_MATCHERS);
+    assert_eq!(cache.parse_count, 80);
+}
+
+#[test]
+fn refreshing_global_rules_replaces_the_cached_matcher() {
+    let mut cache = Cache::default();
+    let mut first = GitignoreBuilder::new("");
+    first.add_line(None, "first").unwrap();
+    cache.refresh_global_with(|| first.build().unwrap());
+    assert!(cache.match_global(std::path::Path::new("first"), false, false));
+    let mut second = GitignoreBuilder::new("");
+    second.add_line(None, "second").unwrap();
+    cache.refresh_global_with(|| second.build().unwrap());
+
+    assert!(!cache.match_global(std::path::Path::new("first"), false, false));
+    assert!(cache.match_global(std::path::Path::new("second"), false, false));
+    assert!(cache.entries.len() <= EFFECTIVE_MAX_LIVE_MATCHERS);
 }
