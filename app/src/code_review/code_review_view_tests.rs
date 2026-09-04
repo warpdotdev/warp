@@ -852,6 +852,138 @@ fn test_comment_actions_wait_for_authoritative_deferred_editor_load() {
 }
 
 #[test]
+fn test_single_file_update_restarts_deferred_load_and_rejects_old_completion() {
+    App::test((), |mut app| async move {
+        const OLD_LOAD_ID: u64 = 41;
+
+        let repo = create_modified_repo("generated.rs", "base\n", "first edit\n").await;
+        let stale_file = retrieve_collapsed_file(repo.path(), "generated.rs").await;
+        let stale_completion = Arc::new(retrieve_collapsed_file(repo.path(), "generated.rs").await);
+        std::fs::write(repo.path().join("generated.rs"), "second edit\n")
+            .expect("write newer file content");
+        let fresh_file = Arc::new(retrieve_collapsed_file(repo.path(), "generated.rs").await);
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        initialize_file_loading_models(&mut app);
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![stale_file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let comment = create_line_comment(
+            repo.path().join("generated.rs"),
+            0,
+            "second edit",
+            "Review latest edit",
+        );
+        let comment_id = comment.id;
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            view.next_deferred_editor_load_id = OLD_LOAD_ID;
+            let Some(CodeReviewViewState::Loaded(state)) = view.state_mut() else {
+                panic!("expected loaded state");
+            };
+            let file = &mut state.file_states["generated.rs"];
+            file.is_expanded = true;
+            file.deferred_editor_load = DeferredEditorLoad::Loading(OLD_LOAD_ID);
+            view.active_comment_model
+                .clone()
+                .unwrap()
+                .update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+            view.handle_jump_to_comment_location(&comment_id, ctx);
+            view.handle_edit_comment(&comment_id, ctx);
+            assert_eq!(view.pending_jump_to_comment, Some(comment_id));
+            assert_eq!(view.pending_edit_comment, Some(comment_id));
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.update_from_single_file_diff_result(
+                "generated.rs".to_string(),
+                Some(fresh_file.clone()),
+                ctx,
+            );
+            let successor_load_id = match view.state() {
+                CodeReviewViewState::Loaded(state) => {
+                    match state.file_states["generated.rs"].deferred_editor_load {
+                        DeferredEditorLoad::Loading(load_id) => load_id,
+                        ref state => panic!("expected successor load, got {state:?}"),
+                    }
+                }
+                _ => panic!("expected loaded state"),
+            };
+            assert_ne!(successor_load_id, OLD_LOAD_ID);
+
+            view.finish_deferred_editor_load(
+                "generated.rs",
+                OLD_LOAD_ID,
+                Ok(stale_completion.clone()),
+                ctx,
+            );
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(file.editor_state.is_none());
+            assert_eq!(
+                file.deferred_editor_load,
+                DeferredEditorLoad::Loading(successor_load_id)
+            );
+            assert!(
+                file.file_diff
+                    .hunks
+                    .iter()
+                    .flat_map(|hunk| &hunk.lines)
+                    .any(|line| line.line_type == DiffLineType::Add && line.text == "second edit")
+            );
+            assert_eq!(view.pending_jump_to_comment, Some(comment_id));
+            assert_eq!(view.pending_edit_comment, Some(comment_id));
+
+            view.finish_deferred_editor_load(
+                "generated.rs",
+                successor_load_id,
+                Ok(fresh_file.clone()),
+                ctx,
+            );
+        });
+
+        wait_for_deferred_load(&mut app, &test.code_review_view, "generated.rs").await;
+
+        test.code_review_view.read(&app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let editor = state.file_states["generated.rs"]
+                .editor_state
+                .as_ref()
+                .expect("successor editor should load")
+                .editor();
+            assert_eq!(
+                editor.as_ref(ctx).editor().as_ref(ctx).text(ctx).as_str(),
+                "second edit\n"
+            );
+            let base = editor
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .model
+                .as_ref(ctx)
+                .diff()
+                .as_ref(ctx)
+                .base()
+                .expect("successor editor should retain the authoritative base");
+            assert_eq!(base.as_str(), "base\n");
+            assert!(view.pending_jump_to_comment.is_none());
+            assert!(view.pending_edit_comment.is_none());
+        });
+    });
+}
+#[test]
 fn test_deferred_editor_load_keeps_loaded_sibling_visible() {
     App::test((), |mut app| async move {
         let repo = create_modified_repo("generated.rs", "base\n", "generated\n").await;

@@ -2436,6 +2436,7 @@ impl CodeReviewView {
         };
 
         let existing_index = diff_data.file_states.get_index_of(&file_path);
+        let mut deferred_editor_to_restart = None;
 
         match (existing_index, updated_diff) {
             (Some(index), Some(diff)) => {
@@ -2464,12 +2465,7 @@ impl CodeReviewView {
                         .unwrap_or(true);
                     if should_apply {
                         current.file_diff = file.file_diff.clone();
-                        if current.editor_state.is_none()
-                            && !matches!(
-                                current.deferred_editor_load,
-                                DeferredEditorLoad::Loading(_)
-                            )
-                        {
+                        if current.editor_state.is_none() {
                             current.deferred_editor_load = if can_defer_editor_construction
                                 && Self::file_supports_editor(file)
                             {
@@ -2477,6 +2473,11 @@ impl CodeReviewView {
                             } else {
                                 DeferredEditorLoad::NotDeferred
                             };
+                            if current.is_expanded
+                                && current.deferred_editor_load == DeferredEditorLoad::Ready
+                            {
+                                deferred_editor_to_restart = Some(index);
+                            }
                         }
                     }
                     self.viewported_list_state
@@ -2501,6 +2502,9 @@ impl CodeReviewView {
 
         if let Some(repo) = self.active_repo.as_mut() {
             repo.state = CodeReviewViewState::Loaded(diff_data);
+        }
+        if let Some(index) = deferred_editor_to_restart {
+            self.ensure_editor_for_file(index, ctx);
         }
 
         self.update_editor_comment_markers(ctx);
