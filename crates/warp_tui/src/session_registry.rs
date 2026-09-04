@@ -11,8 +11,8 @@ use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
     BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
-    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
-    TerminalSurfaceResult, oz_run_url,
+    LocalTtyTerminalManager, PersistenceWriter, RequestTeamScope, ServerConversationToken,
+    TerminalManagerTrait, TerminalSurfaceResult, UserWorkspaces, oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -322,15 +322,18 @@ impl TuiSessions {
         let id = TuiSessionId(view.id());
         if ctx.has_singleton_model::<TuiOrchestrationModel>() {
             let orchestration = TuiOrchestrationModel::handle(ctx);
+            let team_context_resolver = UserWorkspaces::team_context_resolver(view.downgrade());
             ctx.subscribe_to_view(&view, move |_, event, ctx| match event {
                 TuiTerminalSessionEvent::StartAgentConversation {
                     request,
                     working_directory,
                 } => {
+                    let team_scope = RequestTeamScope::from_scope(&team_context_resolver(ctx));
                     orchestration.update(ctx, |orchestration, ctx| {
                         orchestration.dispatch_create_agent(
                             id,
                             (**request).clone(),
+                            team_scope,
                             working_directory.clone(),
                             ctx,
                         );
@@ -465,6 +468,7 @@ impl TuiSessions {
                 parent_session_id,
                 request,
                 prepared,
+                team_scope,
             } => {
                 let child = Self::create_remote_child_session(&sessions, *parent_session_id, ctx);
                 orchestration_for_events.update(ctx, |orchestration, ctx| {
@@ -472,6 +476,7 @@ impl TuiSessions {
                         child,
                         (**request).clone(),
                         (**prepared).clone(),
+                        *team_scope,
                         ctx,
                     );
                 });

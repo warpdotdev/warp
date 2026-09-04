@@ -5,7 +5,7 @@ use super::*;
 use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::server::server_api::ClientError;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
-use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 fn attachment() -> AttachmentInput {
     AttachmentInput {
@@ -413,6 +413,9 @@ fn github_auth_completed_retries_stored_initial_run_request() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let model = add_model(&mut app);
+        let request_team_scope = RequestTeamScope::from_scope(
+            &TeamContextForOperation::new_for_test(ServerId::from(44)),
+        );
 
         model.update(&mut app, |model, ctx| {
             model.status = Status::NeedsGithubAuth {
@@ -421,6 +424,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 auth_url: "https://example.com/oauth/connect/github".to_string(),
             };
             model.request = Some(retry_request("retry this"));
+            model.request_team_scope = Some(request_team_scope);
 
             model.handle_github_auth_completed(ctx);
 
@@ -432,6 +436,7 @@ fn github_auth_completed_retries_stored_initial_run_request() {
                 }
             ));
             let request = model.request().expect("retry should spawn a request");
+            assert_eq!(model.request_team_scope, Some(request_team_scope));
             assert_eq!(request.prompt.as_deref(), Some("retry this"));
             assert_eq!(request.attachments.len(), 1);
             assert_eq!(request.interactive, Some(true));

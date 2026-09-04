@@ -54,6 +54,7 @@ use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::session_management::SessionNavigationData;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::GeneralSettings;
@@ -68,7 +69,8 @@ use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 #[cfg(not(target_family = "wasm"))]
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -1986,6 +1988,8 @@ fn launch_remote_child(
             return None;
         }
     };
+    let team_scope =
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx));
 
     new_terminal_view.update(ctx, |terminal_view, ctx| {
         terminal_view.enter_agent_view(
@@ -1997,7 +2001,7 @@ fn launch_remote_child(
         if let Some(ambient_agent_view_model) = terminal_view.ambient_agent_view_model() {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(conversation_id));
-                model.spawn_agent_with_request(prepared.spawn_request, ctx);
+                model.spawn_agent_with_request(prepared.spawn_request, team_scope, ctx);
             });
         } else {
             report_error!("Remote StartAgent child pane missing ambient agent view model");

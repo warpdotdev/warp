@@ -337,6 +337,7 @@ use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
@@ -15753,6 +15754,9 @@ impl Workspace {
                 return;
             }
         };
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
 
         let presentation = pending.presentation_snapshot();
         let model_slot: Arc<Mutex<Option<ModelHandle<HandoffAmbientAgentViewModel>>>> =
@@ -15778,7 +15782,8 @@ impl Workspace {
             })
         });
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let execution = execute_handoff(pending, ai_client, None, Some(materialize), ctx);
+        let execution =
+            execute_handoff(pending, team_scope, ai_client, None, Some(materialize), ctx);
         ctx.spawn(execution, move |workspace, outcome, ctx| match outcome {
             HandoffCommitOutcome::Rejected { mut pending, error } => {
                 let restoration = pending.take_restoration();

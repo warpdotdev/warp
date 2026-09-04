@@ -55,6 +55,7 @@ use crate::pane_group::pane::PaneStack;
 use crate::pane_group::{BackingView, TerminalPaneId};
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, RightClickBehavior, WarpPromptSeparator};
 use crate::terminal::alt_screen::should_intercept_mouse;
@@ -93,6 +94,11 @@ use crate::test_util::terminal::{
 use crate::test_util::{add_window_with_terminal, assert_eventually};
 use crate::view_components::find::FindWithinBlockState;
 use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+}
 
 fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView> {
     let tips_model = app.add_model(|_| Default::default());
@@ -3449,6 +3455,7 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
                             snapshot_disabled: None,
                             orchestration_handoff: None,
                         },
+                        request_team_scope(),
                         ctx,
                     );
                 });

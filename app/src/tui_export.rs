@@ -191,7 +191,6 @@ pub use crate::server::server_api::TranscribeError;
 pub use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, SpawnAgentRequest, SpawnAgentResponse,
 };
-#[cfg(feature = "voice_input")]
 pub use crate::server::team_scope::RequestTeamScope;
 pub use crate::server::telemetry::{SlashMenuSource, TelemetryEvent};
 pub use crate::settings::{AISettingsChangedEvent, InputSettings};

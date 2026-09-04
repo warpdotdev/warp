@@ -682,11 +682,34 @@ impl ServerApi {
         Ok(self.wrap_eventsource_with_iap_detection(request.eventsource()))
     }
 
+    fn with_request_team_scope(
+        request: http_client::RequestBuilder<'_>,
+        team_scope: Option<RequestTeamScope>,
+    ) -> http_client::RequestBuilder<'_> {
+        match team_scope.and_then(RequestTeamScope::team_uid) {
+            Some(team_uid) => request.header(TEAM_UID_HEADER, team_uid.uid()),
+            None => request,
+        }
+    }
+
     /// Sends a POST request to a public API endpoint and returns the raw response on success.
     async fn post_public_api_response<B>(
         &self,
         path: &str,
         body: &B,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
+        self.post_public_api_response_with_scope(path, body, None)
+            .await
+    }
+
+    async fn post_public_api_response_with_scope<B>(
+        &self,
+        path: &str,
+        body: &B,
+        team_scope: Option<RequestTeamScope>,
     ) -> Result<http_client::Response>
     where
         B: Serialize,
@@ -702,6 +725,7 @@ impl ServerApi {
         if let Some(token) = auth_token.as_bearer_token() {
             request = request.bearer_auth(token);
         }
+        request = Self::with_request_team_scope(request, team_scope);
 
         for (name, value) in self.ambient_agent_headers().await? {
             request = request.header(name, value);
@@ -780,6 +804,26 @@ impl ServerApi {
         R: serde::de::DeserializeOwned,
     {
         let response = self.post_public_api_response(path, body).await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
+    async fn post_public_api_with_scope<B, R>(
+        &self,
+        path: &str,
+        body: &B,
+        team_scope: RequestTeamScope,
+    ) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self
+            .post_public_api_response_with_scope(path, body, Some(team_scope))
+            .await?;
         let url = response.url().clone();
         response
             .json::<R>()

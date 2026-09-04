@@ -45,6 +45,7 @@ use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, RunFollowupRequest,
     SpawnAgentRequest,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
@@ -132,6 +133,7 @@ pub struct AmbientAgentViewModel {
 
     /// The request with which the cloud agent was spawned, if it was spawned.
     request: Option<SpawnAgentRequest>,
+    request_team_scope: Option<RequestTeamScope>,
 
     /// The terminal view this model is part of.
     terminal_view_id: EntityId,
@@ -246,6 +248,7 @@ impl AmbientAgentViewModel {
         Self {
             status: Status::Composing,
             request: None,
+            request_team_scope: None,
             terminal_view_id,
             terminal_view,
             environment_id: None,
@@ -1132,6 +1135,7 @@ impl AmbientAgentViewModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let config = Some(self.build_default_spawn_config(scope, ctx));
+        let request_team_scope = RequestTeamScope::from_scope(scope);
 
         let (prompt, mode) = extract_user_query_mode(prompt);
         let request = SpawnAgentRequest {
@@ -1153,13 +1157,14 @@ impl AmbientAgentViewModel {
             orchestration_handoff: None,
         };
 
-        self.spawn_internal(request, ctx);
+        self.spawn_internal(request, request_team_scope, ctx);
     }
 
     /// Spawn an ambient agent with a fully-constructed request.
     pub fn spawn_agent_with_request(
         &mut self,
         request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
         // Apply pane settings from the request.
@@ -1189,16 +1194,22 @@ impl AmbientAgentViewModel {
             }
         }
 
-        self.spawn_internal(request, ctx);
+        self.spawn_internal(request, team_scope, ctx);
     }
 
     /// Stores `request` and starts the combined spawn-and-monitor stream.
-    fn start_spawn_stream(&mut self, mut request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
+    fn start_spawn_stream(
+        &mut self,
+        mut request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
         request.interactive = Some(true);
         self.request = Some(request.clone());
+        self.request_team_scope = Some(team_scope);
         self.source = None;
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let stream = spawn_task(request, ai_client, None);
+        let stream = spawn_task(request, team_scope, ai_client, None);
         ctx.spawn_stream_local(
             stream,
             |me, event_result, ctx| me.handle_ambient_agent_event_result(event_result, ctx),
@@ -1207,8 +1218,13 @@ impl AmbientAgentViewModel {
     }
 
     /// Spawn an ambient agent given `request`.
-    fn spawn_internal(&mut self, request: SpawnAgentRequest, ctx: &mut ModelContext<Self>) {
-        self.start_spawn_stream(request, ctx);
+    fn spawn_internal(
+        &mut self,
+        request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.start_spawn_stream(request, team_scope, ctx);
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
             kind: SessionStartupKind::InitialRun,
@@ -1516,8 +1532,11 @@ impl AmbientAgentViewModel {
         let Some(request) = self.request.clone() else {
             return;
         };
+        let Some(team_scope) = self.request_team_scope else {
+            return;
+        };
 
-        self.spawn_internal(request, ctx);
+        self.spawn_internal(request, team_scope, ctx);
     }
 
     /// Handles cancellation by transitioning to the Cancelled state.

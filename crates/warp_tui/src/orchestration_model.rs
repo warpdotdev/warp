@@ -21,14 +21,14 @@ use warp::tui_export::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
     CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
-    RemoteChildLaunchConfig, RenderableAIError, ResolvedTeamScope, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentRequest, UserWorkspaces, aggregated_orchestrator_status,
-    apply_child_agent_model_override, child_conversations_in_pill_order,
-    classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
-    descendant_conversations_in_pill_order, finish_local_oz_child_conversation,
-    inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
-    oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
-    register_agent_event_consumer, unregister_agent_event_consumer,
+    RemoteChildLaunchConfig, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
+    ServerApiProvider, StartAgentExecutionMode, StartAgentRequest, UserWorkspaces,
+    aggregated_orchestrator_status, apply_child_agent_model_override,
+    child_conversations_in_pill_order, classify_cloud_agent_startup_error,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    finish_local_oz_child_conversation, inherit_child_agent_settings, loaded_subtree_rollup,
+    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
+    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -124,6 +124,7 @@ pub(crate) enum TuiOrchestrationEvent {
         parent_session_id: TuiSessionId,
         request: Box<StartAgentRequest>,
         prepared: Box<PreparedRemoteChildLaunch>,
+        team_scope: RequestTeamScope,
     },
     KillLocalChildSession {
         session_id: TuiSessionId,
@@ -493,6 +494,7 @@ impl TuiOrchestrationModel {
         &mut self,
         parent_session_id: TuiSessionId,
         request: StartAgentRequest,
+        team_scope: RequestTeamScope,
         working_directory: Option<PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -542,6 +544,7 @@ impl TuiOrchestrationModel {
                 self.begin_remote_child_launch(
                     parent_session_id,
                     request,
+                    team_scope,
                     RemoteChildLaunchConfig {
                         environment_id,
                         skill_references,
@@ -565,6 +568,7 @@ impl TuiOrchestrationModel {
         &mut self,
         parent_session_id: TuiSessionId,
         request: StartAgentRequest,
+        team_scope: RequestTeamScope,
         config: RemoteChildLaunchConfig,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -579,6 +583,7 @@ impl TuiOrchestrationModel {
             parent_session_id,
             request: Box::new(request),
             prepared: Box::new(prepared),
+            team_scope,
         });
     }
 
@@ -588,6 +593,7 @@ impl TuiOrchestrationModel {
         child: RemoteChildSession,
         request: StartAgentRequest,
         prepared: PreparedRemoteChildLaunch,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
         let PreparedRemoteChildLaunch {
@@ -610,7 +616,7 @@ impl TuiOrchestrationModel {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let cloud_run_state_for_launch = cloud_run_state.clone();
         ctx.spawn(
-            async move { ai_client.spawn_agent(spawn_request).await },
+            async move { ai_client.spawn_agent(spawn_request, team_scope).await },
             move |me, result, ctx| {
                 let result = result.map_err(|error| classify_cloud_agent_startup_error(&error));
                 me.finish_remote_child_launch(
