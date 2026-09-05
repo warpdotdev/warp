@@ -515,8 +515,6 @@ pub enum FeatureFlag {
 
     /// Enables rendering markdown tables inline in AI block list responses.
     BlocklistMarkdownTableRendering,
-    /// Enables rendering markdown images inline in AI block list responses.
-    BlocklistMarkdownImages,
 
     /// Enables the /fork-from slash command.
     ForkFromCommand,
@@ -1166,9 +1164,6 @@ impl FeatureFlag {
                 Some("Enables viewing agent conversations within shared sessions.")
             }
             CodeReviewFind => Some("Enables the find bar in the code review pane."),
-            BlocklistMarkdownImages => {
-                Some("Enables rendering markdown images inline in AI block list responses.")
-            }
             CloudEnvironments => {
                 Some("Enables creating and managing Warp Environments via the CLI.")
             }

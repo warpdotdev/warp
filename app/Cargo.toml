@@ -655,7 +655,6 @@ default = [
     "markdown_tables",
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
-    "blocklist_markdown_images",
     "pr_comments_v2",
     "pr_comments_skill",
     "revert_to_checkpoints",
@@ -878,7 +877,6 @@ am_workflows = []
 shell_selector = []
 shared_session_long_running_commands = []
 blocklist_markdown_table_rendering = []
-blocklist_markdown_images = []
 minimalist_ui = []
 loginless_conversion = []
 external_agent_mode_context = []
