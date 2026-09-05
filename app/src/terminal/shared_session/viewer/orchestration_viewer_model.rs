@@ -359,8 +359,10 @@ impl OrchestrationViewerModel {
     /// state is attachable or transcript-loadable. Idempotent: a second call
     /// for the same `task_id` updates status and materialization state only.
     fn register_child(&mut self, task: AmbientAgentTask, ctx: &mut ModelContext<Self>) {
-        // The server-side ancestor endpoint includes the parent itself in
-        // the response; skip it.
+        // `?ancestor_run_id=` is implemented server-side as `parent_run_id = $n`
+        // (direct children only, despite the name), so the parent is not
+        // expected here. Skipping it defensively keeps a subtree-inclusive
+        // response from ever registering the orchestrator as its own child.
         if task.task_id == self.parent_task_id {
             return;
         }

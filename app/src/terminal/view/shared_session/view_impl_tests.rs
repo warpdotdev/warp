@@ -15,7 +15,8 @@ use warpui::{App, EntityId, TypedActionView, ViewHandle};
 use super::*;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIAgentHarness, AIConversation, ConversationStatus, ServerAIConversationMetadata,
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    ServerAIConversationMetadata,
 };
 use crate::ai::agent::{AIAgentInput, UserQueryMode};
 use crate::ai::agent_conversations_model::{
@@ -2292,6 +2293,306 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                 .expect("shared-session replay should reconstruct the user query input");
             assert!(matches!(input, AIAgentInput::UserQuery { .. }));
             assert_eq!(input.display_query().as_deref(), Some(followup_query));
+        });
+    });
+}
+
+fn shared_session_init_event(request_id: &str, conversation_token: &str) -> api::ResponseEvent {
+    api::ResponseEvent {
+        r#type: Some(api::response_event::Type::Init(
+            api::response_event::StreamInit {
+                request_id: request_id.to_string(),
+                conversation_id: conversation_token.to_string(),
+                run_id: String::new(),
+            },
+        )),
+    }
+}
+
+/// The event sequence a viewer receives for one replayed exchange: the stream's
+/// `Init`, the root `CreateTask`, then the user query.
+fn shared_session_replay_events(
+    conversation_token: &str,
+    request_id: &str,
+    task_id: &str,
+    query: &str,
+) -> Vec<api::ResponseEvent> {
+    let create_root_task = api::ResponseEvent {
+        r#type: Some(api::response_event::Type::ClientActions(
+            api::response_event::ClientActions {
+                actions: vec![api::ClientAction {
+                    action: Some(api_client_action::Action::CreateTask(
+                        api_client_action::CreateTask {
+                            task: Some(api::Task {
+                                id: task_id.to_string(),
+                                messages: vec![],
+                                dependencies: None,
+                                description: String::new(),
+                                summary: String::new(),
+                                server_data: String::new(),
+                            }),
+                        },
+                    )),
+                }],
+            },
+        )),
+    };
+    let add_user_query = api::ResponseEvent {
+        r#type: Some(api::response_event::Type::ClientActions(
+            api::response_event::ClientActions {
+                actions: vec![api::ClientAction {
+                    action: Some(api_client_action::Action::AddMessagesToTask(
+                        api_client_action::AddMessagesToTask {
+                            task_id: task_id.to_string(),
+                            messages: vec![api::Message {
+                                fetched_memories: vec![],
+                                id: format!("{request_id}-message"),
+                                task_id: task_id.to_string(),
+                                server_message_data: String::new(),
+                                citations: vec![],
+                                message: Some(api::message::Message::UserQuery(
+                                    api::message::UserQuery {
+                                        query: query.to_string(),
+                                        context: None,
+                                        referenced_attachments: HashMap::new(),
+                                        mode: None,
+                                        intended_agent: Default::default(),
+                                    },
+                                )),
+                                request_id: request_id.to_string(),
+                                timestamp: None,
+                            }],
+                        },
+                    )),
+                }],
+            },
+        )),
+    };
+
+    vec![
+        shared_session_init_event(request_id, conversation_token),
+        create_root_task,
+        add_user_query,
+    ]
+}
+
+fn apply_shared_session_events(
+    terminal: &ViewHandle<TerminalView>,
+    events: Vec<api::ResponseEvent>,
+    app: &mut App,
+) {
+    terminal.update(app, |view, ctx| {
+        for event in events {
+            view.ai_controller.update(ctx, |controller, ctx| {
+                controller.handle_shared_session_response_event(event, ctx);
+            });
+        }
+    });
+}
+
+fn live_conversation_count(terminal: &ViewHandle<TerminalView>, app: &App) -> usize {
+    let terminal_view_id = terminal.id();
+    BlocklistAIHistoryModel::handle(app).read(app, |model, _| {
+        model
+            .all_live_conversations_for_terminal_surface(terminal_view_id)
+            .count()
+    })
+}
+
+/// Creates the pane's own shared-session conversation and replays one exchange
+/// into it, which is what binds the pane to it. Returns its local id.
+fn replay_shared_session_conversation(
+    terminal: &ViewHandle<TerminalView>,
+    conversation_token: &str,
+    app: &mut App,
+) -> AIConversationId {
+    let terminal_view_id = terminal.id();
+    let conversation_id = BlocklistAIHistoryModel::handle(app).update(app, |model, ctx| {
+        let conversation_id =
+            model.start_new_conversation(terminal_view_id, false, false, false, ctx);
+        model.set_server_conversation_token_for_conversation(
+            conversation_id,
+            conversation_token.to_string(),
+        );
+        conversation_id
+    });
+
+    apply_shared_session_events(
+        terminal,
+        shared_session_replay_events(
+            conversation_token,
+            "orchestrator-request",
+            "orchestrator-task",
+            "orchestrator prompt",
+        ),
+        app,
+    );
+
+    BlocklistAIHistoryModel::handle(app).read(app, |model, _| {
+        assert_eq!(
+            model.active_conversation_id(terminal_view_id),
+            Some(conversation_id),
+            "replaying the session's own conversation binds the pane to it"
+        );
+    });
+
+    conversation_id
+}
+
+fn assert_pane_still_shows_conversation(
+    terminal: &ViewHandle<TerminalView>,
+    conversation_id: AIConversationId,
+    expected_query: &str,
+    app: &App,
+) {
+    let terminal_view_id = terminal.id();
+    BlocklistAIHistoryModel::handle(app).read(app, |model, _| {
+        assert_eq!(
+            model.active_conversation_id(terminal_view_id),
+            Some(conversation_id),
+            "the viewer pane must stay on the session's own conversation"
+        );
+        let conversation = model
+            .conversation(&conversation_id)
+            .expect("the session's conversation should still exist");
+        let input = conversation
+            .latest_exchange()
+            .and_then(|exchange| exchange.input.first())
+            .expect("the replayed transcript should be intact");
+        assert_eq!(input.display_query().as_deref(), Some(expected_query));
+    });
+}
+
+/// QUALITY-1676: the sharer can relay a stream for a conversation the viewer does
+/// not hold (e.g. a remote-child placeholder living on the sharer's surface).
+/// Recording it is fine, but it must not repoint the pane at that conversation —
+/// that is what dropped the orchestrator's transcript mid-replay and left the raw
+/// terminal blocklist on screen.
+///
+/// The second `Init` is the part that matters: replay emits one per *exchange*,
+/// and the first one binds the foreign token to the conversation minted for it,
+/// so from then on the foreign conversation is one the viewer does hold. A guard
+/// that only refuses conversations it just minted lets the second `Init` through.
+///
+/// The viewer-side invariant is not feature-gated, so it is asserted in both
+/// `OrchestrationUnifiedStack` states.
+fn assert_unknown_conversation_init_keeps_pane(unified_stack_enabled: bool) {
+    let _unified_stack_flag =
+        FeatureFlag::OrchestrationUnifiedStack.override_enabled(unified_stack_enabled);
+
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let conversation_id =
+            replay_shared_session_conversation(&terminal, "orchestrator-token", &mut app);
+        let conversation_count_before = live_conversation_count(&terminal, &app);
+
+        apply_shared_session_events(
+            &terminal,
+            vec![shared_session_init_event(
+                "sibling-request",
+                "sibling-conversation-token",
+            )],
+            &mut app,
+        );
+
+        assert_pane_still_shows_conversation(
+            &terminal,
+            conversation_id,
+            "orchestrator prompt",
+            &app,
+        );
+
+        apply_shared_session_events(
+            &terminal,
+            vec![shared_session_init_event(
+                "sibling-request-2",
+                "sibling-conversation-token",
+            )],
+            &mut app,
+        );
+
+        assert_pane_still_shows_conversation(
+            &terminal,
+            conversation_id,
+            "orchestrator prompt",
+            &app,
+        );
+        assert_eq!(
+            live_conversation_count(&terminal, &app),
+            conversation_count_before + 1,
+            "both events belong to one foreign conversation, which is still recorded \
+             so a later selection update can navigate to it"
+        );
+    });
+}
+
+#[test]
+fn test_shared_session_init_for_unknown_conversation_keeps_pane_conversation() {
+    assert_unknown_conversation_init_keeps_pane(true);
+}
+
+#[test]
+fn test_shared_session_init_for_unknown_conversation_keeps_pane_conversation_without_unified_stack()
+{
+    assert_unknown_conversation_init_keeps_pane(false);
+}
+
+/// QUALITY-1676: a replayed `Init` for a conversation with no server token at all
+/// identifies nothing, so it must be dropped rather than minting a conversation.
+#[test]
+fn test_shared_session_init_with_empty_conversation_token_is_ignored() {
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let conversation_id =
+            replay_shared_session_conversation(&terminal, "orchestrator-token", &mut app);
+        let conversation_count_before = live_conversation_count(&terminal, &app);
+
+        apply_shared_session_events(
+            &terminal,
+            shared_session_replay_events("", "tokenless-request", "tokenless-task", "child prompt"),
+            &mut app,
+        );
+
+        assert_pane_still_shows_conversation(
+            &terminal,
+            conversation_id,
+            "orchestrator prompt",
+            &app,
+        );
+        assert_eq!(
+            live_conversation_count(&terminal, &app),
+            conversation_count_before,
+            "an unidentifiable stream must not create a conversation"
+        );
+    });
+}
+
+/// QUALITY-1676: blanking a live conversation's token would unmatch every later
+/// `Init` for it, so each one would mint a fresh empty conversation instead.
+#[test]
+fn test_link_forked_conversation_token_ignores_empty_incoming_token() {
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let conversation_token = "orchestrator-token";
+        let conversation_id =
+            replay_shared_session_conversation(&terminal, conversation_token, &mut app);
+
+        terminal.update(&mut app, |view, ctx| {
+            let event = shared_session_init_event("forked-request", "");
+            view.ai_controller.update(ctx, |controller, ctx| {
+                controller.link_forked_conversation_token(conversation_token, &event, ctx);
+            });
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.server_conversation_token())
+                    .map(|token| token.as_str().to_string()),
+                Some(conversation_token.to_string()),
+                "an empty incoming token must not clear the conversation's token"
+            );
         });
     });
 }
