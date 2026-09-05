@@ -501,7 +501,7 @@ impl FileTreeView {
         event: &repo_metadata::RepoMetadataEvent,
         ctx: &mut ViewContext<Self>,
     ) {
-        use repo_metadata::{RepoMetadataEvent, RepositoryIdentifier};
+        use repo_metadata::{MetadataUpdateType, RepoMetadataEvent, RepositoryIdentifier};
         match event {
             RepoMetadataEvent::RepositoryUpdated {
                 id: RepositoryIdentifier::Local(std_path),
@@ -533,7 +533,7 @@ impl FileTreeView {
             }
             RepoMetadataEvent::FileTreeEntryUpdated {
                 id: RepositoryIdentifier::Local(std_path),
-                ..
+                update_type,
             } => {
                 // Find root directories whose backing model entry matches this path.
                 let root_paths: Vec<StandardizedPath> = self
@@ -546,20 +546,42 @@ impl FileTreeView {
                     .collect();
 
                 if !root_paths.is_empty() {
-                    let id = RepositoryIdentifier::Local(std_path.clone());
-                    if let Some(state) = RepoMetadataModel::as_ref(ctx).get_repository(&id, ctx) {
+                    // Apply the same delta the model applied instead of
+                    // re-cloning its tree: cloning would keep the model's
+                    // `Arc` shared with this view and force a full
+                    // copy-on-write clone of the whole tree on every
+                    // subsequent watcher-driven update. Fall back to a full
+                    // clone for a `FullReplace` update, or if delta
+                    // application detects this view's tree has drifted out
+                    // of sync.
+                    let mut needs_resync = matches!(update_type, MetadataUpdateType::FullReplace);
+                    if let MetadataUpdateType::IncrementalUpdate(update) = update_type {
                         for root_path in &root_paths {
-                            if let Some(root_dir) = self.root_directories.get_mut(root_path) {
-                                root_dir.entry = state.entry.clone();
+                            if let Some(root_dir) = self.root_directories.get_mut(root_path)
+                                && !root_dir.entry.apply_repo_metadata_update(update)
+                            {
+                                needs_resync = true;
                             }
                         }
-
-                        for root_path in &root_paths {
-                            self.rebuild_flattened_items_for_root(root_path);
-                        }
-                        self.apply_pending_focus_target();
-                        ctx.notify();
                     }
+
+                    if needs_resync {
+                        let id = RepositoryIdentifier::Local(std_path.clone());
+                        if let Some(state) = RepoMetadataModel::as_ref(ctx).get_repository(&id, ctx)
+                        {
+                            for root_path in &root_paths {
+                                if let Some(root_dir) = self.root_directories.get_mut(root_path) {
+                                    root_dir.entry = state.entry.clone();
+                                }
+                            }
+                        }
+                    }
+
+                    for root_path in &root_paths {
+                        self.rebuild_flattened_items_for_root(root_path);
+                    }
+                    self.apply_pending_focus_target();
+                    ctx.notify();
                 }
             }
             RepoMetadataEvent::UpdatingRepositoryFailed {
@@ -594,21 +616,36 @@ impl FileTreeView {
             }
             RepoMetadataEvent::FileTreeEntryUpdated {
                 id: RepositoryIdentifier::Remote(remote_id),
-                ..
+                update_type,
             } => {
                 let repo_path = remote_id.path.clone();
-                let id = RepositoryIdentifier::Remote(remote_id.clone());
-                if let Some(state) = RepoMetadataModel::as_ref(ctx).get_repository(&id, ctx) {
-                    if let Some(root_dir) = self.root_directories.get_mut(&repo_path) {
+                // See the local `FileTreeEntryUpdated` arm above: apply the
+                // delta directly instead of re-cloning the model's tree,
+                // falling back to a full clone on `FullReplace` or a
+                // detected desync.
+                let mut needs_resync = matches!(update_type, MetadataUpdateType::FullReplace);
+                if let MetadataUpdateType::IncrementalUpdate(update) = update_type
+                    && let Some(root_dir) = self.root_directories.get_mut(&repo_path)
+                    && !root_dir.entry.apply_repo_metadata_update(update)
+                {
+                    needs_resync = true;
+                }
+
+                if needs_resync {
+                    let id = RepositoryIdentifier::Remote(remote_id.clone());
+                    if let Some(state) = RepoMetadataModel::as_ref(ctx).get_repository(&id, ctx)
+                        && let Some(root_dir) = self.root_directories.get_mut(&repo_path)
+                    {
                         root_dir.entry = state.entry.clone();
                     }
-                    // Only rebuild the affected remote root instead of all roots.
-                    // Remote servers stream frequent incremental updates; a full
-                    // rebuild would cause unrelated local roots to re-render on
-                    // every remote filesystem change, leading to visible flicker.
-                    self.rebuild_flattened_items_for_root(&repo_path);
-                    ctx.notify();
                 }
+
+                // Only rebuild the affected remote root instead of all roots.
+                // Remote servers stream frequent incremental updates; a full
+                // rebuild would cause unrelated local roots to re-render on
+                // every remote filesystem change, leading to visible flicker.
+                self.rebuild_flattened_items_for_root(&repo_path);
+                ctx.notify();
             }
             RepoMetadataEvent::RepositoryRemoved {
                 id: RepositoryIdentifier::Remote(remote_id),

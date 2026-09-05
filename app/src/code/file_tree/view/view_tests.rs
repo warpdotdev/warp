@@ -299,6 +299,226 @@ fn selected_hidden_file_is_cleared_when_filtered() {
 }
 
 #[test]
+fn incremental_update_applies_removal_and_subtree_replacement_via_delta() {
+    // Regression test for APP-5355: `FileTreeView` must apply an
+    // `IncrementalUpdate` delta directly to its own tree (not by cloning the
+    // model's), and the resulting tree must stay correct across a sequence
+    // of deltas that includes a removal and a directory-subtree replacement,
+    // not just simple additions.
+    VirtualFS::test("file_tree_incremental_update_delta", |dirs, mut vfs| {
+        vfs.mkdir("tree/src").with_files(vec![Stub::FileWithContent(
+            "tree/main.rs",
+            "fn main() {}\n",
+        )]);
+        let tree = dirs.tests().join("tree");
+        let main_rs = tree.join("main.rs");
+        let lib_rs = tree.join("lib.rs");
+        let src_dir = tree.join("src");
+        let util_dir = tree.join("util");
+        let helpers_rs = util_dir.join("helpers.rs");
+        let constants_rs = util_dir.join("constants.rs");
+
+        App::test((), |mut app| async move {
+            let (_, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![tree.clone()], ctx);
+            });
+            await_repository_indexed(&mut app, &repository_metadata_model, &tree).await;
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let entry = &view.root_directories.get(&std_path(&tree)).unwrap().entry;
+                assert!(entry.contains(&std_path(&main_rs)));
+                assert!(entry.contains(&std_path(&src_dir)));
+            });
+
+            // Delta 1: remove main.rs, add a sibling file directly under the root.
+            let update_one = repo_metadata::file_tree_update::RepoMetadataUpdate {
+                repo_path: std_path(&tree),
+                remove_entries: vec![std_path(&main_rs)],
+                update_entries: vec![repo_metadata::file_tree_update::FileTreeEntryUpdate {
+                    parent_path_to_replace: std_path(&tree),
+                    subtree_metadata: vec![
+                        repo_metadata::file_tree_update::RepoNodeMetadata::File(
+                            repo_metadata::file_tree_update::FileNodeMetadata {
+                                path: std_path(&lib_rs),
+                                extension: Some("rs".to_string()),
+                                ignored: false,
+                            },
+                        ),
+                    ],
+                }],
+                standing_results_delta: Default::default(),
+            };
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.handle_repository_metadata_event(
+                    &repo_metadata::RepoMetadataEvent::FileTreeEntryUpdated {
+                        id: repo_metadata::RepositoryIdentifier::local(std_path(&tree)),
+                        update_type: repo_metadata::MetadataUpdateType::IncrementalUpdate(
+                            update_one,
+                        ),
+                    },
+                    ctx,
+                );
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let entry = &view.root_directories.get(&std_path(&tree)).unwrap().entry;
+                assert!(
+                    !entry.contains(&std_path(&main_rs)),
+                    "main.rs should be removed"
+                );
+                assert!(entry.contains(&std_path(&lib_rs)), "lib.rs should be added");
+            });
+
+            // Delta 2: remove src/ entirely and replace it with a freshly
+            // built directory subtree (dir + 2 nested files) — mirroring an
+            // `AddDirectorySubtree` watcher mutation.
+            let update_two = repo_metadata::file_tree_update::RepoMetadataUpdate {
+                repo_path: std_path(&tree),
+                remove_entries: vec![std_path(&src_dir)],
+                update_entries: vec![repo_metadata::file_tree_update::FileTreeEntryUpdate {
+                    parent_path_to_replace: std_path(&tree),
+                    subtree_metadata: vec![
+                        repo_metadata::file_tree_update::RepoNodeMetadata::Directory(
+                            repo_metadata::file_tree_update::DirectoryNodeMetadata {
+                                path: std_path(&util_dir),
+                                ignored: false,
+                                loaded: true,
+                            },
+                        ),
+                        repo_metadata::file_tree_update::RepoNodeMetadata::File(
+                            repo_metadata::file_tree_update::FileNodeMetadata {
+                                path: std_path(&helpers_rs),
+                                extension: Some("rs".to_string()),
+                                ignored: false,
+                            },
+                        ),
+                        repo_metadata::file_tree_update::RepoNodeMetadata::File(
+                            repo_metadata::file_tree_update::FileNodeMetadata {
+                                path: std_path(&constants_rs),
+                                extension: Some("rs".to_string()),
+                                ignored: false,
+                            },
+                        ),
+                    ],
+                }],
+                standing_results_delta: Default::default(),
+            };
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.handle_repository_metadata_event(
+                    &repo_metadata::RepoMetadataEvent::FileTreeEntryUpdated {
+                        id: repo_metadata::RepositoryIdentifier::local(std_path(&tree)),
+                        update_type: repo_metadata::MetadataUpdateType::IncrementalUpdate(
+                            update_two,
+                        ),
+                    },
+                    ctx,
+                );
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let entry = &view.root_directories.get(&std_path(&tree)).unwrap().entry;
+                assert!(
+                    !entry.contains(&std_path(&src_dir)),
+                    "src/ should be removed"
+                );
+                assert!(
+                    entry.contains(&std_path(&util_dir)),
+                    "util/ subtree should be added"
+                );
+                assert!(entry.contains(&std_path(&helpers_rs)));
+                assert!(entry.contains(&std_path(&constants_rs)));
+                // Untouched from delta 1.
+                assert!(entry.contains(&std_path(&lib_rs)));
+            });
+        });
+    });
+}
+
+#[test]
+fn incremental_update_directory_subtree_replacement_drops_stale_descendant() {
+    // Regression test for APP-5355: a watcher-driven rebuild of an existing
+    // directory (e.g. after a gitignore change) replaces the subtree at the
+    // *same* path. The delta must carry replacement semantics so the view
+    // drops descendants that are no longer part of the rebuilt subtree,
+    // instead of merging the new nodes on top of the stale ones.
+    VirtualFS::test("file_tree_incremental_subtree_replace", |dirs, mut vfs| {
+        vfs.mkdir("tree/src")
+            .with_files(vec![Stub::FileWithContent("tree/src/old.rs", "old")]);
+        let tree = dirs.tests().join("tree");
+        let src_dir = tree.join("src");
+        let old_rs = src_dir.join("old.rs");
+        let new_rs = src_dir.join("new.rs");
+
+        App::test((), |mut app| async move {
+            let (_, repository_metadata_model) = initialize_app(&mut app);
+            let (_, file_tree_view) = app.add_window(WindowStyle::NotStealFocus, FileTreeView::new);
+
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.set_is_active(true, ctx);
+                view.set_root_directories(vec![tree.clone()], ctx);
+            });
+            await_repository_indexed(&mut app, &repository_metadata_model, &tree).await;
+            // `tree` is a lazily-loaded standalone path, so only its first
+            // level is indexed eagerly; expand `src/` to materialize `old.rs`.
+            await_directory_loaded(&mut app, &repository_metadata_model, &tree, &src_dir).await;
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let entry = &view.root_directories.get(&std_path(&tree)).unwrap().entry;
+                assert!(entry.contains(&std_path(&old_rs)));
+            });
+
+            let update = repo_metadata::file_tree_update::RepoMetadataUpdate {
+                repo_path: std_path(&tree),
+                remove_entries: vec![std_path(&src_dir)],
+                update_entries: vec![repo_metadata::file_tree_update::FileTreeEntryUpdate {
+                    parent_path_to_replace: std_path(&tree),
+                    subtree_metadata: vec![
+                        repo_metadata::file_tree_update::RepoNodeMetadata::Directory(
+                            repo_metadata::file_tree_update::DirectoryNodeMetadata {
+                                path: std_path(&src_dir),
+                                ignored: false,
+                                loaded: true,
+                            },
+                        ),
+                        repo_metadata::file_tree_update::RepoNodeMetadata::File(
+                            repo_metadata::file_tree_update::FileNodeMetadata {
+                                path: std_path(&new_rs),
+                                extension: Some("rs".to_string()),
+                                ignored: false,
+                            },
+                        ),
+                    ],
+                }],
+                standing_results_delta: Default::default(),
+            };
+            file_tree_view.update(&mut app, |view, ctx| {
+                view.handle_repository_metadata_event(
+                    &repo_metadata::RepoMetadataEvent::FileTreeEntryUpdated {
+                        id: repo_metadata::RepositoryIdentifier::local(std_path(&tree)),
+                        update_type: repo_metadata::MetadataUpdateType::IncrementalUpdate(update),
+                    },
+                    ctx,
+                );
+            });
+
+            file_tree_view.read(&app, |view, _ctx| {
+                let entry = &view.root_directories.get(&std_path(&tree)).unwrap().entry;
+                assert!(
+                    !entry.contains(&std_path(&old_rs)),
+                    "old.rs should be dropped when src/ is replaced at the same path"
+                );
+                assert!(entry.contains(&std_path(&new_rs)));
+                assert!(entry.contains(&std_path(&src_dir)));
+            });
+        });
+    });
+}
+
+#[test]
 fn repo_transition_unregisters_lazy_loaded_path() {
     VirtualFS::test("file_tree_repo_transition", |dirs, mut vfs| {
         vfs.mkdir("repo/.git/objects")
