@@ -429,13 +429,6 @@ enum WhichTask {
         task_id: TaskId,
     },
 }
-#[cfg(not(target_family = "wasm"))]
-fn starts_local_oz_hook_session(input: &AIAgentInput) -> bool {
-    matches!(
-        input,
-        AIAgentInput::UserQuery { .. } | AIAgentInput::ResumeConversation { .. }
-    )
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalClaudeWakeTrigger {
