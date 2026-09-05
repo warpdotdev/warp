@@ -9,10 +9,10 @@ use warp_multi_agent_api::response_event::stream_finished;
 use warp_multi_agent_api::{self as api};
 
 use super::schema::{
-    active_mcp_servers, agent_conversations, agent_tasks, ai_document_panes, ai_memory_panes,
-    ambient_agent_panes, app, blocks, cloud_objects_refreshes, code_pane_tabs, code_panes,
-    code_review_panes, commands, current_user_information, env_var_collection_panes, folders,
-    generic_string_objects, ignored_suggestions, mcp_environment_variables,
+    active_mcp_servers, agent_conversations, agent_sessions, agent_tasks, ai_document_panes,
+    ai_memory_panes, ambient_agent_panes, app, blocks, cloud_objects_refreshes, code_pane_tabs,
+    code_panes, code_review_panes, commands, current_user_information, env_var_collection_panes,
+    folders, generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
     project_rules, projects, server_experiments, settings_panes, tab_groups, tabs, team_members,
@@ -777,6 +777,37 @@ pub struct Block {
     pub ai_metadata: Option<String>,
     pub is_local: Option<bool>,
     pub agent_view_visibility: Option<String>,
+}
+
+/// Agent CLI state recorded for a pane so that a restart can offer to resume it.
+///
+/// `agent_kind` and `flags` are nullable because the writer degrades a value it cannot serialize
+/// to `NULL` instead of failing: an insert that errored would surface as a write failure for
+/// state the user never asked to persist.
+#[derive(Insertable, AsChangeset)]
+#[diesel(table_name = agent_sessions)]
+#[diesel(treat_none_as_null = true)]
+pub struct NewAgentSession {
+    // No pane leaf UUID foreign key, for the same reason `NewBlock` has none: pane rows are
+    // recreated by every snapshot, so the constraint would be violated as soon as a pane closes.
+    pub pane_leaf_uuid: Vec<u8>,
+    pub agent_kind: Option<String>,
+    pub session_id: String,
+    pub flags: Option<String>,
+    pub directory: Vec<u8>,
+    pub observed_at: NaiveDateTime,
+}
+
+#[derive(Identifiable, Queryable, Selectable)]
+#[diesel(table_name = agent_sessions)]
+pub struct AgentSession {
+    pub id: i32,
+    pub pane_leaf_uuid: Vec<u8>,
+    pub agent_kind: Option<String>,
+    pub session_id: String,
+    pub flags: Option<String>,
+    pub directory: Vec<u8>,
+    pub observed_at: NaiveDateTime,
 }
 
 #[derive(Insertable)]

@@ -75,9 +75,9 @@ use crate::ai::persisted_workspace::EnablementState;
 use crate::app_state::{
     AIFactPaneSnapshot, AmbientAgentPaneSnapshot, AppState, BranchSnapshot, CodePaneSnapShot,
     CodePaneTabSnapshot, CodeReviewPaneSnapshot, EnvVarCollectionPaneSnapshot, LeafContents,
-    LeafSnapshot, LeftPanelSnapshot, NotebookPaneSnapshot, PaneFlex, PaneNodeSnapshot,
-    RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection, TabGroupSnapshot, TabSnapshot,
-    TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
+    LeafSnapshot, LeftPanelSnapshot, NotebookPaneSnapshot, PaneFlex, PaneNodeSnapshot, PaneUuid,
+    RecordedAgentSession, RightPanelSnapshot, SettingsPaneSnapshot, SplitDirection,
+    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::auth::UserUid;
 use crate::auth::auth_manager::PersistedCurrentUserInformation;
@@ -643,6 +643,13 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             // panes and have their data deleted locally.
             delete_blocks(connection, pane_id).context("error deleting blocks")
         }
+        ModelEvent::SetAgentSession { pane_id, session } => match session {
+            Some(session) => save_agent_session(connection, pane_id, &session)
+                .context("error saving agent session"),
+            None => {
+                clear_agent_session(connection, pane_id).context("error clearing agent session")
+            }
+        },
         ModelEvent::Snapshot(app_state) => {
             save_app_state(connection, &app_state).context("error saving app state")
         }
@@ -887,22 +894,42 @@ fn report_db_error(err_kind: &str, err: anyhow::Error, database_path: &Path) {
 
 /// Filter a collection of model events to remove skippable events:
 /// * [`ModelEvent::Snapshot`] includes the entire app state, so we only need the latest one.
+/// * [`ModelEvent::SetAgentSession`] replaces a pane's row wholesale, so only the last one a pane
+///   sent says anything. The CLI agent session event that drives it fires once per tool call, so
+///   an agent task's worth of captures is hundreds of writes of the same row.
+///
+/// Superseded events are dropped where they stand and nothing is reordered: hoisting the
+/// surviving snapshot would rebuild the pane tables after a capture that was recorded before it.
 fn deduplicate_events(events: Vec<ModelEvent>) -> Vec<ModelEvent> {
-    let last_snapshot = events
-        .iter()
-        .enumerate()
-        .rfind(|(_, event)| matches!(event, ModelEvent::Snapshot(_)));
-    match last_snapshot {
-        Some((last_snapshot_index, _)) => events
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, event)| match event {
-                ModelEvent::Snapshot(_) if index < last_snapshot_index => None,
-                event => Some(event),
-            })
-            .collect(),
-        None => events,
+    let mut superseded: HashSet<usize> = HashSet::new();
+    let mut last_snapshot: Option<usize> = None;
+    let mut last_agent_session: HashMap<&[u8], usize> = HashMap::new();
+
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            ModelEvent::Snapshot(_) => {
+                if let Some(previous) = last_snapshot.replace(index) {
+                    superseded.insert(previous);
+                }
+            }
+            ModelEvent::SetAgentSession { pane_id, .. } => {
+                if let Some(previous) = last_agent_session.insert(pane_id.as_slice(), index) {
+                    superseded.insert(previous);
+                }
+            }
+            _ => {}
+        }
     }
+
+    if superseded.is_empty() {
+        return events;
+    }
+
+    events
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, event)| (!superseded.contains(&index)).then_some(event))
+        .collect()
 }
 
 // Used in the save_app_state function to help make the code more readable.
@@ -1508,6 +1535,100 @@ fn decode_path(bytes: Vec<u8>) -> PathBuf {
             OsString::from_wide(wide_char_sequence).into()
         }
     }
+}
+
+/// Records the agent CLI state observed in a pane, replacing whatever was recorded for it before.
+///
+/// A value that fails to serialize is stored as `NULL` instead of aborting the write. This runs on
+/// the same writer thread as session snapshots, and losing one field of a resume hint must never
+/// escalate into a failed database write.
+fn save_agent_session(
+    conn: &mut SqliteConnection,
+    pane_id: Vec<u8>,
+    session: &RecordedAgentSession,
+) -> Result<()> {
+    use schema::agent_sessions::dsl::*;
+
+    let new_session = model::NewAgentSession {
+        pane_leaf_uuid: pane_id,
+        agent_kind: serde_json::to_string(&session.agent).ok(),
+        session_id: session.session_id.clone(),
+        flags: serde_json::to_string(&session.flags).ok(),
+        directory: encode_path(session.directory.clone()),
+        observed_at: session.observed_at,
+    };
+
+    diesel::insert_into(agent_sessions)
+        .values(&new_session)
+        .on_conflict(pane_leaf_uuid)
+        .do_update()
+        .set(&new_session)
+        .execute(conn)?;
+
+    Ok(())
+}
+
+/// Drops whatever agent CLI state was recorded for a pane, leaving nothing to resume.
+fn clear_agent_session(conn: &mut SqliteConnection, pane_id: Vec<u8>) -> Result<()> {
+    use schema::agent_sessions::dsl::*;
+
+    diesel::delete(agent_sessions.filter(pane_leaf_uuid.eq(pane_id))).execute(conn)?;
+
+    Ok(())
+}
+
+/// Drops recorded agent state belonging to panes the saved session does not restore.
+///
+/// This is a safeguard, not the mechanism: the pane-lifecycle hook is what removes a pane's row
+/// when the pane is closed for good, because that is the only place that knows the pane will not
+/// return. A row can still outlive its pane anyway — a crash between the two writes, or a
+/// database written before that hook existed — and a uuid no restored pane claims can never be
+/// resumed, so carrying it forever only grows the table.
+fn purge_agent_sessions_without_a_restored_pane(conn: &mut SqliteConnection) -> Result<(), Error> {
+    use schema::agent_sessions::dsl::*;
+
+    let restored_pane_uuids: Vec<Vec<u8>> = schema::terminal_panes::dsl::terminal_panes
+        .select(schema::terminal_panes::columns::uuid)
+        .load(conn)?;
+
+    diesel::delete(agent_sessions.filter(pane_leaf_uuid.ne_all(restored_pane_uuids)))
+        .execute(conn)?;
+
+    Ok(())
+}
+
+/// Reads every recorded agent session, keyed by the pane it was recorded for.
+///
+/// A row whose stored values no longer parse is dropped instead of failing the read: the pane
+/// still restores, just without anything to resume.
+fn get_all_recorded_agent_sessions(
+    conn: &mut SqliteConnection,
+) -> Result<HashMap<PaneUuid, RecordedAgentSession>, Error> {
+    let rows: Vec<model::AgentSession> = schema::agent_sessions::dsl::agent_sessions
+        .select(model::AgentSession::as_select())
+        .load(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let agent = row
+                .agent_kind
+                .and_then(|kind| serde_json::from_str(&kind).ok())?;
+            let flags = row
+                .flags
+                .and_then(|flags| serde_json::from_str(&flags).ok())?;
+            Some((
+                PaneUuid(row.pane_leaf_uuid),
+                RecordedAgentSession {
+                    agent,
+                    session_id: row.session_id,
+                    flags,
+                    directory: decode_path(row.directory),
+                    observed_at: row.observed_at,
+                },
+            ))
+        })
+        .collect())
 }
 
 fn save_codebase_index_metadata(
@@ -2711,6 +2832,22 @@ fn read_sqlite_data(
             .collect();
 
         let restored_blocks = get_all_restored_blocks(conn)?;
+        // Housekeeping must never cost the user their session: a database this connection cannot
+        // write to still restores every pane, it just keeps carrying rows nothing will claim.
+        if let Err(err) = purge_agent_sessions_without_a_restored_pane(conn) {
+            report_error!(
+                anyhow::Error::new(err).context("Error purging orphaned agent session rows")
+            );
+        }
+        // Reading them must not cost it either: a table only an off-by-default feature reads
+        // costs the panes whatever agent they were running when it fails, never the windows, tabs
+        // and panes themselves.
+        let recorded_agent_sessions = get_all_recorded_agent_sessions(conn).unwrap_or_else(|err| {
+            report_error!(
+                anyhow::Error::new(err).context("Error reading recorded agent session rows")
+            );
+            HashMap::new()
+        });
 
         // Load active MCP servers from database
         let running_mcp_servers = load_active_mcp_servers(conn)?;
@@ -2719,6 +2856,7 @@ fn read_sqlite_data(
             windows: saved_windows,
             active_window_index,
             block_lists: Arc::new(restored_blocks),
+            agent_sessions: Arc::new(recorded_agent_sessions),
             running_mcp_servers,
         })
     } else {

@@ -69,6 +69,7 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
+use crate::terminal::event::BlockCompletedEvent;
 use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, PreexecValue};
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
@@ -7213,7 +7214,7 @@ fn completed_user_controlled_lrc_resumes_when_not_suppressed() {
                     .has_active_stream_for_conversation(conversation_id, ctx)
             );
 
-            view.on_user_block_completed(&block_id, ctx);
+            view.on_user_block_completed(&block_id, /*was_user_authored=*/ true, ctx);
 
             // A Ctrl-C takeover (Stop) without an explicit teardown should resume the
             // conversation once the command completes, just like a manual takeover.
@@ -7262,7 +7263,7 @@ fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
                 active_block.id().clone()
             };
 
-            view.on_user_block_completed(&block_id, ctx);
+            view.on_user_block_completed(&block_id, /*was_user_authored=*/ true, ctx);
 
             assert!(
                 !view
@@ -9997,6 +9998,188 @@ fn warp_tui_listener_does_not_auto_open_rich_input() {
         });
     });
 }
+
+/// Delivers an OSC 777 CLI agent notification the way a live PTY would, so both
+/// the terminal view and any registered listener observe it.
+fn emit_cli_agent_notification(
+    body: &str,
+    view: &TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let dispatcher = view.model_event_dispatcher().clone();
+    let body = body.to_owned();
+    dispatcher.update(ctx, |_, ctx| {
+        ctx.emit(ModelEvent::PluggableNotification {
+            title: Some(CLI_AGENT_NOTIFICATION_SENTINEL.to_owned()),
+            body,
+        });
+    });
+}
+
+fn recorded_cli_agent_session_id(view: &TerminalView, ctx: &AppContext) -> Option<String> {
+    CLIAgentSessionsModel::as_ref(ctx)
+        .session(view.view_id)
+        .expect("CLI agent session should exist")
+        .session_context
+        .session_id
+        .clone()
+}
+
+/// A pane whose agent starts a second conversation must record the newest
+/// session id, not the one captured when the listener was registered.
+#[test]
+fn cli_agent_second_session_start_replaces_recorded_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-a"}"#,
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-a")
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-b"}"#,
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-b")
+            );
+        });
+    });
+}
+
+/// Delivers a block-completed event the way a foreground process ending or
+/// being suspended into the background would.
+fn emit_block_completed(
+    block_type: BlockType,
+    view: &TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) {
+    let dispatcher = view.model_event_dispatcher().clone();
+    dispatcher.update(ctx, |_, ctx| {
+        ctx.emit(ModelEvent::BlockCompleted(BlockCompletedEvent {
+            block_type,
+            num_secrets_obfuscated: 0,
+            block_index: BlockIndex::zero(),
+            block_id: BlockId::new(),
+            session_id: None,
+            restored_block_was_local: None,
+        }));
+    });
+}
+
+fn completed_user_block(command: &str) -> BlockType {
+    BlockType::User(UserBlockCompleted::new_for_test(
+        BlockIndex::zero(),
+        Arc::new(SerializedBlock::new_for_test(
+            command.as_bytes().to_vec(),
+            vec![],
+        )),
+        command.to_owned(),
+        command.to_owned(),
+        String::new(),
+        String::new(),
+        false,
+        false,
+        None,
+        0,
+        0,
+    ))
+}
+
+/// The agent exits and the user launches it again in the same pane; the pane
+/// must record the conversation of the second run.
+#[test]
+fn cli_agent_relaunched_in_pane_records_new_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-a"}"#,
+                view,
+                ctx,
+            );
+            emit_block_completed(completed_user_block("claude"), view, ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .session(view.view_id)
+                    .is_none(),
+                "the exiting agent should end its session"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-b"}"#,
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-b")
+            );
+        });
+    });
+}
+
+/// Suspending the agent completes a background block rather than the user
+/// block, so the session and its recorded conversation survive.
+#[test]
+fn cli_agent_suspended_into_background_block_keeps_session_id() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_cli_agent_notification(
+                r#"{"v":1,"agent":"claude","event":"session_start","session_id":"conversation-a"}"#,
+                view,
+                ctx,
+            );
+            emit_block_completed(
+                BlockType::Background(Arc::new(SerializedBlock::new_for_test(
+                    b"claude".to_vec(),
+                    vec![],
+                ))),
+                view,
+                ctx,
+            );
+        });
+
+        terminal.read(&app, |view, ctx| {
+            assert_eq!(
+                recorded_cli_agent_session_id(view, ctx).as_deref(),
+                Some("conversation-a")
+            );
+        });
+    });
+}
+
 #[test]
 fn active_cli_agent_recognizes_detected_warp_tui_session() {
     App::test((), |mut app| async move {
@@ -10213,6 +10396,197 @@ fn back_button_label_resolves_token_only_parent_linkage() {
             assert_eq!(
                 agent_view_back_button_label(history, Some(child_id)),
                 "for Orchestrator",
+            );
+        });
+    });
+}
+
+/// The same completed block, but authored by Warp rather than by the person at the keyboard.
+fn completed_resume_block(command: &str) -> BlockType {
+    let BlockType::User(mut block) = completed_user_block(command) else {
+        unreachable!("completed_user_block builds a user block")
+    };
+    block.was_warp_authored = true;
+    BlockType::User(block)
+}
+
+/// AE14/R24: the AI-analytics consent banner is spent by the user's first completed block, and a
+/// resume is not that block. The contrast run proves the dismissal still happens for a real one.
+#[test]
+fn resume_block_does_not_dismiss_the_ai_analytics_banner() {
+    App::test((), |mut app| async move {
+        let _banner_flag = FeatureFlag::GlobalAIAnalyticsBanner.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |view, ctx| {
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        terminal.read(&app, |_, ctx| {
+            assert!(
+                !GeneralSettings::as_ref(ctx)
+                    .telemetry_banner_dismissed
+                    .value(),
+                "a resume must not spend the user's one-time consent banner"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        terminal.read(&app, |_, ctx| {
+            assert!(
+                GeneralSettings::as_ref(ctx)
+                    .telemetry_banner_dismissed
+                    .value(),
+                "the user's own first block still dismisses it"
+            );
+        });
+    });
+}
+
+/// R24: onboarding is interrupted by the user running something, so it must survive a line the
+/// user never ran.
+#[test]
+fn resume_execution_does_not_interrupt_onboarding() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let session_id = terminal
+            .read(&app, |view, _| {
+                view.model.lock().block_list().active_block().session_id()
+            })
+            .unwrap_or_else(|| 0.into());
+
+        let emit_execute = |app: &mut App, source: CommandExecutionSource| {
+            input.update(app, move |_, ctx| {
+                ctx.emit(crate::terminal::input::Event::ExecuteCommand(Box::new(
+                    ExecuteCommandEvent {
+                        command: "claude --resume 'session-1'".to_owned(),
+                        session_id,
+                        workflow_id: None,
+                        workflow_command: None,
+                        should_add_command_to_history: false,
+                        source,
+                    },
+                )));
+            });
+        };
+
+        terminal.update(&mut app, |view, _| {
+            view.block_onboarding_active = true;
+        });
+        emit_execute(&mut app, CommandExecutionSource::AgentSessionResume);
+        terminal.read(&app, |view, _| {
+            assert!(
+                view.block_onboarding_active,
+                "a resume must not interrupt the onboarding blocks"
+            );
+        });
+
+        emit_execute(&mut app, CommandExecutionSource::User);
+        terminal.read(&app, |view, _| {
+            assert!(
+                !view.block_onboarding_active,
+                "the user running something still interrupts onboarding"
+            );
+        });
+    });
+}
+
+/// The input-buffer clear is one of the consumers that keys off a completed user block. A resume
+/// completing must leave a draft the user is composing exactly where it was.
+#[test]
+fn resume_block_completing_leaves_a_draft_alone() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("half-typed follow-up", ctx);
+        });
+        // The clear only runs once per block, so each case needs a block of its own to complete.
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("claude", "");
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        assert_eq!(
+            input.read(&app, |input, ctx| input.buffer_text(ctx)),
+            "half-typed follow-up",
+            "a resume completing must not reinitialize the user's buffer"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("ls", "");
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        assert_eq!(
+            input.read(&app, |input, ctx| input.buffer_text(ctx)),
+            "",
+            "a user command completing still clears the buffer"
+        );
+    });
+}
+
+/// R24: the agent context a user has staged is reset by their own completed block, on the reading
+/// that they have moved on to something else. A resume is Warp filling the pane in, so whatever
+/// they had selected for their next query is still what they selected.
+#[test]
+fn resume_block_leaves_the_staged_agent_context_alone() {
+    App::test((), |mut app| async move {
+        let _block_context = FeatureFlag::AgentViewBlockContext.override_enabled(false);
+        initialize_app_for_terminal_view(&mut app);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let context_model = terminal.read(&app, |view, _| view.ai_context_model().clone());
+        let stage_context = |app: &mut App| {
+            context_model.update(app, |context, ctx| {
+                context.set_pending_context_selected_text(
+                    Some("staged selection".to_owned()),
+                    true,
+                    ctx,
+                );
+            });
+        };
+
+        stage_context(&mut app);
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("claude", "");
+            emit_block_completed(
+                completed_resume_block("claude --resume 'session-1'"),
+                view,
+                ctx,
+            );
+        });
+        context_model.read(&app, |context, _| {
+            assert_eq!(
+                context.pending_context_selected_text().map(String::as_str),
+                Some("staged selection"),
+                "a resume must not discard the context the user staged for their next query"
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.model.lock().simulate_block("ls", "");
+            emit_block_completed(completed_user_block("ls"), view, ctx);
+        });
+        context_model.read(&app, |context, _| {
+            assert_eq!(
+                context.pending_context_selected_text(),
+                None,
+                "the user's own block still resets the staged context"
             );
         });
     });

@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use chrono::NaiveDateTime;
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
 use warpui::platform::FullscreenState;
@@ -18,7 +19,8 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::settings_view::SettingsSection;
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::tab::SelectedTabColor;
-use crate::terminal::ShellLaunchData;
+use crate::terminal::cli_agent_resume::RecordedFlag;
+use crate::terminal::{CLIAgent, ShellLaunchData};
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::WorkspaceRegistry;
 use crate::workspace::tab_group::TabGroupId;
@@ -29,11 +31,51 @@ pub struct AppState {
     pub windows: Vec<WindowSnapshot>,
     pub active_window_index: Option<usize>,
     pub block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+    /// Agent CLI state recorded per pane. Unlike the rest of this struct it is not written by a
+    /// snapshot save; it is read from its own table, which snapshot saves leave alone.
+    pub agent_sessions: Arc<HashMap<PaneUuid, RecordedAgentSession>>,
     pub running_mcp_servers: Vec<uuid::Uuid>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PaneUuid(pub Vec<u8>);
+
+/// The agent CLI a pane was last observed running, recorded so a restart can offer to resume it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedAgentSession {
+    pub agent: CLIAgent,
+    /// The session identifier the agent itself reported.
+    pub session_id: String,
+    /// The allowlisted flags of the invocation the user ran that matter when relaunching the
+    /// agent. Never the command line itself: replaying what the user typed would replay secret
+    /// placeholders and unexpandable aliases along with it.
+    pub flags: Vec<RecordedFlag>,
+    /// The directory the agent was running in. Recorded here rather than read back from the
+    /// pane snapshot so that eligibility can compare it against the directory the pane
+    /// actually restored into.
+    pub directory: PathBuf,
+    pub observed_at: NaiveDateTime,
+}
+
+/// Recorded agent sessions handed to pane restoration.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentSessionRestore {
+    pub sessions: Arc<HashMap<PaneUuid, RecordedAgentSession>>,
+    /// The panes that own the identifier they recorded, resolved across every window before the
+    /// first one is created. Panes left out of it recorded an identifier another pane won.
+    pub claimed_panes: Arc<HashSet<PaneUuid>>,
+    /// Mid-session restores (a tab added from a snapshot) reach the same restore path as
+    /// startup, and resuming an agent there would be wrong, so the startup pass says so
+    /// explicitly instead of leaving it to be inferred.
+    pub is_startup_restore: bool,
+}
+
+impl AgentSessionRestore {
+    /// Whether `pane_uuid` is the pane that gets to resume the identifier it recorded.
+    pub fn owns_recorded_identifier(&self, pane_uuid: &PaneUuid) -> bool {
+        self.claimed_panes.contains(pane_uuid)
+    }
+}
 
 /// Wrapper for persisting agent management filters to restore.
 #[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -392,6 +434,7 @@ pub fn get_app_state(app: &AppContext) -> AppState {
         windows,
         active_window_index,
         block_lists: Default::default(),
+        agent_sessions: Default::default(),
         running_mcp_servers: Vec::new(),
     }
 }

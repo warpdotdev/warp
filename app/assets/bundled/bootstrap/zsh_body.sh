@@ -249,6 +249,15 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
     [[ "$1" != *"warp_run_generator_command"* ]]
   }
 
+  # Returns exit code 1 if the given argument carries the agent-resume marker.
+  #
+  # Warp appends this marker to the invocation it runs when restoring a pane onto
+  # an agent's previous session. The marker is a trailing comment, so it is inert
+  # to the shell and identifies the line without a wrapper function.
+  _is_warp_agent_resume_command() {
+    [[ "$1" != *"warp_resume_agent_session"* ]]
+  }
+
   # Note that this is very performance sensitive code, so try not to
   # invoke any external commands in here.
   warp_preexec () {
@@ -1312,17 +1321,20 @@ esac
     POWERLEVEL9K_PROMPT_ADD_NEWLINE=false
   fi
 
-  # Returns exit code 1 if the command starts with 'warp_run_generator_command'.
+  # Returns exit code 1 if the command starts with 'warp_run_generator_command',
+  # or carries the agent-resume marker.
   #
   # This is intended to be used as a zshaddhistory function to prevent in-band
-  # generators from being added to the zsh history file.
+  # generators and restored agent-session invocations from being added to the
+  # zsh history file.
   # zshaddhistory functions.
   #
   # See https://zsh.sourceforge.io/Doc/Release/Functions.html for more context
   # on the zshaddhistory hook.
   _warp_zshaddhistory() {
     _is_warp_generator_command "$1" && [[ "$1" != *"warp_run_external_ctrl_r_widget"* ]] && \
-      [[ "$1" != *"warp_run_external_ctrl_t_widget"* ]]
+      [[ "$1" != *"warp_run_external_ctrl_t_widget"* ]] && \
+      _is_warp_agent_resume_command "$1"
   }
 
   # Register this zshaddhistory hook after the user's RC files have been sourced,

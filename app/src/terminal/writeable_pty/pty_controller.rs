@@ -505,6 +505,9 @@ impl<T: EventLoopSender> PtyController<T> {
                 CommandExecutionSource::User | CommandExecutionSource::QueuedCommand => {
                     model.start_command_execution()
                 }
+                CommandExecutionSource::AgentSessionResume => {
+                    model.start_command_execution_as_warp_authored()
+                }
                 CommandExecutionSource::EnvVarCollection { metadata } => {
                     model.start_command_execution_from_env_var_collection(metadata)
                 }

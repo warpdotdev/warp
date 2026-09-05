@@ -228,9 +228,9 @@ use crate::ai_assistant::execution_context::execution_context_for_session;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
 use crate::ai_assistant::{AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AskAIType};
 use crate::app_state::{
-    LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot, NotebookPaneSnapshot,
-    PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabGroupSnapshot,
-    TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
+    AgentSessionRestore, LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot,
+    NotebookPaneSnapshot, PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot,
+    TabGroupSnapshot, TabSnapshot, TerminalPaneSnapshot, WindowSnapshot, WorkflowPaneSnapshot,
 };
 use crate::appearance::{Appearance, AppearanceManager};
 use crate::auth::AuthStateProvider;
@@ -3909,6 +3909,7 @@ impl Workspace {
                 self.add_tab_with_pane_layout(
                     PanesLayout::Template(tab_template.layout_with_tab_commands()),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     tab_template.title.clone(),
                     ctx,
                 );
@@ -3947,6 +3948,7 @@ impl Workspace {
             NewWorkspaceSource::Restored {
                 window_snapshot,
                 block_lists,
+                agent_restore,
             } => {
                 let active_tab_index = window_snapshot.active_tab_index;
                 let restored_left_panel_open = window_snapshot.left_panel_open;
@@ -3985,6 +3987,7 @@ impl Workspace {
                         self.add_tab_with_pane_layout(
                             PanesLayout::Snapshot(Box::new(saved_tab.root.clone())),
                             block_lists.clone(),
+                            agent_restore.clone(),
                             custom_title,
                             ctx,
                         );
@@ -4046,6 +4049,7 @@ impl Workspace {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(options),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     None,
                     ctx,
                 );
@@ -4065,6 +4069,7 @@ impl Workspace {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(options),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     None,
                     ctx,
                 );
@@ -4078,6 +4083,7 @@ impl Workspace {
                 self.add_tab_with_pane_layout(
                     PanesLayout::AmbientAgent,
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     None,
                     ctx,
                 );
@@ -4113,6 +4119,7 @@ impl Workspace {
                 self.add_tab_with_pane_layout(
                     Default::default(),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     custom_title,
                     ctx,
                 );
@@ -4142,6 +4149,7 @@ impl Workspace {
                 self.add_tab_with_pane_layout(
                     Default::default(),
                     Arc::new(HashMap::new()),
+                    AgentSessionRestore::default(),
                     custom_title,
                     ctx,
                 );
@@ -6454,6 +6462,7 @@ impl Workspace {
                     ..Default::default()
                 })),
                 Arc::new(HashMap::new()),
+                AgentSessionRestore::default(),
                 None,
                 ctx,
             );
@@ -7149,6 +7158,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             PanesLayout::Template(pane_template),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             rendered_title,
             ctx,
         );
@@ -8677,6 +8687,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             panes_layout,
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             Some("Settings".to_owned()),
             ctx,
         );
@@ -8774,6 +8785,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(options)),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             None,
             ctx,
         );
@@ -12580,6 +12592,7 @@ impl Workspace {
                 contents: LeafContents::GetStarted,
             }))),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             None,
             ctx,
         );
@@ -12646,6 +12659,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             PanesLayout::AmbientAgent,
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             None,
             ctx,
         );
@@ -12751,6 +12765,7 @@ impl Workspace {
                 ..Default::default()
             })),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             None, /*custom_tab_title*/
             ctx,
         );
@@ -12835,6 +12850,7 @@ impl Workspace {
         &mut self,
         panes_layout: PanesLayout,
         block_lists: Arc<HashMap<PaneUuid, Vec<SerializedBlockListItem>>>,
+        agent_restore: AgentSessionRestore,
         custom_tab_title: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -12861,6 +12877,7 @@ impl Workspace {
                 self.server_api.clone(),
                 panes_layout,
                 block_lists,
+                agent_restore,
                 self.model_event_sender.clone(),
                 ctx,
             );
@@ -12988,7 +13005,13 @@ impl Workspace {
                 settings: settings.clone(),
             }),
         })));
-        self.add_tab_with_pane_layout(panes_layout, Arc::new(HashMap::new()), None, ctx);
+        self.add_tab_with_pane_layout(
+            panes_layout,
+            Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
+            None,
+            ctx,
+        );
     }
 
     fn add_tab_for_cloud_workflow(
@@ -13005,7 +13028,13 @@ impl Workspace {
                 settings: settings.clone(),
             }),
         })));
-        self.add_tab_with_pane_layout(panes_layout, Arc::new(HashMap::new()), None, ctx);
+        self.add_tab_with_pane_layout(
+            panes_layout,
+            Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
+            None,
+            ctx,
+        );
     }
 
     /// Add a tab with a file notebook pane open.
@@ -13021,7 +13050,13 @@ impl Workspace {
                 path: file_path,
             }),
         })));
-        self.add_tab_with_pane_layout(panes_layout, Arc::new(HashMap::new()), None, ctx);
+        self.add_tab_with_pane_layout(
+            panes_layout,
+            Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
+            None,
+            ctx,
+        );
     }
 
     pub fn add_tab_for_assisted_autoupdate<V: View>(
@@ -13033,6 +13068,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             Default::default(),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             Some("Install Update".to_owned()),
             ctx,
         );
@@ -13205,6 +13241,7 @@ impl Workspace {
                 ..Default::default()
             })),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             None,
             ctx,
         );
@@ -23693,6 +23730,7 @@ impl Workspace {
                 ..Default::default()
             })),
             Arc::new(HashMap::new()),
+            AgentSessionRestore::default(),
             Some("Introducing Oz".to_string()),
             ctx,
         );

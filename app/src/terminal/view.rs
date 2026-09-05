@@ -394,6 +394,7 @@ use crate::terminal::block_list_viewport::{
     ScrollState, ViewportState,
 };
 use crate::terminal::bootstrap::init_subshell_command;
+use crate::terminal::cli_agent_resume::history_suppressed_resume_command;
 use crate::terminal::cli_agent_sessions::event::{
     CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource,
     CLIAgentEventType, parse_event,
@@ -2629,6 +2630,12 @@ pub struct TerminalView {
     /// Commands that should run as separate blocks after the active pending
     /// command finishes successfully.
     pending_command_queue: VecDeque<String>,
+    /// The invocation that reattaches this restored pane to the agent session it was running
+    /// before the restart, held until the shell is ready to take a command.
+    ///
+    /// Dropped rather than deferred the moment the pane stops being untouched, because a pane the
+    /// user has started using is no longer one Warp may write a line into.
+    pending_agent_session_resume: Option<String>,
     /// When true, enter agent view after pending setup commands complete
     /// (i.e. after `PendingCommandCompleted` is emitted). Set by
     /// `pane_tree_from_template_recursive` when a tab config has both
@@ -4407,6 +4414,7 @@ impl TerminalView {
             is_login_shell_bootstrapped: false,
             awaiting_pending_command_completion: false,
             pending_command_queue: Default::default(),
+            pending_agent_session_resume: None,
             enter_agent_view_after_pending_commands: false,
             slow_bootstrap_banner,
             is_slow_bootstrap_banner_open: false,
@@ -11336,7 +11344,12 @@ impl TerminalView {
         }
     }
 
-    fn on_user_block_completed(&mut self, block_id: &BlockId, ctx: &mut ViewContext<Self>) {
+    fn on_user_block_completed(
+        &mut self,
+        block_id: &BlockId,
+        was_user_authored: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
         self.model.lock().end_notify_on_ssh_login_complete();
 
         // If the block that just ended was an agent-requested long running command for which the user took over control,
@@ -11378,8 +11391,10 @@ impl TerminalView {
             });
         }
 
-        // Hide telemetry banner forever after first block user executes.
-        if FeatureFlag::GlobalAIAnalyticsBanner.is_enabled()
+        // Hide telemetry banner forever after first block user executes. R24: a resume Warp wrote
+        // itself is not that block, and must not spend a one-time dismissal on the user's behalf.
+        if was_user_authored
+            && FeatureFlag::GlobalAIAnalyticsBanner.is_enabled()
             && !GeneralSettings::as_ref(ctx)
                 .telemetry_banner_dismissed
                 .value()
@@ -12112,8 +12127,13 @@ impl TerminalView {
                     );
                 }
 
-                if let BlockType::User(_) = &block_completed_event.block_type {
-                    self.on_user_block_completed(&block_completed_event.block_id, ctx);
+                if let BlockType::User(user_block) = &block_completed_event.block_type {
+                    let was_user_authored = user_block.was_user_authored();
+                    self.on_user_block_completed(
+                        &block_completed_event.block_id,
+                        was_user_authored,
+                        ctx,
+                    );
                 }
 
                 // Clear any stale warpify footer so it doesn't leak into the next command's footer rendering.
@@ -12639,8 +12659,9 @@ impl TerminalView {
                         );
                     }
 
-                    // We don't want any suggestion UIs on AI requested blocks.
-                    if !block_completed.was_part_of_agent_interaction {
+                    // We don't want any suggestion UIs on AI requested blocks, nor on a resume
+                    // Warp wrote itself.
+                    if block_completed.was_user_authored() {
                         self.maybe_generate_command_suggestions(block_completed, ctx);
 
                         if self.can_suggest_alias_expansion(ctx) {
@@ -16099,8 +16120,9 @@ impl TerminalView {
             return;
         }
 
-        // Don't send notifications for commands executed by an agent
-        if block.was_part_of_agent_interaction {
+        // Don't send notifications for commands executed by an agent, or for a resume Warp wrote
+        // itself: a notification is Warp telling the user their command finished.
+        if !block.was_user_authored() {
             return;
         }
 
@@ -16270,8 +16292,54 @@ impl TerminalView {
         }
     }
 
+    /// Arms the invocation that reattaches this restored pane to its previous agent session. It
+    /// runs once the shell is ready for a command, on the same gate a launch-config command uses.
+    pub(crate) fn arm_agent_session_resume(&mut self, command: String) {
+        self.pending_agent_session_resume = Some(command);
+    }
+
+    /// The resume invocation still armed for this pane, if any.
+    #[cfg(test)]
+    pub(crate) fn armed_agent_session_resume(&self) -> Option<&str> {
+        self.pending_agent_session_resume.as_deref()
+    }
+
+    /// Runs an armed resume invocation, if the pane is still one Warp may write into.
+    ///
+    /// Taken rather than peeked: a pane that was not writable at the ready gate is a pane the user
+    /// has already claimed, and a deferred injection would land in the middle of their work.
+    fn run_pending_agent_session_resume(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(command) = self.pending_agent_session_resume.take() else {
+            return;
+        };
+
+        // Anything already in the buffer — a draft the user typed, a launch-config command waiting
+        // on the same gate — makes this the user's pane. Warp yields rather than merging the two
+        // into one line or racing them into the shell.
+        let is_occupied = self.input.read(ctx, |input, ctx| {
+            input.has_pending_command() || !input.buffer_text(ctx).is_empty()
+        });
+        if is_occupied {
+            return;
+        }
+
+        // Decided here rather than where the invocation is built, because which mechanism keeps a
+        // line out of history is a property of the pane's shell and nothing upstream knows it.
+        let command =
+            history_suppressed_resume_command(self.active_session_shell_type(ctx), command);
+        self.input.update(ctx, |input, ctx| {
+            input.execute_agent_session_resume(&command, ctx);
+        });
+    }
+
+    /// Drops an armed resume because the user has started using the pane.
+    fn cancel_agent_session_resume(&mut self) {
+        self.pending_agent_session_resume = None;
+    }
+
     /// Executes a command that was submitted by the user and not yet sent to the shell.
     pub fn execute_pending_command(&mut self, _: (), ctx: &mut ViewContext<Self>) {
+        self.run_pending_agent_session_resume(ctx);
         let had_pending = self.input.read(ctx, |input, _| input.has_pending_command());
         self.input.update(ctx, |input, ctx| {
             input.execute_pending_command(ctx);
@@ -21992,7 +22060,9 @@ impl TerminalView {
 
                 ctx.emit(Event::ExecuteCommand(event.as_ref().clone()));
 
-                if self.block_onboarding_active {
+                // R24: onboarding is interrupted by the user starting to work, which a resume
+                // Warp wrote itself is not.
+                if self.block_onboarding_active && !event.source.is_warp_authored() {
                     self.interrupt_onboarding_blocks(ctx);
                 }
             }
@@ -22241,6 +22311,12 @@ impl TerminalView {
             }
             InputEvent::InputStateChanged(_) => {}
             InputEvent::InputEmptyStateChanged { is_empty, reason } => {
+                // The user typing into a restored pane makes it theirs, even if they clear the
+                // buffer again afterwards. The armed resume is dropped, not deferred.
+                if !*is_empty && matches!(reason, InputEmptyStateChangeReason::Edited) {
+                    self.cancel_agent_session_resume();
+                }
+
                 // Update the universal developer input button bar with the new empty state
                 let universal_developer_input_button_bar = self
                     .input

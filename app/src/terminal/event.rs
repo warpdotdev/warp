@@ -338,6 +338,11 @@ pub struct UserBlockCompleted {
     /// `true` if the block was run as a requested command or was part of a CLI subagent interaction.
     pub was_part_of_agent_interaction: bool,
 
+    /// `true` if Warp wrote this command itself with nobody asking for it — today only an agent
+    /// session resume. Carried separately from [`Self::was_part_of_agent_interaction`], which is
+    /// derived from the block's `ai_metadata` and is structurally `false` for a resume.
+    pub was_warp_authored: bool,
+
     /// Time that we started the command grid (i.e. immediately after the user
     /// hit enter).
     pub started_at: Option<Instant>,
@@ -360,6 +365,7 @@ impl UserBlockCompleted {
         output_truncated: Lazy<String, BlockList>,
         output_truncated_with_obfuscated_secrets: Lazy<String, BlockList>,
         was_part_of_agent_interaction: bool,
+        was_warp_authored: bool,
         started_at: Option<Instant>,
         num_output_lines: u64,
         num_output_lines_truncated: u64,
@@ -372,10 +378,20 @@ impl UserBlockCompleted {
             output_truncated,
             output_truncated_with_obfuscated_secrets,
             was_part_of_agent_interaction,
+            was_warp_authored,
             started_at,
             num_output_lines,
             num_output_lines_truncated,
         }
+    }
+
+    /// `true` when a person put this command in the pane, either by typing it or by asking an
+    /// agent to run it.
+    ///
+    /// Everything Warp attributes to the person behind a pane — history, suggestions, one-time
+    /// dismissals, notifications — keys off this rather than off a user block merely existing.
+    pub fn was_user_authored(&self) -> bool {
+        !self.was_part_of_agent_interaction && !self.was_warp_authored
     }
 
     /// Test-only constructor that treats every lazy field as already computed.
@@ -389,6 +405,7 @@ impl UserBlockCompleted {
         output_truncated: String,
         output_truncated_with_obfuscated_secrets: String,
         was_part_of_agent_interaction: bool,
+        was_warp_authored: bool,
         started_at: Option<Instant>,
         num_output_lines: u64,
         num_output_lines_truncated: u64,
@@ -401,6 +418,7 @@ impl UserBlockCompleted {
             Lazy::provided(output_truncated),
             Lazy::provided(output_truncated_with_obfuscated_secrets),
             was_part_of_agent_interaction,
+            was_warp_authored,
             started_at,
             num_output_lines,
             num_output_lines_truncated,

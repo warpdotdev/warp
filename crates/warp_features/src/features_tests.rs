@@ -18,3 +18,12 @@ fn local_child_harnesses_are_local_only_by_default() {
     assert!(!DEBUG_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
     assert!(!DOGFOOD_FLAGS.contains(&FeatureFlag::LocalClaudeCodexChildHarnesses));
 }
+
+#[test]
+fn agent_session_resume_is_local_only_and_runtime_toggleable() {
+    assert!(LOCAL_FLAGS.contains(&FeatureFlag::AgentSessionResume));
+    assert!(RUNTIME_FEATURE_FLAGS.contains(&FeatureFlag::AgentSessionResume));
+    assert!(!DEBUG_FLAGS.contains(&FeatureFlag::AgentSessionResume));
+    assert!(!DOGFOOD_FLAGS.contains(&FeatureFlag::AgentSessionResume));
+    assert!(!PREVIEW_FLAGS.contains(&FeatureFlag::AgentSessionResume));
+}
