@@ -156,12 +156,20 @@ async fn dump_jemalloc_heap_profile_inner() -> anyhow::Result<Vec<u8>> {
             let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
             let profile_path = temp_dir.path().join("heap-profile.pb");
 
-            // Run pprof to fetch and symbolicate the heap profile.
+            // Run pprof to fetch and symbolicate the heap profile.  The local
+            // HTTP server listens on a per-channel port, so a hard-coded port
+            // would scrape whichever other channel's Warp process happens to
+            // own it when several are installed side by side -- attaching a
+            // completely unrelated process's heap to the Sentry event.
+            let heap_profile_url = format!(
+                "http://127.0.0.1:{}/debug/pprof/heap",
+                http_server::HttpServer::port()
+            );
             let pprof_path = pprof_binary_path()?;
             let output = command::r#async::Command::new(pprof_path)
                 .args(["--proto", "--symbolize=local", "-output"])
                 .arg(&profile_path)
-                .arg("http://127.0.0.1:9277/debug/pprof/heap")
+                .arg(&heap_profile_url)
                 .output()
                 .await
                 .context("Failed to execute pprof")?;
