@@ -9,9 +9,9 @@ use warpui::{App, SingletonEntity};
 use super::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, CommandBlockInfo,
     ConversationStatus, ConversationUsageTotals, MAX_RESTORED_COMMAND_BLOCKS,
-    MAX_SERIALIZED_STYLIZED_OUTPUT_LINES, RecentCommandBlocks, RecordingSpanStatus,
-    RestoreConversationError, SerializedBlockListItem, artifact_from_fork_proto,
-    footer_model_token_usage,
+    MAX_RESTORED_COMMAND_OUTPUT_BYTES, MAX_SERIALIZED_STYLIZED_OUTPUT_LINES, RecentCommandBlocks,
+    RecordingSpanStatus, RestoreConversationError, SerializedBlockListItem,
+    artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::agent::task::helper::MessageExt;
 use crate::ai::artifacts::Artifact;
@@ -1819,4 +1819,149 @@ fn tail_lines_handles_a_trailing_newline() {
 #[test]
 fn tail_lines_with_zero_max_lines_returns_empty() {
     assert_eq!(AIConversation::tail_lines("a\nb\nc", 0), "");
+}
+
+fn executed_shell_command(
+    command_id: &str,
+    command: &str,
+    output: &str,
+) -> api::ExecutedShellCommand {
+    api::ExecutedShellCommand {
+        command: command.to_string(),
+        output: output.to_string(),
+        exit_code: 0,
+        command_id: command_id.to_string(),
+        started_ts: None,
+        finished_ts: None,
+        is_auto_attached: false,
+    }
+}
+
+fn user_query_with_attachment(
+    id: &str,
+    request_id: &str,
+    attachment_key: &str,
+    cmd: api::ExecutedShellCommand,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: String::new(),
+            context: None,
+            referenced_attachments: HashMap::from([(
+                attachment_key.to_string(),
+                api::Attachment {
+                    value: Some(api::attachment::Value::ExecutedShellCommand(cmd)),
+                },
+            )]),
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+#[allow(deprecated)]
+fn user_query_with_context_executed_shell_command(
+    id: &str,
+    request_id: &str,
+    cmd: api::ExecutedShellCommand,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: String::new(),
+            context: Some(api::InputContext {
+                executed_shell_commands: vec![cmd],
+                ..Default::default()
+            }),
+            referenced_attachments: HashMap::new(),
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn long_output(line_count: usize, prefix: &str) -> String {
+    (0..line_count)
+        .map(|i| format!("{prefix}{i}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Asserts that a single extracted command block's output was truncated to the most recent
+/// `MAX_SERIALIZED_STYLIZED_OUTPUT_LINES` lines *during extraction* (i.e. before it's ever
+/// serialized), not merely truncated later when serialized.
+fn assert_extracted_output_bounded(conversation: &AIConversation, line_prefix: &str) {
+    let (blocks, _total_seen) = conversation.extract_command_blocks();
+    assert_eq!(blocks.len(), 1);
+    let stored_lines: Vec<&str> = blocks[0].output.split('\n').collect();
+    assert_eq!(stored_lines.len(), MAX_SERIALIZED_STYLIZED_OUTPUT_LINES);
+    assert_eq!(stored_lines[0], format!("{line_prefix}10"));
+}
+
+#[test]
+fn extract_command_blocks_truncates_run_shell_command_output_before_accumulating() {
+    let output = long_output(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES + 10, "line-");
+    let conversation = restored_conversation_with_messages(run_shell_command_messages(0, &output));
+
+    assert_extracted_output_bounded(&conversation, "line-");
+}
+
+#[test]
+fn extract_command_blocks_truncates_attachment_output_before_accumulating() {
+    let output = long_output(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES + 10, "line-");
+    let cmd = executed_shell_command("cmd-1", "cat big.log", &output);
+    let conversation = restored_conversation_with_messages(vec![user_query_with_attachment(
+        "user-0",
+        "req",
+        "attachment-1",
+        cmd,
+    )]);
+
+    assert_extracted_output_bounded(&conversation, "line-");
+}
+
+#[test]
+fn extract_command_blocks_truncates_context_executed_shell_command_output_before_accumulating() {
+    let output = long_output(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES + 10, "line-");
+    let cmd = executed_shell_command("cmd-1", "cat big.log", &output);
+    let conversation =
+        restored_conversation_with_messages(vec![user_query_with_context_executed_shell_command(
+            "user-0", "req", cmd,
+        )]);
+
+    assert_extracted_output_bounded(&conversation, "line-");
+}
+
+#[test]
+fn truncated_output_applies_byte_ceiling_to_a_single_line_with_no_newlines() {
+    // A pathologically long single line has no `\n` at all, so `tail_lines` alone can't bound
+    // it; the byte ceiling must still cap it.
+    let huge_single_line = "x".repeat(MAX_RESTORED_COMMAND_OUTPUT_BYTES + 100);
+
+    let truncated = AIConversation::truncated_output(&huge_single_line);
+
+    assert_eq!(truncated.len(), MAX_RESTORED_COMMAND_OUTPUT_BYTES);
+}
+
+#[test]
+fn tail_bytes_snaps_forward_to_a_utf8_character_boundary() {
+    // "é" is 2 bytes, starting right after "a" (1 byte). Cutting at max_bytes=2 lands exactly
+    // on that boundary; max_bytes=1 would land mid-character and must snap forward past it.
+    let s = "aé";
+    assert_eq!(AIConversation::tail_bytes(s, 2), "é");
+    assert_eq!(AIConversation::tail_bytes(s, 1), "");
+    assert_eq!(AIConversation::tail_bytes(s, 100), s);
 }

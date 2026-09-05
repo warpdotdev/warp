@@ -456,6 +456,11 @@ pub struct AIConversation {
 /// materialize its entire history at once.
 const MAX_RESTORED_COMMAND_BLOCKS: usize = 100;
 
+/// Backstop against a single pathologically long line (e.g. no `\n` at all), which
+/// [`MAX_SERIALIZED_STYLIZED_OUTPUT_LINES`] alone cannot bound. Mirrors the per-file byte
+/// ceiling already used for local file-read context (`MAX_FILE_READ_BYTES`).
+const MAX_RESTORED_COMMAND_OUTPUT_BYTES: usize = 1_000_000;
+
 /// Retains only the most recent [`MAX_RESTORED_COMMAND_BLOCKS`] pushed to it, evicting the
 /// oldest as soon as that cap is exceeded. Collecting every command first and truncating
 /// afterward would still allocate a clone of every historical command's output before any of
@@ -3985,6 +3990,28 @@ impl AIConversation {
         s
     }
 
+    /// Clones only the retained tail of a command's output, so a [`CommandBlockInfo`]
+    /// accumulated during extraction never holds a full-size copy of an oversized command's
+    /// output. Applies the byte ceiling before the line cap so a single pathologically long
+    /// line (no `\n` at all) is still bounded.
+    fn truncated_output(output: &str) -> String {
+        let byte_capped = Self::tail_bytes(output, MAX_RESTORED_COMMAND_OUTPUT_BYTES);
+        Self::tail_lines(byte_capped, MAX_SERIALIZED_STYLIZED_OUTPUT_LINES).to_string()
+    }
+
+    /// Returns the suffix of `s` containing at most `max_bytes` bytes, snapped forward to the
+    /// nearest UTF-8 character boundary so the result is always a valid `&str`.
+    fn tail_bytes(s: &str, max_bytes: usize) -> &str {
+        if s.len() <= max_bytes {
+            return s;
+        }
+        let mut start = s.len() - max_bytes;
+        while !s.is_char_boundary(start) {
+            start += 1;
+        }
+        &s[start..]
+    }
+
     /// Extracts the most recent [`MAX_RESTORED_COMMAND_BLOCKS`] shell command blocks, in order,
     /// from the conversation's API task messages, plus the total number found before that cap
     /// was applied.
@@ -4160,7 +4187,7 @@ impl AIConversation {
 
                         command_blocks.push(CommandBlockInfo {
                             command: command.clone(),
-                            output: command_output.clone(),
+                            output: Self::truncated_output(command_output),
                             exit_code: ExitCode::from(*exit_code),
                             ai_metadata: Some(
                                 serde_json::to_string(&Some(Into::<SerializedAIMetadata>::into(
@@ -4223,7 +4250,7 @@ impl AIConversation {
                         .or(msg_ts);
                     command_blocks.push(CommandBlockInfo {
                         command: cmd.command.clone(),
-                        output: cmd.output.clone(),
+                        output: Self::truncated_output(&cmd.output),
                         exit_code: ExitCode::from(cmd.exit_code),
                         ai_metadata: None,
                         message_id: message_id.clone(),
@@ -4264,7 +4291,7 @@ impl AIConversation {
                             .or(msg_ts);
                         command_blocks.push(CommandBlockInfo {
                             command: executed_shell_command.command.clone(),
-                            output: executed_shell_command.output.clone(),
+                            output: Self::truncated_output(&executed_shell_command.output),
                             exit_code: ExitCode::from(executed_shell_command.exit_code),
                             ai_metadata: None,
                             message_id: message_id.clone(),
