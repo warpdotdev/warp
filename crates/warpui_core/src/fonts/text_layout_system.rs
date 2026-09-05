@@ -38,24 +38,6 @@ impl TextLayoutSystem<'_> {
             .layout_line(text, line_style, style_runs, max_width, clip_config)
     }
 
-    /// Lays out a line without retaining it in a [`crate::text_layout::LayoutCache`].
-    pub fn layout_line_uncached(
-        &self,
-        text: &str,
-        line_style: LineStyle,
-        style_runs: &[(Range<usize>, StyleAndFont)],
-        max_width: f32,
-        clip_config: ClipConfig,
-    ) -> Line {
-        let (text, adjusted_style_runs) = strip_leading_unicode_bom(text, style_runs);
-        let style_runs = adjusted_style_runs
-            .as_ref()
-            .map_or(style_runs, Vec::as_slice);
-        let line = self.layout_line(text, line_style, style_runs, max_width, clip_config);
-        self.request_fallback_fonts(&line.chars_with_missing_glyphs);
-        line
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub fn layout_text(
         &self,
