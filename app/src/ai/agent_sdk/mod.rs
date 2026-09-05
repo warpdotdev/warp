@@ -869,8 +869,12 @@ impl AgentDriverRunner {
         task_id_str: &str,
         args: &RunAgentArgs,
     ) -> Result<(), AgentDriverError> {
-        if warp_isolation_platform::detect().is_none() && args.configure_git_credentials_with_github
-        {
+        // The gh CLI only covers github.com, so this must not replace the
+        // server fetch below — other forges (GitLab, Azure DevOps) get their
+        // credentials exclusively from the server.
+        let git_credentials_configured_with_gh = warp_isolation_platform::detect().is_none()
+            && args.configure_git_credentials_with_github;
+        if git_credentials_configured_with_gh {
             foreground
                 .spawn(|_, _| {
                     command::blocking::Command::new("gh")
@@ -884,7 +888,6 @@ impl AgentDriverRunner {
                 })
                 .await?
                 .map(|_| ())?;
-            return Ok(());
         }
 
         if !FeatureFlag::GitCredentialRefresh.is_enabled() {
@@ -921,6 +924,15 @@ impl AgentDriverRunner {
                     }) =>
             {
                 log::debug!("Skipping git credentials bootstrap: {err}");
+                return Ok(());
+            }
+            Err(err) if git_credentials_configured_with_gh => {
+                // gh already configured github.com above, so a failed server
+                // fetch degrades to GitHub-only credentials instead of
+                // failing a run that previously worked without the fetch.
+                log::warn!(
+                    "Failed to fetch git credentials; continuing with gh-configured GitHub credentials only: {err:#}"
+                );
                 return Ok(());
             }
             Err(err) => {

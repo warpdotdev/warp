@@ -6,6 +6,7 @@ use cloud_objects::cloud_object::{
 };
 use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{JsonModel, JsonSerializer};
 
@@ -17,6 +18,10 @@ pub enum CodeForge {
     GitHub,
     #[serde(rename = "GITLAB")]
     GitLab,
+    /// Azure DevOps (Azure Repos). `owner` carries the
+    /// `organization/project` pair, mirroring GitLab's nested namespaces.
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
     /// Explicit "no code forge" container value: a repo-less environment
     /// that clones nothing and relies entirely on `setup_commands`.
     #[serde(rename = "NONE")]
@@ -36,6 +41,7 @@ impl CodeForge {
         match self {
             CodeForge::GitHub => "github.com",
             CodeForge::GitLab => "gitlab.com",
+            CodeForge::AzureDevOps => "dev.azure.com",
             CodeForge::None | CodeForge::Unknown => "",
         }
     }
@@ -46,6 +52,7 @@ impl fmt::Display for CodeForge {
         match self {
             CodeForge::GitHub => write!(f, "GitHub"),
             CodeForge::GitLab => write!(f, "GitLab"),
+            CodeForge::AzureDevOps => write!(f, "Azure DevOps"),
             CodeForge::None => write!(f, "None"),
             CodeForge::Unknown => write!(f, "Unknown"),
         }
@@ -116,6 +123,22 @@ impl SourceRepo {
     }
 
     pub fn https_clone_url(&self) -> String {
+        // Azure Repos clone URLs carry a `_git` segment between the
+        // organization/project pair and the repository, and no `.git` suffix:
+        // https://dev.azure.com/{organization}/{project}/_git/{repository}.
+        if self.code_forge == Some(CodeForge::AzureDevOps) {
+            let mut clone_url =
+                Url::parse("https://dev.azure.com").expect("valid Azure DevOps URL");
+            {
+                let mut path_segments = clone_url
+                    .path_segments_mut()
+                    .expect("Azure DevOps URL supports path segments");
+                path_segments.extend(self.owner.split('/'));
+                path_segments.push("_git");
+                path_segments.push(&self.repo);
+            }
+            return clone_url.into();
+        }
         format!(
             "https://{}/{}/{}.git",
             self.code_forge.map(CodeForge::host).unwrap_or(""),
@@ -292,7 +315,7 @@ impl AmbientAgentEnvironment {
                     return Vec::new();
                 }
             }
-            primary @ (CodeForge::GitHub | CodeForge::GitLab) => {
+            primary @ (CodeForge::GitHub | CodeForge::GitLab | CodeForge::AzureDevOps) => {
                 if !forges.contains(&primary) {
                     forges.push(primary);
                     forges.sort_by_key(|forge| *forge as u8);
@@ -370,7 +393,11 @@ fn unique_clonable_forges(forges: impl IntoIterator<Item = CodeForge>) -> Vec<Co
     let mut seen = HashSet::new();
     let mut unique = Vec::new();
     for forge in forges {
-        if matches!(forge, CodeForge::GitHub | CodeForge::GitLab) && seen.insert(forge) {
+        if matches!(
+            forge,
+            CodeForge::GitHub | CodeForge::GitLab | CodeForge::AzureDevOps
+        ) && seen.insert(forge)
+        {
             unique.push(forge);
         }
     }
