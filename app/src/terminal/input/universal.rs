@@ -156,10 +156,8 @@ impl Input {
             app,
         );
 
-        // If the file tree is enabled, don't include the top margin for UDI so that the UDI is flush with the
-        // file tree.
-        let margin_top = if FeatureFlag::FileTree.is_enabled() && self.is_input_at_top(&model, app)
-        {
+        // Don't include the top margin for UDI so that the UDI is flush with the file tree.
+        let margin_top = if self.is_input_at_top(&model, app) {
             0.
         } else {
             6.

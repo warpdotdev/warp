@@ -570,7 +570,6 @@ default = [
     "code_review_save_changes",
     "create_project_flow",
     "get_started_tab",
-    "file_tree",
     "vim_code_editor",
     "code_launch_modal",
     "allow_ignoring_input_suggestions",
@@ -934,7 +933,6 @@ undo_closed_panes = []
 revert_diff_hunk = []
 code_review_save_changes = []
 remote_code_review = []
-file_tree = []
 code_launch_modal = []
 api_key_management = []
 diff_set_as_context = []

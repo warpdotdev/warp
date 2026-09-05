@@ -5200,10 +5200,10 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
                 EnablementState::Flag(FeatureFlag::FullSourceCodeEmbedding)
             }
             Self::ObjectLinkCopied => EnablementState::Always,
-            Self::FileTreeToggled => EnablementState::Flag(FeatureFlag::FileTree),
-            Self::FileTreeItemAttachedAsContext => EnablementState::Flag(FeatureFlag::FileTree),
+            Self::FileTreeToggled => EnablementState::Always,
+            Self::FileTreeItemAttachedAsContext => EnablementState::Always,
             Self::CodeSelectionAddedAsContext => EnablementState::Flag(FeatureFlag::HoaCodeReview),
-            Self::FileTreeItemCreated => EnablementState::Flag(FeatureFlag::FileTree),
+            Self::FileTreeItemCreated => EnablementState::Always,
             Self::ConversationListViewOpened
             | Self::ConversationListItemOpened
             | Self::ConversationListItemDeleted
