@@ -33,7 +33,7 @@ Warp can latch rich status.
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh UserPromptSubmit",
             "timeout": 5
           }
         ]
@@ -44,7 +44,7 @@ Warp can latch rich status.
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh Stop",
             "timeout": 5
           }
         ]
@@ -55,7 +55,7 @@ Warp can latch rich status.
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh StopFailure",
             "timeout": 5
           }
         ]

@@ -1,5 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
+use std::path::Path;
 use std::process::Stdio;
 
 use command::blocking::Command;
@@ -58,6 +59,25 @@ fn run_plugin_script(command: &mut Command, input: &[u8]) -> Value {
         .expect("script should emit one OSC 777 notification");
     serde_json::from_slice(payload).unwrap()
 }
+
+#[cfg(unix)]
+fn run_installed_hook(
+    hooks_dir: &Path,
+    hook_config: &Value,
+    hook_name: &str,
+    input: &[u8],
+) -> Value {
+    let command = hook_config["hooks"][hook_name][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    run_plugin_script(
+        Command::new("/bin/bash")
+            .arg("-c")
+            .arg(command)
+            .current_dir(hooks_dir),
+        input,
+    )
+}
 #[test]
 #[serial_test::serial]
 fn install_writes_current_plugin_files_with_executable_script() {
@@ -81,6 +101,18 @@ fn install_writes_current_plugin_files_with_executable_script() {
         hook_config["hooks"]["SessionStart"][0]["hooks"][0]["command"],
         "bin/warp-plugin.sh SessionStart"
     );
+    assert_eq!(
+        hook_config["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"],
+        "bin/warp-plugin.sh UserPromptSubmit"
+    );
+    assert_eq!(
+        hook_config["hooks"]["Stop"][0]["hooks"][0]["command"],
+        "bin/warp-plugin.sh Stop"
+    );
+    assert_eq!(
+        hook_config["hooks"]["StopFailure"][0]["hooks"][0]["command"],
+        "bin/warp-plugin.sh StopFailure"
+    );
 
     #[cfg(unix)]
     {
@@ -96,10 +128,13 @@ fn install_writes_current_plugin_files_with_executable_script() {
 #[cfg(unix)]
 #[test]
 #[serial_test::serial]
-fn installed_script_preserves_escaped_rich_metadata() {
+fn installed_lifecycle_commands_emit_events_and_preserve_escaped_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let _grok_home = GrokHomeGuard::set(dir.path());
     install_plugin_files().unwrap();
+    let hooks = dir.path().join("hooks");
+    let hook_config: Value =
+        serde_json::from_slice(&std::fs::read(hooks.join(HOOK_JSON_FILE)).unwrap()).unwrap();
 
     let input = serde_json::json!({
         "hookEventName": "UserPromptSubmit",
@@ -108,16 +143,30 @@ fn installed_script_preserves_escaped_rich_metadata() {
         "prompt": "say \"hello\" from C:\\tools\nthen continue",
         "error": "line one\n\"line two\"\\tail",
     });
-    let event = run_plugin_script(
-        Command::new(dir.path().join("hooks").join(PLUGIN_SCRIPT_REL)).arg("UserPromptSubmit"),
-        input.to_string().as_bytes(),
+    let input = input.to_string();
+
+    let session_start = run_installed_hook(&hooks, &hook_config, "SessionStart", input.as_bytes());
+    assert_eq!(session_start["event"], "session_start");
+
+    let prompt_submit =
+        run_installed_hook(&hooks, &hook_config, "UserPromptSubmit", input.as_bytes());
+    assert_eq!(prompt_submit["event"], "prompt_submit");
+    assert_eq!(
+        prompt_submit["session_id"],
+        "session-\"quoted\"\\path\nnext"
     );
-    assert_eq!(event["agent"], "grok");
-    assert_eq!(event["event"], "prompt_submit");
-    assert_eq!(event["session_id"], input["sessionId"]);
-    assert_eq!(event["cwd"], input["cwd"]);
-    assert_eq!(event["query"], input["prompt"]);
-    assert_eq!(event["error_type"], input["error"]);
+    assert_eq!(prompt_submit["cwd"], "/tmp/\"quoted\"\\path\nnext");
+    assert_eq!(
+        prompt_submit["query"],
+        "say \"hello\" from C:\\tools\nthen continue"
+    );
+    assert_eq!(prompt_submit["error_type"], "line one\n\"line two\"\\tail");
+
+    let stop = run_installed_hook(&hooks, &hook_config, "Stop", input.as_bytes());
+    assert_eq!(stop["event"], "stop");
+
+    let stop_failure = run_installed_hook(&hooks, &hook_config, "StopFailure", input.as_bytes());
+    assert_eq!(stop_failure["event"], "stop_failure");
 }
 #[cfg(unix)]
 #[test]

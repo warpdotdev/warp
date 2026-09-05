@@ -40,7 +40,7 @@ const HOOK_JSON: &str = r#"{
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh UserPromptSubmit",
             "timeout": 5
           }
         ]
@@ -51,7 +51,7 @@ const HOOK_JSON: &str = r#"{
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh Stop",
             "timeout": 5
           }
         ]
@@ -62,7 +62,7 @@ const HOOK_JSON: &str = r#"{
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh StopFailure",
             "timeout": 5
           }
         ]
