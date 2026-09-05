@@ -108,6 +108,7 @@ pub struct NotebooksEditorModel {
     /// Context used to generate clickable file path links for notebooks.
     file_link_resolution_context: Option<FileLinkResolutionContext>,
     default_mermaid_display_mode: MarkdownDisplayMode,
+    lazy_layout: bool,
 }
 
 #[derive(Clone)]
@@ -239,6 +240,7 @@ impl NotebooksEditorModel {
             resize_tx,
             file_link_resolution_context: None,
             default_mermaid_display_mode: MarkdownDisplayMode::Raw,
+            lazy_layout,
         }
     }
 
@@ -282,8 +284,19 @@ impl NotebooksEditorModel {
     }
 
     /// Set the window this editor model is associated with. Should be called when the pane attaches.
-    pub fn set_window_id(&mut self, window_id: WindowId, _ctx: &mut ModelContext<Self>) {
+    pub fn set_window_id(&mut self, window_id: WindowId, ctx: &mut ModelContext<Self>) {
         self.rte_window_id = Some(window_id);
+        self.child_models.update(
+            self.interaction_state.clone(),
+            self.content.clone(),
+            self.selection_model.clone(),
+            window_id,
+            self.default_mermaid_display_mode,
+            ctx,
+        );
+        if self.sync_mermaid_render_offsets(ctx) && !self.lazy_layout {
+            self.rebuild_layout(ctx);
+        }
     }
 
     /// Get the context for the session and working directory associated with this editor, if any.

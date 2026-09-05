@@ -1404,6 +1404,62 @@ fn test_layout_delta_single_chunk_matches_direct_layout() {
     })
 }
 
+#[test]
+fn test_sequential_layout_preserves_parallel_layout_results() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout_cache = LayoutCache::new();
+            let text_layout = TextLayout::new(
+                &layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..CharOffset::from(13),
+                new_lines: Arc::new(vec![
+                    identifiable_text_block(3),
+                    identifiable_text_block(4),
+                    identifiable_text_block(5),
+                ]),
+                ..Default::default()
+            };
+
+            let parallel = delta.layout_delta(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+            let sequential = delta.layout_delta_sequential(
+                &text_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                None,
+                ctx,
+            );
+
+            assert_eq!(sequential.old_offset, parallel.old_offset);
+            assert_eq!(
+                sequential
+                    .laid_out_line
+                    .iter()
+                    .map(BlockItem::content_length)
+                    .collect::<Vec<_>>(),
+                parallel
+                    .laid_out_line
+                    .iter()
+                    .map(BlockItem::content_length)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                sequential.trailing_newline.is_some(),
+                parallel.trailing_newline.is_some()
+            );
+        });
+    })
+}
 /// Builds a hidden, isolated `CodeBlock`-styled block whose gutter-button count (and thus its
 /// laid-out `line_count`) directly observes the `BlockLocation` it was laid out with: Start/End
 /// always get one button, but a genuine Middle location with `run_count >=

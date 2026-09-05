@@ -176,6 +176,50 @@ fn command_range(
     })
 }
 
+#[test]
+fn test_lazy_model_initializes_rendered_mermaid_before_first_layout() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
+        let window = setup_editor_window(&mut app, true);
+        let model = app.add_model(|ctx| {
+            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+            let mut model = NotebooksEditorModel::new_unbound_lazy(styles, ctx);
+            model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+            model.reset_with_markdown("```mermaid\ngraph TD\nA --> B\n```", ctx);
+            model
+        });
+        layout_model(&mut app, &model).await;
+
+        model.update(&mut app, |model, ctx| model.set_window_id(window, ctx));
+
+        let commands = command_models(&model, &mut app);
+        let mermaid = commands
+            .into_iter()
+            .exactly_one()
+            .expect("expected one Mermaid command model");
+        let (render_offset, options) = app.read(|ctx| {
+            let render_offset = mermaid
+                .as_ref(ctx)
+                .start_offset(ctx)
+                .expect("Mermaid start offset should resolve")
+                + CharOffset::from(1);
+            let options = model
+                .as_ref(ctx)
+                .render_state()
+                .as_ref(ctx)
+                .layout_options();
+            (render_offset, options)
+        });
+
+        assert_eq!(
+            options.mermaid_render_offsets,
+            HashSet::from([render_offset])
+        );
+    });
+}
+
 /// Wait for text layout to finish.
 async fn layout_model(app: &mut App, model: &ModelHandle<NotebooksEditorModel>) {
     app.read(|ctx| model.as_ref(ctx).render_state.as_ref(ctx).layout_complete())
