@@ -37,5 +37,5 @@ pub use warp_terminal::model::secrets::{
 };
 pub use warp_terminal::model::{
     BlockId, ansi, blockgrid, char_or_str, completions, escape_sequences, find, grid, image_map,
-    iterm_image, kitty, mouse, selection,
+    iterm_image, kitty, kitty_placeholder, mouse, selection,
 };

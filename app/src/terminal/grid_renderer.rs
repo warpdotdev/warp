@@ -40,7 +40,7 @@ use crate::terminal::model::cell::{Cell, Flags};
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
-use crate::terminal::model::{ObfuscateSecrets, SecretHandle};
+use crate::terminal::model::{ObfuscateSecrets, SecretHandle, kitty_placeholder};
 use crate::terminal::{SizeInfo, color};
 use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
@@ -557,6 +557,11 @@ fn render_grid_without_ligatures<'a>(
         .flat_map(|marked_text| marked_text.chars());
     let mut next_marked_text_cell_is_wide_char_spacer = false;
 
+    // Kitty Unicode placeholder (U+10EEEE) cells collected from the visible rows. They are
+    // drawn as clipped fragments of their virtual placements after the merged backgrounds.
+    let kitty_placeholders_enabled = FeatureFlag::KittyImages.is_enabled();
+    let mut placeholder_runs: Vec<(usize, kitty_placeholder::PlaceholderRun)> = Vec::new();
+
     if FeatureFlag::ITermImages.is_enabled() {
         let image_ids = grid.get_image_ids_in_range(start_row, end_row);
 
@@ -639,6 +644,14 @@ fn render_grid_without_ligatures<'a>(
             );
             continue;
         };
+
+        if kitty_placeholders_enabled {
+            placeholder_runs.extend(
+                kitty_placeholder::placeholder_runs_in_row(&row[..])
+                    .into_iter()
+                    .map(|run| (offset_row, run)),
+            );
+        }
 
         for col in 0..grid.columns() {
             let current_point = Point::new(row_idx, col);
@@ -886,6 +899,21 @@ fn render_grid_without_ligatures<'a>(
             .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
             .with_background(Fill::Solid(data.color));
     }
+
+    // Placeholder image fragments paint last so they sit above their cells' merged
+    // backgrounds and decorations.
+    for (offset_row, run) in placeholder_runs {
+        render_placeholder_run(
+            grid,
+            &run,
+            offset_row,
+            image_metadata,
+            cell_size,
+            grid_origin,
+            ctx,
+            app,
+        );
+    }
 }
 
 #[inline]
@@ -1066,6 +1094,11 @@ fn render_grid_with_ligatures<'a>(
         .flat_map(|marked_text| marked_text.chars())
         .peekable();
     let mut next_marked_text_cell_is_wide_char_spacer = false;
+
+    // Kitty Unicode placeholder (U+10EEEE) cells collected from the visible rows. They are
+    // drawn as clipped fragments of their virtual placements after the merged backgrounds.
+    let kitty_placeholders_enabled = FeatureFlag::KittyImages.is_enabled();
+    let mut placeholder_runs: Vec<(usize, kitty_placeholder::PlaceholderRun)> = Vec::new();
     if FeatureFlag::ITermImages.is_enabled() {
         let image_ids = grid.get_image_ids_in_range(start_row, end_row);
 
@@ -1150,6 +1183,14 @@ fn render_grid_with_ligatures<'a>(
             );
             continue;
         };
+
+        if kitty_placeholders_enabled {
+            placeholder_runs.extend(
+                kitty_placeholder::placeholder_runs_in_row(&row[..])
+                    .into_iter()
+                    .map(|run| (offset_row, run)),
+            );
+        }
 
         // Elide any empty cells at the end of the row, they don't need to be included in the text
         // layout
@@ -1445,6 +1486,13 @@ fn render_grid_with_ligatures<'a>(
                         glyph_type,
                     });
                     string_builder.append_placeholder(col);
+                } else if kitty_placeholders_enabled
+                    && cell.c == kitty_placeholder::PLACEHOLDER_CHAR
+                {
+                    // Kitty Unicode placeholder cells must never shape as text: no font covers
+                    // the placeholder codepoint, so it would render as tofu. Their image
+                    // fragments are drawn separately from the cell content.
+                    string_builder.append_placeholder(col);
                 } else if cell.c == '\t' {
                     // For a tab, the grid has already taken into account the extra spaces needed
                     // to properly align the contents. We don't want the text layout engine to
@@ -1516,6 +1564,21 @@ fn render_grid_with_ligatures<'a>(
         ctx.scene
             .draw_rect_without_hit_recording(RectF::new(data.origin, data.size))
             .with_background(Fill::Solid(data.color));
+    }
+
+    // Placeholder image fragments paint last so they sit above their cells' merged
+    // backgrounds and decorations.
+    for (offset_row, run) in placeholder_runs {
+        render_placeholder_run(
+            grid,
+            &run,
+            offset_row,
+            image_metadata,
+            cell_size,
+            grid_origin,
+            ctx,
+            app,
+        );
     }
 }
 
@@ -1717,6 +1780,13 @@ fn render_cell_glyph(
     obfuscate_mode: ObfuscateSecrets,
     ctx: &mut PaintContext,
 ) {
+    // Kitty Unicode placeholder cells (U+10EEEE) are stand-ins for image tiles and must never
+    // paint a glyph: no font covers the placeholder codepoint, so the fallback would be tofu.
+    // Image fragments for these cells are drawn separately from the cell content.
+    if FeatureFlag::KittyImages.is_enabled() && cell.c == kitty_placeholder::PLACEHOLDER_CHAR {
+        return;
+    }
+
     let cell_size = if cell.flags().intersects(Flags::WIDE_CHAR) {
         // WIDE_CHAR takes up two cells.
         Vector2F::new(cell_size.x() * 2., cell_size.y())
@@ -1901,6 +1971,89 @@ fn render_image(
                 1.,
                 CornerRadius::default(),
             );
+        }
+        Image::Animated(_) => {
+            log::warn!("Image should be static");
+        }
+    }
+}
+
+/// Draws the image fragment shown by one horizontal run of kitty Unicode placeholder cells.
+///
+/// The referenced image is scaled to fill the virtual placement's `cols x rows` cell rectangle.
+/// The full scaled image is drawn shifted so that the run's first tile lands on the run's first
+/// cell, clipped to the run's rectangle, which shows exactly the run's strip of tiles. Runs
+/// whose image or virtual placement no longer exists, or whose tiles lie outside the placement,
+/// draw nothing: their cells stay blank.
+#[allow(clippy::too_many_arguments)]
+fn render_placeholder_run(
+    grid: &GridHandler,
+    run: &kitty_placeholder::PlaceholderRun,
+    offset_row: usize,
+    image_metadata: &HashMap<u32, StoredImageMetadata>,
+    cell_size: Vector2F,
+    grid_origin: Vector2F,
+    ctx: &mut PaintContext,
+    app: &AppContext,
+) {
+    let Some(placement) = grid.virtual_placement(run.image_id) else {
+        return;
+    };
+    if !image_metadata.contains_key(&run.image_id) {
+        return;
+    }
+    if run.src_row as usize >= placement.rows || run.src_col_start as usize >= placement.cols {
+        return;
+    }
+
+    // Cells past the placement's last column show nothing.
+    let visible_cols = run.len.min(placement.cols - run.src_col_start as usize);
+
+    let full_size = cell_size * vec2f(placement.cols as f32, placement.rows as f32);
+    let run_origin = grid_origin + cell_size * vec2f(run.screen_col as f32, offset_row as f32);
+    let clip_rect = RectF::new(run_origin, cell_size * vec2f(visible_cols as f32, 1.));
+    let image_origin = run_origin - cell_size * vec2f(run.src_col_start as f32, run.src_row as f32);
+
+    let bounds = (full_size * ctx.scene.scale_factor()).to_i32();
+    let asset_cache = AssetCache::as_ref(app);
+    let image = ImageCache::as_ref(app).image(
+        AssetSource::Raw {
+            id: run.image_id.to_string(),
+        },
+        bounds,
+        FitType::Stretch,
+        AnimatedImageBehavior::FullAnimation,
+        CacheOption::BySize,
+        ctx.max_texture_dimension_2d,
+        asset_cache,
+    );
+
+    let image = match image {
+        AssetState::Loaded { data } => data,
+        AssetState::Evicted => {
+            return;
+        }
+        _ => {
+            log::warn!(
+                "Could not load image to render (image id = {})",
+                run.image_id
+            );
+            return;
+        }
+    };
+
+    match image.as_ref() {
+        Image::Static(image) => {
+            let logical_image_size = image.size().to_f32() / ctx.scene.scale_factor();
+            ctx.scene
+                .start_layer(warpui::ClipBounds::BoundedByActiveLayerAnd(clip_rect));
+            ctx.scene.draw_image(
+                RectF::new(image_origin, logical_image_size),
+                image.clone(),
+                1.,
+                CornerRadius::default(),
+            );
+            ctx.scene.stop_layer();
         }
         Image::Animated(_) => {
             log::warn!("Image should be static");

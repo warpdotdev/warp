@@ -34,11 +34,13 @@ use crate::model::cell::{Cell, Flags};
 use crate::model::char_or_str::CharOrStr;
 use crate::model::grid::indexing::IndexRegion as _;
 use crate::model::grid::{Dimensions as _, cell, grapheme_cursor};
-use crate::model::image_map::{ImagePlacementData, ImageType, StoredImageMetadata};
+use crate::model::image_map::{
+    ImagePlacementData, ImageType, StoredImageMetadata, VirtualPlacement,
+};
 use crate::model::index::{Point, VisibleRow};
 use crate::model::iterm_image::{ITermImage, ITermImageDimensionUnit};
 use crate::model::kitty::{
-    CursorMovementPolicy, KittyAction, KittyError, KittyResponse, StorageError,
+    CursorMovementPolicy, KittyAction, KittyError, KittyPlacementData, KittyResponse, StorageError,
 };
 use crate::model::selection::ScrollDelta;
 use crate::model::{KeyboardModes, KeyboardModesApplyBehavior, ObfuscateSecrets};
@@ -1793,6 +1795,39 @@ impl GridHandler {
         }
     }
 
+    /// Records a virtual (Unicode placeholder, `U=1`) placement for an image. Virtual
+    /// placements are not anchored to a point and never move the cursor; placeholder cells
+    /// (U+10EEEE) select tiles from the `cols x rows` rectangle the image is scaled to fill.
+    /// When `c`/`r` are omitted, the rectangle is derived from the image pixel size and the
+    /// cell size, matching kitty.
+    fn add_virtual_placement(
+        &mut self,
+        image_id: u32,
+        placement_data: &KittyPlacementData,
+        image_size: Vector2F,
+    ) {
+        let cell_width = self.ansi_handler_state.cell_width;
+        let cell_height = self.ansi_handler_state.cell_height;
+
+        let cols = match placement_data.cols {
+            Some(cols) => cols as usize,
+            None => ((image_size.x() / cell_width as f32).ceil() as usize).max(1),
+        };
+        let rows = match placement_data.rows {
+            Some(rows) => rows as usize,
+            None => ((image_size.y() / cell_height as f32).ceil() as usize).max(1),
+        };
+
+        self.images.add_virtual_placement(
+            image_id,
+            VirtualPlacement {
+                cols,
+                rows,
+                image_size: Vector2F::new((cols * cell_width) as f32, (rows * cell_height) as f32),
+            },
+        );
+    }
+
     fn handle_completed_kitty_action_internal(
         &mut self,
         action: KittyAction,
@@ -1849,6 +1884,23 @@ impl GridHandler {
                     return Ok(());
                 }
 
+                self.ansi_handler_state
+                    .event_proxy
+                    .send_terminal_event(Event::ImageReceived {
+                        image_id: action.image_id,
+                        image_data: action.image.data,
+                        image_protocol: ImageProtocol::Kitty,
+                    });
+
+                if action.placement_data.virtual_placement {
+                    self.add_virtual_placement(
+                        action.image_id,
+                        &action.placement_data,
+                        metadata.image_size,
+                    );
+                    return Ok(());
+                }
+
                 let max_width =
                     (self.columns() - self.cursor_point().col) * self.ansi_handler_state.cell_width;
 
@@ -1878,14 +1930,6 @@ impl GridHandler {
                     .ceil() as usize;
                 let width_cells =
                     (width_px as f32 / (self.ansi_handler_state.cell_width as f32)).ceil() as usize;
-
-                self.ansi_handler_state
-                    .event_proxy
-                    .send_terminal_event(Event::ImageReceived {
-                        image_id: action.image_id,
-                        image_data: action.image.data,
-                        image_protocol: ImageProtocol::Kitty,
-                    });
 
                 self.images.add_image_placement_data(
                     action.image_id,
@@ -1944,6 +1988,15 @@ impl GridHandler {
                 }
 
                 if let Some(0) = action.placement_data.rows {
+                    return Ok(());
+                }
+
+                if action.placement_data.virtual_placement {
+                    self.add_virtual_placement(
+                        action.image_id,
+                        &action.placement_data,
+                        metadata.image_size,
+                    );
                     return Ok(());
                 }
 
