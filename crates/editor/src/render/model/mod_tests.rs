@@ -1245,7 +1245,7 @@ fn make_test_laid_out_table() -> LaidOutTable {
     let cell_layout = make_test_cell_layout();
     let cell_frame = Arc::new(TextFrame::mock("aaa"));
     LaidOutTable {
-        table,
+        table: Arc::new(table),
         config: TableBlockConfig {
             width: 60.0.into_pixels(),
             spacing: DEFAULT_BLOCK_SPACINGS.text,
@@ -1304,9 +1304,9 @@ fn make_test_laid_out_table() -> LaidOutTable {
         row_heights: vec![20.0.into_pixels(), 20.0.into_pixels()],
         column_widths: vec![30.0.into_pixels(), 30.0.into_pixels()],
         total_height: 40.0.into_pixels(),
-        offset_map,
+        offset_map: Arc::new(offset_map),
         content_length,
-        cell_offset_maps,
+        cell_offset_maps: Arc::new(cell_offset_maps),
         row_y_offsets: vec![0.0, 20.0, 40.0],
         col_x_offsets: vec![0.0, 30.0, 60.0],
         cell_text_frames: vec![
@@ -1387,7 +1387,7 @@ fn test_disabled_horizontal_scroll_reveal_offset_is_noop() {
 #[test]
 fn test_link_at_offset_uses_cached_cell_links() {
     let mut table = make_test_laid_out_table();
-    table.table = FormattedTable {
+    table.table = Arc::new(FormattedTable {
         headers: vec![
             vec![
                 FormattedTextFragment::plain_text("a"),
@@ -1406,7 +1406,7 @@ fn test_link_at_offset_uses_cached_cell_links() {
             vec![FormattedTextFragment::plain_text("ccc")],
             vec![FormattedTextFragment::plain_text("ddd")],
         ]],
-    };
+    });
     table.cell_links = vec![
         vec![
             vec![ParsedUrl::new(1..3, "https://warp.dev".into())],
