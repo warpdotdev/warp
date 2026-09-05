@@ -48,13 +48,11 @@ pub(super) fn upsert_agent_conversation<'a>(
     conn: &mut SqliteConnection,
     conversation_id_param: &str,
     tasks: impl IntoIterator<Item = &'a api::Task>,
-    conversation_data_param: AgentConversationData,
+    mut conversation_data_param: AgentConversationData,
 ) -> Result<(), UpsertConversationError> {
     use diesel::QueryDsl;
     use schema::agent_conversations::dsl::*;
     use schema::agent_tasks::dsl as tasks_dsl;
-
-    let serialized_conversation_data = serde_json::to_string(&conversation_data_param)?;
 
     // `updated_tasks` is always a full snapshot of the conversation's current
     // task set (see `write_updated_conversation_state` and the fork paths), so
@@ -71,7 +69,25 @@ pub(super) fn upsert_agent_conversation<'a>(
     let serialized_summary =
         serde_json::to_string(&AgentConversationSummary::from_tasks(tasks.iter().copied())).ok();
 
-    conn.transaction::<_, Error, _>(|conn| {
+    conn.transaction::<_, UpsertConversationError, _>(|conn| {
+        let persisted_conversation_data = agent_conversations
+            .filter(conversation_id.eq(conversation_id_param))
+            .select(conversation_data)
+            .first::<String>(conn)
+            .optional()?;
+        if let Some(persisted_sequence) = persisted_conversation_data
+            .as_deref()
+            .and_then(|data| serde_json::from_str::<AgentConversationData>(data).ok())
+            .and_then(|data| data.last_event_sequence)
+        {
+            conversation_data_param.last_event_sequence = Some(
+                conversation_data_param
+                    .last_event_sequence
+                    .unwrap_or(persisted_sequence)
+                    .max(persisted_sequence),
+            );
+        }
+        let serialized_conversation_data = serde_json::to_string(&conversation_data_param)?;
         // Upsert the conversation level metadata
         let new_conversation = NewAgentConversation {
             conversation_id: conversation_id_param.to_owned(),
@@ -103,7 +119,7 @@ pub(super) fn upsert_agent_conversation<'a>(
                 .execute(conn)
             {
                 log::warn!("Failed to upsert task {e:?}");
-                return Err(e);
+                return Err(e.into());
             }
         }
 
@@ -139,6 +155,34 @@ pub(super) fn upsert_agent_conversation<'a>(
     })?;
 
     Ok(())
+}
+
+pub(super) fn update_agent_conversation_event_sequence(
+    conn: &mut SqliteConnection,
+    conversation_id_param: &str,
+    sequence: i64,
+) -> Result<(), UpsertConversationError> {
+    use schema::agent_conversations::dsl::*;
+
+    conn.transaction::<_, UpsertConversationError, _>(|conn| {
+        let persisted_conversation_data = agent_conversations
+            .filter(conversation_id.eq(conversation_id_param))
+            .select(conversation_data)
+            .first::<String>(conn)
+            .optional()?;
+
+        let Some(data) = persisted_conversation_data else {
+            return Ok(());
+        };
+        let mut data = serde_json::from_str::<AgentConversationData>(&data)?;
+        data.last_event_sequence = Some(data.last_event_sequence.unwrap_or(sequence).max(sequence));
+        let serialized_conversation_data = serde_json::to_string(&data)?;
+        diesel::update(agent_conversations.filter(conversation_id.eq(conversation_id_param)))
+            .set(conversation_data.eq(serialized_conversation_data))
+            .execute(conn)?;
+
+        Ok(())
+    })
 }
 
 /// Evicts whole orchestration trees so the remaining set fits within `limit`.
