@@ -112,6 +112,27 @@ fn test_cache_key_includes_fixed_width_tab_size() {
 }
 
 #[test]
+fn test_line_has_missing_glyphs() {
+    let mut line = Line::mock(vec![]);
+    assert!(!line.has_missing_glyphs());
+
+    line.chars_with_missing_glyphs = vec!['a'];
+    assert!(line.has_missing_glyphs());
+}
+
+#[test]
+fn test_text_frame_has_missing_glyphs() {
+    let clean_line = Line::mock(vec![]);
+    let frame = TextFrame::new(vec1![clean_line.clone()], 10.0, TextAlignment::Left);
+    assert!(!frame.has_missing_glyphs());
+
+    let mut missing_glyph_line = clean_line;
+    missing_glyph_line.chars_with_missing_glyphs = vec!['\u{2603}'];
+    let frame_with_missing = TextFrame::new(vec1![missing_glyph_line], 10.0, TextAlignment::Left);
+    assert!(frame_with_missing.has_missing_glyphs());
+}
+
+#[test]
 fn test_calculate_line_baseline_position() {
     let baseline_position = default_compute_baseline_position(
         16.,  /* font_size */

@@ -9893,6 +9893,186 @@ fn test_invalidate_content() {
     });
 }
 
+#[test]
+fn test_invalidate_layout_for_range_scopes_to_containing_block() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "one\n\ntwo\n\nthree\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+        buffer.update(&mut app, |buffer, _ctx| {
+            let full_delta = buffer.invalidate_layout();
+            // A plain-text buffer yields one styled block per *line* ("one\n", "\n", "two\n",
+            // "\n", "three"); `invalidate_layout_for_range` scopes to the containing line here,
+            // since `block_or_line_start`/`_end` snap to the line for `BufferBlockStyle::PlainText`.
+            assert_eq!(
+                full_delta.new_lines.len(),
+                5,
+                "expected one styled block per line"
+            );
+
+            // Compute the exact buffer range of the "two\n" line from the full rebuild.
+            let preceding_len =
+                full_delta.new_lines[0].content_length() + full_delta.new_lines[1].content_length();
+            let line_start = CharOffset::from(1) + preceding_len;
+            let line_end = line_start + full_delta.new_lines[2].content_length();
+
+            // A range that falls entirely inside the "two\n" line should snap outward to the
+            // whole line, without touching its neighbors.
+            let inner_range = (line_start + CharOffset::from(1))..(line_end - CharOffset::from(1));
+            let scoped_delta = buffer.invalidate_layout_for_range(inner_range);
+
+            assert_eq!(scoped_delta.old_offset, line_start..line_end);
+            assert_eq!(
+                scoped_delta.new_lines,
+                vec![full_delta.new_lines[2].clone()]
+            );
+
+            // The scoped rebuild must be strictly smaller than a full rebuild for a
+            // multi-line document -- that's the entire point of the optimization.
+            assert!(scoped_delta.old_offset.start > CharOffset::from(1));
+            assert!(scoped_delta.old_offset.end < buffer.max_charoffset());
+        });
+    });
+}
+
+#[test]
+fn test_invalidate_layout_for_range_scopes_to_whole_non_plain_text_block() {
+    App::test((), |mut app| async move {
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            "before\n\n```\nfirst\nsecond\n```\n\nafter\n",
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+        buffer.update(&mut app, |buffer, _ctx| {
+            let full_delta = buffer.invalidate_layout();
+            let code_block_index = full_delta
+                .new_lines
+                .iter()
+                .position(|block| {
+                    matches!(
+                        block,
+                        StyledBufferBlock::Text(StyledTextBlock {
+                            style: BufferBlockStyle::CodeBlock { .. },
+                            ..
+                        })
+                    )
+                })
+                .expect("Expected a code block");
+            let code_block_start = CharOffset::from(1)
+                + full_delta.new_lines[..code_block_index]
+                    .iter()
+                    .fold(CharOffset::zero(), |sum, block| {
+                        sum + block.content_length()
+                    });
+            let code_block_end =
+                code_block_start + full_delta.new_lines[code_block_index].content_length();
+
+            // A range inside just the first line of the (multi-line) code block should still
+            // snap outward to the entire block, unlike the plain-text, line-scoped case above.
+            let inner_range =
+                (code_block_start + CharOffset::from(1))..(code_block_start + CharOffset::from(2));
+            let scoped_delta = buffer.invalidate_layout_for_range(inner_range);
+
+            assert_eq!(scoped_delta.old_offset, code_block_start..code_block_end);
+            assert_eq!(
+                scoped_delta.new_lines,
+                vec![full_delta.new_lines[code_block_index].clone()]
+            );
+            assert!(scoped_delta.old_offset.start > CharOffset::from(1));
+            assert!(scoped_delta.old_offset.end < buffer.max_charoffset());
+        });
+    });
+}
+
+/// Asserts that scoping `invalidate_layout_for_range` to the mermaid code block in `markdown`
+/// produces exactly the same styled block a full rebuild would, without touching any
+/// neighboring content.
+fn assert_mermaid_block_rebuild_matches_full(markdown: &'static str) {
+    App::test((), |mut app| async move {
+        let _flag = warp_core::features::FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let (buffer, _selection) = Buffer::mock_from_markdown(
+            markdown,
+            None,
+            Box::new(|_, _| IndentBehavior::Ignore),
+            &mut app,
+        );
+        buffer.update(&mut app, |buffer, _ctx| {
+            let full_delta = buffer.invalidate_layout();
+            let mermaid_index = full_delta
+                .new_lines
+                .iter()
+                .position(|block| {
+                    matches!(
+                        block,
+                        StyledBufferBlock::Text(StyledTextBlock {
+                            style: BufferBlockStyle::CodeBlock {
+                                code_block_type: CodeBlockType::Mermaid
+                            },
+                            ..
+                        })
+                    )
+                })
+                .unwrap_or_else(|| panic!("Expected a mermaid block in {markdown:?}"));
+
+            let mermaid_start = CharOffset::from(1)
+                + full_delta.new_lines[..mermaid_index]
+                    .iter()
+                    .fold(CharOffset::zero(), |sum, block| {
+                        sum + block.content_length()
+                    });
+            let mermaid_end = mermaid_start + full_delta.new_lines[mermaid_index].content_length();
+            assert!(
+                mermaid_end - mermaid_start > CharOffset::from(2),
+                "test fixture should have a multi-character mermaid block in {markdown:?}"
+            );
+
+            // Probe from a point strictly inside the block (not touching either boundary) --
+            // `invalidate_layout_for_range` should still snap outward to the exact block.
+            let inner_range =
+                (mermaid_start + CharOffset::from(1))..(mermaid_end - CharOffset::from(1));
+            let scoped_delta = buffer.invalidate_layout_for_range(inner_range);
+
+            assert_eq!(
+                scoped_delta.old_offset,
+                mermaid_start..mermaid_end,
+                "scoped rebuild should not expand past the mermaid block in {markdown:?}"
+            );
+            assert_eq!(
+                scoped_delta.new_lines,
+                vec![full_delta.new_lines[mermaid_index].clone()],
+                "scoped rebuild should match the full rebuild's block in {markdown:?}"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_invalidate_layout_for_range_scopes_to_mermaid_block_at_document_start() {
+    assert_mermaid_block_rebuild_matches_full("```mermaid\ngraph TD\nA-->B\n```\n\nafter\n");
+}
+
+#[test]
+fn test_invalidate_layout_for_range_scopes_to_mermaid_block_at_document_middle() {
+    assert_mermaid_block_rebuild_matches_full(
+        "before\n\n```mermaid\ngraph TD\nA-->B\n```\n\nafter\n",
+    );
+}
+
+#[test]
+fn test_invalidate_layout_for_range_scopes_to_mermaid_block_at_document_end() {
+    // The mermaid block is the last content in the buffer -- nothing trails it.
+    assert_mermaid_block_rebuild_matches_full("before\n\n```mermaid\ngraph TD\nA-->B\n```\n");
+}
+
+#[test]
+fn test_invalidate_layout_for_range_scopes_to_mermaid_block_filling_entire_buffer() {
+    assert_mermaid_block_rebuild_matches_full("```mermaid\ngraph TD\nA-->B\n```\n");
+}
+
 // Regression test for CLD-782.
 #[test]
 fn test_export_markdown_multiple_indentation_level() {
