@@ -162,22 +162,10 @@ fn new_command_executor_for_local_tty_session(
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
 
-    // When the remote server feature flag is enabled and the session is an
-    // SSH wrapper session, use the remote server executor *if* the manager
-    // already has a live `Connected` client for this session.
-    //
-    // By construction this branch is only reached after
-    // `ModelEventDispatcher::complete_bootstrapped_session` has gated on
-    // both `Bootstrapped` and the remote-server setup result
-    // (`RemoteServerReady` / `RemoteServerFailed` / skipped). So
-    // `client_for_session` returning `Some` corresponds to a successful
-    // setup and `None` corresponds to the skip / failure paths, where we
-    // fall through to the existing ControlMaster-based
-    // `RemoteCommandExecutor` below. This preserves the fallback behavior
-    // described in specs/APP-3797.
-    if FeatureFlag::SshRemoteServer.is_enabled()
-        && let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session
-    {
+    // When the session origin has a remote-server backend, use the remote
+    // server executor if the manager already has a live `Connected` client.
+    // SSH still falls through to ControlMaster when no client is present.
+    if super::session_origin_uses_remote_server(session_info) {
         let session_id = session_info.session_id;
         let maybe_client = RemoteServerManager::handle(ctx)
             .read(ctx, |mgr, _| mgr.client_for_session(session_id).cloned());
@@ -186,8 +174,8 @@ fn new_command_executor_for_local_tty_session(
             return Arc::new(RemoteServerCommandExecutor::new(session_id, client));
         }
         log::info!(
-            "SshRemoteServer flag on but no connected client for session {session_id:?}; \
-                 falling back to ControlMaster executor"
+            "Remote server backend enabled but no connected client for session {session_id:?}; \
+                 falling back"
         );
     }
 

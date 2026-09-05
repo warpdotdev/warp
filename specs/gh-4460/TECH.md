@@ -29,7 +29,8 @@ transport-neutral `RemoteTransport` contract
   owning, `kill_on_drop` child in `Connection`.
 - Reuse the remote-server install scripts and client tarball cache. Try the in-container download
   first. If the container has no usable downloader or network path, download on the client, copy
-  the archive with `docker cp`, and run the same installer in the container. Install in the
+  the archive with `docker cp`, and run the same installer in the container. Pass mkdir, cleanup,
+  and the installer archive path as docker-exec argv (not interpolated into `sh -c`). Install in the
   container user's channel-specific Warp directory, remove copied temporary files, and require a
   version-valid initialize handshake. Extract transport-neutral install/cache helpers from the SSH
   implementation instead of duplicating them.
@@ -111,8 +112,10 @@ retain owner-only daemon directories.
 
 Supported-platform/install failures block attach. The client-copy fallback covers containers
 without download tools or outbound access, not unsupported architectures or missing Docker
-permissions. Container disconnects disable remote operations without exposing host data. Hostname
-collisions never affect identity.
+permissions. The published Linux CLI tarball is a static ELF (no dynamic interpreter), so musl
+hosts such as Alpine are treated as supported by the preinstall check; Android bionic and uClibc
+still fail closed. Container disconnects disable remote operations without exposing host data.
+Hostname collisions never affect identity.
 
 ## Non-goals
 
