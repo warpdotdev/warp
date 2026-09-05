@@ -1182,6 +1182,8 @@ pub enum InputAction {
     CtrlR,
     CtrlD,
     Up,
+    /// Same work as [`Self::Up`], queued until the current view checkout ends.
+    ApplyEditorUp,
     PageUp,
     PageDown,
     ClearScreen,
@@ -16597,7 +16599,8 @@ impl TypedActionView for Input {
     fn handle_action(&mut self, action: &InputAction, ctx: &mut ViewContext<Self>) {
         match action {
             InputAction::FocusInputBox => self.focus_input_box(ctx),
-            InputAction::Up => self.editor_up(ctx),
+            InputAction::Up => ctx.dispatch_typed_action_deferred(InputAction::ApplyEditorUp),
+            InputAction::ApplyEditorUp => self.editor_up(ctx),
             InputAction::PageUp => self.editor_page_up(ctx),
             InputAction::PageDown => self.editor_page_down(ctx),
             InputAction::CtrlD => self.ctrl_d(ctx),
