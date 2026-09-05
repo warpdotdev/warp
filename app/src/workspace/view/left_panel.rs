@@ -53,9 +53,7 @@ use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::file::external_editor::EditorSettings;
 use crate::util::openable_file_type::FileTarget;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{
-    EditorLayout, is_markdown_file, resolve_file_target_with_editor_choice,
-};
+use crate::util::openable_file_type::{EditorLayout, resolve_file_target_with_editor_choice};
 use crate::workspace::WorkspaceAction;
 use crate::workspace::view::conversation_list::view::{
     ConversationListView, Event as ConversationListViewEvent,
@@ -903,25 +901,33 @@ impl LeftPanelView {
 
                 let settings = EditorSettings::as_ref(ctx);
                 let target = match location {
-                    LocalOrRemotePath::Local(path) => resolve_file_target_with_editor_choice(
-                        path,
-                        *settings.open_code_panels_file_editor,
-                        *settings.prefer_markdown_viewer,
-                        *settings.open_file_layout,
-                        None,
-                    ),
-                    // Local-fs-based target resolution can't inspect remote
-                    // files; mirror the file tree's remote handling (code
-                    // editor, or markdown viewer by extension + preference).
-                    LocalOrRemotePath::Remote(remote) => {
-                        let is_markdown =
-                            is_markdown_file(std::path::Path::new(remote.path.as_str()));
-                        if is_markdown && *settings.prefer_markdown_viewer {
-                            FileTarget::MarkdownViewer(EditorLayout::SplitPane)
+                    LocalOrRemotePath::Local(path) => {
+                        let resolved = resolve_file_target_with_editor_choice(
+                            path,
+                            *settings.open_code_panels_file_editor,
+                            *settings.prefer_markdown_viewer,
+                            *settings.open_file_layout,
+                            None,
+                        );
+                        // The Markdown Viewer doesn't support jumping to a specific line, so a
+                        // match would silently open at the top of the file. Force the raw code
+                        // editor for matches so the requested line is always honored, regardless
+                        // of the user's Markdown Viewer preference.
+                        if let FileTarget::MarkdownViewer(layout) = resolved {
+                            FileTarget::CodeEditor(layout)
                         } else {
-                            FileTarget::CodeEditor(EditorLayout::SplitPane)
+                            resolved
                         }
                     }
+                    // Local-fs-based target resolution can't inspect remote files, so the
+                    // target is chosen directly here rather than via
+                    // `resolve_file_target_with_editor_choice`.
+                    //
+                    // Search matches always carry a specific line and the Markdown Viewer
+                    // can't jump to one, so this deliberately always opens the code editor
+                    // and ignores `prefer_markdown_viewer` -- unlike the file tree, which
+                    // has no line to honor and so may open the Markdown Viewer.
+                    LocalOrRemotePath::Remote(_) => FileTarget::CodeEditor(EditorLayout::SplitPane),
                 };
 
                 send_telemetry_from_ctx!(
