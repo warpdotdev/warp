@@ -4198,6 +4198,7 @@ impl AppContext {
         self.flush_effects();
     }
 
+    #[track_caller]
     pub(super) fn spawn_local<F>(&mut self, future: F) -> usize
     where
         F: 'static + Future,
@@ -4223,6 +4224,7 @@ impl AppContext {
         task_id
     }
 
+    #[track_caller]
     pub(super) fn spawn_stream_local<F>(
         &mut self,
         stream: F,
