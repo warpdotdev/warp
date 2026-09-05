@@ -668,6 +668,7 @@ impl BlocklistAIController {
         server_conversation_token: Option<ServerConversationToken>,
         attachments: Vec<AgentAttachment>,
         participant_id: ParticipantId,
+        attribution_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         // Map server token to sharer's local conversation ID
@@ -730,6 +731,7 @@ impl BlocklistAIController {
                 conversation_id,
                 participant_id,
                 HashMap::new(),
+                attribution_token,
                 ctx,
             );
             return;
@@ -745,6 +747,7 @@ impl BlocklistAIController {
                 conversation_id,
                 participant_id,
                 HashMap::new(),
+                attribution_token,
                 ctx,
             );
             return;
@@ -756,6 +759,7 @@ impl BlocklistAIController {
                 conversation_id,
                 participant_id,
                 HashMap::new(),
+                attribution_token,
                 ctx,
             );
             return;
@@ -828,6 +832,7 @@ impl BlocklistAIController {
                     conversation_id,
                     participant_id,
                     file_attachments,
+                    attribution_token,
                     ctx,
                 );
             },
@@ -873,6 +878,7 @@ impl BlocklistAIController {
         conversation_id: Option<AIConversationId>,
         participant_id: ParticipantId,
         file_attachments: HashMap<String, AIAgentAttachment>,
+        attribution_token: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
         if let Some(conversation_id) = conversation_id {
@@ -892,6 +898,7 @@ impl BlocklistAIController {
                 conversation_id,
                 Some(participant_id),
                 file_attachments,
+                attribution_token,
                 ctx,
             );
         } else {
@@ -938,11 +945,15 @@ impl BlocklistAIController {
                     conversation_id,
                     Some(participant_id),
                     file_attachments,
+                    attribution_token,
                     ctx,
                 );
                 return;
             }
 
+            // Legacy non-AgentView path: the new-conversation entry point has no attachment or
+            // attribution_token plumbing, so the token is dropped here. Cloud-run hosts, the
+            // only senders of injected follow-ups, always have AgentView enabled.
             self.send_user_query_in_new_conversation(
                 prompt,
                 None,

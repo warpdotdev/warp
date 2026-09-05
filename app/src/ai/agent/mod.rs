@@ -2887,6 +2887,10 @@ pub enum AIAgentInput {
         user_query_mode: UserQueryMode,
         running_command: Option<RunningCommand>,
         intended_agent: Option<AgentType>,
+        /// Opaque, server-issued attribution token for follow-ups injected into a shared
+        /// session. The client never parses it; it is echoed verbatim on the request's
+        /// `UserQuery.attribution_token`. `None` for queries the user typed locally.
+        attribution_token: Option<String>,
     },
 
     AutoCodeDiffQuery {

@@ -14,6 +14,7 @@ fn user_query_input(query: &str, mode: UserQueryMode) -> AIAgentInput {
         user_query_mode: mode,
         running_command: None,
         intended_agent: None,
+        attribution_token: None,
     }
 }
 
