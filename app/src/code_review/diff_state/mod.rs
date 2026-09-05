@@ -378,13 +378,30 @@ impl DiffStats {
     }
 }
 
+/// Self-describing result of a diff (re)load, carried by
+/// [`DiffStateModelEvent::NewDiffsComputed`]. Coupling the state with the
+/// payload makes contradictory combinations (e.g. "loaded but no diffs")
+/// unrepresentable: an empty working tree is `Loaded` with an empty
+/// `GitDiffWithBaseContent`, never absent.
+#[derive(Clone, Debug)]
+pub enum DiffSnapshot {
+    /// Diffs were computed successfully. Empty `files` means no changes.
+    Loaded(Arc<GitDiffWithBaseContent>),
+    /// The path is not inside a git repository.
+    NotInRepository,
+    /// Computing the diff failed; carries the error message.
+    Error(String),
+    /// A (re)load is in progress; no diffs are available yet.
+    Loading,
+}
+
 #[derive(Debug)]
 pub enum DiffStateModelEvent {
     /// Event dispatched when the current branch changes.
     CurrentBranchChanged,
     /// Event dispatched when new diffs are computed (full reload).
     NewDiffsComputed {
-        diffs: Option<Arc<GitDiffWithBaseContent>>,
+        snapshot: DiffSnapshot,
         load_duration: Option<Duration>,
     },
     /// Event dispatched when a single file's diff is updated incrementally.
@@ -485,11 +502,11 @@ impl DiffStateModel {
                 ctx.emit(DiffStateModelEvent::CurrentBranchChanged);
             }
             DiffStateModelEvent::NewDiffsComputed {
-                diffs,
+                snapshot,
                 load_duration,
             } => {
                 ctx.emit(DiffStateModelEvent::NewDiffsComputed {
-                    diffs: diffs.clone(),
+                    snapshot: snapshot.clone(),
                     load_duration: *load_duration,
                 });
             }
@@ -869,12 +886,19 @@ impl DiffStateModel {
 #[cfg(test)]
 impl DiffStateModel {
     /// Test-only constructor that creates a local-backend model without a
-    /// repository. All existing tests exercise local behavior; add a
-    /// `new_for_test_remote` variant when remote-backend tests are needed.
-    pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
+    /// repository. Most tests exercise local behavior; use
+    /// [`Self::new_for_remote_test`] for remote-backend coverage.
+    pub fn new_for_local_test(ctx: &mut ModelContext<Self>) -> Self {
         let local = ctx.add_model(LocalDiffStateModel::new_for_test);
         ctx.subscribe_to_model(&local, |me, _, event, ctx| me.forward_event(event, ctx));
         Self::Local(local)
+    }
+
+    /// Test-only constructor wrapping a remote backend.
+    pub fn new_for_remote_test(ctx: &mut ModelContext<Self>) -> Self {
+        let remote = ctx.add_model(|_| RemoteDiffStateModel::new_disconnected_for_test());
+        ctx.subscribe_to_model(&remote, Self::forward_event);
+        Self::Remote(remote)
     }
 }
 

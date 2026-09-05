@@ -96,8 +96,8 @@ use crate::code_review::context::{
 };
 use crate::code_review::diff_selector::{DiffSelector, DiffSelectorEvent, DiffTarget};
 use crate::code_review::diff_state::{
-    DiffHunk, DiffLineType, DiffMode, DiffState, DiffStateModel, DiffStateModelEvent, DiffStats,
-    FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
+    DiffHunk, DiffLineType, DiffMode, DiffSnapshot, DiffState, DiffStateModel, DiffStateModelEvent,
+    DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
@@ -1370,7 +1370,7 @@ impl CodeReviewView {
             // Tracked diff loading starts in `on_open`, after this view is
             // subscribed to `diff_state_model`, so the completion event can
             // be observed and logged.
-            view.invalidate_all(None, None, ctx);
+            view.sync_transient_state(ctx);
         }
 
         view
@@ -1596,7 +1596,7 @@ impl CodeReviewView {
             model.set_diff_mode(mode, false, true, preferred_session, ctx);
         });
         self.update_diff_selector_selection(ctx);
-        self.invalidate_all(None, None, ctx);
+        self.sync_transient_state(ctx);
     }
 
     fn handle_find_event(
@@ -2313,10 +2313,10 @@ impl CodeReviewView {
                 self.update_diff_selector_selection(ctx);
             }
             DiffStateModelEvent::NewDiffsComputed {
-                diffs,
+                snapshot,
                 load_duration,
             } => {
-                self.invalidate_all(diffs.as_ref().map(|d| d.as_ref()), *load_duration, ctx);
+                self.apply_diff_snapshot(snapshot, *load_duration, ctx);
                 if FeatureFlag::GitOperationsInCodeReview.is_enabled() {
                     self.update_git_operations_ui(ctx);
                 }
@@ -2463,68 +2463,81 @@ impl CodeReviewView {
         ctx.notify();
     }
 
-    /// Updates state for the view when new git diffs come in.
-    fn invalidate_all(
+    /// Applies an authoritative diff snapshot delivered by a `NewDiffsComputed`
+    /// event. The snapshot is self-describing, so the view acts on it directly
+    /// instead of re-reading the model's (possibly newer, possibly shared)
+    /// live state. A `Loaded` snapshot with no files clears the panel — this is
+    /// what lets a freshly emptied diff (e.g. after the changes are committed
+    /// or pushed) replace a previously rendered diff instead of leaving it
+    /// stale.
+    fn apply_diff_snapshot(
         &mut self,
-        diff_data: Option<&GitDiffWithBaseContent>,
+        snapshot: &DiffSnapshot,
         load_duration: Option<Duration>,
         ctx: &mut ViewContext<Self>,
     ) {
         if self.active_repo.is_none() {
             return;
-        };
+        }
 
-        match self.diff_state(ctx) {
-            DiffState::Loading => {
-                if let Some(repo) = self.active_repo.as_mut() {
-                    log::info!(
-                        "Code Review Panel: Setting state to loading after receiving 'loading' message."
-                    );
-                    repo.state = CodeReviewViewState::None;
-                }
-                ctx.notify();
-                return;
+        // `ConnectionLost` owns the disconnected view and intentionally keeps
+        // the last diff frozen. Events drain off a deferred queue, so a
+        // `NewDiffsComputed` emitted just before the disconnect can arrive after
+        // the model has gone `Disconnected`; applying it here would clobber the
+        // frozen diff with a stale error / no-repo / loading panel. Ignore it —
+        // reconnect re-fetches a fresh snapshot that rebuilds the view.
+        if matches!(self.diff_state(ctx), DiffState::Disconnected) {
+            return;
+        }
+
+        match snapshot {
+            DiffSnapshot::Loaded(diffs) => {
+                self.rebuild_loaded_state(diffs, load_duration, ctx);
             }
-            DiffState::NotInRepository => {
+            DiffSnapshot::NotInRepository => {
                 // `NotInRepository` is a terminal state from the diff model —
                 // the path has been checked and is definitively not inside a
-                // git repository. Show the "no repo found" UI instead of
-                // the loading spinner.
+                // git repository. Show the "no repo found" UI instead of the
+                // loading spinner.
                 if let Some(repo) = self.active_repo.as_mut() {
                     log::info!(
-                        "Code Review Panel: Setting state to no repo found after receiving 'not in repository' message."
+                        "Code Review Panel: Setting state to no repo found after receiving 'not in repository' snapshot."
                     );
                     repo.state = CodeReviewViewState::NoRepoFound;
                 }
                 ctx.notify();
-                return;
             }
-            DiffState::Error(err) => {
+            DiffSnapshot::Error(err) => {
                 if let Some(repo) = self.active_repo.as_mut() {
-                    repo.state = CodeReviewViewState::Error(err);
+                    repo.state = CodeReviewViewState::Error(err.clone());
                 }
                 ctx.notify();
-                return;
             }
-            DiffState::Disconnected => {
-                // Disconnected state is handled via the ConnectionLost event
-                // path, which preserves stale diffs. If invalidate_all is
-                // called while disconnected (e.g. from a stale push), ignore.
-                return;
+            DiffSnapshot::Loading => {
+                // No-flicker rule: a transient loading snapshot must not knock
+                // an already-loaded diff back to the spinner. Only show the
+                // spinner on the initial load, before any diff has rendered.
+                if !matches!(self.state(), CodeReviewViewState::Loaded(_)) {
+                    if let Some(repo) = self.active_repo.as_mut() {
+                        log::info!(
+                            "Code Review Panel: Setting state to loading after receiving 'loading' snapshot."
+                        );
+                        repo.state = CodeReviewViewState::None;
+                    }
+                    ctx.notify();
+                }
             }
-            DiffState::Loaded => (),
-        };
+        }
+    }
 
-        let Some(diff_data) = diff_data else {
-            // Stale event: the model advanced to Loaded via a later snapshot
-            // before this earlier NewDiffsComputed(None) was processed.
-            // Preserve the existing view state rather than clobbering it.
-            log::info!(
-                "Code Review Panel: Ignoring NewDiffsComputed(None) for already-loaded model"
-            );
-            return;
-        };
-
+    /// Rebuilds the view's file list from a freshly loaded diff. An empty
+    /// `diff_data` produces an empty list, clearing any previously shown diff.
+    fn rebuild_loaded_state(
+        &mut self,
+        diff_data: &GitDiffWithBaseContent,
+        load_duration: Option<Duration>,
+        ctx: &mut ViewContext<Self>,
+    ) {
         // Deallocate global buffers that are going to be invalidated.
         if let Some(repo) = self.active_repo.as_mut() {
             repo.state = CodeReviewViewState::None;
@@ -2577,6 +2590,49 @@ impl CodeReviewView {
         }
 
         ctx.notify();
+    }
+
+    /// Reflects the model's current transitional state in the view without
+    /// rebuilding diff content. Called right after kicking off a load (initial
+    /// construction, diff-mode change, base change) so the panel shows the
+    /// loading / no-repo / error state while the new diff loads; the diff
+    /// content itself is rebuilt later from the `NewDiffsComputed` snapshot. A
+    /// `Loaded` or `Disconnected` live state is left untouched so existing
+    /// content is preserved.
+    fn sync_transient_state(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.active_repo.is_none() {
+            return;
+        }
+
+        match self.diff_state(ctx) {
+            DiffState::Loading => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    log::info!(
+                        "Code Review Panel: Setting state to loading after receiving 'loading' message."
+                    );
+                    repo.state = CodeReviewViewState::None;
+                }
+                ctx.notify();
+            }
+            DiffState::NotInRepository => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    log::info!(
+                        "Code Review Panel: Setting state to no repo found after receiving 'not in repository' message."
+                    );
+                    repo.state = CodeReviewViewState::NoRepoFound;
+                }
+                ctx.notify();
+            }
+            DiffState::Error(err) => {
+                if let Some(repo) = self.active_repo.as_mut() {
+                    repo.state = CodeReviewViewState::Error(err);
+                }
+                ctx.notify();
+            }
+            // Preserve existing content: the load that was just kicked off will
+            // emit a `NewDiffsComputed` snapshot that rebuilds it.
+            DiffState::Loaded | DiffState::Disconnected => {}
+        }
     }
 
     /// Builds view state for the given file diffs, returning the list of newly created file states.
@@ -6017,7 +6073,7 @@ impl CodeReviewView {
             diff_state_model.set_diff_mode_and_fetch_base(diff_mode, preferred_session, ctx);
         });
         self.update_diff_selector_selection(ctx);
-        self.invalidate_all(None, None, ctx);
+        self.sync_transient_state(ctx);
     }
 
     /// Insert diff hunk as an inline attachment in the terminal input
