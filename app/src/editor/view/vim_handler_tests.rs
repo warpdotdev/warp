@@ -4021,7 +4021,7 @@ fn test_vim_line_navigation() {
         let editor_view = add_editor_vim_normal_mode("   echo hello", &mut app);
 
         editor_view.update(&mut app, |editor, ctx| {
-            editor.navigate_line(1, &LineMotion::End, ctx);
+            editor.apply_navigation(&VimMotion::Line(LineMotion::End), 1, ctx);
         });
 
         editor_view.read(&app, |editor, app| {
@@ -4032,7 +4032,7 @@ fn test_vim_line_navigation() {
         });
 
         editor_view.update(&mut app, |editor, ctx| {
-            editor.navigate_line(1, &LineMotion::FirstNonWhitespace, ctx);
+            editor.apply_navigation(&VimMotion::Line(LineMotion::FirstNonWhitespace), 1, ctx);
         });
 
         editor_view.read(&app, |editor, app| {
@@ -4043,13 +4043,103 @@ fn test_vim_line_navigation() {
         });
 
         editor_view.update(&mut app, |editor, ctx| {
-            editor.navigate_line(1, &LineMotion::Start, ctx);
+            editor.apply_navigation(&VimMotion::Line(LineMotion::Start), 1, ctx);
         });
 
         editor_view.read(&app, |editor, app| {
             assert_eq!(
                 editor.selected_ranges(app),
                 [DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0)]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_vim_first_nonwhitespace_on_whitespace_only_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let editor = add_editor_vim_normal_mode("", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.set_buffer_text("   \n  hello\n    ", ctx);
+            view.move_to_buffer_start(ctx);
+            view.vim_user_insert("^", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_ranges(ctx),
+                vec![DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0)]
+            );
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("$", ctx);
+            view.vim_user_insert("_", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_ranges(ctx),
+                vec![DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0)]
+            );
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("+", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_ranges(ctx),
+                vec![DisplayPoint::new(1, 2)..DisplayPoint::new(1, 2)]
+            );
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            view.vim_user_insert("-", ctx);
+        });
+        editor.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_ranges(ctx),
+                vec![DisplayPoint::new(0, 0)..DisplayPoint::new(0, 0)]
+            );
+        });
+    });
+}
+
+#[test]
+fn test_vim_navigation_from_reversed_selection_uses_head() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let editor = add_editor_vim_normal_mode("abcdef", &mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            view.change_selections(ctx, |editor_model, ctx| {
+                let buffer = editor_model.buffer(ctx);
+                let start = buffer.anchor_before(Point::new(0, 1)).unwrap();
+                let end = buffer.anchor_before(Point::new(0, 5)).unwrap();
+                editor_model.change_selections(
+                    vec1![LocalSelection {
+                        selection: Selection {
+                            start,
+                            end,
+                            reversed: true,
+                        },
+                        clamp_direction: Default::default(),
+                        goal_start_column: None,
+                        goal_end_column: None,
+                    }],
+                    ctx,
+                );
+            });
+            view.vim_user_insert("l", ctx);
+        });
+
+        editor.read(&app, |view, ctx| {
+            assert_eq!(
+                view.selected_ranges(ctx),
+                vec![DisplayPoint::new(0, 2)..DisplayPoint::new(0, 2)]
             );
         });
     });

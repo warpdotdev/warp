@@ -451,6 +451,241 @@ fn test_vim_number_repeat_character_motion() {
 }
 
 #[test]
+fn test_vim_line_navigation() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("   echo hello", &mut app);
+
+        vim_user_insert(&editor, "$", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 12));
+
+        vim_user_insert(&editor, "^", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 3));
+
+        vim_user_insert(&editor, "0", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+    });
+}
+
+#[test]
+fn test_vim_first_nonwhitespace_on_whitespace_only_line() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("   \n  hello\n    "), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        layout_editor_view(&mut app, &editor).await;
+
+        vim_user_insert(&editor, "^", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+
+        vim_user_insert(&editor, "$", &mut app);
+        vim_user_insert(&editor, "_", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+
+        vim_user_insert(&editor, "+", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 2));
+
+        vim_user_insert(&editor, "-", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+    });
+}
+
+#[test]
+fn test_vim_underscore_plus_minus_motions() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor(
+            "hello, world 1
+                  hello, world 2
+              hello, world 3
+            hello, world 4
+               hello, world 5"
+                .unindent()
+                .as_str(),
+            &mut app,
+        );
+        layout_editor_view(&mut app, &editor).await;
+
+        vim_user_insert(&editor, "W_", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+
+        vim_user_insert(&editor, "j_", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 6));
+
+        vim_user_insert(&editor, "2_", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (3, 2));
+
+        vim_user_insert(&editor, "gg+", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 6));
+
+        vim_user_insert(&editor, "2+", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (4, 0));
+
+        vim_user_insert(&editor, "G-", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (4, 0));
+
+        vim_user_insert(&editor, "2-", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 6));
+    });
+}
+
+#[test]
+fn test_vim_find_char_motion() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("echo foo bar baz", &mut app);
+
+        vim_user_insert(&editor, "fb", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 9));
+
+        vim_user_insert(&editor, "tz", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 14));
+
+        vim_user_insert(&editor, "fb", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 14));
+
+        vim_user_insert(&editor, "Tf", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 6));
+
+        vim_user_insert(&editor, "Fe", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+
+        vim_user_insert(&editor, "Fk", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+    });
+}
+
+#[test]
+fn test_vim_jump_to_matching_bracket() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor(
+            "echo $(( 2 + 2 )) = 4
+            foo[1]
+            function hi() {
+                echo hello
+            }",
+            &mut app,
+        );
+
+        vim_user_insert(&editor, "%", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 16));
+
+        vim_user_insert(&editor, "%", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 6));
+
+        vim_user_insert(&editor, "l%", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 15));
+    });
+}
+
+#[test]
+fn test_vim_jump_to_unmatched_bracket() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor(
+            "function hello(name) {
+                 if (name.startsWith('a')) {
+                     console.log(name)
+                 }
+             }",
+            &mut app,
+        );
+
+        vim_user_insert(&editor, "www])", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 19));
+
+        vim_user_insert(&editor, "[(", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 14));
+    });
+}
+
+#[test]
+fn test_vim_cursor_line_cap_on_forward_motion() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("echo hello", &mut app);
+
+        vim_user_insert(&editor, "ww", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 9));
+
+        vim_user_insert(&editor, "ll", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 9));
+    });
+}
+
+#[test]
+fn test_vim_cursor_line_cap_on_up_down_motion() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor(
+            "echo hello
+            echo foo bar baz
+            echo
+            echo hello everybody",
+            &mut app,
+        );
+        layout_editor_view(&mut app, &editor).await;
+
+        vim_user_insert(&editor, "j$", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 15));
+
+        vim_user_insert(&editor, "k", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 9));
+
+        vim_user_insert(&editor, "j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 15));
+
+        vim_user_insert(&editor, "j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (3, 3));
+
+        vim_user_insert(&editor, "k", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 15));
+
+        vim_user_insert(&editor, "2j", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (4, 15));
+    });
+}
+
+#[test]
+fn test_vim_paragraph_navigation() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("p1\n\np2\n\np3", &mut app);
+
+        vim_user_insert(&editor, "}", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 0));
+
+        vim_user_insert(&editor, "}", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (4, 0));
+
+        vim_user_insert(&editor, "{", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (2, 0));
+    });
+}
+
+#[test]
 fn test_vim_number_repeat_op_word_motion() {
     let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
 
@@ -2347,5 +2582,68 @@ fn test_clicking_find_input_after_vim_search_word_restores_editing() {
 
         assert!(is_find_input_editable(&find_bar, &app));
         assert!(is_find_input_focused(&find_editor, &app));
+    });
+}
+
+#[test]
+fn test_vim_h_at_buffer_start_does_not_cross_sentinel() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("abc", &mut app);
+
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+        vim_user_insert(&editor, "hhhh", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+        assert_eq!(buffer_text(&editor, &app), "abc");
+    });
+}
+
+#[test]
+fn test_vim_word_back_at_buffer_start_stays_on_first_char() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("echo hello", &mut app);
+
+        vim_user_insert(&editor, "bbb", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+    });
+}
+
+#[test]
+fn test_vim_multibyte_char_motions() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("a你b", &mut app);
+
+        vim_user_insert(&editor, "l", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 1));
+        vim_user_insert(&editor, "l", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 2));
+        vim_user_insert(&editor, "h", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 1));
+        vim_user_insert(&editor, "0", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+        vim_user_insert(&editor, "$", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 2));
+    });
+}
+
+#[test]
+fn test_vim_empty_buffer_motions_do_not_panic() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("", &mut app);
+
+        vim_user_insert(&editor, "hjlwggG0^$", &mut app);
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+        assert_eq!(buffer_text(&editor, &app), "");
     });
 }
