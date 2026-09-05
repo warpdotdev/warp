@@ -58,7 +58,9 @@ impl BaseClient {
         } else {
             self.observe_iap_challenge(&response);
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            // Cap error-body reads to 64 KiB — the body is used only for diagnostics
+            // and we must not buffer unbounded CDN HTML error pages into memory.
+            let body = response.text_capped(64 * 1024).await.unwrap_or_default();
             let status_error = HttpStatusError {
                 status: status.as_u16(),
                 body: body.clone(),
