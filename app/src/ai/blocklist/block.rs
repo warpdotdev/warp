@@ -1227,7 +1227,8 @@ impl AIBlock {
                 }
                 AISettingsChangedEvent::ThinkingDisplayMode { .. }
                 | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. }
-                | AISettingsChangedEvent::UsageDisplayUnit { .. } => {
+                | AISettingsChangedEvent::UsageDisplayUnit { .. }
+                | AISettingsChangedEvent::ShowResponseFooter { .. } => {
                     ctx.notify();
                 }
                 _ => {}

@@ -2098,6 +2098,17 @@ define_settings_group!(AISettings, settings: [
         description: "Whether conversation history appears in the tools panel.",
     }
 
+    show_response_footer: ShowResponseFooter {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.warp_agent.other.show_response_footer",
+        description: "Whether the response footer is shown below completed Warp Agent responses.",
+    }
+
 
     // Controls whether agent notifications (mailbox button, toasts, notification items) are shown.
     show_agent_notifications: ShowAgentNotifications {

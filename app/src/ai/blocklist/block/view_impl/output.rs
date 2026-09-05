@@ -3456,7 +3456,7 @@ fn render_suggested_rules_and_prompts_footer(
 }
 
 fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
-    if props.model.status(app).is_streaming() {
+    if !*AISettings::as_ref(app).show_response_footer || props.model.status(app).is_streaming() {
         return None;
     }
 
