@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow};
 use image::codecs::gif::GifDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;
-use image::{AnimationDecoder, DynamicImage, Frame, ImageBuffer, ImageFormat};
+use image::{AnimationDecoder, DynamicImage, Frame, Frames, ImageBuffer, ImageFormat};
 use itertools::Itertools;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use pathfinder_geometry::vector::Vector2I;
@@ -22,6 +22,20 @@ use crate::util::parse_u32;
 use crate::{Entity, SingletonEntity};
 
 const MIN_REFRESH_DELAY_MS: u32 = 50;
+
+/// Hard ceiling on how many decoded frames of an animated GIF/WebP we will retain in memory,
+/// regardless of the decoded-byte budget below. A cheap secondary guard against pathologically
+/// long animations made up of many small frames.
+const MAX_ANIMATED_IMAGE_FRAME_COUNT: usize = 512;
+
+/// Hard ceiling on the total decoded RGBA bytes retained for a single animated image, summed
+/// across all of its frames. `Frames::next()` decodes one full RGBA bitmap per frame, so without
+/// a cap a single large/long animated GIF or WebP can balloon memory by gigabytes. 256 MiB
+/// comfortably covers ordinary GIFs/WebPs pasted into chat, markdown, or notebooks (typically
+/// well under a few MB of decoded frames in total) while still bounding worst-case memory for
+/// pathological inputs. This bounds the retained set only: a single frame's own decode
+/// allocation happens before this budget is checked and is not itself governed by it.
+const MAX_ANIMATED_IMAGE_DECODED_BYTES: usize = 256 * 1024 * 1024;
 
 static SVG_FONT_DB: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     let mut fontdb = usvg::fontdb::Database::new();
@@ -270,6 +284,69 @@ impl CustomImageHeader {
     }
 }
 
+/// Decodes frames of an animated image one at a time, stopping once the retained set would
+/// exceed `MAX_ANIMATED_IMAGE_DECODED_BYTES` decoded bytes or `MAX_ANIMATED_IMAGE_FRAME_COUNT`
+/// frames, so the full animation is never retained at once.
+fn collect_bounded_animated_frames(frames: Frames<'_>) -> Result<Vec<Frame>> {
+    collect_bounded_animated_frames_with_limits(
+        frames,
+        MAX_ANIMATED_IMAGE_FRAME_COUNT,
+        MAX_ANIMATED_IMAGE_DECODED_BYTES,
+    )
+}
+
+/// Implements [`collect_bounded_animated_frames`] with the limits as parameters.
+///
+/// When a limit is hit, the frames decoded so far are kept as a (shorter) looping animation
+/// rather than failing the whole image. Always keeps at least the first successfully decoded
+/// frame, even if it alone exceeds the byte budget, so the image still has something to render.
+fn collect_bounded_animated_frames_with_limits(
+    mut frames: Frames<'_>,
+    max_frame_count: usize,
+    max_decoded_bytes: usize,
+) -> Result<Vec<Frame>> {
+    let mut collected: Vec<Frame> = Vec::new();
+    let mut total_bytes: usize = 0;
+    let mut truncated = false;
+
+    loop {
+        if collected.len() >= max_frame_count {
+            // Only report truncation if another frame genuinely exists; an animation with
+            // exactly `max_frame_count` frames should not warn about dropping anything.
+            if frames.next().is_some() {
+                truncated = true;
+            }
+            break;
+        }
+
+        let Some(frame) = frames.next() else {
+            break;
+        };
+        let frame = frame?;
+        let frame_bytes = frame.buffer().as_raw().len();
+
+        // Always keep the first frame, even if it alone exceeds the budget, so the image
+        // still has something to render.
+        if !collected.is_empty() && total_bytes.saturating_add(frame_bytes) > max_decoded_bytes {
+            truncated = true;
+            break;
+        }
+
+        total_bytes += frame_bytes;
+        collected.push(frame);
+    }
+
+    if truncated {
+        log::warn!(
+            "Truncated animated image decoding after {} frame(s) / {} decoded byte(s); keeping a shorter loop instead of the full animation",
+            collected.len(),
+            total_bytes
+        );
+    }
+
+    Ok(collected)
+}
+
 impl Asset for ImageType {
     fn try_from_bytes(data: &[u8]) -> anyhow::Result<ImageType> {
         // SVGs are not handled by the guess_format helper function, so we have to manually check
@@ -345,7 +422,7 @@ impl Asset for ImageType {
             Ok(ImageFormat::WebP) => {
                 let decoder = WebPDecoder::new(std::io::Cursor::new(data))?;
                 if decoder.has_animation() {
-                    let frames = decoder.into_frames().collect_frames()?;
+                    let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                     Ok(ImageType::AnimatedBitmap {
                         image: Arc::new(AnimatedImage::from(frames)),
                     })
@@ -358,7 +435,7 @@ impl Asset for ImageType {
             }
             Ok(ImageFormat::Gif) => {
                 let decoder = GifDecoder::new(std::io::Cursor::new(data))?;
-                let frames = decoder.into_frames().collect_frames()?;
+                let frames = collect_bounded_animated_frames(decoder.into_frames())?;
                 Ok(ImageType::AnimatedBitmap {
                     image: Arc::new(AnimatedImage::from(frames)),
                 })
