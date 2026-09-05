@@ -335,6 +335,12 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         error_message: String,
     ) -> Result<()>;
 
+    /// Record that this run is intentionally yielding rather than completing. Finalizing
+    /// the active execution afterward (e.g. because the process exits) is then treated as
+    /// a park rather than a completion, so the task stays in progress instead of being
+    /// marked succeeded, and a later inbound message from this run's family wakes it again.
+    async fn wait_for_events(&self) -> Result<()>;
+
     /// Get presigned upload targets for a workspace state snapshot.
     ///
     /// The returned list is aligned by index with `request.files`. See
@@ -575,6 +581,11 @@ impl HarnessSupportClient for ServerApi {
             &ReportShutdownRequest::abnormal(error_category, error_message),
         )
         .await
+    }
+
+    async fn wait_for_events(&self) -> Result<()> {
+        self.post_public_api_unit("harness-support/wait-for-events", &serde_json::json!({}))
+            .await
     }
 
     async fn get_snapshot_upload_targets(

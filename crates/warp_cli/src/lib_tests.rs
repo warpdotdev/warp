@@ -3037,6 +3037,30 @@ fn report_shutdown_clean_parses() {
 }
 
 #[test]
+fn wait_for_events_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "harness-support",
+        "--run-id",
+        "run-1",
+        "wait-for-events",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected harness-support command");
+    };
+    let CliCommand::HarnessSupport(hs_args) = boxed_cmd.as_ref() else {
+        panic!("Expected harness-support command");
+    };
+    assert!(matches!(
+        &hs_args.command,
+        HarnessSupportCommand::WaitForEvents
+    ));
+    assert_eq!(hs_args.run_id, "run-1");
+}
+
+#[test]
 fn secret_create_codex_api_key_parses_minimal() {
     warp_core::features::mark_initialized();
 
