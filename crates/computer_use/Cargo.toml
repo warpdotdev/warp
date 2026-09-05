@@ -36,9 +36,13 @@ libc.workspace = true
 objc2.workspace = true
 # `NSEvent`/`NSGraphicsContext`/`objc2-core-graphics` are needed to build window-targeted mouse
 # events via `NSEvent::mouseEventWithType_...` and bridge to `CGEvent` for PID-targeted posting.
+# `NSRunningApplication` (with `libc` for the pid lookup) raises a window-recording target, which
+# a cropped display capture needs foreground-visible.
 objc2-app-kit = { workspace = true, features = [
     "NSEvent",
     "NSGraphicsContext",
+    "NSRunningApplication",
+    "libc",
     "objc2-core-graphics",
 ] }
 objc2-core-foundation.workspace = true

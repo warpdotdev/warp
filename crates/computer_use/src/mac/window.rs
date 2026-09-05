@@ -134,6 +134,7 @@ pub fn frontmost_window() -> Option<(libc::pid_t, i64)> {
 }
 
 /// A description of an on-screen window, for diagnostics and enumeration.
+#[derive(Clone, Debug)]
 pub struct WindowDescription {
     pub number: i64,
     pub owner_pid: i64,
@@ -159,6 +160,38 @@ pub fn enumerate_windows() -> Vec<crate::WindowInfo> {
             layer: w.layer as i32,
         })
         .collect()
+}
+
+/// Finds the on-screen window with `window_id`, returning its owner, layer, and point-space
+/// bounds. Unlike [`window_by_id`] this carries the fields a recording needs to validate the
+/// target before capturing it.
+pub fn description_by_id(window_id: u32) -> Option<WindowDescription> {
+    list_windows()
+        .into_iter()
+        .find(|window| window.number == i64::from(window_id))
+}
+
+/// Returns whether `window_id` is the frontmost on-screen window at every one of `points`
+/// (global screen points, top-left origin).
+///
+/// Windows on every layer participate, since a menu or panel covering the target covers it in a
+/// display capture too.
+pub fn topmost_at_points(window_id: u32, points: &[(f64, f64)]) -> bool {
+    // The list is front-to-back, so the first window containing a point is the one visible there.
+    let windows = list_windows();
+    points.iter().all(|&(x, y)| {
+        windows
+            .iter()
+            .find(|window| {
+                window.width > 0.0
+                    && window.height > 0.0
+                    && x >= window.x
+                    && y >= window.y
+                    && x < window.x + window.width
+                    && y < window.y + window.height
+            })
+            .is_some_and(|window| window.number == i64::from(window_id))
+    })
 }
 
 /// Lists on-screen windows (excluding desktop elements), front-to-back, for diagnostics.

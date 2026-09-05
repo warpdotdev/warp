@@ -25,10 +25,8 @@ use x11rb::protocol::xproto::{self, ConnectionExt as _};
 use x11rb::protocol::xtest::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-use crate::{
-    Action, ActionResult, MouseButton, Options, PointerEvent, PointerEventKind, PointerSink,
-    Target, TargetedAction,
-};
+use crate::pointer_capture::{record_positioned_event, record_up};
+use crate::{Action, ActionResult, Options, PointerEventKind, Target, TargetedAction};
 
 /// How often to re-check whether a raise took effect. Raising is redirected to the window
 /// manager (when one is running), which restacks asynchronously.
@@ -467,94 +465,5 @@ impl crate::Actor for Actor {
             },
             captured_window,
         })
-    }
-}
-
-/// Resolves an action's coordinate into the recording's capture-space pixels, or
-/// `None` when the action's surface does not match the recording (so the event
-/// is omitted rather than drawn at the wrong place).
-fn resolve_capture_point(
-    recording_target: Target,
-    action_target: Target,
-    local: Vector2I,
-    root: Vector2I,
-) -> Option<Vector2I> {
-    match recording_target {
-        // Full-screen capture: everything maps to root/screen pixels.
-        Target::Screen => Some(root),
-        // Window capture: only actions on the recorded window resolve, using the
-        // window-local pixels that match the captured window's frame.
-        Target::Window {
-            window_id: recorded,
-            ..
-        } => match action_target {
-            Target::Window { window_id, .. } if window_id == recorded => Some(local),
-            _ => None,
-        },
-    }
-}
-
-/// Records a resolved coordinate-carrying pointer event (a press, move, or
-/// scroll position sample) into the pointer sink, updating the recording-
-/// scoped pointer session so a later release (which carries no coordinate) can
-/// reuse the last point — even when that release arrives in a later
-/// `UseComputer` call. An event whose surface does not match the recording
-/// clears the session so a following release is not recorded at a stale
-/// coordinate.
-fn record_positioned_event(
-    pointer_sink: Option<&PointerSink>,
-    kind: PointerEventKind,
-    button: Option<MouseButton>,
-    action_target: Target,
-    local: Vector2I,
-    root: Vector2I,
-) {
-    let Some(sink) = pointer_sink else {
-        return;
-    };
-    match resolve_capture_point(sink.recording_target, action_target, local, root) {
-        Some(point) => {
-            sink.session.record_press_or_move(kind, button, point);
-            push_pointer_event(sink, point, kind, button);
-        }
-        None => {
-            // Any unmatched coordinate-carrying event (a surface that isn't
-            // the recorded one) invalidates the active pointer state, so a
-            // following release is not recorded at a stale in-frame coordinate.
-            sink.session.clear();
-        }
-    }
-}
-
-/// Records a release at the session's last resolved point (a release carries no
-/// coordinate of its own), but only when the released button matches the active
-/// press. Omitted when there is no matching active press — for example when the
-/// press was on a non-recorded surface, in a failed/cancelled call whose session
-/// was reset, or for a button that was never pressed.
-fn record_up(pointer_sink: Option<&PointerSink>, button: MouseButton) {
-    let Some(sink) = pointer_sink else {
-        return;
-    };
-    if let Some(point) = sink.session.record_release(button) {
-        push_pointer_event(sink, point, PointerEventKind::Up, Some(button));
-    }
-}
-
-fn push_pointer_event(
-    sink: &PointerSink,
-    point: Vector2I,
-    kind: PointerEventKind,
-    button: Option<MouseButton>,
-) {
-    let offset = Instant::now()
-        .checked_duration_since(sink.started_at)
-        .unwrap_or_default();
-    if let Ok(mut events) = sink.events.lock() {
-        events.push(PointerEvent {
-            offset,
-            kind,
-            button,
-            point,
-        });
     }
 }

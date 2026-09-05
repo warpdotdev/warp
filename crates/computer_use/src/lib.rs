@@ -10,6 +10,10 @@ mod mock;
 mod noop;
 mod overlay;
 #[cfg(any(macos, linux))]
+mod pointer_capture;
+#[cfg(any(macos, linux))]
+mod recording;
+#[cfg(any(macos, linux))]
 mod recording_metadata;
 #[cfg(any(macos, linux, windows))]
 mod screenshot_utils;
@@ -286,9 +290,11 @@ pub fn create_recorder() -> Box<dyn Recorder> {
     }
 }
 
-/// Applies platform-specific post-processing and returns the path to upload.
-/// Linux trims inactive gaps and burns action overlays; other platforms return
-/// `input` unchanged.
+/// Trims inactive gaps out of a finished recording, burns the action and
+/// pointer overlays into the result, and returns the path to upload.
+///
+/// Runs wherever a real recorder exists (macOS and Linux); every other platform
+/// returns `input` unchanged.
 pub async fn post_process_recording(
     input: &Path,
     entries: &[ActionLogEntry],
@@ -296,11 +302,18 @@ pub async fn post_process_recording(
     source_duration: Duration,
     frame_rate: u32,
 ) -> Result<PathBuf, RecordingError> {
-    #[cfg(all(linux, not(noop)))]
+    #[cfg(any(macos, linux))]
     {
-        imp::post_process_recording(input, entries, dimensions, source_duration, frame_rate).await
+        recording::post_process::post_process_recording(
+            input,
+            entries,
+            dimensions,
+            source_duration,
+            frame_rate,
+        )
+        .await
     }
-    #[cfg(not(all(linux, not(noop))))]
+    #[cfg(not(any(macos, linux)))]
     {
         let _ = (entries, dimensions, source_duration, frame_rate);
         Ok(input.to_path_buf())
@@ -383,12 +396,15 @@ pub struct RecordingConfig {
     /// Maximum output size in bytes before the runtime auto-stops recording.
     pub max_size_bytes: u64,
     /// How many times faster the output video should play back relative to real
-    /// time. For example, 4.0 makes a 4-minute recording play in 1 minute. A
-    /// value of 0.0 or 1.0 means real-time (no speedup). Applied via an ffmpeg
-    /// presentation-timestamp rescale filter on the output video.
+    /// time, as requested over the wire.
+    ///
+    /// Both real recorders capture a 1x master and compact it with the post-stop
+    /// smart cut instead of speeding footage up, so this value is accepted for
+    /// wire compatibility and applied nowhere.
+    // TODO(vkodithala): remove this field from the protos, then from here.
     pub playback_speed_multiplier: f32,
-    /// The surface to capture. `Screen` records the whole X display (legacy behavior);
-    /// `Window` records the targeted window after making it foreground-visible when supported.
+    /// The surface to capture. `Screen` records the whole main display (legacy behavior);
+    /// `Window` records the targeted window after making it foreground-visible.
     pub target: Target,
 }
 
@@ -400,9 +416,6 @@ impl Default for RecordingConfig {
             // NOTE: Bounds every capture so an unattended recording can't grow without bound (~10 min / 1 GiB).
             max_duration: Duration::from_secs(10 * 60),
             max_size_bytes: 1024 * 1024 * 1024,
-            // NOTE: 4x playback speed keeps demo videos short and watchable. A 4-minute
-            // recording plays in 1 minute. The server can override via the StartRecording
-            // tool call's playback_speed_multiplier field.
             playback_speed_multiplier: 4.0,
             target: Target::Screen,
         }
@@ -680,7 +693,7 @@ pub struct Options {
 }
 
 /// Collects resolved pointer events during a recording so the finalize pass can burn in
-/// click/drag annotations. Only the Linux x11 actor populates it.
+/// click/drag annotations. Populated by the actors that support burn-in (macOS and Linux X11).
 pub struct PointerSink {
     /// Capture start instant; event offsets are measured from here.
     pub started_at: instant::Instant,
