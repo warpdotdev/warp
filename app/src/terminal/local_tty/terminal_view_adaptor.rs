@@ -1425,6 +1425,16 @@ impl TerminalManager<TerminalView> {
                 participant_id,
                 request,
             } => {
+                // Unconditional receipt log: recorded regardless of how this prompt is
+                // eventually routed or rejected below (feature-flag gate, permission checks,
+                // live PTY / PendingCliHarnessPromptQueue / Oz routing), so every received
+                // shared-session prompt is observable for diagnosing lost or misrouted prompts.
+                log::info!(
+                    "Received shared-session agent prompt request id={id:?} \
+                     participant_id={participant_id} has_server_conversation_token={}",
+                    request.server_conversation_token.is_some()
+                );
+
                 if !FeatureFlag::AgentSharedSessions.is_enabled() {
                     return;
                 }
