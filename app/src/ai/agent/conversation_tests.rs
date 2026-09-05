@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 
 use ai::api_keys::{ApiKeyManager, CustomEndpointParams, CustomEndpointSchema};
+use warp_core::command::ExitCode;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, MAX_RESTORED_COMMAND_BLOCKS, MAX_SERIALIZED_STYLIZED_OUTPUT_LINES,
-    RecordingSpanStatus, RestoreConversationError, SerializedBlockListItem,
-    artifact_from_fork_proto, footer_model_token_usage,
+    AIConversation, AIConversationAutoexecuteMode, AIConversationId, CommandBlockInfo,
+    ConversationStatus, ConversationUsageTotals, MAX_RESTORED_COMMAND_BLOCKS,
+    MAX_SERIALIZED_STYLIZED_OUTPUT_LINES, RecentCommandBlocks, RecordingSpanStatus,
+    RestoreConversationError, SerializedBlockListItem, artifact_from_fork_proto,
+    footer_model_token_usage,
 };
 use crate::ai::agent::task::helper::MessageExt;
 use crate::ai::artifacts::Artifact;
@@ -1747,4 +1749,74 @@ fn to_serialized_blocklist_items_bounds_output_resurrected_from_summarized_histo
         MAX_SERIALIZED_STYLIZED_OUTPUT_LINES
     );
     assert_eq!(old_restored_lines[0], "old-line-10");
+}
+
+fn command_block_info(command: &str) -> CommandBlockInfo {
+    CommandBlockInfo {
+        command: command.to_string(),
+        output: String::new(),
+        exit_code: ExitCode::from(0),
+        ai_metadata: None,
+        message_id: format!("{command}-message"),
+        start_ts: None,
+        completed_ts: None,
+    }
+}
+
+#[test]
+fn recent_command_blocks_evicts_oldest_and_counts_total_pushed() {
+    let total = MAX_RESTORED_COMMAND_BLOCKS + 5;
+    let mut recent = RecentCommandBlocks::new();
+    for i in 0..total {
+        recent.push(command_block_info(&format!("cmd-{i}")));
+    }
+
+    let (blocks, total_seen) = recent.into_vec_with_total_seen();
+
+    assert_eq!(total_seen, total);
+    assert_eq!(blocks.len(), MAX_RESTORED_COMMAND_BLOCKS);
+    assert_eq!(
+        blocks.first().unwrap().command,
+        format!("cmd-{}", total - MAX_RESTORED_COMMAND_BLOCKS)
+    );
+    assert_eq!(blocks.last().unwrap().command, format!("cmd-{}", total - 1));
+}
+
+#[test]
+fn recent_command_blocks_keeps_everything_under_the_cap() {
+    let mut recent = RecentCommandBlocks::new();
+    recent.push(command_block_info("cmd-0"));
+    recent.push(command_block_info("cmd-1"));
+
+    let (blocks, total_seen) = recent.into_vec_with_total_seen();
+
+    assert_eq!(total_seen, 2);
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].command, "cmd-0");
+    assert_eq!(blocks[1].command, "cmd-1");
+}
+
+#[test]
+fn tail_lines_keeps_full_string_when_under_the_cap() {
+    assert_eq!(AIConversation::tail_lines("a\nb", 2), "a\nb");
+    assert_eq!(AIConversation::tail_lines("a\nb", 5), "a\nb");
+}
+
+#[test]
+fn tail_lines_finds_the_exact_boundary() {
+    let lines: Vec<String> = (0..10).map(|i| format!("line-{i}")).collect();
+    let s = lines.join("\n");
+
+    assert_eq!(AIConversation::tail_lines(&s, 3), "line-7\nline-8\nline-9");
+}
+
+#[test]
+fn tail_lines_handles_a_trailing_newline() {
+    // "a\nb\n" splits into three `\n`-delimited pieces: "a", "b", and a trailing empty piece.
+    assert_eq!(AIConversation::tail_lines("a\nb\n", 2), "b\n");
+}
+
+#[test]
+fn tail_lines_with_zero_max_lines_returns_empty() {
+    assert_eq!(AIConversation::tail_lines("a\nb\nc", 0), "");
 }

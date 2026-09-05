@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
 use ai::document::AIDocumentId;
@@ -455,6 +455,38 @@ pub struct AIConversation {
 /// context, so a long-running or repeatedly summarized conversation would otherwise
 /// materialize its entire history at once.
 const MAX_RESTORED_COMMAND_BLOCKS: usize = 100;
+
+/// Retains only the most recent [`MAX_RESTORED_COMMAND_BLOCKS`] pushed to it, evicting the
+/// oldest as soon as that cap is exceeded. Collecting every command first and truncating
+/// afterward would still allocate a clone of every historical command's output before any of
+/// it could be freed; evicting during traversal keeps that peak bounded to the retained window
+/// instead of the conversation's full history.
+struct RecentCommandBlocks {
+    blocks: VecDeque<CommandBlockInfo>,
+    total_seen: usize,
+}
+
+impl RecentCommandBlocks {
+    fn new() -> Self {
+        Self {
+            blocks: VecDeque::with_capacity(MAX_RESTORED_COMMAND_BLOCKS),
+            total_seen: 0,
+        }
+    }
+
+    fn push(&mut self, block: CommandBlockInfo) {
+        self.total_seen += 1;
+        self.blocks.push_back(block);
+        if self.blocks.len() > MAX_RESTORED_COMMAND_BLOCKS {
+            self.blocks.pop_front();
+        }
+    }
+
+    /// Consumes this accumulator, returning the retained blocks and the total number pushed.
+    fn into_vec_with_total_seen(self) -> (Vec<CommandBlockInfo>, usize) {
+        (self.blocks.into(), self.total_seen)
+    }
+}
 
 pub(crate) fn artifact_from_fork_proto(
     proto_artifact: &api::message::artifact_event::ConversationArtifact,
@@ -3923,21 +3955,39 @@ impl AIConversation {
 
     /// Normalize all newlines to CRLF so restored blocks render lines starting at column 0,
     /// which is consistent with how we serialize real terminal blocks. When `max_lines` is
-    /// set, keeps only the most recent lines.
+    /// set, keeps only the most recent lines; the retained tail is located without allocating
+    /// a copy of the untruncated string, so a single oversized output can't force a transient
+    /// full-size copy.
     fn to_stylized_bytes(s: &str, max_lines: Option<usize>) -> Vec<u8> {
-        let s = s.replace("\r\n", "\n");
-        let s = match max_lines {
-            Some(max_lines) => {
-                let lines: Vec<&str> = s.split('\n').collect();
-                lines[lines.len().saturating_sub(max_lines)..].join("\n")
-            }
+        let tail = match max_lines {
+            Some(max_lines) => Self::tail_lines(s, max_lines),
             None => s,
         };
-        s.replace('\n', "\r\n").into_bytes()
+        let normalized = tail.replace("\r\n", "\n");
+        normalized.replace('\n', "\r\n").into_bytes()
     }
 
-    /// Extracts all shell command blocks, in order, from the conversation's API task
-    /// messages.
+    /// Returns the suffix of `s` made up of at most its last `max_lines` `\n`-delimited lines,
+    /// found by scanning backward for the boundary instead of splitting the whole string.
+    fn tail_lines(s: &str, max_lines: usize) -> &str {
+        if max_lines == 0 {
+            return "";
+        }
+        let mut newlines_seen = 0;
+        for (i, byte) in s.bytes().enumerate().rev() {
+            if byte == b'\n' {
+                newlines_seen += 1;
+                if newlines_seen == max_lines {
+                    return &s[i + 1..];
+                }
+            }
+        }
+        s
+    }
+
+    /// Extracts the most recent [`MAX_RESTORED_COMMAND_BLOCKS`] shell command blocks, in order,
+    /// from the conversation's API task messages, plus the total number found before that cap
+    /// was applied.
     ///
     /// This includes:
     /// - RunShellCommand tool calls that completed
@@ -3945,15 +3995,15 @@ impl AIConversation {
     /// - Context blocks from UserQuery/SystemQuery/ToolCallResult messages
     ///
     /// Returns CommandBlockInfo with command, output, exit_code, and optional ai_metadata.
-    fn extract_command_blocks(&self) -> Vec<CommandBlockInfo> {
-        let mut command_blocks = Vec::new();
+    fn extract_command_blocks(&self) -> (Vec<CommandBlockInfo>, usize) {
+        let mut command_blocks = RecentCommandBlocks::new();
 
         // Get the root task's API messages.
         let Some(root_task) = self.get_root_task() else {
-            return command_blocks;
+            return command_blocks.into_vec_with_total_seen();
         };
         let Some(api_task) = root_task.source() else {
-            return command_blocks;
+            return command_blocks.into_vec_with_total_seen();
         };
 
         // Build a map from message ID to exchange for timestamp lookups.
@@ -3978,7 +4028,7 @@ impl AIConversation {
             &mut seen_command_ids,
         );
 
-        command_blocks
+        command_blocks.into_vec_with_total_seen()
     }
 
     /// Extracts command blocks from a list of messages.
@@ -3989,7 +4039,7 @@ impl AIConversation {
         &self,
         messages: &[api::Message],
         message_id_to_exchange: &HashMap<&str, &AIAgentExchange>,
-        command_blocks: &mut Vec<CommandBlockInfo>,
+        command_blocks: &mut RecentCommandBlocks,
         seen_command_ids: &mut HashSet<String>,
     ) {
         // Build a map from tool_call_id to (RunShellCommandResult, result_message_id, result_proto_timestamp)
@@ -4236,11 +4286,8 @@ impl AIConversation {
     pub fn to_serialized_blocklist_items(&self) -> Vec<SerializedBlockListItem> {
         let mut serialized_blocks = Vec::new();
 
-        // Extract all command blocks from the task messages, keeping only the most recent
-        // MAX_RESTORED_COMMAND_BLOCKS.
-        let mut command_blocks = self.extract_command_blocks();
-        let total_command_blocks = command_blocks.len();
-        command_blocks.drain(0..total_command_blocks.saturating_sub(MAX_RESTORED_COMMAND_BLOCKS));
+        // Extraction itself retains only the most recent MAX_RESTORED_COMMAND_BLOCKS.
+        let (command_blocks, total_command_blocks) = self.extract_command_blocks();
         log::info!(
             "Extracted {} of {} command blocks for conversation {}",
             command_blocks.len(),

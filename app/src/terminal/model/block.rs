@@ -108,10 +108,8 @@ impl TranscriptScope {
     }
 }
 
-/// Cap on stored `stylized_output` lines, applied both when serializing a live `Block` (see
-/// `impl From<&Block> for SerializedBlock`) and when materializing a restored AI conversation's
-/// command blocks (`AIConversation::to_serialized_blocklist_items`), so both restoration paths
-/// bound memory the same way.
+/// Maximum number of lines retained in a serialized block's `stylized_output`, keeping the
+/// most recent.
 pub(crate) const MAX_SERIALIZED_STYLIZED_OUTPUT_LINES: usize = 5000;
 
 /// Number of max lines to store that aren't stylized. We only store 50 lines as we only need
