@@ -1192,6 +1192,220 @@ fn handle_event_batch_persists_max_seq_to_history_model() {
     });
 }
 
+/// A server-authoritative parent-completion success on this conversation's own run must be
+/// delivered as `ParentCompletionSucceeded` (not silently dropped like every other self-scoped
+/// event), and the run must be tombstoned so a later, out-of-order buffered event cannot
+/// resurrect an earlier local status.
+#[test]
+fn handle_event_batch_emits_parent_completion_succeeded_for_self_scoped_event() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let self_run_id = "550e8400-e29b-41d4-a716-446655440900".to_string();
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(self_run_id.clone());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let captured: std::sync::Arc<parking_lot::Mutex<Vec<AIConversationId>>> =
+            std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured_for_closure = captured.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::ParentCompletionSucceeded {
+                    conversation_id,
+                } = event
+                {
+                    captured_for_closure.lock().push(*conversation_id);
+                }
+            })
+        });
+
+        streamer.update(&mut app, |me, ctx| {
+            me.streams.entry(conversation_id).or_default();
+            me.handle_event_batch(
+                conversation_id,
+                &self_run_id,
+                0,
+                vec![AgentRunEvent {
+                    event_type: EVENT_RUN_SUCCEEDED_BY_PARENT_COMPLETION.to_string(),
+                    run_id: self_run_id.clone(),
+                    ref_id: None,
+                    execution_id: None,
+                    occurred_at: "2026-01-01T00:00:00Z".to_string(),
+                    sequence: 5,
+                }],
+                vec![],
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            captured.lock().clone(),
+            vec![conversation_id],
+            "the self-scoped parent-completion event must emit ParentCompletionSucceeded exactly once"
+        );
+        streamer.read(&app, |me, _| {
+            assert_eq!(
+                me.parent_completion_terminal_sequence.get(&self_run_id),
+                Some(&5),
+                "the terminal event's sequence must be recorded so an out-of-order event at or \
+                 below it cannot restore an earlier status"
+            );
+            assert!(
+                !me.killed_run_ids.contains(&self_run_id),
+                "the permanent kill mechanism must NOT be used for this event: a later resumed \
+                 execution under the same run_id must still be deliverable"
+            );
+        });
+    });
+}
+
+/// Regression for review finding 2: the parent-completion tombstone must be sequence-bounded,
+/// not a permanent blanket suppression. A late, out-of-order buffered event at or before the
+/// terminal sequence must still be dropped, but a legitimately resumed execution's events
+/// (necessarily at a higher sequence) must be delivered normally.
+#[test]
+fn handle_event_batch_parent_completion_tombstone_is_sequence_bounded() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let event_service = app.add_singleton_model(|_| OrchestrationEventService::default());
+
+        let self_run_id = "550e8400-e29b-41d4-a716-446655440901".to_string();
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(self_run_id.clone());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        // Self-scoped `new_message` events are the vehicle used here (rather than a
+        // lifecycle-typed event) because `convert_lifecycle_events` unconditionally drops
+        // every self-scoped *lifecycle* event regardless of any tombstone -- a run's own
+        // driver always reports its own status directly. `new_message` is delivered as
+        // `ParentSelf`/tracked via `messages`, so it is a signal this sequence bound can
+        // actually gate one way or the other.
+        streamer.update(&mut app, |me, ctx| {
+            me.streams.entry(conversation_id).or_default();
+            // The terminal parent-completion event lands at sequence 5.
+            me.handle_event_batch(
+                conversation_id,
+                &self_run_id,
+                0,
+                vec![AgentRunEvent {
+                    event_type: EVENT_RUN_SUCCEEDED_BY_PARENT_COMPLETION.to_string(),
+                    run_id: self_run_id.clone(),
+                    ref_id: None,
+                    execution_id: None,
+                    occurred_at: "2026-01-01T00:00:00Z".to_string(),
+                    sequence: 5,
+                }],
+                vec![],
+                ctx,
+            );
+            // A late, out-of-order buffered event AT sequence 5 (e.g. a duplicate delivery
+            // racing the terminal event) must still be dropped.
+            me.handle_event_batch(
+                conversation_id,
+                &self_run_id,
+                5,
+                vec![AgentRunEvent {
+                    event_type: EVENT_NEW_MESSAGE.to_string(),
+                    run_id: self_run_id.clone(),
+                    ref_id: Some("msg-at-terminal-sequence".to_string()),
+                    execution_id: None,
+                    occurred_at: "2026-01-01T00:00:01Z".to_string(),
+                    sequence: 5,
+                }],
+                vec![ReceivedMessageInput {
+                    message_id: "msg-at-terminal-sequence".to_string(),
+                    sender_agent_id: "some-other-run".to_string(),
+                    addresses: vec![self_run_id.clone()],
+                    subject: "late".to_string(),
+                    message_body: "body".to_string(),
+                }],
+                ctx,
+            );
+        });
+        event_service.read(&app, |service, _| {
+            assert!(
+                !service.has_pending_events(conversation_id),
+                "an out-of-order event at or before the terminal sequence must not be delivered"
+            );
+        });
+
+        // A legitimately resumed execution's event, at a HIGHER sequence, must be delivered
+        // normally -- the tombstone must not permanently block this run_id.
+        streamer.update(&mut app, |me, ctx| {
+            me.handle_event_batch(
+                conversation_id,
+                &self_run_id,
+                5,
+                vec![AgentRunEvent {
+                    event_type: EVENT_NEW_MESSAGE.to_string(),
+                    run_id: self_run_id.clone(),
+                    ref_id: Some("msg-after-resume".to_string()),
+                    execution_id: None,
+                    occurred_at: "2026-01-01T00:00:02Z".to_string(),
+                    sequence: 6,
+                }],
+                vec![ReceivedMessageInput {
+                    message_id: "msg-after-resume".to_string(),
+                    sender_agent_id: "some-other-run".to_string(),
+                    addresses: vec![self_run_id.clone()],
+                    subject: "resumed".to_string(),
+                    message_body: "body".to_string(),
+                }],
+                ctx,
+            );
+        });
+        event_service.read(&app, |service, _| {
+            assert!(
+                service.has_pending_events(conversation_id),
+                "a resumed execution's event at a higher sequence must still be delivered -- the \
+                 tombstone must not act as a permanent blanket suppression"
+            );
+        });
+    });
+}
+
 #[test]
 fn handle_event_batch_drops_events_for_killed_run_ids_after_persisting_cursor() {
     App::test((), |mut app| async move {
@@ -3019,6 +3233,86 @@ fn drain_family_events_primary_routes_mixed_batch_and_delivers_inbox() {
                 "Primary cursor must advance to the batch max sequence"
             );
         });
+    });
+}
+
+/// Regression for review finding 1: on the unified family-drain path (as used whenever
+/// `OrchestrationUnifiedStack` is enabled), the self-scoped `run_succeeded_by_parent_completion`
+/// event must still reach `handle_event_batch` and emit `ParentCompletionSucceeded`. Before the
+/// fix, `classify_family_event` had no arm for this event type, so it fell through to `Opaque`
+/// and was silently dropped -- the local child would have kept running indefinitely on the
+/// unified stack despite the server-authoritative SUCCEEDED.
+#[test]
+fn drain_family_events_primary_forwards_self_scoped_parent_completion_event() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, _receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(4);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let self_run_id = make_parent_task_id_for_test(0xf6).to_string();
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(self_run_id.clone());
+        let conversation_id = conversation.id();
+        let terminal_view_id = warpui::EntityId::new();
+        history_model.update(&mut app, |model, ctx| {
+            model.restore_conversations(terminal_view_id, vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_update_event_sequence_on_server()
+            .returning(|_, _| Ok(()));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        let captured: std::sync::Arc<parking_lot::Mutex<Vec<AIConversationId>>> =
+            std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured_for_closure = captured.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&streamer, move |_, event, _| {
+                if let OrchestrationEventStreamerEvent::ParentCompletionSucceeded {
+                    conversation_id,
+                } = event
+                {
+                    captured_for_closure.lock().push(*conversation_id);
+                }
+            })
+        });
+
+        let events = vec![make_seq_event(
+            EVENT_RUN_SUCCEEDED_BY_PARENT_COMPLETION,
+            &self_run_id,
+            None,
+            9,
+        )];
+
+        streamer.update(&mut app, |me, ctx| {
+            let tracker = OrchestrationChildTracker::new(self_run_id.parse().unwrap());
+            me.drain_family_events(
+                conversation_id,
+                &self_run_id,
+                FamilyDrainMode::Primary,
+                tracker,
+                0,
+                events,
+                Vec::new(),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            captured.lock().clone(),
+            vec![conversation_id],
+            "the unified family-drain path must still forward the self-scoped parent-completion \
+             event to handle_event_batch and emit ParentCompletionSucceeded"
+        );
     });
 }
 

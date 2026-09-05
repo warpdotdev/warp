@@ -55,6 +55,14 @@ const EVENT_CHILD_AGENT_STARTED: &str = "child_agent_started";
 /// Wire `event_type` emitted on a CHILD run when its sandbox session links;
 /// the session UUID is carried in `ref_id`.
 const EVENT_RUN_SESSION_LINKED: &str = "run_session_linked";
+/// Wire `event_type` emitted self-scoped (`run_id` == the descendant's own run) only by a
+/// server-side parent-completion cascade, never by a run's own ordinary completion. Unlike
+/// every other self-scoped lifecycle event (dropped by `convert_lifecycle_events` because a
+/// run's own driver already reports its own status directly), this one is a safe,
+/// unambiguous external stop signal: the server has already recorded this run as `SUCCEEDED`
+/// on its own authority, so the local client must stop its still-live process and project
+/// `Success` without sending a contradicting `CANCELLED` back.
+const EVENT_RUN_SUCCEEDED_BY_PARENT_COMPLETION: &str = "run_succeeded_by_parent_completion";
 
 /// Per-event item delivered from the SSE background task to the entity.
 struct SseStreamItem {
@@ -294,6 +302,14 @@ pub struct OrchestrationEventStreamer {
     /// Run IDs killed locally; kept briefly to drop late server events.
     killed_run_ids: HashSet<String>,
     killed_run_id_order: VecDeque<String>,
+    /// For a run that received a self-scoped parent-completion event, the sequence number
+    /// of that terminal event. Unlike `killed_run_ids` (a permanent blanket suppression,
+    /// appropriate for a genuinely killed run that will never legitimately resume under the
+    /// same run_id), this only discards buffered events at or below the recorded sequence --
+    /// a later resumed execution's `run_in_progress`, messages, and lifecycle events (all at
+    /// a higher sequence) are still delivered normally.
+    parent_completion_terminal_sequence: HashMap<String, i64>,
+    parent_completion_terminal_sequence_order: VecDeque<String>,
 }
 
 #[allow(private_interfaces)]
@@ -321,6 +337,10 @@ pub enum OrchestrationEventStreamerEvent {
         run_id: String,
         status: ConversationStatus,
     },
+    /// A parent-completion cascade recorded this conversation's own run as `SUCCEEDED` while
+    /// it was still running locally. The subscriber (the controller) must stop the local
+    /// conversation and project `Success` without reporting `CANCELLED`.
+    ParentCompletionSucceeded { conversation_id: AIConversationId },
 }
 
 /// Outcome of selecting the SSE wire filter for an owner-side conversation.
@@ -402,6 +422,12 @@ fn classify_family_event(event: &AgentRunEvent, self_run_id: &str) -> FamilyEven
             None => FamilyEvent::Opaque,
         },
         (true, EVENT_NEW_MESSAGE) => FamilyEvent::ParentSelf(event.clone()),
+        // Must be classified explicitly and forwarded as ParentSelf: it is a self-scoped
+        // event, but not a recognised lifecycle type (`lifecycle_event_type_from_wire`
+        // returns None for it), so without this arm it would fall through to Opaque and
+        // never reach handle_event_batch's ParentCompletionSucceeded detection on the
+        // unified family-drain path.
+        (true, EVENT_RUN_SUCCEEDED_BY_PARENT_COMPLETION) => FamilyEvent::ParentSelf(event.clone()),
         (true, event_type) => {
             // The parent's own lifecycle events are ParentSelf; unrecognised
             // self events advance the cursor only.
@@ -1000,6 +1026,8 @@ impl OrchestrationEventStreamer {
             next_wake_generation: 0,
             killed_run_ids: HashSet::new(),
             killed_run_id_order: VecDeque::new(),
+            parent_completion_terminal_sequence: HashMap::new(),
+            parent_completion_terminal_sequence_order: VecDeque::new(),
         }
     }
 
@@ -1025,6 +1053,8 @@ impl OrchestrationEventStreamer {
             next_wake_generation: 0,
             killed_run_ids: HashSet::new(),
             killed_run_id_order: VecDeque::new(),
+            parent_completion_terminal_sequence: HashMap::new(),
+            parent_completion_terminal_sequence_order: VecDeque::new(),
         }
     }
 
@@ -1055,6 +1085,35 @@ impl OrchestrationEventStreamer {
                 break;
             };
             self.killed_run_ids.remove(&evicted_run_id);
+        }
+    }
+
+    /// Records (or advances) the sequence number of the self-scoped parent-completion
+    /// terminal event for `run_id`. Only ever moves forward for a given run_id, so an
+    /// out-of-order re-delivery of an older terminal event cannot regress the bound and
+    /// re-suppress events a newer resumed execution already let through.
+    fn remember_parent_completion_terminal_sequence(&mut self, run_id: String, sequence: i64) {
+        let entry = self
+            .parent_completion_terminal_sequence
+            .entry(run_id.clone())
+            .or_insert(sequence);
+        if sequence > *entry {
+            *entry = sequence;
+        }
+        if !self
+            .parent_completion_terminal_sequence_order
+            .contains(&run_id)
+        {
+            self.parent_completion_terminal_sequence_order
+                .push_back(run_id);
+        }
+        while self.parent_completion_terminal_sequence.len() > MAX_KILLED_RUN_IDS {
+            let Some(evicted_run_id) = self.parent_completion_terminal_sequence_order.pop_front()
+            else {
+                break;
+            };
+            self.parent_completion_terminal_sequence
+                .remove(&evicted_run_id);
         }
     }
 
@@ -2660,6 +2719,42 @@ impl OrchestrationEventStreamer {
                 );
             }
         }
+
+        // A parent-completion cascade recorded this conversation's own run as SUCCEEDED.
+        // Unlike every other self-scoped event (handled below by convert_lifecycle_events,
+        // which deliberately drops self events because a run's own driver already reports
+        // its own status), this one is emitted only by the server-side cascade and is safe
+        // to treat as an authoritative external stop signal. Record its sequence so a
+        // later, out-of-order buffered event AT OR BEFORE that sequence cannot restore an
+        // earlier local status. Unlike `killed_run_ids` (a permanent blanket suppression),
+        // this bound is sequence-scoped: a follow-up that legitimately resumes the same run
+        // under the same run_id produces events at a HIGHER sequence, which are delivered
+        // normally below.
+        if let Some(terminal_event) = events.iter().find(|event| {
+            event.run_id == self_run_id
+                && event.event_type == EVENT_RUN_SUCCEEDED_BY_PARENT_COMPLETION
+        }) {
+            self.remember_parent_completion_terminal_sequence(
+                self_run_id.to_string(),
+                terminal_event.sequence,
+            );
+            ctx.emit(OrchestrationEventStreamerEvent::ParentCompletionSucceeded {
+                conversation_id,
+            });
+        }
+        if let Some(&terminal_sequence) = self.parent_completion_terminal_sequence.get(self_run_id)
+        {
+            let dropped_message_ids: HashSet<String> = events
+                .iter()
+                .filter(|event| event.run_id == self_run_id && event.sequence <= terminal_sequence)
+                .filter_map(|event| event.ref_id.clone())
+                .collect();
+            events.retain(|event| {
+                !(event.run_id == self_run_id && event.sequence <= terminal_sequence)
+            });
+            messages.retain(|message| !dropped_message_ids.contains(&message.message_id));
+        }
+
         // Track message IDs for server-side mark_delivered calls.
         let message_ids: Vec<String> = messages
             .iter()
