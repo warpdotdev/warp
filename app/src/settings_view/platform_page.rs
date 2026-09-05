@@ -5,6 +5,7 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::ApiKeyProperties as GqlApiKeyProperties;
+use warp_server_client::auth::RequestTeamScope;
 use warpui::elements::{
     Align, Border, ChildView, ConstrainedBox, Container, CrossAxisAlignment, DragBarSide, Element,
     Empty, Expanded, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisSize,
@@ -129,7 +130,11 @@ impl PlatformPageView {
             crate::server::server_api::ServerApiProvider::as_ref(ctx).get_auth_client();
 
         ctx.spawn(
-            async move { auth_client.list_api_keys().await },
+            async move {
+                auth_client
+                    .list_api_keys(RequestTeamScope::unscoped())
+                    .await
+            },
             |me, res, ctx| {
                 me.is_loading = false;
                 match res {

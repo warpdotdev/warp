@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
+use cloud_objects::ids::ServerId;
 use cynic::{MutationBuilder, QueryBuilder};
 use firebase::FirebaseError;
 use instant::Duration;
@@ -40,12 +41,32 @@ use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsV
 use warp_server_auth::credentials::{AuthToken, Credentials, FirebaseToken, LoginToken};
 pub use warp_server_auth::user_uid;
 
-use crate::base_client::BaseClient;
-use crate::graphql_helpers::send_graphql_request;
+use crate::base_client::{BaseClient, TEAM_UID_HEADER};
+use crate::graphql_helpers::{send_graphql_request, send_graphql_request_with_options};
 use crate::ids::ApiKeyUid;
 
 /// Header key used to associate unauthenticated requests with an experiment identity.
 pub const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
+
+/// Team context for an API-key listing request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RequestTeamScope(Option<ServerId>);
+
+impl RequestTeamScope {
+    /// Captures the team selected by the application after team membership resolution.
+    pub fn from_resolved_team(team_uid: Option<ServerId>) -> Self {
+        Self(team_uid)
+    }
+
+    /// Creates a request with no selected team.
+    pub fn unscoped() -> Self {
+        Self(None)
+    }
+
+    fn team_uid(self) -> Option<ServerId> {
+        self.0
+    }
+}
 
 /// A named agent identity from the public API.
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -151,7 +172,7 @@ pub trait AuthClient: Send + Sync {
         timeout: Duration,
     ) -> StdResult<FirebaseToken, UserAuthenticationError>;
 
-    async fn list_api_keys(&self) -> Result<Vec<ApiKeyProperties>>;
+    async fn list_api_keys(&self, team_scope: RequestTeamScope) -> Result<Vec<ApiKeyProperties>>;
 
     async fn create_api_key(
         &self,
@@ -415,11 +436,19 @@ impl AuthClient for AuthClientImpl {
             .await
     }
 
-    async fn list_api_keys(&self) -> Result<Vec<ApiKeyProperties>> {
+    async fn list_api_keys(&self, team_scope: RequestTeamScope) -> Result<Vec<ApiKeyProperties>> {
         let operation = ApiKeys::build(ApiKeysVariables {
             request_context: warp_graphql::client::get_request_context(),
         });
-        let response = send_graphql_request(self.base_client.as_ref(), operation, None).await?;
+        let mut options = self.base_client.graphql_request_options(None).await?;
+        if let Some(team_uid) = team_scope.team_uid() {
+            options
+                .headers
+                .insert(TEAM_UID_HEADER.to_string(), team_uid.uid());
+        }
+        let response =
+            send_graphql_request_with_options(self.base_client.as_ref(), operation, options)
+                .await?;
         match response.api_keys {
             ApiKeyPropertiesResult::ApiKeyPropertiesOutput(output) => Ok(output.api_keys),
             ApiKeyPropertiesResult::UserFacingError(error) => Err(anyhow!(
