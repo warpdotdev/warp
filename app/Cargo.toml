@@ -669,7 +669,6 @@ default = [
     "open_code_notifications",
     "cli_agent_rich_input",
     "vertical_tabs",
-    "vertical_tabs_summary_mode",
     "tab_configs",
     "grouped_tabs",
     "pinned_tabs",
@@ -1006,7 +1005,6 @@ inline_menu_headers = []
 directory_tab_colors = []
 hoa_code_review = []
 vertical_tabs = []
-vertical_tabs_summary_mode = []
 tab_configs = []
 grouped_tabs = []
 pinned_tabs = []
