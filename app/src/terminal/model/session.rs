@@ -1468,12 +1468,23 @@ impl Session {
         }
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
-        async_fs::read(history_file).await.map_err(|e| {
-            ReadHistoryContentsError::PowerShellAndAsyncFsError {
+        match async_fs::read(history_file).await {
+            Ok(contents) => {
+                // The PowerShell read path failed but the filesystem fallback succeeded. Report
+                // this so we have data on whether the PowerShell method is reliable. The detailed
+                // PowerShell stderr is attached as structured context so the Sentry grouping
+                // message stays stable.
+                report_error!(
+                    "Failed to read history using PowerShell commands",
+                    extra: { "powershell_error" => ?powershell_error }
+                );
+                Ok(contents)
+            }
+            Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
-            }
-        })
+            }),
+        }
     }
 
     #[cfg(windows)]
