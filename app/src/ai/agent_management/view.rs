@@ -50,6 +50,7 @@ use crate::ai::agent_management::cloud_setup_guide_view::{
 use crate::ai::agent_management::details_action_buttons::{
     ActionButtonsConfig, AgentDetailsButtonEvent, ConversationActionButtonsRow,
 };
+use crate::ai::agent_management::factory_setup_guide_view::FactorySetupGuideView;
 use crate::ai::agent_management::telemetry::{
     AgentManagementTelemetryEvent, ArtifactType, FilterType, OpenedFrom,
 };
@@ -172,6 +173,7 @@ pub struct AgentManagementView {
     is_agent_type_selector_open: bool,
 
     cloud_setup_guide_view: ViewHandle<CloudSetupGuideView>,
+    factory_setup_guide_view: ViewHandle<FactorySetupGuideView>,
 
     all_filter_button: ViewHandle<ActionButton>,
     personal_filter_button: ViewHandle<ActionButton>,
@@ -299,6 +301,8 @@ impl AgentManagementView {
             }
         });
 
+        let factory_setup_guide_view = ctx.add_typed_action_view(FactorySetupGuideView::new);
+
         let search_editor = ctx.add_typed_action_view(|ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
             let mut editor = EditorView::single_line(
@@ -357,6 +361,7 @@ impl AgentManagementView {
             setup_guide_button,
             view_agents_button,
             cloud_setup_guide_view,
+            factory_setup_guide_view,
             loading_icon_mouse_state: MouseStateHandle::default(),
             all_filter_button,
             personal_filter_button,
@@ -2179,7 +2184,15 @@ impl View for AgentManagementView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let main_content = match self.get_view_state(app) {
             ViewState::Loading => self.render_loading_state(app),
-            ViewState::SetupGuide { .. } => ChildView::new(&self.cloud_setup_guide_view).finish(),
+            ViewState::SetupGuide { .. } => {
+                // Show factory-specific FTUX when the CloudAgentRunners feature is enabled;
+                // otherwise show the standard Oz cloud agent setup guide.
+                if FeatureFlag::CloudAgentRunners.is_enabled() {
+                    ChildView::new(&self.factory_setup_guide_view).finish()
+                } else {
+                    ChildView::new(&self.cloud_setup_guide_view).finish()
+                }
+            }
             ViewState::NoFilterMatches => self.render_no_results_view(app),
             ViewState::HasTasks => self.render_default_scroll_view(app),
         };
