@@ -51,6 +51,8 @@ use crate::terminal::view::blocklist_filter;
 use crate::ui_components::icons::Icon;
 
 mod conversation_loader;
+#[cfg(test)]
+pub(super) use conversation_loader::MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS;
 pub use conversation_loader::{
     CLIAgentConversation, CloudConversationData,
     convert_persisted_conversation_to_ai_conversation_with_metadata, load_conversation_from_server,

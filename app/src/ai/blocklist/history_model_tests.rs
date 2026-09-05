@@ -10,8 +10,9 @@ use warpui::{App, EntityId, ModelHandle};
 
 use super::{
     AIConversationMetadata, AIQueryHistoryOutputStatus, BeginConversationRenameError,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ForkConversationError, PersistedAIInput,
-    PersistedAIInputType, convert_persisted_conversation_to_ai_conversation_with_metadata,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ForkConversationError,
+    MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS, PersistedAIInput, PersistedAIInputType,
+    convert_persisted_conversation_to_ai_conversation_with_metadata,
 };
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
@@ -1111,6 +1112,113 @@ fn test_initialize_historical_conversations_eagerly_hydrates_orchestration_child
             assert!(
                 model.get_conversation_metadata(&child_id).is_none(),
                 "child metadata should NOT be recorded in all_conversations_metadata",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_initialize_historical_conversations_caps_eager_child_hydration() {
+    // Only the `MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS` most-recently-modified
+    // orchestration children should be fully hydrated into `conversations_by_id`
+    // at startup; the rest must still be indexed via `children_by_parent` so
+    // they load lazily via `restore_conversations` instead of spiking startup
+    // memory (see APP-4823).
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+
+        let child_count = MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS + 5;
+        let mut children = Vec::with_capacity(child_count);
+        let mut conversations = Vec::with_capacity(child_count + 1);
+        for i in 0..child_count {
+            let child_id = AIConversationId::new();
+            let child_run_id = Uuid::new_v4().to_string();
+            // Sort key: higher `i` is more recently modified, so children
+            // 0..5 are the oldest and fall outside the cap.
+            let last_modified_at = now - chrono::Duration::seconds((child_count - i) as i64);
+            conversations.push(persisted_agent_conversation(
+                child_id,
+                AgentConversationData {
+                    server_conversation_token: Some(format!("child-token-{i}")),
+                    conversation_usage_metadata: None,
+                    reverted_action_ids: None,
+                    forked_from_server_conversation_token: None,
+                    artifacts_json: None,
+                    parent_agent_id: Some(parent_run_id.clone()),
+                    agent_name: Some(format!("Agent {i}")),
+                    orchestration_harness_type: None,
+                    parent_conversation_id: Some(parent_id.to_string()),
+                    is_remote_child: false,
+                    root_task_is_optimistic: None,
+                    run_id: Some(child_run_id.clone()),
+                    autoexecute_override: None,
+                    last_event_sequence: None,
+                    pinned: false,
+                },
+                last_modified_at,
+                Some("Child query"),
+            ));
+            children.push((child_id, last_modified_at));
+        }
+        conversations.push(persisted_agent_conversation(
+            parent_id,
+            AgentConversationData {
+                server_conversation_token: Some("parent-token".to_string()),
+                conversation_usage_metadata: None,
+                reverted_action_ids: None,
+                forked_from_server_conversation_token: None,
+                artifacts_json: None,
+                parent_agent_id: None,
+                agent_name: None,
+                orchestration_harness_type: None,
+                parent_conversation_id: None,
+                is_remote_child: false,
+                root_task_is_optimistic: None,
+                run_id: Some(parent_run_id.clone()),
+                autoexecute_override: None,
+                last_event_sequence: None,
+                pinned: false,
+            },
+            now - chrono::Duration::seconds(child_count as i64 + 1),
+            Some("Parent query"),
+        ));
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        // Most-recently-modified children (highest `i`) should be eagerly hydrated.
+        children.sort_by_key(|(_, last_modified_at)| *last_modified_at);
+        children.reverse();
+        let (eagerly_hydrated, deferred) =
+            children.split_at(MAX_EAGERLY_HYDRATED_CHILD_CONVERSATIONS);
+
+        history_model.read(&app, |model, _| {
+            for (child_id, _) in eagerly_hydrated {
+                assert!(
+                    model.conversation(child_id).is_some(),
+                    "child within the eager-hydration cap should be fully hydrated",
+                );
+            }
+            for (child_id, _) in deferred {
+                assert!(
+                    model.conversation(child_id).is_none(),
+                    "child beyond the eager-hydration cap should not be eagerly hydrated",
+                );
+            }
+            // All children, capped or not, must still be indexed so the pill
+            // bar can discover and lazily load them later.
+            let indexed_children: HashSet<_> = model
+                .child_conversation_ids_of(&parent_id)
+                .iter()
+                .copied()
+                .collect();
+            let expected_children: HashSet<_> =
+                children.iter().map(|(child_id, _)| *child_id).collect();
+            assert_eq!(
+                indexed_children, expected_children,
+                "all children should remain indexed in children_by_parent regardless of the cap",
             );
         });
     });
