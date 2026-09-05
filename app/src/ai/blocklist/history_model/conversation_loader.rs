@@ -589,9 +589,21 @@ impl BlocklistAIHistoryModel {
                     //
                     // Startup rows carry no tasks, so the child's task
                     // payload is loaded from the local DB; fully-hydrated
-                    // inputs convert directly.
+                    // inputs convert directly. If the DB load fails (e.g.
+                    // the RO connection could not be established), fall back
+                    // to synthesizing a minimal conversation from the
+                    // metadata already in memory. This is the same shape as
+                    // the pre-TUI-speedup code path and is sufficient for
+                    // the pill bar and orchestration transcript name
+                    // resolution, which only need `agent_name`, `task_id`,
+                    // and parent linkage — not the full task transcript.
                     let child_conversation = if agent_conversation.tasks.is_empty() {
                         self.load_conversation_from_db(&conversation_id)
+                            .or_else(|| {
+                                convert_persisted_conversation_to_ai_conversation_with_metadata(
+                                    agent_conversation.clone(),
+                                )
+                            })
                     } else {
                         convert_persisted_conversation_to_ai_conversation_with_metadata(
                             agent_conversation.clone(),
