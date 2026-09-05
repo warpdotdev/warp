@@ -59,6 +59,7 @@ fn batch(comments: Vec<AttachedReviewComment>) -> AgentReviewCommentBatch {
     AgentReviewCommentBatch {
         comments,
         diff_set: HashMap::new(),
+        pull_request: None,
     }
 }
 
@@ -183,6 +184,31 @@ fn test_build_review_prompt_general_comment() {
     );
     let prompt = build_review_prompt(&batch(vec![comment]));
     assert!(prompt.contains("General: overall looks good"));
+}
+
+#[test]
+fn test_build_review_prompt_includes_pull_request_reference() {
+    let comment = make_comment("looks good", AttachedReviewCommentTarget::General, false);
+    let mut review = batch(vec![comment]);
+    review.pull_request = Some(crate::ai::agent::StackLayerReference {
+        number: 6,
+        url: "https://github.com/warpdotdev/warp/pull/6".to_string(),
+    });
+    let prompt = build_review_prompt(&review);
+    assert!(
+        prompt.contains("pull request #6") && prompt.contains("warpdotdev/warp/pull/6"),
+        "expected the prompt to name the reviewed pull request, got: {prompt}"
+    );
+}
+
+#[test]
+fn test_build_review_prompt_omits_pull_request_reference_for_working_tree() {
+    let comment = make_comment("looks good", AttachedReviewCommentTarget::General, false);
+    let prompt = build_review_prompt(&batch(vec![comment]));
+    assert!(
+        !prompt.contains("pull request #"),
+        "working-tree reviews should not mention a pull request, got: {prompt}"
+    );
 }
 
 #[test]

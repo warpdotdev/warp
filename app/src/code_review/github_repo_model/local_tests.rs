@@ -4,7 +4,7 @@ use warpui::{App, ModelHandle};
 
 use super::*;
 use crate::code_review::git_repo_model::GitRepoStatusModel;
-use crate::util::git::RepositoryInfo;
+use crate::util::git::{PrStackLayer, RepositoryInfo};
 
 fn pr(number: u64) -> PrInfo {
     PrInfo {
@@ -21,6 +21,26 @@ fn repository_info() -> RepositoryInfo {
         name: "warp".to_string(),
         owner: Some("warpdotdev".to_string()),
         host: Some("github.com".to_string()),
+    }
+}
+
+fn stack_layer(number: u64, base_ref: &str) -> PrStackLayer {
+    PrStackLayer {
+        pr: pr(number),
+        title: format!("PR #{number}"),
+        head_ref: format!("feature-{number}"),
+        head_oid: "a".repeat(40),
+        base_ref: base_ref.to_string(),
+        base_oid: "b".repeat(40),
+        merged_at: None,
+    }
+}
+
+fn stack_info(number: u64, layers: Vec<PrStackLayer>) -> PrStackInfo {
+    PrStackInfo {
+        number,
+        trunk_ref: "main".to_string(),
+        layers,
     }
 }
 
@@ -163,6 +183,101 @@ fn repository_info_survives_branch_change() {
         });
         model.read(&app, |model, _| {
             assert_eq!(model.repository_info(), Some(&repository_info()));
+        });
+    });
+}
+
+#[test]
+fn stack_info_ignores_stale_result_after_branch_change() {
+    App::test((), |mut app| async move {
+        let (_temp_dir, model) = new_github_repo_model_for_test(&mut app);
+
+        model.update(&mut app, |model, ctx| {
+            model.branch = Some("feature-a".to_string());
+            model.set_pr_info_for_test(Some(pr(123)), ctx);
+        });
+
+        // Branch (and its PR) changes before the in-flight fetch that was
+        // started for feature-a/#123 resolves.
+        model.update(&mut app, |model, ctx| {
+            model.branch = Some("feature-b".to_string());
+            model.set_pr_info_for_test(Some(pr(456)), ctx);
+        });
+
+        // The stale result for feature-a/#123 arrives after the switch.
+        let stale = stack_info(1, vec![stack_layer(123, "main"), stack_layer(200, "123")]);
+        model.update(&mut app, |model, ctx| {
+            model.handle_stack_info_result(
+                StackDiscoveryResult::Available(stale),
+                "feature-a".to_string(),
+                123,
+                ctx,
+            );
+        });
+
+        model.read(&app, |model, _| {
+            assert_eq!(model.stack_info(), None);
+        });
+    });
+}
+
+#[test]
+fn stack_info_preserved_across_transient_failure() {
+    App::test((), |mut app| async move {
+        let (_temp_dir, model) = new_github_repo_model_for_test(&mut app);
+        let snapshot = stack_info(1, vec![stack_layer(123, "main"), stack_layer(200, "123")]);
+
+        model.update(&mut app, |model, ctx| {
+            model.branch = Some("feature-a".to_string());
+            model.set_pr_info_for_test(Some(pr(123)), ctx);
+            model.set_stack_info_for_test(Some(snapshot.clone()), ctx);
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.stack_info(), Some(&snapshot));
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.handle_stack_info_result(
+                StackDiscoveryResult::Unavailable {
+                    reason: "gh timed out".to_string(),
+                },
+                "feature-a".to_string(),
+                123,
+                ctx,
+            );
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.stack_info(), Some(&snapshot));
+        });
+    });
+}
+
+#[test]
+fn stack_info_cleared_on_branch_change() {
+    App::test((), |mut app| async move {
+        let (_temp_dir, model) = new_github_repo_model_for_test(&mut app);
+        let snapshot = stack_info(1, vec![stack_layer(123, "main"), stack_layer(200, "123")]);
+
+        model.update(&mut app, |model, ctx| {
+            model.branch = Some("feature-a".to_string());
+            model.set_pr_info_for_test(Some(pr(123)), ctx);
+            model.set_stack_info_for_test(Some(snapshot), ctx);
+        });
+        model.read(&app, |model, _| {
+            assert!(model.stack_info().is_some());
+        });
+
+        // Mirrors the branch-change handling in `LocalGitHubRepoModel::new`,
+        // which clears `stack_info` immediately rather than waiting for a
+        // fresh discovery result.
+        model.update(&mut app, |model, ctx| {
+            model.branch = Some("feature-b".to_string());
+            if model.stack_info.take().is_some() {
+                ctx.emit(GitHubRepoEvent::StackInfoChanged);
+            }
+        });
+        model.read(&app, |model, _| {
+            assert_eq!(model.stack_info(), None);
         });
     });
 }

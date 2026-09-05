@@ -467,6 +467,17 @@ pub fn build_review_prompt(review: &AgentReviewCommentBatch) -> String {
          especially for deleted lines.\n",
     );
 
+    // Name the reviewed pull request stack layer explicitly rather than
+    // asking the agent to infer it (TECH.md "Partition comments by review
+    // context"). This identifies context only; it does not authorize the
+    // agent to create, sync, or mutate the stack.
+    if let Some(pull_request) = &review.pull_request {
+        text.push_str(&format!(
+            "\nThese comments are for pull request #{} ({}), a layer in a GitHub-native stack.\n",
+            pull_request.number, pull_request.url
+        ));
+    }
+
     for comment in &review.comments {
         if comment.outdated {
             continue;

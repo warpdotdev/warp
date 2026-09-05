@@ -7265,6 +7265,9 @@ impl TerminalView {
                 .map(|m| DiffBase::BranchName(m.main_branch_name.clone()))
                 .unwrap_or(DiffBase::UncommittedChanges),
             DiffMode::OtherBranch(branch_name) => DiffBase::BranchName(branch_name.clone()),
+            DiffMode::PullRequestLayer { base_oid, .. } => {
+                DiffBase::HeadlessCommitSha(base_oid.clone())
+            }
         };
 
         // Create attachment reference and key using the shared function

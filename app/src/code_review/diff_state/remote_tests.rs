@@ -102,6 +102,7 @@ fn simple_file_with_content(path: &str, content_at_base: Option<&str>) -> FileDi
             size: DiffSize::Normal,
         },
         content_at_head: content_at_base.map(str::to_string),
+        content_at_new_commit: None,
     }
 }
 
@@ -809,6 +810,34 @@ fn diff_mode_preserved() {
         None,
     );
     assert_eq!(m.diff_mode(), DiffMode::OtherBranch("develop".into()));
+}
+
+#[test]
+fn set_diff_mode_ignores_pull_request_layer_mode() {
+    // Stack review is local-only in V1: the remote/SSH pane never exposes the
+    // stack control, so this path should be unreachable in practice. The
+    // guard must still leave the model's mode (and subscription) untouched
+    // rather than issuing a `GetDiffState` the daemon has no support for.
+    warpui::App::test((), |mut app| async move {
+        let handle = app.add_model(|_ctx| {
+            RemoteDiffStateModel::new_for_test(
+                DiffMode::Head,
+                InternalRemoteDiffState::Loading,
+                None,
+            )
+        });
+        let layer_mode = DiffMode::PullRequestLayer {
+            pr_number: 7,
+            base_oid: "a".repeat(40),
+            head_oid: "b".repeat(40),
+        };
+        handle.update(&mut app, |m, ctx| {
+            m.set_diff_mode(layer_mode, true, None, ctx);
+        });
+        handle.read(&app, |m, _| {
+            assert_eq!(m.diff_mode(), DiffMode::Head);
+        });
+    });
 }
 
 #[test]
