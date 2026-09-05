@@ -162,16 +162,27 @@ impl Repository {
         }
     }
 
-    /// Walk ancestors of the given path to find the `.git` component and return
-    /// it as the shared git root. For example,
-    /// `/repo/.git/worktrees/foo` → `/repo/.git`.
-    fn derive_common_git_dir(external_git_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-        for ancestor in external_git_dir.ancestors() {
-            if ancestor.file_name().and_then(|n| n.to_str()) == Some(".git") {
-                return Some(ancestor.to_path_buf());
-            }
+    /// The shared git directory that all worktrees of one repository have in
+    /// common.
+    ///
+    /// Git guarantees a linked worktree's git dir has the shape
+    /// `<common-git-dir>/worktrees/<name>`, so stripping that trailing pair
+    /// covers both normal (`/repo/.git/worktrees/foo` → `/repo/.git`) and bare
+    /// (`/repos/api.git/worktrees/foo` → `/repos/api.git`) layouts. Searching
+    /// ancestors for a component named `.git` instead would find nothing in the
+    /// bare case, scattering the worktrees of one repository.
+    ///
+    /// Any other path is already the common directory and is returned
+    /// unchanged; [`Self::derive_common_git_directory`] then drops it, since
+    /// there is nothing separate to store.
+    fn derive_common_git_dir(external_git_dir: &std::path::Path) -> std::path::PathBuf {
+        if let Some(worktrees_dir) = external_git_dir.parent()
+            && worktrees_dir.file_name().and_then(|name| name.to_str()) == Some("worktrees")
+            && let Some(common_git_dir) = worktrees_dir.parent()
+        {
+            return common_git_dir.to_path_buf();
         }
-        None
+        external_git_dir.to_path_buf()
     }
 
     fn derive_common_git_directory(
@@ -179,7 +190,7 @@ impl Repository {
     ) -> Option<StandardizedPath> {
         external_git_directory
             .to_local_path()
-            .and_then(|local| Self::derive_common_git_dir(&local))
+            .map(|local| Self::derive_common_git_dir(&local))
             .and_then(|path| StandardizedPath::try_from_local(&path).ok())
             // Only store when it differs from external_git_directory.
             .filter(|common| common != external_git_directory)

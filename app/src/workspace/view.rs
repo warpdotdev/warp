@@ -1,4 +1,5 @@
 pub(crate) mod agent_cli_launch_modal;
+mod auto_grouping;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
 pub(crate) mod cloud_agent_capacity_modal;
@@ -1031,6 +1032,9 @@ pub struct Workspace {
     traffic_light_mouse_states: TrafficLightMouseStates,
     /// Tab groups in this workspace, keyed by id.
     pub(crate) tab_groups: HashMap<TabGroupId, TabGroup>,
+    /// In-memory resolver state for automatic tab grouping. Deliberately not
+    /// persisted: it only has to survive between two directory changes.
+    auto_grouping_state: auto_grouping::AutoGroupingState,
     /// Per-group hover state for the horizontal tab bar.
     horizontal_tab_group_mouse_states: RefCell<HashMap<TabGroupId, HorizontalTabGroupMouseStates>>,
     tab_rename_editor: ViewHandle<EditorView>,
@@ -3416,6 +3420,7 @@ impl Workspace {
             tab_bar_hover_state: Default::default(),
             traffic_light_mouse_states: Default::default(),
             tab_groups: HashMap::new(),
+            auto_grouping_state: Default::default(),
             horizontal_tab_group_mouse_states: RefCell::default(),
             tab_rename_editor: Self::tab_rename_editor(ctx),
             pane_rename_editor: Self::pane_rename_editor(ctx),
@@ -3890,6 +3895,22 @@ impl Workspace {
                 self.sync_panel_positions_from_config(ctx);
                 ctx.notify();
             }
+            TabSettingsChangedEvent::AutoGroupTabs { .. } => {
+                // Enabling the mode is the single moment automation touches
+                // tabs that are already ungrouped. Disabling it does nothing:
+                // every group stays exactly as it is, as an ordinary manual
+                // group.
+                self.sweep_tabs_for_auto_grouping(ctx);
+                // Tabs the sweep did not have to move — ones an earlier run of
+                // the mode left in their project's group — are placed already
+                // and so are never reached by the coloring at join time.
+                self.sweep_auto_tab_colors(ctx);
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::AutoGroupTabColors { .. } => {
+                self.sweep_auto_tab_colors(ctx);
+                ctx.notify();
+            }
         }
     }
 
@@ -3970,6 +3991,7 @@ impl Workspace {
                                     // Pinned Tabs feature is enabled.
                                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                                         && group_snapshot.pinned,
+                                    project_key: group_snapshot.project_key.clone(),
                                 },
                             )
                         })
@@ -4000,6 +4022,7 @@ impl Workspace {
                         self.tabs[tab_index].group_id = saved_tab
                             .group_id
                             .filter(|group_id| self.tab_groups.contains_key(group_id));
+                        self.tabs[tab_index].placed_by_automation = saved_tab.placed_by_automation;
 
                         let pane_group = self.tabs[tab_index].pane_group.clone();
 
@@ -7306,6 +7329,10 @@ impl Workspace {
         if let Some(tab) = self.tabs.get_mut(new_tab_index) {
             tab.group_id = Some(group_id);
         }
+        // The user asked for this tab to be in this group. Without retiring the
+        // marker the tab's first resolved key would pull it straight back out
+        // and prune the group that was just created.
+        self.note_manual_tab_placement(new_tab_index);
 
         self.move_tab_to_index(new_tab_index, target, ctx);
 
@@ -7411,6 +7438,7 @@ impl Workspace {
             return;
         };
         let previous_group_id = tab.group_id;
+        let pane_group_id = tab.pane_group.id();
 
         let group = TabGroup::new();
         let group_id = group.id;
@@ -7429,6 +7457,7 @@ impl Workspace {
         self.tabs[tab_index].group_id = Some(group_id);
         // Pin state is cleared when a new group with this tab is created.
         self.tabs[tab_index].pinned = false;
+        self.note_manual_tab_placement(tab_index);
 
         self.move_tab_to_index(tab_index, target, ctx);
 
@@ -7439,9 +7468,19 @@ impl Workspace {
             .unwrap_or(tab_index);
         self.set_active_tab_index(new_active, ctx);
 
+        // Read before the prune below can destroy it: it is the key the colour
+        // the tab still carries would have been derived from, and so what
+        // decides whether that colour was automation's or the user's.
+        let previous_key = previous_group_id.and_then(|gid| self.project_key_of_group(gid));
+
         if let Some(prev_group_id) = previous_group_id {
             self.prune_empty_tab_group(prev_group_id, ctx);
         }
+
+        // A group made from one tab is that tab's project's group, so the tab
+        // is back under automation from here on (R14). No-op while the mode is
+        // off or the tab's project is unknown.
+        self.adopt_project_key_for_new_group(group_id, pane_group_id, previous_key, ctx);
 
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
@@ -7471,10 +7510,21 @@ impl Workspace {
         let previous_group_id = tab.group_id;
 
         let target_index = self.index_after_group(group_id).unwrap_or(self.tabs.len());
+        // Read before the membership changes: it is the key the colour the tab
+        // carries now would have been derived from.
+        let previous_key = self.project_key_of_tabs_group(tab_index);
         self.tabs[tab_index].group_id = Some(group_id);
 
-        // Moving a tab to a group, clear its pinned state.
+        // Moving a tab to a group, clear its pinned state — and its
+        // queued-for-placement marker, so the group the user picked is the one
+        // it keeps. See `Workspace::note_manual_tab_placement`.
         self.tabs[tab_index].pinned = false;
+        self.note_manual_tab_placement(tab_index);
+        // The colour follows the membership, as it does on the drag path and on
+        // automation's own paths. Applied before the move, while `tab_index`
+        // still addresses this tab.
+        let key = self.project_key_of_tabs_group(tab_index);
+        self.apply_derived_tab_color(tab_index, key.as_ref(), previous_key.as_ref(), ctx);
         self.expand_tab_group(group_id, ctx);
         self.move_tab_to_index(tab_index, target_index, ctx);
 
@@ -7508,7 +7558,15 @@ impl Workspace {
             .index_after_group(previous_group_id)
             .map(|t| self.clamp_to_unpinned_region(&self.tabs, t));
 
+        // Before the membership is dropped, while the group it is leaving can
+        // still be read: a tab automation coloured for that project must not
+        // keep advertising it from outside the group.
+        self.clear_derived_tab_color_on_leaving(tab_index, previous_group_id, ctx);
+
         self.tabs[tab_index].group_id = None;
+        // Leaving a group is a placement: the tab is now ungrouped *and*
+        // detached, and stays that way until the user puts it somewhere.
+        self.note_manual_tab_placement(tab_index);
 
         if let Some(target) = target {
             self.move_tab_to_index(tab_index, target, ctx);
@@ -7531,9 +7589,23 @@ impl Workspace {
         let was_pinned = self.tab_groups.get(&group_id).is_some_and(|g| g.pinned);
         let member_range = group_member_index_range(&self.tabs, group_id);
 
+        // Every member gives up a colour automation derived for this group's
+        // project, for the same reason one leaving on its own does. Done first,
+        // while the group is still there to judge provenance against.
+        let members: Vec<usize> = group_member_indices(&self.tabs, group_id).collect();
+        for tab_index in members {
+            self.clear_derived_tab_color_on_leaving(tab_index, group_id, ctx);
+        }
+
         for tab in &mut self.tabs {
             if tab.group_id == Some(group_id) {
                 tab.group_id = None;
+                // R15: a former member is ungrouped *and* detached. Clearing
+                // the marker is what makes that true for a member automation
+                // had not placed yet — without it the next resolve would sweep
+                // the tab straight back into a group. See
+                // `Workspace::note_manual_tab_placement`.
+                tab.placed_by_automation = false;
             }
         }
         self.tab_groups.remove(&group_id);
@@ -7596,6 +7668,11 @@ impl Workspace {
             }
             self.move_tab_to_index(new_idx, target_index, ctx);
         }
+        // The user asked for a tab *in this group*, so this group is where it
+        // stays even if its directory belongs to another project.
+        // `move_tab_to_index` re-seats the active index onto the tab it moved,
+        // so this is the new tab in both branches.
+        self.note_manual_tab_placement(self.active_tab_index);
         self.expand_tab_group(group_id, ctx);
     }
 
@@ -7816,6 +7893,36 @@ impl Workspace {
             self.tab_groups.remove(&group_id);
             ctx.notify();
         }
+    }
+
+    /// Whether a member of `group_id` gives up its own per-tab `Draggable` so
+    /// the parent group's drag fires instead.
+    ///
+    /// Only the sole member of a **manual** group does. That suppression exists
+    /// so dragging the last tab out of a group the user authored moves the
+    /// whole block instead of orphaning the group. An automation-keyed group is
+    /// derived rather than authored, so nothing is orphaned — the emptied group
+    /// prunes itself and the tab regroups at its destination — and the member
+    /// keeps the per-tab drag that carrying a tab into another window relies on
+    /// (group drag does not cross windows; that is issue #14152). With
+    /// automatic grouping on a tab is essentially always grouped, so suppressing
+    /// there would quietly take cross-window drag away (R22).
+    ///
+    /// Gated on the group rather than on the mode on purpose: a manual group
+    /// holding one tab behaves identically whether the mode is on or off, and a
+    /// keyed group left behind after the mode is switched off stays draggable.
+    ///
+    /// This is the single predicate both tab bars ask — the horizontal bar in
+    /// `render_horizontal_tab_group`, the vertical panel through
+    /// `vertical_tabs::member_defers_drag_to_group` — so the two cannot drift
+    /// apart. An unknown `group_id` suppresses nothing, so a stale id never
+    /// costs a tab its drag.
+    pub(super) fn suppresses_member_drag(&self, group_id: TabGroupId) -> bool {
+        group_has_single_member(&self.tabs, group_id)
+            && self
+                .tab_groups
+                .get(&group_id)
+                .is_some_and(|group| group.project_key.is_none())
     }
 
     /// Moves the tab at `from` to position `to` (`Vec::insert` semantics).
@@ -11754,6 +11861,10 @@ impl Workspace {
                     // enabled.
                     pinned: FeatureFlag::PinnedTabs.is_enabled()
                         && self.tabs.get(tab_index).is_some_and(|tab| tab.pinned),
+                    placed_by_automation: self
+                        .tabs
+                        .get(tab_index)
+                        .is_some_and(|tab| tab.placed_by_automation),
                 }
             })
             .filter(|tab| {
@@ -11785,6 +11896,7 @@ impl Workspace {
                     color: group.color,
                     collapsed: group.collapsed,
                     pinned: FeatureFlag::PinnedTabs.is_enabled() && group.pinned,
+                    project_key: group.project_key.clone(),
                 })
                 .collect()
         } else {
@@ -12143,6 +12255,11 @@ impl Workspace {
 
         let removed_pane_group_id = tab_data.pane_group.id();
         self.tab_mru_order.retain(|id| *id != removed_pane_group_id);
+        // The single funnel for every way a tab leaves for good — plain close,
+        // `remove_tab_by_pane_group_id`, and the cross-window drag's
+        // `remove_tab_without_undo` — so the resolver's per-tab maps are pruned
+        // here rather than at each caller.
+        self.auto_grouping_state.forget(removed_pane_group_id);
 
         // If the closed tab was a group member, prune the group when it now
         // has no remaining members.
@@ -12488,6 +12605,14 @@ impl Workspace {
             pane_group.reattach_panes(ctx);
         });
 
+        // A reopened tab is treated as newly created only when the group it
+        // was closed from is gone; a group that survived means its restored
+        // placement stands, and the ordinary manual-override rule applies.
+        let stored_group_vanished = tab_data
+            .group_id
+            .is_some_and(|group_id| !self.tab_groups.contains_key(&group_id));
+        let pane_group_id = tab_data.pane_group.id();
+
         // If the tab belonged to a group, try to re-join it by appending after
         // the group's current last member. If the group no longer exists (it was
         // pruned when the tab was closed), drop the membership and fall back to
@@ -12514,6 +12639,10 @@ impl Workspace {
         }
 
         self.activate_tab(insert_index, ctx);
+
+        if stored_group_vanished {
+            self.place_tab_by_auto_grouping(pane_group_id, ctx);
+        }
 
         ctx.notify();
     }
@@ -12883,6 +13012,7 @@ impl Workspace {
         } else {
             self.new_tab_index_and_group(ctx)
         };
+        let new_pane_group_id = new_pane_group.id();
         self.tabs.insert(insert_idx, TabData::new(new_pane_group));
         self.tab_mru_order
             .push(self.tabs[insert_idx].pane_group.id());
@@ -12928,6 +13058,18 @@ impl Workspace {
                 pg.set_left_panel_open(true, ctx);
             });
         }
+
+        // Automatic grouping places a genuinely new tab. A restoration is
+        // excluded: the window snapshot carries each tab's own group and its
+        // placed-by-automation marker, and overwriting them here would undo a
+        // placement the user made before the restart. A tab that inherited a
+        // group takes the path that respects a manual one.
+        if !is_restoration {
+            match inherited_group_id {
+                Some(group_id) => self.place_tab_born_into_group(new_pane_group_id, group_id, ctx),
+                None => self.place_tab_by_auto_grouping(new_pane_group_id, ctx),
+            }
+        }
     }
 
     pub fn add_tab_from_existing_pane(
@@ -12952,6 +13094,7 @@ impl Workspace {
             me.handle_file_tree_event(pane_group, event, ctx)
         });
 
+        let new_pane_group_id = new_pane_group.id();
         if self.tab_count() == 0 {
             self.tabs.push(TabData::new(new_pane_group));
             self.tab_mru_order
@@ -12970,6 +13113,11 @@ impl Workspace {
                 new_tab.group_id = Some(group_id);
             }
             self.expand_tab_group(group_id, ctx);
+        }
+
+        match group_id {
+            Some(group_id) => self.place_tab_born_into_group(new_pane_group_id, group_id, ctx),
+            None => self.place_tab_by_auto_grouping(new_pane_group_id, ctx),
         }
     }
 
@@ -16045,6 +16193,12 @@ impl Workspace {
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
+
+                // The primary automatic-grouping trigger. This event also
+                // fires on pane splits, pane closes, session changes and title
+                // updates, so the handler guards on the anchor pane's
+                // directory actually having changed.
+                self.reconcile_tab_auto_group_after_directory_change(pane_group.id(), ctx);
             }
             pane_group::Event::ActiveSessionChanged => {
                 self.update_active_session(ctx);
@@ -16563,6 +16717,12 @@ impl Workspace {
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
+
+                // The secondary automatic-grouping trigger: detection answered
+                // for a directory that moved some frames ago. Cannot be the
+                // primary one — it stays silent for every non-git to non-git
+                // move, which is exactly the case R6 covers.
+                self.reconcile_tab_auto_group_after_repo_change(pane_group.id(), ctx);
             }
             #[cfg(feature = "local_fs")]
             pane_group::Event::RemoteRepoNavigated { remote_path } => {
@@ -19973,10 +20133,10 @@ impl Workspace {
             } else {
                 TabCloseButtonPosition::default()
             };
-            // When a group has only one member, suppress that member's per-tab
-            // `Draggable` so the parent group's `Draggable` picks up the drag
-            // instead, dragging the whole group rather than orphaning it.
-            let is_sole_member = group_has_single_member(&self.tabs, group.id);
+            // A member may have to give up its per-tab `Draggable` so the
+            // parent group's `Draggable` picks up the drag instead; see
+            // `Workspace::suppresses_member_drag` for when and why.
+            let defers_drag_to_group = self.suppresses_member_drag(group.id);
             for idx in member_range {
                 // Insertion divider before this member when a pane drop lands
                 // here (into the group at `idx`).
@@ -19997,7 +20157,7 @@ impl Workspace {
                     ctx,
                 )
                 .with_effective_color(effective_color)
-                .for_grouped_member(is_sole_member)
+                .for_grouped_member(defers_drag_to_group)
                 .with_multi_tab_selection(self.is_tab_in_multi_tab_selection(idx))
                 .build()
                 .finish();
@@ -23189,6 +23349,12 @@ impl Workspace {
         }
         if *tab_settings.preserve_active_tab_color.value() {
             context.set.insert(flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG);
+        }
+        if *tab_settings.auto_group_tabs.value() {
+            context.set.insert(flags::AUTO_GROUP_TABS_FLAG);
+        }
+        if *tab_settings.auto_group_tab_colors.value() {
+            context.set.insert(flags::AUTO_GROUP_TAB_COLORS_FLAG);
         }
         if *tab_settings
             .show_vertical_tab_panel_in_restored_windows
@@ -28024,8 +28190,12 @@ impl Workspace {
         let mut tab_data = TabData::new(pane_group);
         tab_data.selected_color = color.map_or(SelectedTabColor::Unset, SelectedTabColor::Color);
         tab_data.draggable_state = draggable_state;
+        let pane_group_id = tab_data.pane_group.id();
         self.tabs.insert(index, tab_data);
         self.activate_tab_internal(index, ctx);
+        // A tab arriving from another window carries no group membership, so
+        // it is treated as newly created rather than as deliberately ungrouped.
+        self.place_tab_by_auto_grouping(pane_group_id, ctx);
         ctx.notify();
     }
 
@@ -28714,7 +28884,7 @@ impl Workspace {
                 // a pinned tab dragged into a pinned group keeps its pin for the
                 // duration of the drag and only loses it on drop (see the
                 // `DropTab` handler).
-                self.assign_tab_to_group(current_index, expanded_target, ctx);
+                self.commit_dragged_tab_group(current_index, expanded_target, ctx);
 
                 // Hop into the target group's contiguous block so the group
                 // stays one rendered container. Vertical tab rendering only
@@ -29451,11 +29621,11 @@ fn group_member_index_range(tabs: &[TabData], group_id: TabGroupId) -> Option<(u
     Some((first, last))
 }
 
-/// Returns `true` when `group_id` has exactly one member in `tabs`. Shared
-/// by both horizontal and vertical tab rendering to detect the "sole grouped
-/// member" case, where the per-tab `Draggable` is suppressed so the parent
-/// group's `Draggable` picks up the drag — dragging the only member of a
-/// group drags the entire group rather than orphaning it.
+/// Returns `true` when `group_id` has exactly one member in `tabs`.
+///
+/// This is only the membership half of the "sole grouped member" case; whether
+/// that member actually gives up its own drag is decided by
+/// [`Workspace::suppresses_member_drag`], which both tab bars call.
 pub(super) fn group_has_single_member(tabs: &[TabData], group_id: TabGroupId) -> bool {
     group_member_index_range(tabs, group_id).is_some_and(|(first, last)| first == last)
 }

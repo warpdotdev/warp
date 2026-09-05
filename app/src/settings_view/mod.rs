@@ -554,6 +554,8 @@ pub mod flags {
     pub const AUTO_OPEN_CODE_REVIEW_PANE_FLAG: &str = "Auto_Open_Code_Review_Pane_Enabled";
     pub const USE_VERTICAL_TABS_FLAG: &str = "Use_Vertical_Tabs";
     pub const PRESERVE_ACTIVE_TAB_COLOR_FLAG: &str = "Preserve_Active_Tab_Color";
+    pub const AUTO_GROUP_TABS_FLAG: &str = "Auto_Group_Tabs";
+    pub const AUTO_GROUP_TAB_COLORS_FLAG: &str = "Auto_Group_Tab_Colors";
     pub const SHOW_VERTICAL_TAB_PANEL_IN_RESTORED_WINDOWS_FLAG: &str =
         "Show_Vertical_Tab_Panel_In_Restored_Windows";
     pub const USE_LATEST_USER_PROMPT_AS_CONVERSATION_TITLE_IN_TAB_NAMES_FLAG: &str =
@@ -1009,6 +1011,17 @@ pub enum SettingsAction {
     Down,
     /// For internal, debug-related settings which don't appear in the UI.
     Debug(DebugSettingsAction),
+}
+
+/// The action that flips the automatic tab grouping setting.
+///
+/// Surfaces outside Settings — the tab bar's context menu — dispatch this
+/// rather than writing `appearance.tabs.auto_group_tabs` themselves, so the
+/// menu, the Settings switch and the keybinding stay one writer with one
+/// telemetry event between them. Exposed as a constructor so the Appearance
+/// page's own action enum stays private to this module.
+pub(crate) fn auto_group_tabs_toggle_action() -> SettingsAction {
+    SettingsAction::AppearancePageToggle(AppearancePageAction::ToggleAutoGroupTabs)
 }
 
 #[derive(Copy, Clone, Debug)]

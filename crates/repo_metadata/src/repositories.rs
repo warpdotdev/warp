@@ -217,6 +217,24 @@ impl DetectedRepositories {
         DirectoryWatcher::as_ref(ctx).get_watched_directory_for_path(local_path)
     }
 
+    /// Like [`Self::get_local_watched_repo_for_path`], but for a path that is
+    /// already canonicalized: neither the root lookup nor the watched-directory
+    /// lookup touches the filesystem.
+    ///
+    /// This is the path from a pane's canonical working directory to the
+    /// `Repository` holding its shared git directory, and it runs on every
+    /// directory change.
+    pub fn get_local_watched_repo_for_canonical_path(
+        &self,
+        path: &Path,
+        ctx: &AppContext,
+    ) -> Option<ModelHandle<Repository>> {
+        let root =
+            self.get_root_for_canonical_path(&LocalOrRemotePath::Local(path.to_path_buf()))?;
+        let local_path = root.to_local_path()?;
+        DirectoryWatcher::as_ref(ctx).get_watched_directory_for_canonical_path(local_path)
+    }
+
     /// Given a local or remote path, return its corresponding repo root.
     ///
     /// No git detection is performed; roots are looked up in our cached

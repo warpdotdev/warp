@@ -38,6 +38,7 @@ use crate::features::FeatureFlag;
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
+use crate::settings_view::auto_group_tabs_toggle_action;
 use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
@@ -52,7 +53,7 @@ use crate::util::color::{Opacity, coloru_with_opacity};
 use crate::util::truncation::truncate_from_end;
 use crate::window_settings::WindowSettings;
 use crate::workspace::sync_inputs::SyncedInputState;
-use crate::workspace::tab_group::{TabGroup, TabGroupId};
+use crate::workspace::tab_group::{TabGroup, TabGroupId, auto_tab_grouping_available};
 use crate::workspace::tab_settings::{
     TabCloseButtonPosition, TabSettings, VerticalTabsDisplayGranularity,
 };
@@ -227,6 +228,37 @@ pub(crate) fn reveals_tab_shortcut_hints(ctx: &AppContext) -> bool {
 /// Label for the tab right-click menu's "Move to group" submenu parent.
 pub const MOVE_TO_GROUP_LABEL: &str = "Move to group";
 
+/// Labels for the per-tab menu's automatic-tab-grouping toggle.
+///
+/// The verb says what activating the entry will do, which is why the label is
+/// state-aware rather than a static noun.
+///
+/// Menu rows are laid out against [`crate::menu::DEFAULT_WIDTH`] and clip
+/// rather than wrap, so a label has to stay inside the width the menu's
+/// existing entries already fit in — hence `auto-grouping` over the settings
+/// page's fuller "Automatically group tabs by project". What does not fit in a
+/// row lives in [`AUTO_GROUP_TABS_MENU_TOOLTIP`] instead.
+pub const TURN_ON_AUTO_GROUP_TABS_LABEL: &str = "Turn on auto-grouping";
+pub const TURN_OFF_AUTO_GROUP_TABS_LABEL: &str = "Turn off auto-grouping";
+
+/// Hover text for the automatic-tab-grouping toggle.
+///
+/// Everything else in the group section acts on the single tab that was
+/// right-clicked; this entry flips `appearance.tabs.auto_group_tabs`, a
+/// cloud-synced setting that governs every window. Nothing about a menu row's
+/// shape conveys that and the label has no room to, so the tooltip carries it.
+pub const AUTO_GROUP_TABS_MENU_TOOLTIP: &str =
+    "Groups tabs by project automatically. Applies to every window, not just this tab.";
+
+/// The automatic-grouping toggle's label for the setting's current value.
+pub fn auto_group_tabs_menu_label(enabled: bool) -> &'static str {
+    if enabled {
+        TURN_OFF_AUTO_GROUP_TABS_LABEL
+    } else {
+        TURN_ON_AUTO_GROUP_TABS_LABEL
+    }
+}
+
 /// Decides which tab-group context-menu entries apply to a tab, based on its
 /// group membership, whether it is the sole member of that group, and whether
 /// any *other* groups exist.
@@ -247,6 +279,61 @@ fn tab_group_menu_entry_flags(
     let has_other_groups = tab_groups.keys().any(|gid| Some(*gid) != group_id);
     let show_new_group = !(in_group && is_only_member_of_group);
     (show_new_group, has_other_groups, in_group)
+}
+
+/// Builds the tab-group section of the per-tab right-click menu — the one menu
+/// both tab bars open, so this is the single place the section is defined.
+///
+/// `auto_group_tabs` is `None` when the automatic-grouping mode is out of reach
+/// (see [`auto_tab_grouping_available`]) and `Some(enabled)` with the setting's
+/// current value otherwise. When it is `Some`, the section ends with a divider
+/// and the window-wide toggle, fenced off because every entry above it acts on
+/// the one right-clicked tab.
+fn tab_group_menu_items_for(
+    index: usize,
+    group_id: Option<TabGroupId>,
+    tab_groups: &HashMap<TabGroupId, TabGroup>,
+    is_only_member_of_group: bool,
+    auto_group_tabs: Option<bool>,
+) -> Vec<MenuItem<WorkspaceAction>> {
+    let (show_new_group, show_move_to_group, show_remove_from_group) =
+        tab_group_menu_entry_flags(group_id, tab_groups, is_only_member_of_group);
+    let mut menu_items = vec![];
+    if show_new_group {
+        menu_items.push(
+            MenuItemFields::new("New group with tab")
+                .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
+                .into_item(),
+        );
+    }
+    if show_move_to_group {
+        menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
+    }
+    if show_remove_from_group {
+        menu_items.push(
+            MenuItemFields::new("Remove from group")
+                .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
+                .into_item(),
+        );
+    }
+    if let Some(enabled) = auto_group_tabs {
+        if !menu_items.is_empty() {
+            menu_items.push(MenuItem::Separator);
+        }
+        menu_items.push(
+            MenuItemFields::new(auto_group_tabs_menu_label(enabled))
+                // Routed through the settings page's own toggle instead of
+                // writing `appearance.tabs.auto_group_tabs` here, so the menu,
+                // the Settings switch and the keybinding stay one writer with
+                // one telemetry event between them.
+                .with_on_select_action(WorkspaceAction::DispatchToSettingsTab(
+                    auto_group_tabs_toggle_action(),
+                ))
+                .with_tooltip(AUTO_GROUP_TABS_MENU_TOOLTIP)
+                .into_item(),
+        );
+    }
+    menu_items
 }
 
 /// True when the user has opted into vertical tabs and the feature flag is on.
@@ -370,6 +457,14 @@ pub struct TabData {
     pub in_multi_selection: bool,
     /// True when this tab is pinned to the front of the tab list.
     pub pinned: bool,
+    /// True while this tab is still waiting for automatic grouping to place
+    /// it. Set when the tab is created, reopened, or transferred in from
+    /// another window, and cleared by the first reconcile that places it.
+    ///
+    /// Without it, a tab the user deliberately ungrouped and a tab automation
+    /// never reached — because its project key had not resolved yet — are
+    /// indistinguishable after a restart.
+    pub placed_by_automation: bool,
 }
 
 const TAB_COLOR_ICON_PATH: &str = "bundled/svg/ellipse.svg";
@@ -390,6 +485,7 @@ impl TabData {
             group_id: None,
             in_multi_selection: false,
             pinned: false,
+            placed_by_automation: false,
         }
     }
 
@@ -455,7 +551,7 @@ impl TabData {
 
         for section_items in [
             self.pin_menu_items(index),
-            self.tab_group_menu_items(index, tab_groups, is_only_member_of_group),
+            self.tab_group_menu_items(index, tab_groups, is_only_member_of_group, ctx),
             self.session_sharing_menu_items(index, ctx),
             self.copy_metadata_menu_items(pane_name_target, ctx),
             self.modify_tab_menu_items(index, can_move_left, can_move_right, pane_name_target, ctx),
@@ -842,36 +938,30 @@ impl TabData {
     /// The `Move to group` item is a submenu parent — selecting/hovering it
     /// opens a sidecar populated by the workspace; it has no
     /// `on_select_action` of its own.
+    ///
+    /// When the automatic-grouping mode is available it also appends the
+    /// window-wide toggle for it, behind a divider — see
+    /// [`tab_group_menu_items_for`]. Reading the setting here rather than in the
+    /// builder keeps the section's shape a pure function of its inputs.
     fn tab_group_menu_items(
         &self,
         index: usize,
         tab_groups: &HashMap<TabGroupId, TabGroup>,
         is_only_member_of_group: bool,
+        ctx: &AppContext,
     ) -> Vec<MenuItem<WorkspaceAction>> {
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return vec![];
         }
-        let (show_new_group, show_move_to_group, show_remove_from_group) =
-            tab_group_menu_entry_flags(self.group_id, tab_groups, is_only_member_of_group);
-        let mut menu_items = vec![];
-        if show_new_group {
-            menu_items.push(
-                MenuItemFields::new("New group with tab")
-                    .with_on_select_action(WorkspaceAction::NewTabGroupFromTab(index))
-                    .into_item(),
-            );
-        }
-        if show_move_to_group {
-            menu_items.push(MenuItemFields::new_submenu(MOVE_TO_GROUP_LABEL).into_item());
-        }
-        if show_remove_from_group {
-            menu_items.push(
-                MenuItemFields::new("Remove from group")
-                    .with_on_select_action(WorkspaceAction::RemoveTabFromGroup(index))
-                    .into_item(),
-            );
-        }
-        menu_items
+        let auto_group_tabs = auto_tab_grouping_available()
+            .then(|| *TabSettings::as_ref(ctx).auto_group_tabs.value());
+        tab_group_menu_items_for(
+            index,
+            self.group_id,
+            tab_groups,
+            is_only_member_of_group,
+            auto_group_tabs,
+        )
     }
 
     fn color_option_menu_items(
@@ -1089,8 +1179,9 @@ pub struct TabComponent<'a> {
     for_drag_ghost: bool,
     /// Set when rendered as a member of a horizontal tab group.
     grouped_member: bool,
-    /// Set when this member is the sole tab in its group.
-    sole_grouped_member: bool,
+    /// Set when this member must give up its own drag to the enclosing group's.
+    /// Decided by the caller — see `Workspace::suppresses_member_drag`.
+    defers_drag_to_group: bool,
     /// Locator pointing at this tab's focused pane.
     locator: PaneViewLocator,
     /// True when this tab is part of a multi-tab (count > 1) selection. Drives
@@ -1263,7 +1354,7 @@ impl<'a> TabComponent<'a> {
             background_opacity,
             for_drag_ghost: false,
             grouped_member: false,
-            sole_grouped_member: false,
+            defers_drag_to_group: false,
             locator,
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
@@ -1279,11 +1370,12 @@ impl<'a> TabComponent<'a> {
 
     /// Marks this tab as a member of a horizontal tab group. See the
     /// [`TabComponent`] `grouped_member` field for the rendering differences.
-    /// Pass `is_sole_member = true` when this is the only tab in its group so
-    /// the per-tab `Draggable` is suppressed and the parent group drag fires.
-    pub fn for_grouped_member(mut self, is_sole_member: bool) -> Self {
+    /// Pass `defers_drag_to_group = true` to suppress the per-tab `Draggable`
+    /// so the parent group's drag fires instead; the caller decides, via
+    /// `Workspace::suppresses_member_drag`.
+    pub fn for_grouped_member(mut self, defers_drag_to_group: bool) -> Self {
         self.grouped_member = true;
-        self.sole_grouped_member = is_sole_member;
+        self.defers_drag_to_group = defers_drag_to_group;
         self
     }
 
@@ -2159,7 +2251,7 @@ impl UiComponent for TabComponent<'_> {
         let mouse_close_state = self.tab.close_mouse_state.clone();
         // Capture before `self` is moved into the Hoverable closure below.
         let for_drag_ghost = self.for_drag_ghost;
-        let sole_grouped_member = self.sole_grouped_member;
+        let defers_drag_to_group = self.defers_drag_to_group;
         let locator = self.locator;
         let is_in_multi_tab_selection = self.is_in_multi_tab_selection;
 
@@ -2373,12 +2465,12 @@ impl UiComponent for TabComponent<'_> {
         // position cache, breaking `tab_insertion_index_for_cursor`.
         let full_tab: Box<dyn Element> = if for_drag_ghost {
             constrained_tab
-        } else if sole_grouped_member {
-            // Sole member of a group: skip the per-tab `Draggable` so the
-            // parent group's `Draggable` picks up the drag instead. Dragging
-            // the only member of a group drags the entire group, preventing
-            // accidental orphaning. Keep `SavePosition` so hit-testing /
-            // neighbor-rect math still works.
+        } else if defers_drag_to_group {
+            // The member hands its drag to the group: skip the per-tab
+            // `Draggable` so the parent group's picks up the drag instead and
+            // the whole block moves, rather than orphaning a group the user
+            // authored. Keep `SavePosition` so hit-testing / neighbor-rect math
+            // still works.
             SavePosition::new(constrained_tab, &tab_position_id(tab_index)).finish()
         } else {
             // Grouped members use the same `Draggable` wrapper as regular tabs

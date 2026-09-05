@@ -67,6 +67,7 @@ use crate::settings_view::DisplayCount;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
+use crate::tab::auto_group_tabs_menu_label;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::history::History;
@@ -4654,6 +4655,137 @@ fn test_close_tab_group_removes_group_and_members() {
     });
 }
 
+/// Puts the tabs at `member_indices` (already a contiguous run, as the
+/// workspace requires) into a fresh group and returns its id. `project_key`
+/// stands in for how the group came to be: `Some` is an automation-keyed
+/// group, `None` a group the user made by hand.
+pub(crate) fn group_tabs_for_test(
+    workspace: &mut Workspace,
+    member_indices: &[usize],
+    project_key: Option<&str>,
+) -> TabGroupId {
+    let mut group = TabGroup::new();
+    let group_id = group.id;
+    group.project_key = project_key.map(str::to_string);
+    workspace.tab_groups.insert(group_id, group);
+    for &index in member_indices {
+        workspace.tabs[index].group_id = Some(group_id);
+    }
+    group_id
+}
+
+#[test]
+fn test_sole_member_of_keyed_group_keeps_its_own_drag_affordance() {
+    // R22. An automation-keyed group is derived, so dragging its only member
+    // away orphans nothing — the emptied group prunes itself and the tab
+    // regroups at its destination. The member therefore keeps the per-tab drag
+    // affordance that cross-window drag rides on.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let group_id = group_tabs_for_test(workspace, &[0], Some("/work/api/.git"));
+
+            assert!(
+                !workspace.suppresses_member_drag(group_id),
+                "the sole member of a keyed group must keep its own drag"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_sole_member_of_manual_group_defers_drag_to_group_with_auto_grouping_on() {
+    // The gate is on the group, not on the mode: a group the user authored
+    // still swallows its only member's drag so the block moves as one and the
+    // group is never orphaned — even with automatic grouping switched on.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let group_id = group_tabs_for_test(workspace, &[0], None);
+
+            assert!(
+                workspace.suppresses_member_drag(group_id),
+                "the sole member of a manual group must still defer to the group drag"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_multi_member_groups_keep_their_members_own_drag_affordance() {
+    // Regression guard: suppression has only ever applied to a *sole* member,
+    // and that is unchanged for keyed and manual groups alike.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..3 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            assert_eq!(workspace.tab_count(), 4);
+
+            let manual_group_id = group_tabs_for_test(workspace, &[0, 1], None);
+            let keyed_group_id = group_tabs_for_test(workspace, &[2, 3], Some("/work/api/.git"));
+
+            assert!(
+                !workspace.suppresses_member_drag(manual_group_id),
+                "members of a multi-member manual group keep their own drag"
+            );
+            assert!(
+                !workspace.suppresses_member_drag(keyed_group_id),
+                "members of a multi-member keyed group keep their own drag"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_dragging_sole_member_out_empties_and_prunes_its_keyed_group() {
+    // `remove_tab_without_undo` is the source-side step a cross-window tab drag
+    // runs once the tab has been handed to the target window. Driving the real
+    // drag needs two live windows, so this asserts the step that decides
+    // whether anything is orphaned.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let group_id = group_tabs_for_test(workspace, &[0], Some("/work/api/.git"));
+
+            workspace.remove_tab_without_undo(0, ctx);
+
+            assert_eq!(workspace.tab_count(), 1);
+            assert!(
+                !workspace.tab_groups.contains_key(&group_id),
+                "the emptied keyed group must prune itself"
+            );
+            // A group that no longer exists suppresses nothing, so a stale id
+            // never costs a tab its drag.
+            assert!(!workspace.suppresses_member_drag(group_id));
+        });
+    });
+}
+
 #[test]
 fn test_new_tab_with_after_all_tabs_setting_lands_top_level_at_end() {
     // With `new_tab_placement = AfterAllTabs`, a new tab lands at the very end
@@ -5470,4 +5602,175 @@ mod simplified_wasm_tab_bar {
         });
         });
     }
+}
+
+/// True when the built menu offers a row with exactly this label.
+fn menu_offers(items: &[MenuItem<WorkspaceAction>], label: &str) -> bool {
+    items
+        .iter()
+        .any(|item| item.is_approximately_same_item_as(&MenuItemFields::new(label).into_item()))
+}
+
+/// The per-tab menu as each tab bar builds it: the plain builder the horizontal
+/// tab bar and the vertical panel's kebab reach through
+/// `WorkspaceAction::ToggleTabRightClickMenu`, and the pane-targeted builder a
+/// right-click on a vertical panel row reaches through
+/// `WorkspaceAction::ToggleVerticalTabsPaneContextMenu`.
+fn per_tab_menus_from_both_tab_bars(
+    workspace: &Workspace,
+    pane_name_target: PaneNameMenuTarget,
+    ctx: &AppContext,
+) -> Vec<Vec<MenuItem<WorkspaceAction>>> {
+    let tabs_len = workspace.tabs.len();
+    vec![
+        workspace.tabs[0].menu_items(0, tabs_len, &workspace.tab_groups, false, false, false, ctx),
+        workspace.tabs[0].menu_items_with_pane_name_target(
+            0,
+            tabs_len,
+            &workspace.tab_groups,
+            false,
+            false,
+            false,
+            Some(pane_name_target),
+            ctx,
+        ),
+    ]
+}
+
+fn first_pane_name_target(workspace: &Workspace, ctx: &AppContext) -> PaneNameMenuTarget {
+    let tab = &workspace.tabs[0];
+    PaneNameMenuTarget {
+        locator: PaneViewLocator {
+            pane_group_id: tab.pane_group.id(),
+            pane_id: tab.pane_group.as_ref(ctx).focused_pane_id(ctx),
+        },
+        rename_label: "Rename pane",
+        reset_label: "Reset pane name",
+    }
+}
+
+// R17/R19: the automatic-grouping toggle belongs to the one per-tab context menu
+// both tab bars open, so a single entry serves the horizontal tab bar and the
+// vertical tabs panel alike. Rendering two tab bars in a unit test is
+// impractical, so this asserts that the two builder entry points those surfaces
+// share (see `per_tab_menus_from_both_tab_bars`) both carry the entry, and that
+// its label follows the live setting rather than a stale snapshot.
+#[test]
+fn auto_group_tabs_toggle_is_in_the_per_tab_menu_both_tab_bars_open() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        // Mode off: both surfaces offer to turn it on, and never both labels.
+        workspace.read(&app, |workspace, ctx| {
+            let target = first_pane_name_target(workspace, ctx);
+            for items in per_tab_menus_from_both_tab_bars(workspace, target, ctx) {
+                assert!(
+                    menu_offers(&items, auto_group_tabs_menu_label(false)),
+                    "every tab bar's per-tab menu should offer the automatic-grouping toggle"
+                );
+                assert!(!menu_offers(&items, auto_group_tabs_menu_label(true)));
+            }
+        });
+
+        TabSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .auto_group_tabs
+                .set_value(true, ctx)
+                .expect("enable automatic tab grouping");
+        });
+
+        // Mode on: the same entry now offers to turn it off, on both surfaces.
+        workspace.read(&app, |workspace, ctx| {
+            let target = first_pane_name_target(workspace, ctx);
+            for items in per_tab_menus_from_both_tab_bars(workspace, target, ctx) {
+                assert!(
+                    menu_offers(&items, auto_group_tabs_menu_label(true)),
+                    "with the mode on the entry should offer to turn it off"
+                );
+                assert!(!menu_offers(&items, auto_group_tabs_menu_label(false)));
+            }
+        });
+    });
+}
+
+// With `AutoTabGrouping` off the entry must not exist on either surface, even
+// though `GroupedTabs` still puts the tab-scoped group entries in the menu.
+#[test]
+fn auto_group_tabs_toggle_is_absent_from_the_per_tab_menu_without_the_flag() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        workspace.read(&app, |workspace, ctx| {
+            let target = first_pane_name_target(workspace, ctx);
+            for items in per_tab_menus_from_both_tab_bars(workspace, target, ctx) {
+                assert!(
+                    menu_offers(&items, "New group with tab"),
+                    "the tab-scoped group entries should still be present"
+                );
+                for enabled in [false, true] {
+                    assert!(
+                        !menu_offers(&items, auto_group_tabs_menu_label(enabled)),
+                        "the toggle must not exist at all with the feature flag off"
+                    );
+                }
+            }
+        });
+    });
+}
+
+// The entry earns its place only if selecting it actually flips the setting.
+// It dispatches into the settings pane, which is built alongside the workspace
+// and therefore reachable whether or not Settings has ever been opened — the
+// failure mode worth pinning is a menu entry that dispatches into the void.
+#[test]
+fn auto_group_tabs_toggle_entry_flips_the_setting() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        let toggle_action = workspace.read(&app, |workspace, ctx| {
+            let tabs_len = workspace.tabs.len();
+            let items = workspace.tabs[0].menu_items(
+                0,
+                tabs_len,
+                &workspace.tab_groups,
+                false,
+                false,
+                false,
+                ctx,
+            );
+            items
+                .iter()
+                .find(|item| {
+                    item.is_approximately_same_item_as(
+                        &MenuItemFields::new(auto_group_tabs_menu_label(false)).into_item(),
+                    )
+                })
+                .and_then(|item| item.item_on_select_action())
+                .cloned()
+                .expect("the per-tab menu should offer the automatic-grouping toggle")
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&toggle_action, ctx);
+        });
+
+        workspace.read(&app, |_workspace, ctx| {
+            assert!(
+                *TabSettings::as_ref(ctx).auto_group_tabs.value(),
+                "selecting the entry should turn the mode on"
+            );
+        });
+    });
 }

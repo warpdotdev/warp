@@ -15,6 +15,14 @@ use crate::ui_components::icons::Icon;
 
 const COLOR_DOT_SIZE: f32 = 16.;
 
+/// The colors a tab or tab group can be set to.
+///
+/// **This array's length and order are a persisted contract, not just a picker
+/// layout.** `workspace::project_key::derived_color` indexes it by a hash of a
+/// project key, so reordering it or changing its length silently repaints every
+/// automatically colored tab group a user already has, and orphans the
+/// provenance rule that keeps automation off a color the user chose. A build
+/// assertion there pins the length; change either only on purpose.
 pub(crate) const TAB_COLOR_OPTIONS: [AnsiColorIdentifier; 6] = [
     AnsiColorIdentifier::Red,
     AnsiColorIdentifier::Green,

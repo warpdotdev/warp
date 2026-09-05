@@ -89,11 +89,13 @@ use crate::window_settings::{
 };
 use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
+use crate::workspace::tab_group::auto_tab_grouping_available;
 use crate::workspace::tab_settings::{
-    DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs, PreserveActiveTabColor,
-    ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows, TabCloseButtonPosition,
-    TabSettings, TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames,
-    UseVerticalTabs, WorkspaceDecorationVisibility, canonical_directory_key,
+    AutoGroupTabColors, AutoGroupTabs, DirectoryTabColor, HideTitleBarSearchBarInVerticalTabs,
+    PreserveActiveTabColor, ShowIndicatorsButton, ShowVerticalTabPanelInRestoredWindows,
+    TabCloseButtonPosition, TabSettings, TabSettingsChangedEvent,
+    UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
+    WorkspaceDecorationVisibility, canonical_directory_key,
 };
 use crate::{send_telemetry_from_ctx, themes};
 
@@ -431,6 +433,29 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG,
     ));
 
+    if auto_tab_grouping_available() {
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "automatic tab grouping by project",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleAutoGroupTabs,
+            )),
+            context,
+            flags::AUTO_GROUP_TABS_FLAG,
+        ));
+        // Deliberately not gated on the parent setting the way the Settings row
+        // is: the pairs are built once, while `auto_group_tabs` changes at
+        // runtime. Flipping this early is harmless — nothing is keyed to colour
+        // yet — and the sweep applies it the moment grouping is turned on.
+        toggle_binding_pairs.push(ToggleSettingActionPair::new(
+            "coloring automatically grouped tabs by project",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleAutoGroupTabColors,
+            )),
+            context,
+            flags::AUTO_GROUP_TAB_COLORS_FLAG,
+        ));
+    }
+
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
         "custom padding in alt-screen",
         builder(SettingsAction::AppearancePageToggle(
@@ -498,6 +523,8 @@ pub enum AppearancePageAction {
     ToggleTabIndicators,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
+    ToggleAutoGroupTabs,
+    ToggleAutoGroupTabColors,
     ToggleVerticalTabs,
     ToggleShowVerticalTabPanelInRestoredWindows,
     ToggleHideTitleBarSearchBarInVerticalTabs,
@@ -688,6 +715,8 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
+            ToggleAutoGroupTabs => self.toggle_auto_group_tabs(ctx),
+            ToggleAutoGroupTabColors => self.toggle_auto_group_tab_colors(ctx),
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
             ToggleShowVerticalTabPanelInRestoredWindows => {
                 self.toggle_show_vertical_tab_panel_in_restored_windows(ctx)
@@ -1548,36 +1577,7 @@ impl AppearanceSettingsPageView {
             ],
         ));
 
-        let tab_settings = TabSettings::as_ref(ctx);
-        let mut tab_settings_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
-            vec![Box::new(TabIndicatorWidget::default())];
-        if FeatureFlag::FullScreenZenMode.is_enabled()
-            && tab_settings
-                .workspace_decoration_visibility
-                .is_supported_on_current_platform()
-        {
-            tab_settings_widgets.push(Box::new(ZenModeWidget::default()));
-        }
-        if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
-            tab_settings_widgets.push(Box::new(TabCloseButtonPositionWidget::default()));
-        }
-        tab_settings_widgets.push(Box::new(PreserveActiveTabColorWidget::default()));
-
-        if FeatureFlag::VerticalTabs.is_enabled() {
-            tab_settings_widgets.push(Box::new(VerticalTabsWidget::default()));
-            tab_settings_widgets.push(Box::new(
-                ShowVerticalTabPanelInRestoredWindowsWidget::default(),
-            ));
-            tab_settings_widgets.push(Box::new(
-                HideTitleBarSearchBarInVerticalTabsWidget::default(),
-            ));
-            tab_settings_widgets.push(Box::new(
-                UseLatestUserPromptAsConversationTitleInTabNamesWidget::default(),
-            ));
-            if FeatureFlag::ConfigurableToolbar.is_enabled() {
-                tab_settings_widgets.push(Box::new(EditToolbarWidget));
-            }
-        }
+        let mut tab_settings_widgets = Self::tab_settings_widgets(ctx);
 
         if FeatureFlag::DirectoryTabColors.is_enabled() {
             let add_picker = ctx.add_typed_action_view(DirectoryColorAddPicker::new);
@@ -1600,6 +1600,50 @@ impl AppearanceSettingsPageView {
         ));
 
         PageType::new_categorized(categories, None)
+    }
+
+    /// The Tabs category's widgets, apart from the directory-tab-colors widget, which owns a view
+    /// only `build_page` can create.
+    fn tab_settings_widgets(app: &AppContext) -> Vec<Box<dyn SettingsWidget<View = Self>>> {
+        let tab_settings = TabSettings::as_ref(app);
+        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(TabIndicatorWidget::default())];
+        if FeatureFlag::FullScreenZenMode.is_enabled()
+            && tab_settings
+                .workspace_decoration_visibility
+                .is_supported_on_current_platform()
+        {
+            widgets.push(Box::new(ZenModeWidget::default()));
+        }
+        if FeatureFlag::TabCloseButtonOnLeft.is_enabled() {
+            widgets.push(Box::new(TabCloseButtonPositionWidget::default()));
+        }
+        widgets.push(Box::new(PreserveActiveTabColorWidget::default()));
+
+        // The mode's flag is fixed for the process, so the widget is never created rather than
+        // opting out of every render pass.
+        if auto_tab_grouping_available() {
+            widgets.push(Box::new(AutoGroupTabsWidget::default()));
+            widgets.push(Box::new(AutoGroupTabColorsWidget::default()));
+        }
+
+        if FeatureFlag::VerticalTabs.is_enabled() {
+            widgets.push(Box::new(VerticalTabsWidget::default()));
+            widgets.push(Box::new(
+                ShowVerticalTabPanelInRestoredWindowsWidget::default(),
+            ));
+            widgets.push(Box::new(
+                HideTitleBarSearchBarInVerticalTabsWidget::default(),
+            ));
+            widgets.push(Box::new(
+                UseLatestUserPromptAsConversationTitleInTabNamesWidget::default(),
+            ));
+            if FeatureFlag::ConfigurableToolbar.is_enabled() {
+                widgets.push(Box::new(EditToolbarWidget));
+            }
+        }
+
+        widgets
     }
 
     fn set_alt_screen_padding_editor_text(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2542,6 +2586,34 @@ impl AppearanceSettingsPageView {
 
         send_telemetry_from_ctx!(
             TelemetryEvent::TogglePreserveActiveTabColor { enabled: new_value },
+            ctx
+        );
+    }
+
+    fn toggle_auto_group_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        let tab_settings = TabSettings::handle(ctx);
+        let new_value = !*tab_settings.as_ref(ctx).auto_group_tabs.value();
+
+        ctx.update_model(&tab_settings, move |tab_settings, ctx| {
+            report_if_error!(tab_settings.auto_group_tabs.set_value(new_value, ctx));
+        });
+
+        send_telemetry_from_ctx!(
+            TelemetryEvent::ToggleAutoGroupTabs { enabled: new_value },
+            ctx
+        );
+    }
+
+    fn toggle_auto_group_tab_colors(&mut self, ctx: &mut ViewContext<Self>) {
+        let tab_settings = TabSettings::handle(ctx);
+        let new_value = !*tab_settings.as_ref(ctx).auto_group_tab_colors.value();
+
+        ctx.update_model(&tab_settings, move |tab_settings, ctx| {
+            report_if_error!(tab_settings.auto_group_tab_colors.set_value(new_value, ctx));
+        });
+
+        send_telemetry_from_ctx!(
+            TelemetryEvent::ToggleAutoGroupTabColors { enabled: new_value },
             ctx
         );
     }
@@ -5005,6 +5077,121 @@ impl SettingsWidget for PreserveActiveTabColorWidget {
 }
 
 #[derive(Default)]
+struct AutoGroupTabsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AutoGroupTabsWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "tab group grouping automatic project repository worktree"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Automatically group tabs by project".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                AutoGroupTabs::storage_key(),
+                AutoGroupTabs::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.auto_group_tabs)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleAutoGroupTabs);
+                })
+                .finish(),
+            Some(
+                "Keeps each tab in a group named after the project it is in. Groups you make or \
+                 change by hand are left alone."
+                    .into(),
+            ),
+        )
+    }
+}
+
+/// Whether the group-color row has anything to configure.
+///
+/// The setting it modifies is only read while automatic grouping is on, so the
+/// row follows the parent toggle rather than sitting there inert. A user
+/// setting can change while Settings is open, so this is a `should_render`
+/// rather than a check at page-build time.
+fn should_render_auto_group_tab_colors(app: &AppContext) -> bool {
+    *TabSettings::as_ref(app).auto_group_tabs
+}
+
+#[derive(Default)]
+struct AutoGroupTabColorsWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for AutoGroupTabColorsWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "tab group grouping automatic project color colour colored coloring palette"
+    }
+
+    fn should_render(&self, app: &AppContext) -> bool {
+        should_render_auto_group_tab_colors(app)
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let tab_settings = TabSettings::as_ref(app);
+
+        render_body_item::<AppearancePageAction>(
+            "Color automatically grouped tabs by project".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                AutoGroupTabColors::storage_key(),
+                AutoGroupTabColors::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*tab_settings.auto_group_tab_colors)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleAutoGroupTabColors);
+                })
+                .finish(),
+            Some(
+                "Gives the tabs in each automatic group a color derived from their project, so a \
+                 repository always reads the same color and the group itself stays uncolored. A \
+                 tab takes its new project's color when it moves, and gives the color up when \
+                 you take it out of the group. Colors come from a palette of six, so two \
+                 projects can land on the same one. Colors you set by hand are left alone."
+                    .into(),
+            ),
+        )
+    }
+}
+
+#[derive(Default)]
 struct VerticalTabsWidget {
     switch_state: SwitchStateHandle,
 }
@@ -5677,3 +5864,7 @@ impl From<ViewHandle<AppearanceSettingsPageView>> for SettingsPageViewHandle {
         SettingsPageViewHandle::Appearance(view_handle)
     }
 }
+
+#[cfg(test)]
+#[path = "appearance_page_tests.rs"]
+mod tests;

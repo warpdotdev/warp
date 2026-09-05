@@ -1653,6 +1653,12 @@ pub enum TelemetryEvent {
     TogglePreserveActiveTabColor {
         enabled: bool,
     },
+    ToggleAutoGroupTabs {
+        enabled: bool,
+    },
+    ToggleAutoGroupTabColors {
+        enabled: bool,
+    },
     ShowSubshellBanner,
     DeclineSubshellBootstrap {
         remember: bool,
@@ -3316,6 +3322,10 @@ impl TelemetryEvent {
             TelemetryEvent::TogglePreserveActiveTabColor { enabled } => {
                 Some(json!({ "enabled": enabled }))
             }
+            TelemetryEvent::ToggleAutoGroupTabs { enabled } => Some(json!({ "enabled": enabled })),
+            TelemetryEvent::ToggleAutoGroupTabColors { enabled } => {
+                Some(json!({ "enabled": enabled }))
+            }
             TelemetryEvent::DeclineSubshellBootstrap { remember } => {
                 Some(json!({ "remember": remember }))
             }
@@ -4887,6 +4897,8 @@ impl TelemetryEvent {
             | TelemetryEvent::DisableInputSync
             | TelemetryEvent::ToggleTabIndicators { .. }
             | TelemetryEvent::TogglePreserveActiveTabColor { .. }
+            | TelemetryEvent::ToggleAutoGroupTabs { .. }
+            | TelemetryEvent::ToggleAutoGroupTabColors { .. }
             | TelemetryEvent::ShowSubshellBanner
             | TelemetryEvent::DeclineSubshellBootstrap { .. }
             | TelemetryEvent::TriggerSubshellBootstrap { .. }
@@ -5422,6 +5434,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::DisableInputSync => EnablementState::Always,
             Self::ToggleTabIndicators => EnablementState::Always,
             Self::TogglePreserveActiveTabColor => EnablementState::Always,
+            Self::ToggleAutoGroupTabs => EnablementState::Always,
+            Self::ToggleAutoGroupTabColors => EnablementState::Always,
             Self::ShowSubshellBanner => EnablementState::Always,
             Self::DeclineSubshellBootstrap => EnablementState::Always,
             Self::TriggerSubshellBootstrap => EnablementState::Always,
@@ -5904,6 +5918,8 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             Self::DisableInputSync => "Disable Input Sync Inputs",
             Self::ToggleTabIndicators => "Toggle Tab Indicators",
             Self::TogglePreserveActiveTabColor => "Toggle Preserve Active Tab Color",
+            Self::ToggleAutoGroupTabs => "Toggle Automatic Tab Grouping",
+            Self::ToggleAutoGroupTabColors => "Toggle Automatic Grouped Tab Colors",
             Self::ShowSubshellBanner => "Show Subshell Banner",
             Self::DeclineSubshellBootstrap => "Decline Subshell Bootstrap",
             Self::TriggerSubshellBootstrap => "Trigger Subshell Bootstrap",
@@ -6557,6 +6573,12 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::TogglePreserveActiveTabColor => {
                 "Enabled or disabled preserving the active tab color"
+            }
+            Self::ToggleAutoGroupTabs => {
+                "Enabled or disabled automatically grouping tabs by the project they are in"
+            }
+            Self::ToggleAutoGroupTabColors => {
+                "Enabled or disabled giving the tabs in an automatically created group a color derived from their project"
             }
             Self::ShowSubshellBanner => {
                 "Displayed the banner asking whether Warp should Warpify the current session via Warp's subshell wrapper"
