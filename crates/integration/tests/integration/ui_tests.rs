@@ -124,6 +124,8 @@ integration_tests! {
     test_with_launch_config_with_active_tab_index,
     test_with_launch_config_with_active_pane,
     test_with_launch_config_with_no_active_pane,
+    test_launch_config_restores_tab_groups,
+    test_launch_config_restores_tab_groups_into_active_window,
     test_find_query_not_evaluated_on_terminal_mode_change,
     test_custom_open_completions_menu_binding,
     test_ssh_with_shell_override,
