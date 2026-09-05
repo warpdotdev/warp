@@ -1082,6 +1082,7 @@ fn cli_scope_explicit_team_validates_the_uid_and_membership() {
         });
     })
 }
+
 #[test]
 fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
     let first_team = team_for_test();

@@ -599,6 +599,8 @@ pub struct AgentDriverOptions {
     pub selected_harness: Harness,
     /// Model config for the selected harness. Only used for non-Oz harnesses.
     pub third_party_harness_model_config: Option<HarnessModelConfig>,
+    /// Team scope assigned to a newly created local run's headless window.
+    pub team_scope: Option<Arc<ResolvedTeamScope>>,
     /// Whether to skip end-of-run snapshot upload.
     pub snapshot_disabled: Option<bool>,
     /// End-of-run snapshot upload timeout override.
@@ -1019,6 +1021,7 @@ impl AgentDriver {
             remove_repository_origins,
             selected_harness,
             third_party_harness_model_config,
+            team_scope,
             snapshot_disabled,
             snapshot_upload_timeout,
             snapshot_script_timeout,
@@ -1096,6 +1099,7 @@ impl AgentDriver {
                 should_share,
                 task_id,
                 conversation_restoration,
+                team_scope,
             },
             ctx,
         )?;

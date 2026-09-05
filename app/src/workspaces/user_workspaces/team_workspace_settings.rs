@@ -44,15 +44,10 @@ mod sealed {
 
 /// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
 ///
-/// Either of [`TeamContextForOperation`] or [`TeamContext`] is the "key" external
-/// modules use to obtain a team-level setting. The only external modules can obtain
-/// this "key" is by exchanging a ViewContext or a ViewHandle for one. Once minted,
-/// both [`TeamContextForOperation`] or [`TeamContext`] cannot be copied, cloned, or
-/// moved. This ensures that the external operations which need TeamScopes (i.e. to
-/// exchange for a team setting) is scoped to the view (and therefore team-scoped
-/// window) that started the operation. External callers shouldn't copy a TeamContext
-/// to a Singleton model for example, risking leaking that TeamContext / team info to
-/// a different window with another team.
+/// Application code obtains a [`TeamContext`] or [`TeamContextForOperation`] by exchanging a
+/// view context or handle. Neither type can be copied or cloned. `TeamContext` is borrow-bound to
+/// an immediate read, while `TeamContextForOperation` is owned so one operation can move it across
+/// an asynchronous boundary without re-resolving against a different window team.
 ///
 /// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
 /// outside [`UserWorkspaces`].
@@ -61,7 +56,8 @@ pub trait TeamScope: sealed::Sealed {
     fn team_uid(&self) -> Option<ServerId>;
 }
 
-pub(crate) struct TeamContextForOperation {
+/// The team selected when a view-scoped operation starts.
+pub struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
 
@@ -183,11 +179,27 @@ pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
 }
 
 impl UserWorkspaces {
+    /// Replaces a headless window's inherited team with its resolved launch scope.
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_team_for_window_from_scope(
+        &mut self,
+        window_id: WindowId,
+        scope: &impl TeamScope,
+        ctx: &mut warpui::ModelContext<Self>,
+    ) {
+        let team_uid = scope.team_uid();
+        if self.team_uid_for_window(window_id) == team_uid {
+            return;
+        }
+        self.window_team_uids.insert(window_id, team_uid);
+        ctx.emit(super::UserWorkspacesEvent::WindowTeamChanged { window_id });
+        ctx.notify();
+    }
     /// Captures the team selected in `ctx`'s window as an operation's
     /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
     /// succeeds -- a window with no team selected still yields a scope, just one whose
     /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
-    pub(crate) fn team_context_for_operation<T: Entity>(
+    pub fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
     ) -> TeamContextForOperation {
@@ -249,6 +261,10 @@ impl UserWorkspaces {
     #[cfg(any(test, feature = "test-util"))]
     pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
         Rc::new(|_| TeamContext { team_uid: None })
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn teamless_context_for_operation_for_test() -> TeamContextForOperation {
+        TeamContextForOperation { team_uid: None }
     }
 
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {

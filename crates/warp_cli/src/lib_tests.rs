@@ -271,6 +271,31 @@ fn agent_run_accepts_model() {
 }
 
 #[test]
+fn agent_run_accepts_team_selection() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--team=team-uid",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(
+        run_args.team_selection.requested_team_uid(),
+        Some("team-uid")
+    );
+}
+
+#[test]
 fn agent_run_accepts_hidden_bedrock_inference_role_flag() {
     let args = Args::try_parse_from([
         "warp",

@@ -49,10 +49,11 @@ pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use team_workspace_settings::GeminiEnterpriseBackgroundHost;
-pub(crate) use team_workspace_settings::TeamContextForOperation;
 #[cfg(test)]
 pub(crate) use team_workspace_settings::TeamlessScopeForTest;
-pub use team_workspace_settings::{ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope};
+pub use team_workspace_settings::{
+    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver, TeamScope,
+};
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 

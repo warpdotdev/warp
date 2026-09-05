@@ -17,7 +17,7 @@ use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
+use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
@@ -29,7 +29,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
 };
-use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope as _, UserWorkspaces};
+use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope, UserWorkspaces};
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -148,13 +148,54 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
 }
 
 /// The team a CLI command's policy reads are scoped to.
-fn resolve_team_scope(
+pub(super) fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {
     UserWorkspaces::as_ref(ctx)
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+
+fn validate_custom_llm_for_team_scope(
+    model_id: &str,
+    llm_id: LLMId,
+    llm: &LLMInfo,
+    team_scope: &impl TeamScope,
+    llm_prefs: &LLMPreferences,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    if is_model_allowed_for_scope(llm_prefs, llm, team_scope, ctx) {
+        return Ok(llm_id);
+    }
+    let scope = team_scope.team_uid().map_or_else(
+        || "your personal scope".to_string(),
+        |team_uid| format!("team {team_uid}"),
+    );
+    Err(anyhow::anyhow!(
+        "Model '{model_id}' is one of your own custom endpoints, which {scope} does not allow."
+    ))
+}
+
+pub(super) fn validate_agent_mode_base_model_id_for_team_scope(
+    model_id: &str,
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    let llm_prefs = LLMPreferences::as_ref(ctx);
+    let valid_ids = llm_prefs
+        .get_base_llm_choices_for_agent_mode(team_scope, ctx)
+        .map(|info| info.id.clone())
+        .collect::<Vec<_>>();
+    let llm_id = classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable(team_scope),
+    )?;
+    let Some(llm) = llm_prefs.custom_llm_info_for_id(&llm_id) else {
+        return Ok(llm_id);
+    };
+    validate_custom_llm_for_team_scope(model_id, llm_id, llm, team_scope, llm_prefs, ctx)
 }
 
 /// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
@@ -175,16 +216,7 @@ pub fn validate_agent_mode_base_model_id_for_scope(
     };
 
     let team_scope = resolve_team_scope(team_selection, ctx)?;
-    if is_model_allowed_for_scope(prefs, llm, &team_scope, ctx) {
-        return Ok(llm_id);
-    }
-    let scope = team_scope.team_uid().map_or_else(
-        || "your personal scope".to_string(),
-        |team_uid| format!("team {team_uid}"),
-    );
-    Err(anyhow::anyhow!(
-        "Model '{model_id}' is one of your own custom endpoints, which {scope} does not allow."
-    ))
+    validate_custom_llm_for_team_scope(model_id, llm_id, llm, &team_scope, prefs, ctx)
 }
 
 fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {

@@ -54,6 +54,8 @@ use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::team_scope::RequestTeamScope;
 use crate::session_management::SessionNavigationData;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::GeneralSettings;
@@ -1529,13 +1531,27 @@ fn dispatch_start_agent_conversation(
     request: StartAgentRequest,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
+    #[cfg(not(target_family = "wasm"))]
+    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    #[cfg(not(target_family = "wasm"))]
+    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    #[cfg(not(target_family = "wasm"))]
+    let resolved_team_scope = ResolvedTeamScope::from_scope(&team_context);
     match request.execution_mode.clone() {
         #[cfg(not(target_family = "wasm"))]
         StartAgentExecutionMode::Local {
             harness_type: None,
             model_id,
         } => {
-            launch_local_no_harness_child(group, parent_pane_id, request, model_id, ctx);
+            launch_local_no_harness_child(
+                group,
+                parent_pane_id,
+                request,
+                model_id,
+                request_team_scope,
+                resolved_team_scope,
+                ctx,
+            );
         }
         #[cfg(not(target_family = "wasm"))]
         StartAgentExecutionMode::Local {
@@ -1549,6 +1565,8 @@ fn dispatch_start_agent_conversation(
                 request,
                 harness_type,
                 model_id,
+                request_team_scope,
+                resolved_team_scope,
                 ctx,
             );
         }
@@ -1628,6 +1646,8 @@ fn launch_local_no_harness_child(
     parent_pane_id: PaneId,
     request: StartAgentRequest,
     model_id: Option<String>,
+    request_team_scope: RequestTeamScope,
+    resolved_team_scope: ResolvedTeamScope,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let request_id = request.id;
@@ -1645,6 +1665,7 @@ fn launch_local_no_harness_child(
         &request.name,
         &request.prompt,
         request.parent_run_id.as_deref(),
+        request_team_scope,
         ctx,
     );
     let _ = ctx.spawn(launch, move |group, result, ctx| match result {
@@ -1675,11 +1696,8 @@ fn launch_local_no_harness_child(
                     conversation_id,
                     ..
                 }) => {
-                    let scope = ResolvedTeamScope::from_scope(
-                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                    );
                     apply_child_agent_model_override(
-                        &scope,
+                        &resolved_team_scope,
                         terminal_view_id,
                         model_id.as_deref(),
                         ctx,
@@ -1757,6 +1775,8 @@ fn launch_local_harness_child(
     request: StartAgentRequest,
     harness_type: String,
     model_id: Option<String>,
+    request_team_scope: RequestTeamScope,
+    resolved_team_scope: ResolvedTeamScope,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let startup_directory = group.startup_path_for_new_session(Some(terminal_pane_id), ctx);
@@ -1792,6 +1812,7 @@ fn launch_local_harness_child(
                 shell_type,
                 startup_directory,
                 ai_client,
+                request_team_scope,
             )
             .await
         },
@@ -1825,11 +1846,8 @@ fn launch_local_harness_child(
                         conversation_id,
                         ..
                     }) => {
-                        let scope = ResolvedTeamScope::from_scope(
-                            &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                        );
                         apply_child_agent_model_override(
-                            &scope,
+                            &resolved_team_scope,
                             terminal_view_id,
                             model_id.as_deref(),
                             ctx,
