@@ -362,6 +362,8 @@ pub enum FeatureFlag {
 
     /// Enables new Search Codebase UI
     SearchCodebaseUI,
+    /// Renders file paths in tool-call blocklist rows relative to the invocation cwd.
+    RelativeBlocklistPaths,
 
     /// Enables us to render linked code blocks
     LinkedCodeBlocks,
@@ -1039,6 +1041,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::MarkdownImages,
     FeatureFlag::FileAndDiffSetComments,
     FeatureFlag::FileGlobV2Warnings,
+    FeatureFlag::RelativeBlocklistPaths,
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::VideoRecording,

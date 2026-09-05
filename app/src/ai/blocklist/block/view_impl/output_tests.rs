@@ -5,6 +5,7 @@ use ai::skills::{ParsedSkill, SkillProvider, SkillReference, SkillScope};
 use computer_use::{Action, ScreenshotParams, Target, TargetedAction};
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::{DirectoryWatcher, RepoMetadataModel};
+use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
@@ -13,17 +14,22 @@ use warpui::App;
 use watcher::HomeDirectoryWatcher;
 
 use super::{
-    RecordingCardText, format_upload_artifact_text, parsed_skill_for_common_locations,
-    read_skill_display_text, should_decorate_recorded_use_computer, start_recording_card_text,
-    stop_recording_card_text,
+    RecordingCardText, format_failed_read_paths, format_upload_artifact_text,
+    formatted_text_for_file_glob, formatted_text_for_grep, parsed_skill_for_common_locations,
+    read_files_request_display_paths, read_files_success_display_paths, read_skill_display_text,
+    should_decorate_recorded_use_computer, start_recording_card_text, stop_recording_card_text,
 };
 use crate::ai::agent::{
-    RecordingStarted, RecordingStopped, StartRecordingResult, StopRecordingResult,
-    UploadArtifactResult,
+    AnyFileContent, FileContext, FileLocations, ReadFilesFailedFile, RecordingStarted,
+    RecordingStopped, StartRecordingResult, StopRecordingResult, UploadArtifactResult,
 };
 use crate::ai::skills::SkillManager;
 use crate::settings::AISettings;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
+
+fn native_path(path: &str) -> String {
+    path.replace('/', std::path::MAIN_SEPARATOR_STR)
+}
 
 #[test]
 fn format_upload_artifact_text_includes_request_details() {
@@ -32,11 +38,148 @@ fn format_upload_artifact_text_includes_request_details() {
         description: Some("Daily summary".to_string()),
     };
 
-    let text = format_upload_artifact_text(&request, None);
+    let text = format_upload_artifact_text(&request, None, None, None);
 
     assert_eq!(
         text,
         "Upload artifact: reports/daily.txt\nDescription: Daily summary"
+    );
+}
+
+#[test]
+fn grep_renderer_preserves_copy_and_formats_explicit_and_current_paths() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+    let cwd = "/repo/worktree/deep".to_string();
+    let queries = vec!["needle".to_string()];
+
+    assert_eq!(
+        formatted_text_for_grep(
+            &queries,
+            "/repo/worktree/deep/src",
+            false,
+            false,
+            None,
+            Some(&cwd),
+        )
+        .raw_text(),
+        "Grepping for needle in src\n"
+    );
+    assert_eq!(
+        formatted_text_for_grep(&queries, ".", true, false, None, Some(&cwd)).raw_text(),
+        "Grep for needle in the current directory cancelled\n"
+    );
+}
+
+#[test]
+fn file_glob_and_v2_renderer_format_explicit_and_omitted_directories() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+    let cwd = "/repo/worktree/deep".to_string();
+    let patterns = vec!["**/*.rs".to_string()];
+
+    assert_eq!(
+        formatted_text_for_file_glob(
+            &patterns,
+            Some("/repo/archive"),
+            false,
+            false,
+            None,
+            Some(&cwd),
+        )
+        .raw_text(),
+        format!(
+            "Finding files that match **/*.rs in {}\n",
+            native_path("../../archive")
+        )
+    );
+    assert_eq!(
+        formatted_text_for_file_glob(&patterns, None, false, true, None, Some(&cwd)).raw_text(),
+        "Search for files that match **/*.rs in the current directory\n"
+    );
+}
+
+fn file_context(path: &str, line_range: Option<std::ops::Range<usize>>) -> FileContext {
+    FileContext::new(
+        path.to_string(),
+        AnyFileContent::StringContent("one\ntwo\nthree".to_string()),
+        line_range,
+        None,
+    )
+}
+
+#[test]
+fn read_files_request_renderer_formats_paths_once_against_invocation_cwd() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+    let cwd = "/repo/worktree/deep".to_string();
+    let files = vec![
+        FileLocations {
+            name: "/repo/worktree/deep/src/lib.rs".to_string(),
+            lines: std::iter::once(10..20).collect(),
+        },
+        FileLocations {
+            name: "/repo/archive.rs".to_string(),
+            lines: vec![],
+        },
+        FileLocations {
+            name: "/outside.rs".to_string(),
+            lines: vec![],
+        },
+    ];
+    assert_eq!(
+        read_files_request_display_paths(&files, None, Some(&cwd)),
+        vec![
+            format!("{} (10-20)", native_path("src/lib.rs")),
+            native_path("../../archive.rs"),
+            native_path("/outside.rs"),
+        ]
+    );
+}
+
+#[test]
+fn read_files_grouped_success_renderer_formats_and_groups_actual_results() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+    let cwd = "/repo/worktree/deep".to_string();
+    let files = vec![
+        file_context("/repo/worktree/deep/src/lib.rs", Some(40..45)),
+        file_context("/repo/archive.rs", None),
+        file_context("/repo/worktree/deep/src/lib.rs", Some(10..20)),
+    ];
+
+    assert_eq!(
+        read_files_success_display_paths(&files, None, Some(&cwd)),
+        vec![
+            format!("{} (10-20, 40-45)", native_path("src/lib.rs")),
+            native_path("../../archive.rs"),
+        ]
+    );
+}
+
+#[test]
+fn failed_read_rows_use_invocation_cwd() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+    let cwd = "/repo/worktree/deep".to_string();
+    let failed_files = vec![
+        ReadFilesFailedFile {
+            path: "/repo/worktree/deep/src/missing.rs".to_string(),
+            message: "not found".to_string(),
+        },
+        ReadFilesFailedFile {
+            path: "/repo/archive/missing.rs".to_string(),
+            message: "not found".to_string(),
+        },
+        ReadFilesFailedFile {
+            path: "/outside.rs".to_string(),
+            message: "not found".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        format_failed_read_paths(&failed_files, None, Some(&cwd)),
+        [
+            native_path("src/missing.rs"),
+            native_path("../../archive/missing.rs"),
+            native_path("/outside.rs"),
+        ]
+        .join("\n")
     );
 }
 
@@ -54,7 +197,7 @@ fn format_upload_artifact_text_includes_success_summary() {
         size_bytes: 128,
     };
 
-    let text = format_upload_artifact_text(&request, Some(&result));
+    let text = format_upload_artifact_text(&request, Some(&result), None, None);
 
     assert_eq!(
         text,
@@ -74,6 +217,8 @@ fn format_upload_artifact_text_includes_terminal_status() {
         Some(&UploadArtifactResult::Error(
             "permission denied".to_string(),
         )),
+        None,
+        None,
     );
     assert_eq!(
         error_text,
@@ -81,8 +226,34 @@ fn format_upload_artifact_text_includes_terminal_status() {
     );
 
     let cancelled_text =
-        format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled));
+        format_upload_artifact_text(&request, Some(&UploadArtifactResult::Cancelled), None, None);
     assert_eq!(cancelled_text, "Upload artifact: reports/daily.txt");
+}
+
+#[test]
+fn format_upload_artifact_text_uses_invocation_cwd_for_local_paths() {
+    let _relative_paths = FeatureFlag::RelativeBlocklistPaths.override_enabled(true);
+    let cwd = "/repo/worktree".to_string();
+    let request = UploadArtifactRequest {
+        file_path: "/repo/worktree/reports/daily.txt".to_string(),
+        description: Some("Daily summary".to_string()),
+    };
+    let result = UploadArtifactResult::Success {
+        artifact_uid: "artifact-123".to_string(),
+        filepath: Some("/repo/archive/daily.txt".to_string()),
+        mime_type: "text/plain".to_string(),
+        description: Some("Daily summary".to_string()),
+        size_bytes: 128,
+    };
+
+    assert_eq!(
+        format_upload_artifact_text(&request, Some(&result), None, Some(&cwd)),
+        format!(
+            "Upload artifact: {}\nDescription: Daily summary\nStatus: uploaded artifact artifact-123\nUploaded file: {}",
+            native_path("reports/daily.txt"),
+            native_path("../archive/daily.txt")
+        )
+    );
 }
 
 #[test]
