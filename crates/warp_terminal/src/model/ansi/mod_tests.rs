@@ -237,6 +237,11 @@ impl Handler for MockHandler {
             .push(DProtoHook::InputBuffer { value: data })
     }
 
+    fn external_shell_widget_selection(&mut self, data: super::ExternalShellWidgetSelectionValue) {
+        self.d_proto_hooks
+            .push(DProtoHook::ExternalShellWidgetSelection { value: data })
+    }
+
     fn init_subshell(&mut self, data: InitSubshellValue) {
         self.d_proto_hooks
             .push(DProtoHook::InitSubshell { value: data })
@@ -973,6 +978,53 @@ fn parse_dcs_input_buffer() {
         ),
         _ => panic!("incorrect dcs value"),
     }
+}
+
+#[test]
+fn parse_dcs_external_shell_widget_selection() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "ExternalShellWidgetSelection",
+                "value": {
+                    "buffer": "echo selected",
+                    "session_id": 167303092612201
+                }
+            }"#,
+    );
+
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert_eq!(handler.d_proto_hooks.len(), 1);
+    match handler.d_proto_hooks.first().unwrap() {
+        DProtoHook::ExternalShellWidgetSelection { value } => assert_eq!(
+            *value,
+            ExternalShellWidgetSelectionValue {
+                buffer: "echo selected".to_string(),
+                session_id: Some(167303092612201),
+            }
+        ),
+        _ => panic!("incorrect dcs value"),
+    }
+}
+
+#[test]
+fn parse_dcs_external_shell_widget_selection_with_unregistered_session_is_rejected() {
+    let bytes = hex_encoded_dcs_string(
+        r#"{
+                "hook": "ExternalShellWidgetSelection",
+                "value": {
+                    "buffer": "echo selected",
+                    "session_id": 999999999999999
+                }
+            }"#,
+    );
+
+    let (_, handler) = parse_bytes(&bytes);
+
+    assert!(
+        handler.d_proto_hooks.is_empty(),
+        "a selection for an unregistered session_id must be rejected, not dispatched"
+    );
 }
 
 #[test]

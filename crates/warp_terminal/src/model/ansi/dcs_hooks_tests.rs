@@ -170,6 +170,10 @@ fn every_hook_tag_dispatches_to_the_matching_variant() {
             serde_json::json!({"session_id": 1, "shell": "zsh"}),
         ),
         ("InputBuffer", serde_json::json!({"buffer": "echo hi"})),
+        (
+            "ExternalShellWidgetSelection",
+            serde_json::json!({"buffer": "echo hi"}),
+        ),
         ("Clear", serde_json::json!({})),
         (
             "InitSubshell",

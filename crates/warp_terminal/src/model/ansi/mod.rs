@@ -604,6 +604,9 @@ impl<'a, H: Handler + 'a, W: io::Write> Performer<'a, H, W> {
             Ok(DProtoHook::SSH { value }) => self.handler.ssh(value),
             Ok(DProtoHook::InitShell { value }) => self.handler.init_shell(value),
             Ok(DProtoHook::InputBuffer { value }) => self.handler.input_buffer(value),
+            Ok(DProtoHook::ExternalShellWidgetSelection { value }) => {
+                self.handler.external_shell_widget_selection(value)
+            }
             Ok(DProtoHook::Clear { value }) => self.handler.clear(value),
             Ok(DProtoHook::InitSubshell { value }) => self.handler.init_subshell(value),
             Ok(DProtoHook::SourcedRcFileForWarp { .. }) => {

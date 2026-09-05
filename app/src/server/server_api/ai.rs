@@ -10,7 +10,6 @@ use ai::index::full_source_code_embedding::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
-#[cfg(not(target_family = "wasm"))]
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use cloud_object_models::CodeForge;
@@ -105,6 +104,10 @@ use warp_graphql::queries::get_scheduled_agent_history::{
 };
 use warp_graphql::queries::rerank_fragments::{
     RerankFragments, RerankFragmentsResult, RerankFragmentsVariables,
+};
+use warp_graphql::queries::setup_failure_debug_authorization::{
+    SetupFailureDebugAuthorization, SetupFailureDebugAuthorizationInput,
+    SetupFailureDebugAuthorizationResult, SetupFailureDebugAuthorizationVariables,
 };
 use warp_graphql::queries::sync_merkle_tree::{
     SyncMerkleTree, SyncMerkleTreeInput, SyncMerkleTreeResult, SyncMerkleTreeVariables,
@@ -1263,9 +1266,9 @@ pub trait AIClient: 'static + Send + Sync {
     /// Updates a run's server-side record. Every argument is independently optional; omitted
     /// fields are left untouched rather than cleared.
     ///
-    /// `session_debug_until` is the deadline of an open post-failure debug window. It is
-    /// deliberately separate from `status_message` so a refresh can move the deadline without
-    /// rewriting the failure text the run reported.
+    /// `session_debug_until` and `debug_agent_active` (REMOTE-2661) are kept separate from
+    /// `status_message` so a deadline or pin/unpin update never overwrites the failure text.
+    #[allow(clippy::too_many_arguments)]
     async fn update_agent_task(
         &self,
         task_id: AmbientAgentTaskId,
@@ -1274,6 +1277,7 @@ pub trait AIClient: 'static + Send + Sync {
         conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
         session_debug_until: Option<DateTime<Utc>>,
+        debug_agent_active: Option<bool>,
     ) -> anyhow::Result<(), anyhow::Error>;
 
     async fn spawn_agent(
@@ -1485,6 +1489,16 @@ pub trait AIClient: 'static + Send + Sync {
         accepts_partial_refresh: bool,
     ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error>;
 
+    /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+    /// session, called by the sharer with its own workload token. Anything short of `Ok(true)`
+    /// means the caller must reject the prompt.
+    async fn setup_failure_debug_authorization(
+        &self,
+        task_id: AmbientAgentTaskId,
+        workload_token: String,
+        participant_firebase_uid: String,
+    ) -> anyhow::Result<bool, anyhow::Error>;
+
     async fn get_task_attachments(
         &self,
         task_id: String,
@@ -1505,6 +1519,14 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         artifact_uid: &str,
     ) -> anyhow::Result<ArtifactDownloadResponse, anyhow::Error>;
+
+    /// Downloads the bytes of a computer-use screenshot stored in Warp-managed
+    /// object storage. Requires view access to the conversation.
+    async fn download_stored_screenshot(
+        &self,
+        conversation_id: &str,
+        screenshot_uid: &str,
+    ) -> anyhow::Result<Bytes, anyhow::Error>;
 
     async fn prepare_attachments_for_upload(
         &self,
@@ -2289,6 +2311,7 @@ impl AIClient for ServerApi {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all, err, fields(
         tags.cloud_agent = true,
         ?task_state,
@@ -2304,6 +2327,7 @@ impl AIClient for ServerApi {
         conversation_id: Option<String>,
         status_message: Option<TaskStatusUpdate>,
         session_debug_until: Option<DateTime<Utc>>,
+        debug_agent_active: Option<bool>,
     ) -> anyhow::Result<(), anyhow::Error> {
         let variables = UpdateAgentTaskVariables {
             input: UpdateAgentTaskInput {
@@ -2316,6 +2340,7 @@ impl AIClient for ServerApi {
                     error_code: update.error_code,
                 }),
                 session_debug_until: session_debug_until.map(Into::into),
+                debug_agent_active,
             },
             request_context: get_request_context(),
         };
@@ -2825,6 +2850,37 @@ impl AIClient for ServerApi {
     }
 
     #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
+    async fn setup_failure_debug_authorization(
+        &self,
+        task_id: AmbientAgentTaskId,
+        workload_token: String,
+        participant_firebase_uid: String,
+    ) -> anyhow::Result<bool, anyhow::Error> {
+        let variables = SetupFailureDebugAuthorizationVariables {
+            input: SetupFailureDebugAuthorizationInput {
+                task_id: task_id.to_string().into(),
+                workload_token,
+                participant_firebase_uid,
+            },
+            request_context: get_request_context(),
+        };
+        let operation = SetupFailureDebugAuthorization::build(variables);
+        let response = self.send_graphql_request(operation, None).await?;
+
+        match response.setup_failure_debug_authorization {
+            SetupFailureDebugAuthorizationResult::SetupFailureDebugAuthorizationOutput(output) => {
+                Ok(output.authorized)
+            }
+            SetupFailureDebugAuthorizationResult::UserFacingError(error) => {
+                Err(anyhow!(get_user_facing_error_message(error)))
+            }
+            SetupFailureDebugAuthorizationResult::Unknown => {
+                Err(anyhow!("Failed to authorize setup failure debug prompt"))
+            }
+        }
+    }
+
+    #[tracing::instrument(skip_all, err, fields(tags.cloud_agent = true))]
     async fn get_task_attachments(
         &self,
         task_id: String,
@@ -2951,6 +3007,27 @@ impl AIClient for ServerApi {
             .get_public_api(&format!("agent/artifacts/{artifact_uid}"))
             .await?;
         Ok(response)
+    }
+
+    async fn download_stored_screenshot(
+        &self,
+        conversation_id: &str,
+        screenshot_uid: &str,
+    ) -> anyhow::Result<Bytes, anyhow::Error> {
+        // The endpoint redirects to a short-lived signed URL, which the HTTP
+        // client follows transparently. Strip that URL from body-read errors so
+        // it cannot leak into logs or Sentry breadcrumbs.
+        let response = self
+            .get_public_api_response(&format!(
+                "agent/conversations/{}/screenshots/{}/download",
+                urlencoding::encode(conversation_id),
+                urlencoding::encode(screenshot_uid)
+            ))
+            .await?;
+        response
+            .bytes()
+            .await
+            .map_err(|error| anyhow::Error::new(error.without_url()))
     }
 
     async fn prepare_attachments_for_upload(

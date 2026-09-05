@@ -12,6 +12,7 @@ mod model;
 mod model_selector;
 mod progress;
 mod progress_ui_state;
+mod team_required;
 mod tips;
 mod view_impl;
 
@@ -35,6 +36,11 @@ pub use model_selector::{
 };
 pub use progress::{ProgressProps, ProgressStep, ProgressStepState, render_progress};
 pub use progress_ui_state::AmbientAgentProgressUIState;
+pub use team_required::{CloudAgentTeamRequiredView, CloudAgentTeamRequiredViewEvent};
+pub(crate) use team_required::{
+    should_render as should_render_cloud_agent_team_required_view,
+    toast_message as cloud_agent_team_required_toast_message,
+};
 pub use tips::{CloudModeTip, get_cloud_mode_tips};
 use warp_core::features::FeatureFlag;
 use warpui::geometry::vector::Vector2F;
@@ -154,7 +160,8 @@ pub fn wire_ambient_agent_session_events(
                 | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
                 | AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility
                 | AmbientAgentViewModelEvent::AuthSecretSelected
-                | AmbientAgentViewModelEvent::RunLifecycleChanged => {}
+                | AmbientAgentViewModelEvent::RunLifecycleChanged
+                | AmbientAgentViewModelEvent::FollowupSubmissionFailed { .. } => {}
             }
         });
     });

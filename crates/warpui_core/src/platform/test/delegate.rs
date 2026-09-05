@@ -65,6 +65,7 @@ impl IntegrationTestDelegate {
 #[derive(Default)]
 pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
+    last_shown_and_focused_window: Mutex<Option<WindowId>>,
 }
 
 impl WindowManager {
@@ -113,8 +114,12 @@ impl platform::WindowManager for WindowManager {
         None
     }
 
-    fn show_window_and_focus_app(&self, _window_id: WindowId, _behavior: WindowFocusBehavior) {
-        // no-op for tests
+    fn show_window_and_focus_app(&self, window_id: WindowId, _behavior: WindowFocusBehavior) {
+        *self.last_shown_and_focused_window.lock() = Some(window_id);
+    }
+
+    fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        *self.last_shown_and_focused_window.lock()
     }
 
     fn hide_app(&self) {

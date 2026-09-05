@@ -758,6 +758,8 @@ fn task(id: &str, state: AmbientAgentTaskState, title: &str) -> AmbientAgentTask
         artifacts: vec![],
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 

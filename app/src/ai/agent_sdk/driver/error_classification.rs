@@ -137,6 +137,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::MCPUnresolvedSecrets {
+            server_name,
+            secret_names,
+        } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "MCP server '{server_name}' references secret(s) that are not available to this run: {}. Check that each secret exists and is attached to this agent or run.",
+                    secret_names.join(", ")
+                ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::ProfileError(name) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -376,6 +389,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
             )
         }
+
+        // The harness didn't respond to any graceful exit attempt and had to
+        // be forcibly killed. This is a Warp/CLI interaction gap rather than
+        // something the user misconfigured, but the run's own outcome was
+        // already decided before shutdown, so classify like other harness
+        // command-failure variants (FAILED) rather than an internal ERROR.
+        AgentDriverError::HarnessExitTimedOut { harness } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Harness '{harness}' did not exit gracefully and was forcibly terminated."),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
 
         // The sandbox deadline is either a fixed limit (free plan) the user can
         // remove by upgrading, or a configurable limit (paid plan) they can adjust.

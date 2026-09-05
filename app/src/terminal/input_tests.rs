@@ -104,6 +104,7 @@ use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBar
 use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -115,6 +116,57 @@ use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
 };
+
+fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
+    PendingShellWidgetHandoff {
+        session_id: SessionId::from(1),
+        original_buffer: "draft".to_string(),
+        selection: None,
+        block_id: BlockId::new(),
+        apply_mode: ShellWidgetApplyMode::Replace,
+        cursor_offset: None,
+    }
+}
+
+fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
+    PendingShellWidgetHandoff {
+        session_id: SessionId::from(1),
+        original_buffer: "echo ".to_string(),
+        selection: None,
+        block_id: BlockId::new(),
+        apply_mode: ShellWidgetApplyMode::Splice,
+        cursor_offset: Some(ByteOffset::from(5)),
+    }
+}
+
+#[test]
+fn matching_shell_widget_handoff_selection_is_applied() {
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "echo selected");
+    assert_eq!(handoff.restore_text(), "echo selected");
+
+    let mut handoff = pending_ctrl_t_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "selected/file.txt");
+    assert_eq!(handoff.selection, Some("selected/file.txt".to_string()));
+}
+
+#[test]
+fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(2), "echo selected");
+    assert_eq!(handoff.restore_text(), "draft");
+}
+
+#[test]
+fn empty_shell_widget_handoff_selection_keeps_original_buffer() {
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "");
+    assert_eq!(handoff.restore_text(), "draft");
+
+    let mut handoff = pending_ctrl_t_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "");
+    assert_eq!(handoff.selection, None);
+}
 
 #[test]
 fn renders_git_checkout_prompt_chip_command_as_single_shell_argument() {
@@ -1452,6 +1504,32 @@ fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
 }
 
 #[test]
+fn unresolved_ambient_task_blocks_submission() {
+    // REMOTE-2661: eligibility that is merely unresolved (the ambient task is not in
+    // `AgentConversationsModel` yet) must fail closed for every submission path, rather than
+    // fall back to the direct viewer path or a new local conversation.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-000000000099".parse().unwrap();
+
+        let blocked = input.update(&mut app, |input, ctx| {
+            input.block_submission_while_ambient_task_unresolved(Some(task_id), ctx)
+        });
+        assert!(
+            blocked,
+            "an uncached ambient task must block the submission instead of resolving eligibility"
+        );
+    });
+}
+
+#[test]
 fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
     // An executor viewer forwards the prompt to the sharer (SendAgentPrompt) instead of running
     // it on the viewer's local machine.
@@ -1831,6 +1909,341 @@ fn queued_command_completion_preserves_draft() {
 
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "draft in progress");
+        });
+    });
+}
+
+fn user_block_completed_for_test(command: &str) -> BlockType {
+    BlockType::User(UserBlockCompleted::new_for_test(
+        BlockIndex::zero(),
+        Arc::new(SerializedBlock::new_for_test(
+            command.as_bytes().to_vec(),
+            vec![],
+        )),
+        command.to_owned(),
+        command.to_owned(),
+        String::new(),
+        String::new(),
+        false,
+        None,
+        0,
+        0,
+    ))
+}
+
+async fn complete_ctrl_t_handoff(
+    app: &mut App,
+    apply_mode: ShellWidgetApplyMode,
+    original_buffer: &str,
+    cursor_offset: usize,
+    insertion: Option<&str>,
+) -> (String, ByteOffset) {
+    let terminal = add_window_with_bootstrapped_terminal(app, None, None).await;
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let block_id = BlockId::new();
+    input.update(app, |input, ctx| {
+        input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
+            session_id: SessionId::from(1),
+            original_buffer: original_buffer.to_string(),
+            selection: insertion.map(str::to_string),
+            block_id: block_id.clone(),
+            apply_mode,
+            cursor_offset: Some(ByteOffset::from(cursor_offset)),
+        });
+        input.deferred_remote_operations.latest_block_id = BlockId::new();
+        input.handle_block_completed_event(
+            BlockCompletedEvent {
+                block_type: user_block_completed_for_test(original_buffer),
+                num_secrets_obfuscated: 0,
+                block_index: BlockIndex::zero(),
+                block_id,
+                session_id: None,
+                restored_block_was_local: None,
+            },
+            ctx,
+        );
+    });
+    input.read(app, |input, ctx| {
+        (
+            input.buffer_text(ctx),
+            input
+                .editor()
+                .as_ref(ctx)
+                .end_byte_index_of_last_selection(ctx),
+        )
+    })
+}
+
+async fn complete_ctrl_r_handoff(
+    app: &mut App,
+    original_buffer: &str,
+    selection: Option<&str>,
+) -> String {
+    let terminal = add_window_with_bootstrapped_terminal(app, None, None).await;
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let block_id = BlockId::new();
+    input.update(app, |input, ctx| {
+        input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
+            session_id: SessionId::from(1),
+            original_buffer: original_buffer.to_string(),
+            selection: selection.map(str::to_string),
+            block_id: block_id.clone(),
+            apply_mode: ShellWidgetApplyMode::Replace,
+            cursor_offset: None,
+        });
+        input.deferred_remote_operations.latest_block_id = BlockId::new();
+        input.handle_block_completed_event(
+            BlockCompletedEvent {
+                block_type: user_block_completed_for_test(original_buffer),
+                num_secrets_obfuscated: 0,
+                block_index: BlockIndex::zero(),
+                block_id,
+                session_id: None,
+                restored_block_was_local: None,
+            },
+            ctx,
+        );
+    });
+    input.read(app, |input, ctx| input.buffer_text(ctx))
+}
+
+#[test]
+fn ctrl_r_handoff_replace_lands_selection() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let buffer = complete_ctrl_r_handoff(&mut app, "draft", Some("echo selected")).await;
+        assert_eq!(buffer, "echo selected");
+    });
+}
+
+#[test]
+fn ctrl_r_handoff_cancel_restores_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let buffer = complete_ctrl_r_handoff(&mut app, "draft", None).await;
+        assert_eq!(buffer, "draft");
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_in_middle_of_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "echo START END",
+            11,
+            Some("FILE.txt "),
+        )
+        .await;
+        assert_eq!(buffer, "echo START FILE.txt END");
+        assert_eq!(cursor, ByteOffset::from("echo START FILE.txt ".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_at_end_of_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "echo ",
+            5,
+            Some("FILE.txt"),
+        )
+        .await;
+        assert_eq!(buffer, "echo FILE.txt");
+        assert_eq!(cursor, ByteOffset::from("echo FILE.txt".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_into_empty_buffer() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "",
+            0,
+            Some("FILE.txt"),
+        )
+        .await;
+        assert_eq!(buffer, "FILE.txt");
+        assert_eq!(cursor, ByteOffset::from("FILE.txt".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_after_multi_byte_character() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let original = "caf\u{e9} ";
+        let cursor_offset = original.len();
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            original,
+            cursor_offset,
+            Some("dest.txt"),
+        )
+        .await;
+        assert_eq!(buffer, "caf\u{e9} dest.txt");
+        assert_eq!(cursor, ByteOffset::from("caf\u{e9} dest.txt".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_cancel_restores_cursor_to_original_offset_mid_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        for apply_mode in [ShellWidgetApplyMode::Splice, ShellWidgetApplyMode::Replace] {
+            let (buffer, cursor) =
+                complete_ctrl_t_handoff(&mut app, apply_mode, "echo START END", 11, None).await;
+            assert_eq!(
+                buffer, "echo START END",
+                "{apply_mode:?}: cancelling must leave the original text untouched"
+            );
+            assert_eq!(
+                cursor,
+                ByteOffset::from(11),
+                "{apply_mode:?}: cancelling must restore the cursor to where ctrl-t was pressed, \
+                 not the end of the buffer"
+            );
+        }
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo START MIDDLE", ctx);
+            input.editor().update(ctx, |editor, ctx| {
+                editor.select_ranges_by_byte_offset(
+                    [ByteOffset::from(11)..ByteOffset::from(11)],
+                    ctx,
+                );
+            });
+        });
+
+        let started = input.update(&mut app, |input, ctx| {
+            input.trigger_external_shell_widget_handoff(
+                "warp_run_external_ctrl_t_widget",
+                ShellWidgetApplyMode::Splice,
+                true,
+                ctx,
+            )
+        });
+        assert!(started, "the handoff command should have started");
+
+        let block_id = terminal.read(&app, |terminal, _| {
+            terminal.model.lock().block_list().active_block_id().clone()
+        });
+
+        input.update(&mut app, |input, _ctx| {
+            input.deferred_remote_operations.latest_block_id = BlockId::new();
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.handle_block_completed_event(
+                BlockCompletedEvent {
+                    block_type: user_block_completed_for_test(" warp_run_external_ctrl_t_widget"),
+                    num_secrets_obfuscated: 0,
+                    block_index: BlockIndex::zero(),
+                    block_id,
+                    session_id: None,
+                    restored_block_was_local: None,
+                },
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo START MIDDLE");
+            assert_eq!(
+                input
+                    .editor()
+                    .as_ref(ctx)
+                    .end_byte_index_of_last_selection(ctx),
+                ByteOffset::from(11),
+                "cancelling a handoff whose cursor was captured by a real trigger must restore \
+                 the cursor to where ctrl-t was pressed, not the end of the buffer"
+            );
+        });
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_replace_mode_lands_selection_wholesale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Replace,
+            "vim src/ END",
+            8,
+            Some("vim src/nested.rs "),
+        )
+        .await;
+        assert_eq!(buffer, "vim src/nested.rs ");
+        assert_eq!(cursor, ByteOffset::from("vim src/nested.rs ".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (splice_buffer, splice_cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "vim src/ END",
+            8,
+            Some("nested.rs "),
+        )
+        .await;
+        assert_eq!(splice_buffer, "vim src/nested.rs  END");
+        assert_eq!(splice_cursor, ByteOffset::from("vim src/nested.rs ".len()));
+
+        let (replace_buffer, replace_cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Replace,
+            "vim src/ END",
+            8,
+            Some("vim src/nested.rs  END"),
+        )
+        .await;
+        assert_eq!(replace_buffer, "vim src/nested.rs  END");
+        assert_eq!(
+            replace_cursor,
+            ByteOffset::from("vim src/nested.rs  END".len())
+        );
+    });
+}
+
+#[test]
+fn ctrl_t_binding_is_ineligible_when_shell_widget_handoff_flag_is_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        assert!(
+            !FeatureFlag::ShellWidgetHandoff.is_enabled(),
+            "this test assumes the flag defaults to disabled in the test harness"
+        );
+        app.read(|ctx| {
+            assert!(
+                ctx.get_binding_by_name("workspace:trigger_external_ctrl_t_file_search")
+                    .is_none(),
+                "the ctrl-t binding must be ineligible while ShellWidgetHandoff is disabled"
+            );
         });
     });
 }
@@ -2980,22 +3393,6 @@ fn native_completions_after_empty_specs_bails_when_stale() {
     });
 }
 
-/// Yields until `condition` holds, then returns; panics if it never holds. The bound is an attempt
-/// count rather than a wall-clock deadline, so the wait cannot hang and does not depend on the test
-/// clock advancing with `Instant::now()`.
-async fn poll_until(app: &mut App, awaited: &str, mut condition: impl FnMut(&mut App) -> bool) {
-    const POLL_ATTEMPTS: usize = 600;
-    const POLL_INTERVAL: Duration = Duration::from_millis(5);
-
-    for _ in 0..POLL_ATTEMPTS {
-        if condition(app) {
-            return;
-        }
-        warpui::r#async::Timer::after(POLL_INTERVAL).await;
-    }
-    panic!("gave up after {POLL_ATTEMPTS} attempts waiting for {awaited}");
-}
-
 fn count_native_shell_completions_dispatches(
     app: &mut App,
     terminal: &ViewHandle<TerminalView>,
@@ -3036,16 +3433,12 @@ fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
             input.input_tab(ctx);
         });
 
-        poll_until(
-            &mut app,
-            "the bundled-spec completions menu to open",
-            |app| {
-                input.read(app, |input, ctx| {
-                    input.suggestions_mode_model.as_ref(ctx).is_visible()
-                })
-            },
-        )
-        .await;
+        assert_eventually!(
+            600 => input.read(&app, |input, ctx| {
+                input.suggestions_mode_model.as_ref(ctx).is_visible()
+            }),
+            "gave up after 600 attempts waiting for the bundled-spec completions menu to open"
+        );
 
         assert_eq!(
             *dispatch_count.borrow(),
@@ -3079,11 +3472,10 @@ fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
             input.input_tab(ctx);
         });
 
-        let dispatched = dispatch_count.clone();
-        poll_until(&mut app, "the shell to be asked", move |_| {
-            *dispatched.borrow() == 1
-        })
-        .await;
+        assert_eventually!(
+            600 => *dispatch_count.borrow() == 1,
+            "gave up after 600 attempts waiting for the shell to be asked"
+        );
 
         assert_eq!(
             *dispatch_count.borrow(),
