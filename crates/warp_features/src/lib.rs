@@ -889,6 +889,9 @@ pub enum FeatureFlag {
     /// are protected from reordering.
     PinnedTabs,
 
+    /// Lets users park tabs to exclude them from next/previous tab navigation.
+    ParkedTabs,
+
     /// Gates the SuperGrok feature, which lets users
     /// connect a Grok subscription instead of pasting an API key.
     SuperGrok,
@@ -1061,6 +1064,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::GPTConfigurableContextWindow,
     FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
+    FeatureFlag::ParkedTabs,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
