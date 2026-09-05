@@ -2,20 +2,135 @@ use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
 use itertools::Itertools;
 use mockito::{Matcher, Server};
-use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
+use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
 
 use super::super::ServerApi;
 use super::{
-    AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
     ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
-    ConnectedSelfHostedWorker, ExecutionLocation, ForkConversationResponse,
+    ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
     TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
     build_list_agent_runs_url, build_run_followup_url, is_unknown_git_credential_schema_error,
 };
 use crate::notebooks::NotebookId;
+use crate::server::ids::ServerId;
 use crate::server::server_api::presigned_upload::upload_to_target;
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
+
+fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn list_agents_sends_selected_team_header() {
+    let team_uid = ServerId::from(7);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let agents = block_on(server_api.list_agents(request_scope_for_team(team_uid))).unwrap();
+
+    assert!(agents.is_empty());
+}
+
+#[test]
+fn create_agent_sends_selected_team_header() {
+    let team_uid = ServerId::from(8);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("POST", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(
+                r#"{"uid":"agent-1","name":"catalog-agent","description":null,"available":true,"created_at":"2026-09-04T00:00:00Z","secrets":[],"skills":[],"base_model":null,"environment_id":null}"#,
+            )
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+    let request = CreateAgentRequest {
+        name: "catalog-agent".to_string(),
+        description: None,
+        prompt: None,
+        secrets: vec![],
+        skills: vec![],
+        base_model: None,
+        environment_id: None,
+    };
+
+    let agent =
+        block_on(server_api.create_agent(request, request_scope_for_team(team_uid))).unwrap();
+
+    assert_eq!(agent.uid, "agent-1");
+}
+
+#[test]
+fn list_skills_sends_selected_team_header() {
+    let team_uid = ServerId::from(9);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let skills = block_on(server_api.list_skills(None, request_scope_for_team(team_uid))).unwrap();
+
+    assert!(skills.is_empty());
+}
+
+#[test]
+fn list_memory_stores_sends_selected_team_header() {
+    let team_uid = ServerId::from(10);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/memory_stores")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"memory_stores":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let stores = block_on(server_api.list_memory_stores(request_scope_for_team(team_uid))).unwrap();
+
+    assert!(stores.is_empty());
+}
+
+#[test]
+fn list_agents_omits_team_header_for_personal_scope() {
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let agents =
+        block_on(server_api.list_agents(RequestTeamScope::from_scope(&TeamlessScopeForTest)))
+            .unwrap();
+
+    assert!(agents.is_empty());
+}
 
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {

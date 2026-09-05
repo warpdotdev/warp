@@ -91,14 +91,15 @@ impl AgentManagementRunner {
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let team_scope = super::common::request_team_scope_for_cli(&args.team_selection, ctx)?;
         let future = async move {
             ensure_json_sort_is_not_requested(output_format, &args.json_output, &args)?;
 
             if matches!(output_format, OutputFormat::Json) || args.json_output.force_json_output() {
-                let response = ai_client.list_agents_raw().await?;
+                let response = ai_client.list_agents_raw(team_scope).await?;
                 super::output::print_raw_json(response, &args.json_output)?;
             } else {
-                let mut agents = ai_client.list_agents().await?;
+                let mut agents = ai_client.list_agents(team_scope).await?;
                 sort_agents(&mut agents, args.sort_by, args.sort_order);
                 print_agents(&agents, output_format)?;
             }
@@ -136,14 +137,15 @@ impl AgentManagementRunner {
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let team_scope = super::common::request_team_scope_for_cli(&args.team_selection, ctx)?;
         let future = async move {
             let json_output = args.json_output.clone();
             let request = build_create_request(args);
             if matches!(output_format, OutputFormat::Json) || json_output.force_json_output() {
-                let response = ai_client.create_agent_raw(request).await?;
+                let response = ai_client.create_agent_raw(request, team_scope).await?;
                 super::output::print_raw_json(response, &json_output)?;
             } else {
-                let agent = ai_client.create_agent(request).await?;
+                let agent = ai_client.create_agent(request, team_scope).await?;
                 print_single_agent(&agent, output_format)?;
             }
             Ok(())

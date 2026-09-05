@@ -494,11 +494,24 @@ fn memory_store_list_parses() {
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
         panic!("Expected `warp memory-store list` command");
     };
-    let CliCommand::MemoryStore(memory_store_cmd) = boxed_cmd.as_ref() else {
+    let CliCommand::MemoryStore(MemoryStoreCommand::List(args)) = boxed_cmd.as_ref() else {
         panic!("Expected `warp memory-store` command");
     };
+    assert!(args.team_selection.team.is_none());
+}
 
-    assert!(matches!(memory_store_cmd, MemoryStoreCommand::List));
+#[test]
+fn memory_store_list_accepts_team_selection() {
+    let args = Args::try_parse_from(["warp", "memory-store", "list", "--team=team-123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store list` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::List(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store list` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
 }
 
 #[test]
@@ -508,11 +521,9 @@ fn memory_stores_alias_parses() {
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
         panic!("Expected `warp memory-stores list` command");
     };
-    let CliCommand::MemoryStore(memory_store_cmd) = boxed_cmd.as_ref() else {
+    let CliCommand::MemoryStore(MemoryStoreCommand::List(_)) = boxed_cmd.as_ref() else {
         panic!("Expected `warp memory-stores` alias to parse as memory-store command");
     };
-
-    assert!(matches!(memory_store_cmd, MemoryStoreCommand::List));
 }
 
 #[test]
@@ -1337,6 +1348,53 @@ fn agent_create_accepts_prompt() {
 
     assert_eq!(args.name, "agent");
     assert_eq!(args.prompt.as_deref(), Some("base prompt"));
+}
+
+#[test]
+fn agent_list_accepts_team_selection() {
+    let parsed = Args::try_parse_from(["warp", "agent", "list", "--team=team-123"]).unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::List(args)) = boxed.as_ref() else {
+        panic!("Expected `agent list` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
+}
+
+#[test]
+fn agent_create_accepts_team_selection() {
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "create",
+        "--name",
+        "agent",
+        "--team=team-123",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Create(args)) = boxed.as_ref() else {
+        panic!("Expected `agent create` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
+}
+
+#[test]
+fn agent_skills_accepts_team_selection() {
+    let parsed = Args::try_parse_from(["warp", "agent", "skills", "--team=team-123"]).unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Skills(args)) = boxed.as_ref() else {
+        panic!("Expected `agent skills` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
 }
 
 #[test]

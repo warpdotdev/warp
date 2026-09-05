@@ -1854,7 +1854,7 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
         },
         CliCommand::Model(ModelCommand::List) => CliTelemetryEvent::ModelList,
         CliCommand::MemoryStore(memory_store_cmd) => match memory_store_cmd {
-            MemoryStoreCommand::List => CliTelemetryEvent::MemoryStoreList,
+            MemoryStoreCommand::List(_) => CliTelemetryEvent::MemoryStoreList,
             MemoryStoreCommand::Get(_) => CliTelemetryEvent::MemoryStoreGetStore,
             MemoryStoreCommand::Update(_) => CliTelemetryEvent::MemoryStoreUpdateStore,
             MemoryStoreCommand::ListStoreAgents(_) => CliTelemetryEvent::MemoryStoreListStoreAgents,

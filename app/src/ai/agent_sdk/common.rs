@@ -25,6 +25,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
@@ -155,6 +156,13 @@ fn resolve_team_scope(
     UserWorkspaces::as_ref(ctx)
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+pub(super) fn request_team_scope_for_cli(
+    team_selection: &TeamSelection,
+    ctx: &AppContext,
+) -> anyhow::Result<RequestTeamScope> {
+    let team_scope = resolve_team_scope(team_selection, ctx)?;
+    Ok(RequestTeamScope::from_scope(&team_scope))
 }
 
 /// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
