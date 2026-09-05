@@ -34,7 +34,6 @@ use get_size::GetSize;
 use grapheme::Grapheme;
 use hyperlink::HyperlinkIdMap;
 use index::Index;
-use itertools::Itertools;
 use string_offset::ByteOffset;
 use style::BgAndStyle;
 
@@ -139,10 +138,8 @@ impl FlatStorage {
         let start_row = self.total_rows().saturating_sub(count);
 
         // Materialize the rows that we're popping off.
-        let rows = self
-            .rows_from(start_row)
-            .map(Rc::unwrap_or_clone)
-            .collect_vec();
+        let mut iter = row_iterator::RowIterator::new(self, start_row);
+        let rows = std::iter::from_fn(|| iter.next_owned()).collect();
 
         // Truncate internal data structures to exclude the rows we're
         // popping off.

@@ -352,3 +352,63 @@ fn test_blank_cells_before_hyperlink_are_not_clickable() {
     assert_eq!(flat[2].c, 'a');
     assert_eq!(flat[2].hyperlink_id(), Some(id));
 }
+
+#[test]
+fn pop_rows_returns_trailing_rows_and_truncates_storage() {
+    let num_cols = 5;
+    let rows = "hello\nworld\n!!!!\n".to_rows(num_cols);
+    let mut storage = FlatStorage::new(num_cols, None, None);
+    storage.push_rows(&rows);
+    assert_eq!(storage.total_rows(), 3);
+
+    let popped = storage.pop_rows(2);
+    assert_eq!(storage.total_rows(), 1);
+    assert_rows_equal(&popped, &rows[1..]);
+
+    let remaining = storage
+        .rows_from(0)
+        .map(|row| row.as_ref().clone())
+        .collect_vec();
+    assert_rows_equal(&remaining, &rows[..1]);
+}
+
+#[test]
+fn pop_rows_returns_all_rows_when_count_exceeds_len() {
+    let num_cols = 5;
+    let rows = "hello\nworld\n".to_rows(num_cols);
+    let mut storage = FlatStorage::new(num_cols, None, None);
+    storage.push_rows(&rows);
+
+    let popped = storage.pop_rows(8);
+    assert_eq!(storage.total_rows(), 0);
+    assert_rows_equal(&popped, &rows);
+    assert!(storage.rows_from(0).next().is_none());
+}
+
+#[test]
+fn pop_rows_returns_empty_when_count_is_zero() {
+    let num_cols = 5;
+    let rows = "hello\nworld\n".to_rows(num_cols);
+    let mut storage = FlatStorage::new(num_cols, None, None);
+    storage.push_rows(&rows);
+
+    let popped = storage.pop_rows(0);
+    assert!(popped.is_empty());
+    assert_eq!(storage.total_rows(), 2);
+}
+
+#[test]
+fn pop_rows_after_set_columns_returns_reflowed_rows() {
+    let mut storage = FlatStorage::new(6, None, None);
+    storage.push_rows_from_string("abcdef\n");
+    assert_eq!(storage.total_rows(), 1);
+
+    storage.set_columns(3);
+    let popped = storage.pop_rows(storage.total_rows());
+    assert_eq!(popped.len(), 2);
+    assert_eq!(popped[0][0].c, 'a');
+    assert_eq!(popped[0][2].c, 'c');
+    assert_eq!(popped[1][0].c, 'd');
+    assert_eq!(popped[1][2].c, 'f');
+    assert_eq!(storage.total_rows(), 0);
+}
