@@ -12517,6 +12517,8 @@ impl TerminalView {
                             self.pending_command_queue.clear();
                         }
                         ctx.emit(Event::PendingCommandCompleted);
+                        // Setup commands (worktree `cd`) just finished; refresh explorer roots.
+                        ctx.emit(Event::AppStateChanged);
 
                         // If agent view entry was deferred until setup commands
                         // finished, enter it now (unless suppressed by onboarding).
