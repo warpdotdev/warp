@@ -981,6 +981,301 @@ fn append_restored_command_doesnt_overwrite_rich_history() {
 }
 
 #[test]
+fn command_execution_stats_reflects_persisted_history() {
+    App::test((), |mut app| async move {
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test()
+                .with_id(0)
+                .with_shell_type(ShellType::Bash),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+
+        let shell_host = ShellHost {
+            shell_type: ShellType::Bash,
+            user: String::from("local:user"),
+            hostname: String::from("local:host"),
+        };
+        let persisted_command = |id: i32, pwd: &str| PersistedCommand {
+            id,
+            command: String::from("git status"),
+            exit_code: Some(ExitCode::from(0)),
+            start_ts: Some(Local::now()),
+            completed_ts: None,
+            pwd: Some(pwd.to_string()),
+            shell_host: Some(shell_host.clone()),
+            session_id: None,
+            git_branch: None,
+            workflow_id: None,
+            workflow_command: None,
+            is_agent_executed: false,
+        };
+        let persisted_commands = vec![
+            persisted_command(0, "/home/user/project"),
+            persisted_command(1, "/home/user/project"),
+            persisted_command(2, "/tmp"),
+        ];
+
+        let mut history_handle = app.add_model(|_| History::new(persisted_commands));
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec![] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.read(&app, |history, _ctx| {
+            let stats = history.command_execution_stats(
+                session.id(),
+                "git status",
+                Some("/home/user/project"),
+            );
+            assert_eq!(stats.total_count, 3);
+            assert_eq!(stats.cwd_count, 2);
+            assert_eq!(stats.pwd_known_count, 3);
+        });
+    });
+}
+
+#[test]
+fn command_execution_stats_pwd_known_count_excludes_pwd_less_executions() {
+    App::test((), |mut app| async move {
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test()
+                .with_id(0)
+                .with_shell_type(ShellType::Bash),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+
+        let shell_host = ShellHost {
+            shell_type: ShellType::Bash,
+            user: String::from("local:user"),
+            hostname: String::from("local:host"),
+        };
+        let persisted_command = |id: i32, pwd: Option<&str>| PersistedCommand {
+            id,
+            command: String::from("deploy"),
+            exit_code: Some(ExitCode::from(0)),
+            start_ts: Some(Local::now()),
+            completed_ts: None,
+            pwd: pwd.map(str::to_owned),
+            shell_host: Some(shell_host.clone()),
+            session_id: None,
+            git_branch: None,
+            workflow_id: None,
+            workflow_command: None,
+            is_agent_executed: false,
+        };
+        // One execution has no recorded pwd (e.g. a history-file row with no matching sqlite
+        // record).
+        let persisted_commands = vec![
+            persisted_command(0, Some("/home/user/project")),
+            persisted_command(1, None),
+        ];
+
+        let mut history_handle = app.add_model(|_| History::new(persisted_commands));
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec![] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.update(&mut app, |history, _ctx| {
+            history.append_commands(
+                session.id(),
+                vec![HistoryEntry {
+                    session_id: Some(session.id()),
+                    command: "deploy".to_string(),
+                    pwd: None,
+                    start_ts: Some(Local::now()),
+                    completed_ts: None,
+                    workflow_id: None,
+                    workflow_command: None,
+                    exit_code: Some(ExitCode::from(0)),
+                    git_head: None,
+                    shell_host: None,
+                    is_agent_executed: false,
+                    is_for_restored_block: false,
+                }],
+            );
+        });
+
+        history_handle.read(&app, |history, _ctx| {
+            let stats =
+                history.command_execution_stats(session.id(), "deploy", Some("/home/user/project"));
+            assert_eq!(
+                stats.total_count, 3,
+                "every execution counts toward the total"
+            );
+            assert_eq!(
+                stats.pwd_known_count, 1,
+                "only the one execution with a recorded pwd should count here"
+            );
+            assert_eq!(stats.cwd_count, 1);
+        });
+    });
+}
+
+#[test]
+fn command_execution_stats_defaults_to_zero_for_unknown_command() {
+    App::test((), |mut app| async move {
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test().with_id(0),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+        let mut history_handle = app.add_model(|_| History::new(vec![]));
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec![] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.read(&app, |history, _ctx| {
+            let stats = history.command_execution_stats(session.id(), "never run", Some("/tmp"));
+            assert_eq!(stats.total_count, 0);
+            assert_eq!(stats.cwd_count, 0);
+            assert_eq!(stats.pwd_known_count, 0);
+        });
+    });
+}
+
+#[test]
+fn append_commands_updates_execution_stats_live() {
+    App::test((), |mut app| async move {
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test().with_id(0),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+
+        let mut history_handle = app.add_model(|_| History::new(vec![]));
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec![] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.read(&app, |history, _ctx| {
+            let stats = history.command_execution_stats(session.id(), "npm test", Some("/repo"));
+            assert_eq!(
+                stats.total_count, 0,
+                "frequency should start at zero before any execution"
+            );
+        });
+
+        history_handle.update(&mut app, |history, _ctx| {
+            history.append_commands(
+                session.id(),
+                vec![HistoryEntry {
+                    session_id: Some(session.id()),
+                    command: "npm test".to_string(),
+                    pwd: Some("/repo".to_string()),
+                    start_ts: Some(Local::now()),
+                    completed_ts: None,
+                    workflow_id: None,
+                    workflow_command: None,
+                    exit_code: Some(ExitCode::from(0)),
+                    git_head: None,
+                    shell_host: None,
+                    is_agent_executed: false,
+                    is_for_restored_block: false,
+                }],
+            );
+        });
+
+        history_handle.read(&app, |history, _ctx| {
+            let stats = history.command_execution_stats(session.id(), "npm test", Some("/repo"));
+            assert_eq!(
+                stats.total_count, 1,
+                "a live execution should increment the count immediately, unlike the old \
+                 frozen-at-launch summary"
+            );
+            assert_eq!(stats.cwd_count, 1);
+        });
+    });
+}
+
+#[test]
+fn append_restored_commands_does_not_double_count_execution_stats() {
+    App::test((), |mut app| async move {
+        let session = Arc::new(Session::new(
+            SessionInfo::new_for_test()
+                .with_id(0)
+                .with_shell_type(ShellType::Bash),
+            Arc::new(TestCommandExecutor::default()),
+        ));
+
+        let shell_host = ShellHost {
+            shell_type: ShellType::Bash,
+            user: String::from("local:user"),
+            hostname: String::from("local:host"),
+        };
+        let persisted_commands = vec![PersistedCommand {
+            id: 0,
+            command: String::from("ls"),
+            exit_code: Some(ExitCode::from(0)),
+            start_ts: Some(Local::now()),
+            completed_ts: None,
+            pwd: Some(String::from("/tmp")),
+            shell_host: Some(shell_host),
+            session_id: None,
+            git_branch: None,
+            workflow_id: None,
+            workflow_command: None,
+            is_agent_executed: false,
+        }];
+
+        let mut history_handle = app.add_model(|_| History::new(persisted_commands));
+        initialize_history_for_testing(
+            &mut history_handle,
+            session.clone(),
+            async { vec![] },
+            Vec::new(),
+            &mut app,
+        )
+        .await;
+
+        history_handle.update(&mut app, |history, _ctx| {
+            history.append_restored_commands(
+                session.id(),
+                vec![HistoryEntry {
+                    session_id: None,
+                    command: "ls".to_string(),
+                    pwd: Some("/tmp".to_string()),
+                    start_ts: Some(Local::now()),
+                    completed_ts: None,
+                    workflow_id: None,
+                    workflow_command: None,
+                    exit_code: Some(ExitCode::from(0)),
+                    git_head: None,
+                    shell_host: None,
+                    is_agent_executed: false,
+                    is_for_restored_block: true,
+                }],
+            );
+        });
+
+        history_handle.read(&app, |history, _ctx| {
+            let stats = history.command_execution_stats(session.id(), "ls", Some("/tmp"));
+            assert_eq!(
+                stats.total_count, 1,
+                "restoring a session shouldn't double-count a command already counted at \
+                 History::new"
+            );
+        });
+    });
+}
+
+#[test]
 fn is_appendable_vs_is_queryable() {
     App::test((), |mut app| async move {
         let mut history_handle = app.add_model(|_| History::new(vec![]));

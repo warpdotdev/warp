@@ -157,12 +157,78 @@ pub enum HistoryEvent {
     Initialized(SessionId),
 }
 
+/// Aggregated execution data for a single command string, seeded from the sqlite "commands"
+/// table at startup (`History::new`) and kept live as new commands run (`History::append_commands`).
+#[derive(Debug, Clone)]
+struct CommandHistorySummary {
+    /// The execution metadata from the latest time this command was run, per the sqlite-backed
+    /// history read at startup. Deliberately *not* refreshed by live executions during the
+    /// session: its only consumer, `load_history_file_commands`, joins it against the shell
+    /// history file asynchronously in the background shortly after startup, and letting a live
+    /// execution race that join would make an otherwise-deterministic startup path depend on
+    /// exactly when the user's first command of the session happens to complete. `total_count`
+    /// and `count_by_cwd` below don't have this problem since nothing joins against them at a
+    /// fixed point in time -- they're read fresh, live, whenever a rank is computed.
+    most_recent_entry: HistoryEntry,
+
+    /// Total number of times this command has been run, across both the persisted sqlite history
+    /// and this session's live executions. Note this may not match the count in the HISTFILE.
+    total_count: u32,
+
+    /// Of those executions, how many ran from each directory. Executions with no recorded pwd
+    /// aren't counted here, so `count_by_cwd.values().sum() <= total_count`.
+    count_by_cwd: HashMap<String, u32>,
+
+    /// Cached number of executions with a recorded directory, avoiding per-query aggregation.
+    pwd_known_count: u32,
+}
+
+impl CommandHistorySummary {
+    fn new(most_recent_entry: HistoryEntry) -> Self {
+        let mut count_by_cwd = HashMap::new();
+        let mut pwd_known_count = 0;
+        if let Some(pwd) = most_recent_entry.pwd.clone() {
+            count_by_cwd.insert(pwd, 1);
+            pwd_known_count = 1;
+        }
+        Self {
+            most_recent_entry,
+            total_count: 1,
+            count_by_cwd,
+            pwd_known_count,
+        }
+    }
+
+    /// Records one more execution of this command beyond the one `Self` was built from, without
+    /// touching `most_recent_entry` (see its doc comment for why).
+    fn record_additional_execution(&mut self, pwd: Option<&str>) {
+        self.total_count += 1;
+        if let Some(pwd) = pwd {
+            *self.count_by_cwd.entry(pwd.to_owned()).or_insert(0) += 1;
+            self.pwd_known_count += 1;
+        }
+    }
+}
+
+/// Execution-count statistics for a single command, used by `rank.rs` to compute the frequency
+/// and cwd priors. Defaults to all-zero when there's no persisted or live execution data for the
+/// command, which correctly yields a neutral frequency prior (0) and a neutral cwd prior (0.5,
+/// via `rank.rs`'s Beta(K,K)-smoothed fraction) rather than a false "never ran here" penalty.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommandExecutionStats {
+    pub total_count: u32,
+    pub cwd_count: u32,
+    pub pwd_known_count: u32,
+}
+
 #[derive(Default, Debug)]
 pub struct History {
     /// For each ShellHost, the de-duped commands from the sqlite "commands" table is stored here,
-    /// keyed by command string. Each time a history file is read, it gets "joined" to the
-    /// commands in here to add the execution metadata from the most recent run.
-    persisted_commands_summary: HashMap<ShellHost, HashMap<String, HistoryEntry>>,
+    /// keyed by command string, aggregated into a `CommandHistorySummary`. Each time a history
+    /// file is read, `most_recent_entry` gets "joined" to the commands in here to add the
+    /// execution metadata from the most recent run; `total_count`/`count_by_cwd` are kept live as
+    /// new commands are appended (see `Self::append_commands`).
+    persisted_commands_summary: HashMap<ShellHost, HashMap<String, CommandHistorySummary>>,
 
     /// Entries from the history file for the host.  Immutable once loaded and
     /// shared between sessions.
@@ -441,7 +507,7 @@ impl History {
     pub fn new(persisted_commands: Vec<PersistedCommand>) -> Self {
         log::debug!("Creating new History model with persisted commands {persisted_commands:?}");
         let mut persisted_commands_summary =
-            HashMap::<ShellHost, HashMap<String, HistoryEntry>>::new();
+            HashMap::<ShellHost, HashMap<String, CommandHistorySummary>>::new();
 
         for command in persisted_commands {
             if let Some(shell_host) = command.shell_host.as_ref() {
@@ -449,15 +515,45 @@ impl History {
                     .entry(shell_host.clone())
                     .or_default();
                 let hist_entry: HistoryEntry = command.into();
+                let pwd = hist_entry.pwd.clone();
                 summaries
                     .entry(hist_entry.command.clone())
-                    .or_insert(hist_entry);
+                    .and_modify(|summary| summary.record_additional_execution(pwd.as_deref()))
+                    .or_insert_with(|| CommandHistorySummary::new(hist_entry));
             }
         }
 
         Self {
             persisted_commands_summary,
             ..Default::default()
+        }
+    }
+
+    /// Returns execution-count statistics for `command` on the shell host associated with
+    /// `session_id`, per the persisted "commands" table plus this session's live executions (see
+    /// `Self::append_commands`). `cwd` is the directory to count matching executions for.
+    pub fn command_execution_stats(
+        &self,
+        session_id: SessionId,
+        command: &str,
+        cwd: Option<&str>,
+    ) -> CommandExecutionStats {
+        let Some(summary) = self
+            .session_id_to_shell_host
+            .get(&session_id)
+            .and_then(|host| self.persisted_commands_summary.get(host))
+            .and_then(|summaries| summaries.get(command))
+        else {
+            return CommandExecutionStats::default();
+        };
+
+        CommandExecutionStats {
+            total_count: summary.total_count,
+            cwd_count: cwd
+                .and_then(|cwd| summary.count_by_cwd.get(cwd))
+                .copied()
+                .unwrap_or(0),
+            pwd_known_count: summary.pwd_known_count,
         }
     }
 
@@ -626,7 +722,7 @@ impl History {
                     self.persisted_commands_summary
                         .get(&host)
                         .and_then(|summaries| summaries.get(&command))
-                        .cloned()
+                        .map(|summary| summary.most_recent_entry.clone())
                         .unwrap_or_else(|| HistoryEntry::command_only(command))
                 })
                 .map(Arc::new)
@@ -731,6 +827,25 @@ impl History {
             log::warn!("ShellHost should be populated in the map for all bootstrapped sessions.");
             return;
         };
+
+        // Restored blocks re-append commands whose sqlite rows were already counted when this
+        // History was constructed (`Self::new`); only genuinely new, live executions should
+        // increment the running totals below, or restoring a session would double-count them.
+        let summaries = self
+            .persisted_commands_summary
+            .entry(shell_host.clone())
+            .or_default();
+        for command in commands
+            .iter()
+            .filter(|command| !command.is_for_restored_block)
+        {
+            let pwd = command.pwd.clone();
+            summaries
+                .entry(command.command.clone())
+                .and_modify(|summary| summary.record_additional_execution(pwd.as_deref()))
+                .or_insert_with(|| CommandHistorySummary::new(command.clone()));
+        }
+
         match self
             .read_history_file_state
             .get_mut(shell_host)
