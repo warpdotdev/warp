@@ -573,7 +573,6 @@ default = [
     "file_tree",
     "vim_code_editor",
     "code_launch_modal",
-    "allow_ignoring_input_suggestions",
     "mcp_oauth",
     "expand_edit_to_pane",
     "fallback_model_load_output_messaging",
@@ -763,7 +762,6 @@ agent_mode_evals = [
 ambient_agents_command_line = []
 ambient_agents_image_upload = []
 scheduled_ambient_agents = []
-allow_ignoring_input_suggestions = []
 inline_slash_commands = ["agent_view"]
 
 # Enable this feature to track heap usage and automatically produce a heap
