@@ -78,6 +78,7 @@ use crate::server::cloud_objects::update_manager::{
 use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{
     CloudObjectTelemetryMetadata, SharingDialogSource, TelemetryCloudObjectType, TelemetryEvent,
 };
@@ -2596,9 +2597,16 @@ impl WorkflowView {
         let ai_client = self.ai_client.clone();
         let command = self.content_editor.as_ref(ctx).buffer_text(ctx);
         let raw_request = command.trim().to_string();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
 
         ctx.spawn(
-            async move { ai_client.generate_metadata_for_command(raw_request).await },
+            async move {
+                ai_client
+                    .generate_metadata_for_command(raw_request, team_scope)
+                    .await
+            },
             move |pane, response, ctx| {
                 match response {
                     Ok(metadata) => {

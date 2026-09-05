@@ -42,6 +42,7 @@ use crate::input_suggestions::{Event as InputSuggestionsEvent, InputSuggestions}
 use crate::send_telemetry_from_ctx;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{TelemetryEvent, WarpAIActionType};
 use crate::terminal::resizable_data::{DEFAULT_WARP_AI_WIDTH, ModalType, ResizableData};
 use crate::ui_components::blended_colors;
@@ -618,8 +619,11 @@ impl AIAssistantPanelView {
         let team_uid = UserWorkspaces::as_ref(ctx)
             .team_for_view(ctx)
             .map(|team| team.uid);
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         self.requests_model.update(ctx, |requests_model, ctx| {
-            requests_model.issue_request(request, team_uid, ctx);
+            requests_model.issue_request(request, team_uid, team_scope, ctx);
         });
         self.transcript_view.update(ctx, |transcript_view, ctx| {
             transcript_view.clear_selected_block(ctx);

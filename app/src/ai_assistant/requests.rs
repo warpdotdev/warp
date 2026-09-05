@@ -17,6 +17,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{TelemetryEvent, WarpAIRequestResult};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -171,6 +172,7 @@ impl Requests {
         &mut self,
         request: String,
         team_uid: Option<ServerId>,
+        team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
         let server_api = self.server_api.clone();
@@ -190,7 +192,7 @@ impl Requests {
             async move {
                 let start_time = Utc::now();
                 (start_time, server_api
-                    .generate_dialogue_answer(transcript, request_for_api, ai_execution_context)
+                    .generate_dialogue_answer(transcript, request_for_api, ai_execution_context, team_scope)
                     .await)
             },
             move |model, (start_time, response), ctx| {
