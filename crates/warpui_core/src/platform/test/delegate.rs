@@ -11,7 +11,7 @@ use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f, vec2i};
 
 use crate::accessibility::AccessibilityContent;
 use crate::clipboard::InMemoryClipboard;
-use crate::fonts::FamilyId;
+use crate::fonts::{FamilyId, FontId};
 use crate::keymap::Keystroke;
 use crate::modals::{AlertDialog, ModalId};
 use crate::notification::UserNotification;
@@ -21,7 +21,7 @@ use crate::platform::{
     SendNotificationErrorCallback, TerminationMode, TextLayoutSystem, WindowFocusBehavior,
     WindowOptions,
 };
-use crate::text_layout::TextAlignment;
+use crate::text_layout::{Glyph, Run, TextAlignment};
 use crate::windowing::WindowCallbacks;
 use crate::{
     ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId, geometry,
@@ -646,13 +646,42 @@ impl platform::FontDB for FontDB {
 impl platform::TextLayoutSystem for FontDB {
     fn layout_line(
         &self,
-        _text: &str,
+        text: &str,
         line_style: platform::LineStyle,
-        _style_runs: &[(std::ops::Range<usize>, crate::text_layout::StyleAndFont)],
+        style_runs: &[(std::ops::Range<usize>, crate::text_layout::StyleAndFont)],
         _max_width: f32,
         _clip_config: crate::text_layout::ClipConfig,
     ) -> crate::text_layout::Line {
-        crate::text_layout::Line::empty(line_style.font_size, line_style.line_height_ratio, 0)
+        if text.is_empty() {
+            return crate::text_layout::Line::empty(
+                line_style.font_size,
+                line_style.line_height_ratio,
+                0,
+            );
+        }
+        let styles = style_runs
+            .first()
+            .map(|(_, style_and_font)| style_and_font.style)
+            .unwrap_or_default();
+        let glyphs: Vec<_> = text
+            .chars()
+            .enumerate()
+            .map(|(index, _)| Glyph {
+                id: Default::default(),
+                position_along_baseline: Default::default(),
+                index,
+                width: 10.0,
+            })
+            .collect();
+        let mut line = crate::text_layout::Line::mock(vec![Run {
+            font_id: FontId(0),
+            glyphs,
+            styles,
+            width: text.chars().count() as f32 * 10.0,
+        }]);
+        line.font_size = line_style.font_size;
+        line.line_height_ratio = line_style.line_height_ratio;
+        line
     }
 
     fn layout_text(
