@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -457,7 +458,11 @@ async fn run_command(
     };
     let exit_code = status.code();
     let outputs = async move {
-        let stdin_failed = !matches!(stdin_task.await, Ok(Ok(())));
+        let stdin_failed = match stdin_task.await {
+            Ok(Ok(())) => false,
+            Ok(Err(error)) if error.kind() == ErrorKind::BrokenPipe => false,
+            Ok(Err(_)) | Err(_) => true,
+        };
         let stdout = join_output(stdout_task, exit_code).await?;
         let stderr = join_output(stderr_task, exit_code).await?;
         Ok((stdout, stderr, stdin_failed))
