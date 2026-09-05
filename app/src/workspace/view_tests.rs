@@ -4612,6 +4612,15 @@ fn test_close_tab_group_removes_group_and_members() {
 
     App::test((), |mut app| async move {
         initialize_app(&mut app);
+        app.update(|ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .new_tab_placement
+                        .set_value(NewTabPlacement::AfterCurrentTab, ctx)
+                );
+            });
+        });
 
         let workspace = mock_workspace(&mut app);
         workspace.update(&mut app, |workspace, ctx| {
