@@ -329,6 +329,7 @@ arborium = { version = "2", default-features = false, features = [
   "lang-swift",
   "lang-kotlin",
   "lang-scala",
+  "lang-solidity",
   "lang-powershell",
   "lang-elixir",
   "lang-sql",
