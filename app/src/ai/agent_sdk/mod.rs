@@ -1600,7 +1600,7 @@ fn command_requires_auth(command: &CliCommand) -> bool {
             TaskCommand::Message { .. } => true,
         },
         CliCommand::Model(model_cmd) => match model_cmd {
-            ModelCommand::List => true,
+            ModelCommand::List(_) => true,
         },
         CliCommand::MemoryStore(_) => true,
         CliCommand::Memory(_) => true,
@@ -1852,7 +1852,7 @@ fn command_to_telemetry_event(command: &CliCommand) -> CliTelemetryEvent {
                 harness: resolve_orchestration_harness_label(),
             },
         },
-        CliCommand::Model(ModelCommand::List) => CliTelemetryEvent::ModelList,
+        CliCommand::Model(ModelCommand::List(_)) => CliTelemetryEvent::ModelList,
         CliCommand::MemoryStore(memory_store_cmd) => match memory_store_cmd {
             MemoryStoreCommand::List => CliTelemetryEvent::MemoryStoreList,
             MemoryStoreCommand::Get(_) => CliTelemetryEvent::MemoryStoreGetStore,

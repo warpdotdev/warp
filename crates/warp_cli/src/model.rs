@@ -1,21 +1,28 @@
 use clap::{Args, Subcommand};
 
+use crate::scope::TeamSelection;
+
 /// Model-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum ModelCommand {
     /// List available models for the Warp Agent harness. For third party harnesses,
     /// consult third party harness docs for available models.
-    List,
+    List(ListModelsArgs),
 }
 
 impl ModelCommand {
     pub(crate) fn as_str_for_tracing(&self) -> &'static str {
         match self {
-            ModelCommand::List => "model list",
+            ModelCommand::List(_) => "model list",
         }
     }
 }
 
+#[derive(Debug, Clone, Args)]
+pub struct ListModelsArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
+}
 /// Shared CLI args for selecting a base model.
 #[derive(Debug, Clone, Args, Default)]
 pub struct ModelArgs {

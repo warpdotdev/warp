@@ -483,8 +483,26 @@ fn model_list_parses() {
     let CliCommand::Model(model_cmd) = boxed_cmd.as_ref() else {
         panic!("Expected `warp model` command");
     };
+    let crate::model::ModelCommand::List(list_args) = model_cmd;
+    assert_eq!(list_args.team_selection.team, None);
+}
 
-    assert!(matches!(model_cmd, crate::model::ModelCommand::List));
+#[test]
+fn model_list_accepts_team_selection() {
+    let args =
+        Args::try_parse_from(["warp", "model", "list", "--team=team_uid00000000000123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp model list` command");
+    };
+    let CliCommand::Model(crate::model::ModelCommand::List(list_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp model list` command");
+    };
+
+    assert_eq!(
+        list_args.team_selection.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
 }
 
 #[test]
