@@ -220,6 +220,58 @@ fn subscribe_to_start_agent_requests(
     captured
 }
 
+#[derive(Default)]
+struct CapturedSpawningFinishedEvents(Vec<AIAgentActionId>);
+
+impl Entity for CapturedSpawningFinishedEvents {
+    type Event = ();
+}
+
+fn subscribe_to_spawning_finished(
+    app: &mut App,
+    executor: &ModelHandle<RunAgentsExecutor>,
+) -> ModelHandle<CapturedSpawningFinishedEvents> {
+    let captured = app.add_model(|_| CapturedSpawningFinishedEvents::default());
+    captured.update(app, |_, ctx| {
+        ctx.subscribe_to_model(executor, |captured, _, event, _ctx| {
+            if let RunAgentsExecutorEvent::SpawningFinished { action_id } = event {
+                captured.0.push(action_id.clone());
+            }
+        });
+    });
+    captured
+}
+
+/// If cancellation lands while the executor has already moved past
+/// publication into `Spawning` (children dispatching asynchronously), the
+/// pending marker must still be cleared and `SpawningFinished` still emitted
+/// so the card's "Spawning…" snapshot doesn't linger forever. Unlike the
+/// `Publishing` case, this cannot pull back the already-dispatched children;
+/// it only unblocks the UI.
+#[test]
+fn cancel_during_spawning_clears_pending_and_emits_spawning_finished() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        let action_id = AIAgentActionId::from("run-agents-action".to_string());
+        state.executor.update(&mut app, |executor, _ctx| {
+            executor
+                .pending
+                .insert(action_id.clone(), PendingRunAgents::Spawning);
+        });
+        let captured = subscribe_to_spawning_finished(&mut app, &state.executor);
+
+        state.executor.update(&mut app, |executor, ctx| {
+            assert!(executor.is_pending(&action_id));
+            executor.cancel_execution(&action_id, ctx);
+            assert!(!executor.is_pending(&action_id));
+        });
+
+        captured.read(&app, |captured, _ctx| {
+            assert_eq!(captured.0, vec![action_id.clone()]);
+        });
+    });
+}
+
 fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
     AIAgentAction {
         id: AIAgentActionId::from("run-agents-action".to_string()),

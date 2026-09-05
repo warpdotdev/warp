@@ -15,8 +15,11 @@ use warpui_core::elements::tui::{
 };
 
 use super::{CardMode, ORCHESTRATION_BLOCK_TITLE, TuiOrchestrationBlock};
-use crate::agent_block_sections::render_fallback_tool_call_section;
+use crate::agent_block_sections::{
+    render_cancelled_fallback_row, render_fallback_tool_call_section,
+};
 use crate::orchestrated_agent_identity_styling::{AgentIdentity, assign_agent_identity_indices};
+use crate::tool_call_labels::RUN_AGENTS_CANCELLED_LABEL;
 use crate::tui_builder::TuiUiBuilder;
 
 impl TuiOrchestrationBlock {
@@ -242,9 +245,35 @@ impl TuiOrchestrationBlock {
     }
 }
 
-/// Renders the orchestration block in interactive or fallback form.
+/// Whether the card can no longer reach a real outcome and must render as
+/// cancelled: the tool call never entered the action queue (so it has no
+/// status and will never produce a result), and the response stream that was
+/// streaming it has already finished as cancelled or failed. Without this
+/// check the card would keep rendering the "Configuring agents…" placeholder
+/// forever. Mirrors the GUI's
+/// `RunAgentsCardView::is_orphaned_by_finished_output`.
+fn is_orphaned_by_finished_output(
+    action_status: Option<&AIActionStatus>,
+    block_finished_unsuccessfully: bool,
+) -> bool {
+    action_status.is_none() && block_finished_unsuccessfully
+}
+
+/// Renders the orchestration block in interactive, cancelled-terminal, or
+/// fallback form.
 pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn TuiElement> {
     let status = block.controller.action_status(&block.action_id, app);
+
+    // Restored-from-history: dispatch state is lost, render as cancelled.
+    // Checked before the orphan check below because a restored block also
+    // carries no action status.
+    if block.is_restored
+        || (block.spawning.is_none()
+            && is_orphaned_by_finished_output(status.as_ref(), block.block_finished_unsuccessfully))
+    {
+        return render_cancelled_fallback_row(RUN_AGENTS_CANCELLED_LABEL, app);
+    }
+
     let interactive = !block.is_restored
         && block.spawning.is_none()
         && matches!(status, Some(AIActionStatus::Blocked));
@@ -277,3 +306,7 @@ pub(super) fn render(block: &TuiOrchestrationBlock, app: &AppContext) -> Box<dyn
         )
         .finish()
 }
+
+#[cfg(test)]
+#[path = "render_tests.rs"]
+mod tests;

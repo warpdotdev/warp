@@ -19,8 +19,8 @@ use warpui_core::elements::tui::{
 
 use crate::agent_block::{CollapsibleSectionStates, TuiAIBlockAction};
 use crate::tool_call_labels::{
-    ResolvedCommandBlock, mcp_server_name_for_action, styled_tool_call_label_spans,
-    tool_call_display_state, tool_call_label_with_server,
+    ResolvedCommandBlock, ToolCallDisplayState, mcp_server_name_for_action,
+    styled_tool_call_label_spans, tool_call_display_state, tool_call_label_with_server,
 };
 use crate::tui_builder::TuiUiBuilder;
 
@@ -110,6 +110,25 @@ pub(crate) fn render_fallback_tool_call_section(
                 .finish(),
         )
         .child(TuiText::from_spans(styled_tool_call_label_spans(&label, &builder)).finish())
+        .finish()
+}
+
+/// Renders a fallback row with a fixed `label` and the terminal cancelled
+/// glyph, bypassing the per-action-type state derivation that
+/// [`render_fallback_tool_call_section`] does. Used when an action's outcome
+/// is already known to be cancelled even though the action itself never
+/// reached a status of its own (see
+/// `crate::orchestration_block::render::is_orphaned_by_finished_output`).
+pub(crate) fn render_cancelled_fallback_row(label: &str, app: &AppContext) -> Box<dyn TuiElement> {
+    let builder = TuiUiBuilder::from_app(app);
+    let state = ToolCallDisplayState::Cancelled;
+    TuiFlex::row()
+        .child(
+            TuiText::new(format!("{} ", state.glyph()))
+                .with_style(state.glyph_style(&builder))
+                .finish(),
+        )
+        .child(TuiText::from_spans(styled_tool_call_label_spans(label, &builder)).finish())
         .finish()
 }
 
