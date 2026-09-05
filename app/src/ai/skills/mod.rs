@@ -33,7 +33,7 @@ pub enum SkillManagerEvent {
 pub enum ActiveSkillLookupError {
     #[error("Bundled skills are not available on this remote session")]
     BundledSkillsUnavailable,
-    #[error("Skill not found: {reference}")]
+    #[error("Skill not found: {reference}{}", not_found_hint(reference))]
     NotFound { reference: SkillReference },
 }
 
@@ -48,6 +48,20 @@ impl ActiveSkillLookupError {
                 reference: reference.clone(),
             }
         }
+    }
+}
+
+/// Extra guidance appended to a `NotFound` error so a caller that used the
+/// wrong tool argument (e.g. passing a path skill's bare `name` as
+/// `bundled_skill_id`) learns the correct one, instead of just seeing a bare
+/// "not found".
+fn not_found_hint(reference: &SkillReference) -> &'static str {
+    match reference {
+        SkillReference::BundledSkillId(_) => {
+            " If this is a project or personal skill (not one bundled with Warp), invoke it \
+            with `skill_path` set to the skill's listed `path`, not `bundled_skill_id`."
+        }
+        SkillReference::Path(_) => "",
     }
 }
 
