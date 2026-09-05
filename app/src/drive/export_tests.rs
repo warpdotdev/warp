@@ -28,7 +28,7 @@ struct ExportTest {
 }
 
 impl ExportTest {
-    fn new(app: &mut App) -> Self {
+    fn new(temp_dir_prefix: &str, app: &mut App) -> Self {
         let pending_exports = Arc::new(Mutex::new(
             HashMap::<ExportId, oneshot::Sender<ExportEvent>>::new(),
         ));
@@ -51,7 +51,10 @@ impl ExportTest {
         }
 
         Self {
-            target_dir: TempDir::new().expect("failed to create temporary export directory"),
+            target_dir: tempfile::Builder::new()
+                .prefix(temp_dir_prefix)
+                .tempdir()
+                .expect("failed to create temporary export directory"),
             pending_exports,
         }
     }
@@ -149,7 +152,7 @@ fn test_export_workflow_success() {
         let workflow = Workflow::new("Test workflow", "echo hello world");
         add_workflow(workflow_id, workflow, &mut app);
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_workflow_success", &mut app);
         let (id, export) = exporter.start_export(
             CloudObjectTypeAndId::from_id_and_type(workflow_id, ObjectType::Workflow),
             &mut app,
@@ -193,7 +196,7 @@ fn test_export_workflow_duplicate() {
         let workflow = Workflow::new("Test workflow", "echo hello world");
         add_workflow(workflow_id, workflow, &mut app);
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_workflow_duplicate", &mut app);
 
         // Create a file at the default export path.
         fs::write(
@@ -251,7 +254,7 @@ fn test_export_workflow_failure() {
         let workflow = Workflow::new("Test workflow", "echo hello world");
         add_workflow(workflow_id, workflow, &mut app);
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_workflow_failure", &mut app);
         // Ensure that the export will fail.
         fs::remove_dir_all(exporter.target_dir.path()).expect("Could not remove test directory");
 
@@ -296,7 +299,7 @@ print("hello")
             &mut app,
         );
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_notebook_with_embeds", &mut app);
         let (id, export) = exporter.start_export(
             CloudObjectTypeAndId::from_id_and_type(notebook_id, ObjectType::Notebook),
             &mut app,
@@ -351,7 +354,7 @@ fn test_export_untitled_notebook() {
         let notebook_id = SyncId::ServerId(NotebookId::from(456).into());
         add_notebook(notebook_id, "", "This is untitled", &mut app);
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_untitled_notebook", &mut app);
         let (id, export) = exporter.start_export(
             CloudObjectTypeAndId::from_id_and_type(notebook_id, ObjectType::Notebook),
             &mut app,
@@ -382,7 +385,7 @@ fn test_export_with_special_characters() {
         let workflow = Workflow::new("Prefix: Some/workflow", "echo hello world");
         add_workflow(workflow_id, workflow, &mut app);
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_with_special_characters", &mut app);
         let (id, export) = exporter.start_export(
             CloudObjectTypeAndId::from_id_and_type(workflow_id, ObjectType::Workflow),
             &mut app,
@@ -438,7 +441,7 @@ fn test_export_multiple_objects() {
             &mut app,
         );
 
-        let exporter = ExportTest::new(&mut app);
+        let exporter = ExportTest::new("test_export_multiple_objects", &mut app);
 
         // Prepare export IDs for all three objects
         let export_ids = vec![
