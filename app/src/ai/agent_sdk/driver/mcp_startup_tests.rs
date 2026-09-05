@@ -25,7 +25,7 @@ use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::mcp::builtin::FACTORY_MCP_SERVER_NAME;
+use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
 use crate::ai::mcp::parsing::normalize_mcp_json;
@@ -750,6 +750,48 @@ fn api_key_credentials() -> Credentials {
         key: "wk-test-key".to_string(),
         owner_type: None,
     }
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_factory_mcp_for_oz_uses_stable_installation() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    let installation =
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .expect("built-in Factory MCP should attach when eligible");
+
+    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
+    assert_eq!(
+        installation.templatable_mcp_server().name,
+        FACTORY_MCP_SERVER_NAME
+    );
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_factory_mcp_for_oz_skips_without_flag_or_credentials() {
+    let flag = FeatureFlag::FactoryMcp.override_enabled(false);
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
+            .is_none()
+    );
+    drop(flag);
+
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
+}
+
+#[test]
+#[serial_test::serial]
+fn builtin_factory_mcp_for_oz_preserves_exact_name_collision() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
+
+    assert!(
+        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
+            .is_none()
+    );
 }
 
 fn explicit_http_server(url: &str) -> JSONMCPServer {
