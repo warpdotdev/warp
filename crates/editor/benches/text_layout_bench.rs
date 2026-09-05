@@ -23,6 +23,18 @@ use {warpui::platform::mac::FontDB as MacFontDB, warpui_core::fonts::Cache as Fo
 const BLOCK_COUNT: usize = 4_096;
 const BLOCK_TEXT: &str =
     "fn layout_parallel_editor_block(value: usize) -> usize { value.saturating_add(1) }\n";
+fn benchmark_block(text: String) -> StyledBufferBlock {
+    let content_length = text.chars().count();
+    StyledBufferBlock::Text(StyledTextBlock {
+        block: vec![StyledBufferRun {
+            run: text,
+            text_styles: TextStylesWithMetadata::default(),
+            block_style: BufferBlockStyle::PlainText,
+        }],
+        style: BufferBlockStyle::PlainText,
+        content_length: CharOffset::from(content_length),
+    })
+}
 
 fn benchmark_styles(font_family: FamilyId) -> RichTextStyles {
     let white = ColorU::white();
@@ -82,7 +94,7 @@ fn benchmark_styles(font_family: FamilyId) -> RichTextStyles {
             header_text_color: white,
             scrollbar_nonactive_thumb_color: white,
             scrollbar_active_thumb_color: white,
-            font_family: FamilyId(0),
+            font_family,
             font_size: 13.,
             cell_padding: 8.,
             outer_border: true,
@@ -92,36 +104,34 @@ fn benchmark_styles(font_family: FamilyId) -> RichTextStyles {
     }
 }
 
-fn benchmark_delta() -> EditDelta {
-    let block = StyledBufferBlock::Text(StyledTextBlock {
-        block: vec![StyledBufferRun {
-            run: BLOCK_TEXT.to_owned(),
-            text_styles: TextStylesWithMetadata::default(),
-            block_style: BufferBlockStyle::PlainText,
-        }],
-        style: BufferBlockStyle::PlainText,
-        content_length: CharOffset::from(BLOCK_TEXT.chars().count()),
-    });
-    EditDelta {
-        old_offset: CharOffset::from(1)
-            ..CharOffset::from(1 + BLOCK_COUNT * BLOCK_TEXT.chars().count()),
-        new_lines: Arc::new(vec![block; BLOCK_COUNT]),
-        ..Default::default()
-    }
+fn benchmark_delta(texts: impl IntoIterator<Item = String>) -> (EditDelta, usize) {
+    let blocks: Vec<_> = texts.into_iter().map(benchmark_block).collect();
+    let chars = blocks
+        .iter()
+        .map(StyledBufferBlock::content_length)
+        .map(CharOffset::as_usize)
+        .sum();
+    (
+        EditDelta {
+            old_offset: CharOffset::from(1)..CharOffset::from(1 + chars),
+            new_lines: Arc::new(blocks),
+            ..Default::default()
+        },
+        chars,
+    )
 }
 
 fn test_backend_text_layout_benchmark(criterion: &mut Criterion) {
-    let delta = benchmark_delta();
+    let (delta, chars) = benchmark_delta(std::iter::repeat_n(BLOCK_TEXT.to_owned(), BLOCK_COUNT));
     let styles = benchmark_styles(FamilyId(0));
     let layout_options = RenderLayoutOptions::default();
-    let chars = BLOCK_COUNT * BLOCK_TEXT.chars().count();
     let mut criterion = std::mem::take(criterion);
 
     App::test((), move |app| async move {
         app.read(|ctx| {
             let mut group = criterion.benchmark_group("editor_text_layout/test_backend");
             group.throughput(Throughput::Elements(chars as u64));
-            group.bench_function("layout_delta_4096_blocks", |bench| {
+            group.bench_function("layout_delta_4096_identical_blocks", |bench| {
                 bench.iter(|| {
                     let text_layout =
                         TextLayout::new(ctx.font_cache().text_layout_system(), &styles, f32::MAX);
@@ -138,17 +148,20 @@ fn core_text_layout_benchmark(criterion: &mut Criterion) {
     let font_family = font_cache
         .load_system_font("Menlo")
         .expect("Menlo should be available on macOS");
-    let delta = benchmark_delta();
+    let (delta, chars) = benchmark_delta((0..BLOCK_COUNT).map(|index| {
+        format!(
+            "fn layout_parallel_editor_block_{index}(value: usize) -> usize {{ value.saturating_add(1) }}\n"
+        )
+    }));
     let styles = benchmark_styles(font_family);
     let layout_options = RenderLayoutOptions::default();
-    let chars = BLOCK_COUNT * BLOCK_TEXT.chars().count();
     let mut criterion = std::mem::take(criterion);
 
     App::test((), move |app| async move {
         app.read(|ctx| {
             let mut group = criterion.benchmark_group("editor_text_layout/core_text");
             group.throughput(Throughput::Elements(chars as u64));
-            group.bench_function("layout_delta_4096_blocks", |bench| {
+            group.bench_function("layout_delta_4096_unique_blocks", |bench| {
                 bench.iter(|| {
                     let text_layout =
                         TextLayout::new(font_cache.text_layout_system(), &styles, f32::MAX);
