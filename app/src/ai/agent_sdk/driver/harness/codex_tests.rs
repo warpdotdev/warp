@@ -46,7 +46,11 @@ fn codex_runs_isolate_builtin_and_explicit_factory_mcp_config() {
     let explicit_working_dir = tmp.path().join("explicit-workspace");
     let persistent_config = r#"
 [mcp_servers.warp-factory]
-url = "https://persistent.example.com/factory"
+command = "persistent-command"
+args = ["--persistent"]
+env = { TOKEN = "persistent-token" }
+cwd = "/persistent/cwd"
+enabled = false
 
 [mcp_servers.user-server]
 command = "user-command"
@@ -111,30 +115,33 @@ command = "user-command"
     let builtin_path = builtin_home.path().to_path_buf();
     let explicit_path = explicit_home.path().to_path_buf();
     assert_ne!(builtin_path, explicit_path);
+    let builtin_config = read_codex_config(&builtin_path.join("config.toml"));
+    let builtin_factory = &builtin_config["mcp_servers"][FACTORY_MCP_SERVER_NAME];
     assert_eq!(
-        read_codex_config(&builtin_path.join("config.toml"))["mcp_servers"]
-            [FACTORY_MCP_SERVER_NAME]["url"]
-            .as_str(),
+        builtin_factory["url"].as_str(),
         Some("https://app.warp.dev/api/v1/mcp/factory")
     );
     assert_eq!(
-        read_codex_config(&builtin_path.join("config.toml"))["mcp_servers"]
-            [FACTORY_MCP_SERVER_NAME]["http_headers"]["Authorization"]
-            .as_str(),
+        builtin_factory["http_headers"]["Authorization"].as_str(),
         Some("Bearer parent-token")
     );
+    for stale_key in ["command", "args", "env", "cwd", "enabled"] {
+        assert!(builtin_factory.get(stale_key).is_none());
+    }
+
+    let explicit_config = read_codex_config(&explicit_path.join("config.toml"));
+    let explicit_factory = &explicit_config["mcp_servers"][FACTORY_MCP_SERVER_NAME];
     assert_eq!(
-        read_codex_config(&explicit_path.join("config.toml"))["mcp_servers"]
-            [FACTORY_MCP_SERVER_NAME]["url"]
-            .as_str(),
+        explicit_factory["url"].as_str(),
         Some("https://user.example.com/factory")
     );
     assert_eq!(
-        read_codex_config(&explicit_path.join("config.toml"))["mcp_servers"]
-            [FACTORY_MCP_SERVER_NAME]["http_headers"]["Authorization"]
-            .as_str(),
+        explicit_factory["http_headers"]["Authorization"].as_str(),
         Some("Bearer explicit-token")
     );
+    for stale_key in ["command", "args", "env", "cwd", "enabled"] {
+        assert!(explicit_factory.get(stale_key).is_none());
+    }
     assert_eq!(
         fs::read_to_string(persistent_home.join("config.toml")).unwrap(),
         persistent_config

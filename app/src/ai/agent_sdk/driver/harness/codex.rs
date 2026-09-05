@@ -1101,11 +1101,7 @@ fn write_codex_mcp_servers(
         .expect("mcp_servers table inserted above");
 
     for (name, server) in servers {
-        let entry = mcp_tbl
-            .entry(name)
-            .or_insert_with(toml_edit::table)
-            .as_table_mut()
-            .expect("mcp_servers entry is a table");
+        let mut entry = toml_edit::Table::new();
         entry.set_implicit(false);
 
         match &server.transport_type {
@@ -1145,6 +1141,7 @@ fn write_codex_mcp_servers(
                 }
             }
         }
+        mcp_tbl.insert(name, toml_edit::Item::Table(entry));
     }
 }
 
