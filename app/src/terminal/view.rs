@@ -10384,6 +10384,31 @@ impl TerminalView {
         }
     }
 
+    /// Reports that a dynamic prompt suggestion banner was surfaced to the user.
+    ///
+    /// Every path that shows that banner must call this. Acceptance rate is measured as
+    /// accepts over exposures, so an unreported exposure degrades the metric silently
+    /// instead of failing loudly.
+    fn send_prompt_suggestion_shown_telemetry(
+        &self,
+        id: String,
+        request_duration_ms: u64,
+        block_id: Option<String>,
+        server_request_token: Option<String>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        send_telemetry_from_ctx!(
+            TelemetryEvent::PromptSuggestionShown {
+                id,
+                request_duration_ms,
+                block_id,
+                view: self.prompt_suggestion_view_type(ctx),
+                server_request_token,
+            },
+            ctx
+        );
+    }
+
     fn resolve_prompt_suggestion(
         &mut self,
         resolution: PromptSuggestionResolution,
@@ -15634,7 +15659,7 @@ impl TerminalView {
         &mut self,
         prompt: &str,
         label: &Option<String>,
-        _request_duration_ms: u64,
+        request_duration_ms: u64,
         trigger: Option<PassiveSuggestionTrigger>,
         conversation_id: Option<AIConversationId>,
         server_request_token: Option<String>,
@@ -15645,6 +15670,8 @@ impl TerminalView {
         }
 
         self.clear_prompt_suggestions(ctx);
+        // Captured before `trigger` is moved into the banner state below.
+        let block_id = trigger.as_ref().and_then(|t| t.block_id());
         let suggestion_id = Uuid::new_v4().to_string();
         let banner_id = self.inline_banners_state.next_banner_id();
         let banner_state = PromptSuggestionBannerState {
@@ -15670,6 +15697,14 @@ impl TerminalView {
             input.set_prompt_suggestions_banner_state(Some(banner_state), ctx);
             input.notify_and_notify_children(ctx);
         });
+
+        self.send_prompt_suggestion_shown_telemetry(
+            suggestion_id,
+            request_duration_ms,
+            block_id.map(|b| b.to_string()),
+            server_request_token,
+            ctx,
+        );
 
         ctx.notify();
     }
@@ -15959,6 +15994,14 @@ impl TerminalView {
                             view: self.prompt_suggestion_view_type(ctx),
                         },
                         ctx
+                    );
+                } else {
+                    self.send_prompt_suggestion_shown_telemetry(
+                        suggestion_id,
+                        request_duration_ms,
+                        Some(block_id.to_string()),
+                        None,
+                        ctx,
                     );
                 }
 

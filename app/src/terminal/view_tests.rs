@@ -9175,6 +9175,149 @@ fn ctrl_c_does_not_accept_prompt_suggestion_banner() {
     })
 }
 
+/// Guards the denominator of the prompt-suggestion acceptance rate.
+///
+/// Acceptance rate is accepts over exposures, and the accept event is emitted from a
+/// different callsite than the exposures. So an exposure that goes missing skews the metric
+/// instead of zeroing it, and an exposure emitted twice skews it just as badly in the other
+/// direction. Neither is visible from any single callsite, hence the exact-count assertions.
+///
+/// Both dynamic banner paths are exercised in one test rather than two because
+/// `warpui::telemetry::flush_events` drains a process-wide queue: two tests asserting on the
+/// same event name could consume each other's events when run in the same process.
+#[test]
+fn dynamic_prompt_suggestion_banner_reports_exposure_telemetry() {
+    const LEGACY_SUGGESTION_ID: &str = "legacy-prompt-suggestion-shown-telemetry";
+    const MAA_REQUEST_TOKEN: &str = "maa-prompt-suggestion-shown-telemetry-token";
+    const REQUEST_DURATION_MS: u64 = 42;
+
+    fn drain_exposure_events() -> Vec<serde_json::Value> {
+        warpui::telemetry::flush_events()
+            .into_iter()
+            .filter_map(|event| match event.payload {
+                warpui::telemetry::EventPayload::NamedEvent { name, value, .. }
+                    if name == "Agent Mode Query Suggestions Banner Shown" =>
+                {
+                    value
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Waits for the first exposure event matching `is_match`, then keeps draining briefly so
+    /// a second, duplicate emission would also be collected rather than missed.
+    async fn collect_exposures(
+        is_match: impl Fn(&serde_json::Value) -> bool,
+    ) -> Vec<serde_json::Value> {
+        let mut matches = Vec::new();
+        for _ in 0..100 {
+            matches.extend(drain_exposure_events().into_iter().filter(&is_match));
+            if !matches.is_empty() {
+                break;
+            }
+            Timer::after(Duration::from_millis(10)).await;
+        }
+        for _ in 0..20 {
+            Timer::after(Duration::from_millis(10)).await;
+            matches.extend(drain_exposure_events().into_iter().filter(&is_match));
+        }
+        matches
+    }
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let block_id = terminal.update(&mut app, |view, _ctx| {
+            let mut model = view.model.lock();
+            model.simulate_block("ls", "output");
+            let last_completed_block_index = BlockIndex(model.block_list().blocks().len() - 2);
+            model
+                .block_list()
+                .block_at(last_completed_block_index)
+                .unwrap()
+                .id()
+                .clone()
+        });
+
+        // Legacy path: no server request token.
+        terminal.update(&mut app, |view, ctx| {
+            view.on_legacy_prompt_suggestion_generated(
+                AgentModePromptSuggestion::Success(PromptSuggestion {
+                    id: LEGACY_SUGGESTION_ID.to_owned(),
+                    label: Some("Do something".to_owned()),
+                    prompt: "Do something".to_owned(),
+                    coding_query_context: None,
+                    // A static suggestion reports a different event, so leave this unset to
+                    // exercise the dynamic path.
+                    static_prompt_suggestion_name: None,
+                    should_start_new_conversation: false,
+                }),
+                block_id.clone(),
+                "ls".to_owned(),
+                REQUEST_DURATION_MS,
+                ctx,
+            );
+        });
+
+        let legacy_exposures =
+            collect_exposures(|value| value["id"] == serde_json::json!(LEGACY_SUGGESTION_ID)).await;
+        assert_eq!(
+            legacy_exposures.len(),
+            1,
+            "legacy path should report exactly one exposure, got {legacy_exposures:#?}"
+        );
+        let legacy = &legacy_exposures[0];
+        assert_eq!(legacy["block_id"], serde_json::json!(block_id.to_string()));
+        assert_eq!(
+            legacy["request_duration_ms"],
+            serde_json::json!(REQUEST_DURATION_MS)
+        );
+        assert_eq!(legacy["server_request_token"], serde_json::Value::Null);
+
+        // MAA path: carries a server request token, which is what joins this event to the
+        // server-side record of the request that produced the suggestion.
+        let trigger = terminal.update(&mut app, |view, _ctx| {
+            let model = view.model.lock();
+            let block_context = block_context_from_terminal_model(&model, &block_id, false)
+                .expect("simulated block should produce a block context");
+            PassiveSuggestionTrigger::ShellCommandCompleted(ShellCommandCompletedTrigger {
+                executed_shell_command: Box::new(block_context),
+                relevant_files: vec![],
+            })
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.on_maa_prompt_suggestion_generated(
+                "Do something else",
+                &Some("Do something else".to_owned()),
+                REQUEST_DURATION_MS,
+                Some(trigger),
+                None,
+                Some(MAA_REQUEST_TOKEN.to_owned()),
+                ctx,
+            );
+        });
+
+        let maa_exposures = collect_exposures(|value| {
+            value["server_request_token"] == serde_json::json!(MAA_REQUEST_TOKEN)
+        })
+        .await;
+        assert_eq!(
+            maa_exposures.len(),
+            1,
+            "MAA path should report exactly one exposure, got {maa_exposures:#?}"
+        );
+        let maa = &maa_exposures[0];
+        assert_eq!(maa["block_id"], serde_json::json!(block_id.to_string()));
+        assert_eq!(
+            maa["request_duration_ms"],
+            serde_json::json!(REQUEST_DURATION_MS)
+        );
+    })
+}
+
 /// Regression test for GH703: a Linear deeplink prompt must never be auto-submitted
 /// to the LLM. Because `LinearDeepLink` returns `AutoTriggerBehavior::Never`, the
 /// prompt must land in the input buffer as a draft and the "press enter again to
