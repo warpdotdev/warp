@@ -11,8 +11,8 @@ use pathfinder_geometry::vector::Vector2F;
 use warp::tui_export::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, AmbientAgentTaskId,
     BannerState, BlocklistAIHistoryModel, GlobalResourceHandlesProvider, IsSharedSessionCreator,
-    LocalTtyTerminalManager, PersistenceWriter, ResolvedTeamScope, ServerConversationToken,
-    TerminalManagerTrait, TerminalSurfaceResult, UserWorkspaces, oz_run_url,
+    LocalTtyTerminalManager, PersistenceWriter, ServerConversationToken, TerminalManagerTrait,
+    TerminalSurfaceResult, oz_run_url,
 };
 use warpui::SingletonEntity;
 use warpui_core::runtime::TuiDriverHandle;
@@ -322,19 +322,18 @@ impl TuiSessions {
         let id = TuiSessionId(view.id());
         if ctx.has_singleton_model::<TuiOrchestrationModel>() {
             let orchestration = TuiOrchestrationModel::handle(ctx);
-            let team_context_resolver = UserWorkspaces::team_context_resolver(view.downgrade());
             ctx.subscribe_to_view(&view, move |_, event, ctx| match event {
                 TuiTerminalSessionEvent::StartAgentConversation {
                     request,
                     working_directory,
+                    team_context,
                 } => {
-                    let team_scope = ResolvedTeamScope::from_scope(&(team_context_resolver)(ctx));
                     orchestration.update(ctx, |orchestration, ctx| {
                         orchestration.dispatch_create_agent(
                             id,
                             (**request).clone(),
                             working_directory.clone(),
-                            team_scope,
+                            team_context,
                             ctx,
                         );
                     });
@@ -430,11 +429,10 @@ impl TuiSessions {
             TuiOrchestrationEvent::CreateLocalChildSession {
                 parent_session_id,
                 request,
-                model_id,
                 working_directory,
                 task_id,
                 conversation_name,
-                team_scope,
+                child_settings,
             } => {
                 let window_id = sessions
                     .as_ref(ctx)
@@ -457,10 +455,9 @@ impl TuiSessions {
                             session_id,
                             session_view,
                             request: (**request).clone(),
-                            model_id: model_id.clone(),
                             task_id: *task_id,
                             conversation_name: conversation_name.clone(),
-                            team_scope: team_scope.clone(),
+                            child_settings: child_settings.clone(),
                         },
                         ctx,
                     );

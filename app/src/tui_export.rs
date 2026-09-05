@@ -121,8 +121,9 @@ pub use crate::ai::blocklist::{
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{
-    PreparedLocalOzChildLaunch, apply_child_agent_model_override,
-    finish_local_oz_child_conversation, prepare_local_oz_child_launch,
+    ChildAgentSettingsSnapshot, PreparedLocalOzChildLaunch, apply_child_agent_model_override,
+    apply_child_agent_settings, capture_child_agent_settings, finish_local_oz_child_conversation,
+    prepare_local_oz_child_launch,
 };
 pub use crate::ai::cloud_environments::{
     CloudEnvironment, CloudEnvironmentCatalog, CloudEnvironmentCatalogEvent, OZ_ENVIRONMENTS_URL,
@@ -280,8 +281,8 @@ pub use crate::util::time_format::format_elapsed_seconds;
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
 pub use crate::workspaces::update_manager::TeamUpdateManager;
 pub use crate::workspaces::user_workspaces::{
-    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
-    UserWorkspacesEvent,
+    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver, TeamScope,
+    UserWorkspaces, UserWorkspacesEvent,
 };
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 

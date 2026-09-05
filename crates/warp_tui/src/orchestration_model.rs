@@ -15,19 +15,18 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::rc::Rc;
 
 use warp::tui_export::{
     AIConversation, AIConversationId, AgentRunDisplayStatus, AmbientAgentTaskId,
-    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, CloudAgentStartupIssue,
-    CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
-    OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
-    RemoteChildLaunchConfig, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
-    ServerApiProvider, StartAgentExecutionMode, StartAgentRequest, aggregated_orchestrator_status,
-    apply_child_agent_model_override, child_conversations_in_pill_order,
-    classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
-    descendant_conversations_in_pill_order, finish_local_oz_child_conversation,
-    inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
+    BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ChildAgentSettingsSnapshot,
+    CloudAgentStartupIssue, CloudConversationData, ConversationStatus, Harness,
+    LoadedSubtreeRollup, OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
+    PreparedRemoteChildLaunch, RemoteChildLaunchConfig, RenderableAIError, RequestTeamScope,
+    ServerApiProvider, StartAgentExecutionMode, StartAgentRequest, TeamContextForOperation,
+    aggregated_orchestrator_status, apply_child_agent_settings, capture_child_agent_settings,
+    child_conversations_in_pill_order, classify_cloud_agent_startup_error,
+    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
+    finish_local_oz_child_conversation, loaded_subtree_rollup, orchestration_root_conversation_id,
     oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
@@ -116,11 +115,10 @@ pub(crate) enum TuiOrchestrationEvent {
     CreateLocalChildSession {
         parent_session_id: TuiSessionId,
         request: Box<StartAgentRequest>,
-        model_id: Option<String>,
         working_directory: Option<PathBuf>,
         task_id: warp::tui_export::AmbientAgentTaskId,
         conversation_name: String,
-        team_scope: Rc<ResolvedTeamScope>,
+        child_settings: ChildAgentSettingsSnapshot,
     },
     CreateRemoteChildSession {
         parent_session_id: TuiSessionId,
@@ -156,10 +154,9 @@ pub(crate) struct MaterializedLocalOzChildSession {
     pub(crate) session_id: TuiSessionId,
     pub(crate) session_view: ViewHandle<TuiTerminalSessionView>,
     pub(crate) request: StartAgentRequest,
-    pub(crate) model_id: Option<String>,
     pub(crate) task_id: warp::tui_export::AmbientAgentTaskId,
     pub(crate) conversation_name: String,
-    pub(crate) team_scope: Rc<ResolvedTeamScope>,
+    pub(crate) child_settings: ChildAgentSettingsSnapshot,
 }
 
 impl Entity for TuiOrchestrationModel {
@@ -497,7 +494,7 @@ impl TuiOrchestrationModel {
         parent_session_id: TuiSessionId,
         request: StartAgentRequest,
         working_directory: Option<PathBuf>,
-        team_scope: ResolvedTeamScope,
+        team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         match request.execution_mode.clone() {
@@ -509,7 +506,7 @@ impl TuiOrchestrationModel {
                 request,
                 model_id,
                 working_directory,
-                team_scope,
+                team_context,
                 ctx,
             ),
             StartAgentExecutionMode::Local {
@@ -770,11 +767,12 @@ impl TuiOrchestrationModel {
         request: StartAgentRequest,
         model_id: Option<String>,
         working_directory: Option<PathBuf>,
-        team_scope: ResolvedTeamScope,
+        team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        let request_team_scope = RequestTeamScope::from_scope(&team_scope);
-        let team_scope = Rc::new(team_scope);
+        let request_team_scope = RequestTeamScope::from_scope(team_context);
+        let child_settings =
+            capture_child_agent_settings(parent_session_id.surface_id(), model_id.as_deref(), ctx);
         let launch = prepare_local_oz_child_launch(
             &request.name,
             &request.prompt,
@@ -786,11 +784,10 @@ impl TuiOrchestrationModel {
             Ok(prepared) => ctx.emit(TuiOrchestrationEvent::CreateLocalChildSession {
                 parent_session_id,
                 request: Box::new(request),
-                model_id,
                 working_directory,
                 task_id: prepared.task_id,
                 conversation_name: prepared.conversation_name,
-                team_scope,
+                child_settings,
             }),
             Err(error) => me.fail_child_request(
                 &request,
@@ -812,26 +809,12 @@ impl TuiOrchestrationModel {
             session_id,
             session_view,
             request,
-            model_id,
             task_id,
             conversation_name,
-            team_scope,
+            child_settings,
         } = child;
         let child_surface_id = session_id.surface_id();
-
-        let parent_surface_id = parent_session_id.surface_id();
-        inherit_child_agent_settings(
-            team_scope.as_ref(),
-            parent_surface_id,
-            child_surface_id,
-            ctx,
-        );
-        apply_child_agent_model_override(
-            team_scope.as_ref(),
-            child_surface_id,
-            model_id.as_deref(),
-            ctx,
-        );
+        apply_child_agent_settings(child_settings, child_surface_id, ctx);
 
         let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             let conversation_id = history.start_new_child_conversation(

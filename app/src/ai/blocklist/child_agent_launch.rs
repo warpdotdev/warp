@@ -15,9 +15,52 @@ use {
 
 use crate::AIExecutionProfilesModel;
 #[cfg(not(target_family = "wasm"))]
+use crate::ai::execution_profiles::ExecutionProfileId;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
 use crate::workspaces::user_workspaces::TeamScope;
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone)]
+pub struct ChildAgentSettingsSnapshot {
+    profile_id: ExecutionProfileId,
+    model_selection: Option<LLMId>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn capture_child_agent_settings(
+    parent_surface_id: EntityId,
+    model_id: Option<&str>,
+    ctx: &AppContext,
+) -> ChildAgentSettingsSnapshot {
+    let profile_id = AIExecutionProfilesModel::as_ref(ctx)
+        .active_profile(Some(parent_surface_id), ctx)
+        .id()
+        .clone();
+    let model_selection = model_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(LLMId::from)
+        .or_else(|| LLMPreferences::as_ref(ctx).agent_mode_selection(parent_surface_id));
+    ChildAgentSettingsSnapshot {
+        profile_id,
+        model_selection,
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn apply_child_agent_settings(
+    settings: ChildAgentSettingsSnapshot,
+    child_surface_id: EntityId,
+    ctx: &mut AppContext,
+) {
+    AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+        profiles.set_active_profile(child_surface_id, settings.profile_id, ctx);
+    });
+    LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+        preferences.apply_agent_mode_selection(settings.model_selection, child_surface_id, ctx);
+    });
+}
 
 /// Server-side state prepared before a frontend creates the child's surface.
 #[cfg(not(target_family = "wasm"))]
