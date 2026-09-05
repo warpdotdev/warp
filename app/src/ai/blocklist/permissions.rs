@@ -14,6 +14,7 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::hooks::trust::is_hook_trust_store_path;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ExecutionProfileId,
@@ -1236,6 +1237,7 @@ fn check_protected_write_paths(paths: &[PathBuf]) -> Option<FileWritePermission>
     if paths.iter().any(|p| {
         mcp_provider_from_file_path(p).is_some()
             || p.ends_with(std::path::Path::new(".warp/hooks.json"))
+            || is_hook_trust_store_path(p)
     }) {
         Some(FileWritePermission::Denied(
             FileWritePermissionDeniedReason::ProtectedPath,

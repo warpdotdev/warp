@@ -1,5 +1,4 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum NativePermission {
     Deny,
     Allow,
@@ -7,14 +6,12 @@ pub(crate) enum NativePermission {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum HookPermission {
     Continue,
     Deny,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(crate) enum ComposedPermission {
     DeniedByWarp,
     DeniedByHook,
@@ -22,7 +19,6 @@ pub(crate) enum ComposedPermission {
     Prompt,
 }
 
-#[allow(dead_code)]
 pub(crate) fn compose_permission(
     native: NativePermission,
     hook: HookPermission,

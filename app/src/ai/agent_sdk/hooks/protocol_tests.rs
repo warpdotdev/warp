@@ -31,6 +31,7 @@ fn object(fields: impl IntoIterator<Item = (&'static str, Value)>) -> Value {
 
 fn common_fields() -> BTreeMap<String, Value> {
     [
+        ("schema_version", string(PAYLOAD_SCHEMA_VERSION)),
         ("session_id", string("session")),
         ("run_id", string("run")),
         ("conversation_id", string("conversation")),
@@ -48,6 +49,17 @@ fn action(
     event_fields: impl IntoIterator<Item = (&'static str, Value)>,
 ) -> RunOzHook {
     let mut fields = common_fields();
+    let hook_event_name = match event {
+        ProtocolEvent::SessionStart => "SessionStart",
+        ProtocolEvent::SessionEnd => "SessionEnd",
+        ProtocolEvent::UserPromptSubmit => "UserPromptSubmit",
+        ProtocolEvent::Stop => "Stop",
+        ProtocolEvent::PreToolUse => "PreToolUse",
+        ProtocolEvent::PostToolUse => "PostToolUse",
+        ProtocolEvent::PreCompact => "PreCompact",
+        ProtocolEvent::Unspecified => "Unspecified",
+    };
+    fields.insert("hook_event_name".into(), string(hook_event_name));
     fields.extend(
         event_fields
             .into_iter()
@@ -66,6 +78,31 @@ fn action(
         schema_version: PAYLOAD_SCHEMA_VERSION.into(),
         redacted_payload: Some(Struct { fields }),
     }
+}
+
+#[test]
+fn oz_hooks_protocol_requires_envelope_fields_and_rejects_non_tool_ids() {
+    for field in ["schema_version", "hook_event_name"] {
+        let mut missing = action(ProtocolEvent::Stop, [("turn_status", string("idle"))]);
+        missing
+            .redacted_payload
+            .as_mut()
+            .unwrap()
+            .fields
+            .remove(field);
+        assert!(matches!(
+            event_from_protocol(&missing),
+            Err(ProtocolHookError::MissingPayloadField(missing_field))
+                if missing_field == field
+        ));
+    }
+
+    let mut non_tool = action(ProtocolEvent::Stop, [("turn_status", string("idle"))]);
+    non_tool.tool_use_id = "unexpected".into();
+    assert!(matches!(
+        event_from_protocol(&non_tool),
+        Err(ProtocolHookError::InvalidToolUseId)
+    ));
 }
 
 #[test]
@@ -257,5 +294,23 @@ fn oz_hooks_protocol_maps_continue_deny_failed_and_cancelled_results() {
         )
         .outcome,
         Some(Outcome::Cancelled(_))
+    ));
+    assert!(matches!(
+        result_for_pre_tool(
+            &action,
+            OzPreToolUseDecision::Deny {
+                reason: "explicit".into(),
+                source: HookConfigSource::Project,
+                diagnostics: vec![
+                    diagnostic(
+                        HookInvocationResult::Continued,
+                        Some(HookFailureCategory::Timeout),
+                    ),
+                    diagnostic(HookInvocationResult::Denied, None),
+                ],
+            },
+        )
+        .outcome,
+        Some(Outcome::Deny(ref deny)) if deny.reason == "explicit"
     ));
 }

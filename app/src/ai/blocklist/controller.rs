@@ -2420,8 +2420,15 @@ impl BlocklistAIController {
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn set_oz_hook_session(&mut self, session: Option<OzHookSession>) {
-        self.oz_hook_session = session;
+    pub(crate) fn set_oz_hook_session(
+        &mut self,
+        session: Option<OzHookSession>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.oz_hook_session = session.clone();
+        self.action_model.update(ctx, |model, ctx| {
+            model.set_oz_hook_session(session, ctx);
+        });
     }
 
     #[cfg(not(target_family = "wasm"))]

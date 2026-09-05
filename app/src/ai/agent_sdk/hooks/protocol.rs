@@ -105,6 +105,13 @@ pub(crate) fn event_from_protocol(action: &RunOzHook) -> Result<OzHookEvent, Pro
     {
         return Err(ProtocolHookError::InvalidToolUseId);
     }
+    if !matches!(
+        event_name,
+        HookEventName::PreToolUse | HookEventName::PostToolUse
+    ) && !action.tool_use_id.is_empty()
+    {
+        return Err(ProtocolHookError::InvalidToolUseId);
+    }
     if let HookEventFields::PreToolUse { tool_use_id, .. }
     | HookEventFields::PostToolUse { tool_use_id, .. } = &event
         && tool_use_id != &action.tool_use_id
@@ -152,17 +159,25 @@ pub(crate) fn result_for_pre_tool(
             reason,
             source,
             diagnostics,
-        } => diagnostics
-            .iter()
-            .rev()
-            .find(|diagnostic| diagnostic.failure_category.is_some())
-            .map(|diagnostic| Some(failed_outcome(diagnostic, ResolvedAction::Deny)))
-            .unwrap_or_else(|| {
+        } => {
+            if let Some(diagnostic) = diagnostics.last()
+                && diagnostic.result == HookInvocationResult::Denied
+                && diagnostic.failure_category.is_some()
+            {
+                Some(failed_outcome(diagnostic, ResolvedAction::Deny))
+            } else {
                 Some(oz_hook_result::Outcome::Deny(oz_hook_result::Deny {
                     reason: super::redaction::truncate_utf8(&reason, MAX_DENIAL_REASON_BYTES),
                     source: source.as_str().into(),
                 }))
-            }),
+            }
+        }
+        OzPreToolUseDecision::Cancelled { diagnostics } => {
+            let _ = diagnostics;
+            Some(oz_hook_result::Outcome::Cancelled(
+                oz_hook_result::Cancelled {},
+            ))
+        }
     };
     OzHookResult {
         invocation_id: action.invocation_id.clone(),
@@ -239,14 +254,16 @@ fn validate_envelope_fields(
     if fields.contains_key("hook_source") {
         return Err(ProtocolHookError::UnexpectedHookSource);
     }
-    if let Some(schema_version) = fields.remove("schema_version")
-        && schema_version != RedactedValue::String(PAYLOAD_SCHEMA_VERSION.into())
-    {
+    let schema_version = fields
+        .remove("schema_version")
+        .ok_or(ProtocolHookError::MissingPayloadField("schema_version"))?;
+    if schema_version != RedactedValue::String(PAYLOAD_SCHEMA_VERSION.into()) {
         return Err(ProtocolHookError::UnsupportedSchema);
     }
-    if let Some(hook_event_name) = fields.remove("hook_event_name")
-        && hook_event_name != RedactedValue::String(event.as_str().into())
-    {
+    let hook_event_name = fields
+        .remove("hook_event_name")
+        .ok_or(ProtocolHookError::MissingPayloadField("hook_event_name"))?;
+    if hook_event_name != RedactedValue::String(event.as_str().into()) {
         return Err(ProtocolHookError::MismatchedEvent);
     }
     Ok(())

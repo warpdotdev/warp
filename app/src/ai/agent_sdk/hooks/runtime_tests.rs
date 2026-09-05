@@ -156,10 +156,15 @@ async fn oz_hooks_runtime_invalid_allow_output_fails_open_or_closed() {
 
 #[tokio::test]
 async fn oz_hooks_runtime_timeout_kills_and_resolves_failure_mode() {
+    let temp = tempfile::tempdir().unwrap();
+    let sentinel = temp.path().join("descendant-survived");
     let runtime = runtime_with_hooks(json!({
         "PreToolUse": [{"hooks": [{
             "type": "command",
-            "command": "sleep 30",
+            "command": format!(
+                "(sleep 2; printf survived > '{}') & sleep 30",
+                sentinel.display()
+            ),
             "timeout": 1,
             "on_failure": "deny"
         }]}]
@@ -170,6 +175,8 @@ async fn oz_hooks_runtime_timeout_kills_and_resolves_failure_mode() {
 
     assert!(started.elapsed() < Duration::from_secs(5));
     assert!(matches!(decision, OzPreToolUseDecision::Deny { .. }));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(!sentinel.exists());
 }
 
 #[tokio::test]
@@ -226,4 +233,47 @@ async fn oz_hooks_runtime_cancellation_removes_pending_event() {
         observation.diagnostics[0].result,
         HookInvocationResult::Cancelled
     );
+}
+
+#[tokio::test]
+async fn oz_hooks_runtime_cancellation_while_queued_is_not_continue() {
+    let runtime = Arc::new(runtime_with_hooks(json!({
+        "SessionStart": [{"hooks": [{
+            "type": "command",
+            "command": "sleep 30"
+        }]}],
+        "PreToolUse": [{"hooks": [{
+            "type": "command",
+            "command": "exit 0"
+        }]}]
+    })));
+    let blocker = {
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move {
+            runtime
+                .observe(event(
+                    "blocker",
+                    HookEventFields::SessionStart {
+                        source: SessionStartSource::Startup,
+                    },
+                ))
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let queued = {
+        let runtime = Arc::clone(&runtime);
+        tokio::spawn(async move { runtime.pre_tool_use(pre_tool_event("queued")).await })
+    };
+    tokio::task::yield_now().await;
+
+    runtime.cancel(OzHookCancellationScope::Invocation("queued".into()));
+    let decision = tokio::time::timeout(Duration::from_secs(5), queued)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(decision, OzPreToolUseDecision::Cancelled { .. }));
+
+    runtime.cancel(OzHookCancellationScope::Invocation("blocker".into()));
+    blocker.await.unwrap();
 }

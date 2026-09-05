@@ -63,6 +63,8 @@ use crate::ai::agent::{
     CancellationOutcome, CancellationReason, CreateDocumentsResult, EditDocumentsResult,
     RequestCommandOutputResult,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::OzHookSession;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -289,6 +291,27 @@ impl BlocklistAIActionModel {
             } => {
                 me.handle_action_result(*conversation_id, result.clone(), *cancellation_reason, ctx)
             }
+            BlocklistAIActionExecutorEvent::OzPreflightNotExecuted {
+                action,
+                conversation_id,
+                reason,
+            } => {
+                let should_remove_entry =
+                    me.running_actions
+                        .get_mut(conversation_id)
+                        .is_some_and(|running| {
+                            running.remove_action(&action.id);
+                            running.is_empty()
+                        });
+                if should_remove_entry {
+                    me.running_actions.remove(conversation_id);
+                }
+                me.pending_actions
+                    .entry(*conversation_id)
+                    .or_default()
+                    .push_front((**action).clone());
+                me.handle_not_executed_action(action, *reason, *conversation_id, ctx);
+            }
             BlocklistAIActionExecutorEvent::InitProject(id) => {
                 ctx.emit(BlocklistAIActionEvent::InitProject(id.clone()))
             }
@@ -427,6 +450,17 @@ impl BlocklistAIActionModel {
         self.ambient_agent_task_id = id;
         self.executor.update(ctx, |executor, ctx| {
             executor.set_ambient_agent_task_id(id, ctx);
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_oz_hook_session(
+        &mut self,
+        session: Option<OzHookSession>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.executor.update(ctx, |executor, _| {
+            executor.set_oz_hook_session(session);
         });
     }
 

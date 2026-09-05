@@ -16,7 +16,6 @@ pub(crate) enum RedactedValue {
 }
 
 impl RedactedValue {
-    #[allow(dead_code)]
     pub(crate) fn object(
         fields: impl IntoIterator<Item = (impl Into<String>, RedactedValue)>,
     ) -> Self {
@@ -28,7 +27,6 @@ impl RedactedValue {
         )
     }
 
-    #[allow(dead_code)]
     pub(crate) fn redacted(reason: &str, byte_count: usize) -> Self {
         Self::object([
             ("redacted", Self::Bool(true)),

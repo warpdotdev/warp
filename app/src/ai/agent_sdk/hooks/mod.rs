@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod adapters;
 pub(crate) mod config;
 pub(crate) mod payload;
 pub(crate) mod permissions;
@@ -26,6 +27,8 @@ pub(crate) const MAX_DENIAL_REASON_BYTES: usize = 4 * 1024;
 pub(crate) struct OzHookSession {
     pub(crate) runtime: Arc<dyn runtime::OzHookRuntime>,
     pub(crate) protocol_context: warp_multi_agent_api::OzHookContext,
+    pub(crate) payload_context: payload::HookPayloadContext,
+    pub(crate) redactor: redaction::HookRedactor,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

@@ -92,6 +92,20 @@ use crate::ai::agent::{
     AIAgentActionType, AIAgentActionTypeDiscriminants, CancellationReason, FileContext,
     FileLocations, ReadFilesFailedFile, ServerOutputId,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::OzHookSession;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::adapters::{local_action_payload, local_action_result_payload};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::payload::{HookEventFields, HookPayloadTemplate};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::permissions::{
+    ComposedPermission, HookPermission, NativePermission, compose_permission,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::runtime::{
+    OzHookCancellationScope, OzHookEvent, OzPreToolUseDecision, OzPreToolUseEvent,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::recording_controller::RecordingController;
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
@@ -119,6 +133,12 @@ pub(super) enum ParallelExecutionPolicy {
     /// Read-only actions that only inspect local context and may be safely coalesced into the
     /// same execution phase when the underlying runtime supports it.
     ReadOnlyLocalContext,
+}
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LocalActionHookStage {
+    Preflight,
+    Executing,
+    Postflight,
 }
 
 /// Whether an action is running serially or in parallel with other actions.
@@ -239,6 +259,7 @@ struct AsyncExecutingAction {
     /// The conversation this action belongs to so cancellation and follow-up scheduling remain
     /// scoped even when several conversations have async actions in flight.
     conversation_id: AIConversationId,
+    hook_stage: LocalActionHookStage,
 }
 
 impl AsyncExecutingAction {
@@ -286,6 +307,10 @@ pub struct BlocklistAIActionExecutor {
     /// Reference to the terminal model for checking session sharing state.
     terminal_model: Arc<FairMutex<TerminalModel>>,
     team_context_resolver: TeamContextResolver,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_session: Option<OzHookSession>,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_approved_actions: std::collections::HashSet<AIAgentActionId>,
 }
 
 impl BlocklistAIActionExecutor {
@@ -381,7 +406,16 @@ impl BlocklistAIActionExecutor {
             send_message_executor,
             ask_user_question_executor,
             wait_for_events_executor,
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_session: None,
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_approved_actions: Default::default(),
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_oz_hook_session(&mut self, session: Option<OzHookSession>) {
+        self.oz_hook_session = session;
     }
 
     pub fn async_executing_action(&self, action_id: &AIAgentActionId) -> Option<&AIAgentAction> {
@@ -597,6 +631,27 @@ impl BlocklistAIActionExecutor {
         is_user_initiated: bool,
         ctx: &mut ModelContext<Self>,
     ) -> TryExecuteResult {
+        #[cfg(not(target_family = "wasm"))]
+        let oz_preflight_complete = self.oz_hook_approved_actions.remove(&action.id);
+        #[cfg(target_family = "wasm")]
+        let oz_preflight_complete = false;
+        self.try_to_execute_action_inner(
+            action,
+            conversation_id,
+            is_user_initiated,
+            oz_preflight_complete,
+            ctx,
+        )
+    }
+
+    fn try_to_execute_action_inner(
+        &mut self,
+        action: AIAgentAction,
+        conversation_id: AIConversationId,
+        is_user_initiated: bool,
+        oz_preflight_complete: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> TryExecuteResult {
         // We should never actually execute actions in view-only mode.
         if self.is_shared_session_viewer() {
             return TryExecuteResult::NotExecuted {
@@ -618,12 +673,14 @@ impl BlocklistAIActionExecutor {
         let needs_confirmation = !(is_user_initiated
             || can_auto_execute
             || (is_agent_autonomous && action.action.is_request_command_output()));
-        if needs_confirmation {
-            return TryExecuteResult::NotExecuted {
-                action: Box::new(action),
-                reason: NotExecutedReason::NeedsConfirmation,
-            };
-        } else if !is_user_initiated && !can_auto_execute && is_agent_autonomous {
+        let native_permission = if !is_user_initiated && !can_auto_execute && is_agent_autonomous {
+            NativePermission::Deny
+        } else if needs_confirmation {
+            NativePermission::Prompt
+        } else {
+            NativePermission::Allow
+        };
+        if native_permission == NativePermission::Deny {
             // It must be the case that the autonomous agent is requesting a denylisted command.
             if let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action {
                 let action_id = action.id.clone();
@@ -648,6 +705,121 @@ impl BlocklistAIActionExecutor {
 
                 return TryExecuteResult::ExecutedSync;
             }
+        }
+
+        #[cfg(not(target_family = "wasm"))]
+        if !oz_preflight_complete && let Some(session) = self.oz_hook_session.clone() {
+            let (tool_name, tool_input) = local_action_payload(&action.action, &session.redactor);
+            let tool_use_id = action.id.to_string();
+            let mut payload_context = session.payload_context.clone();
+            payload_context.conversation_id = conversation_id.to_string();
+            let event = OzPreToolUseEvent::new(OzHookEvent {
+                invocation_id: uuid::Uuid::new_v4().to_string(),
+                tool_use_id: Some(tool_use_id.clone()),
+                payload: HookPayloadTemplate {
+                    context: payload_context,
+                    event: HookEventFields::PreToolUse {
+                        tool_name: tool_name.into(),
+                        tool_use_id,
+                        tool_input,
+                    },
+                },
+            })
+            .expect("local pre-tool event uses the pre-tool payload");
+            let action_id = action.id.clone();
+            self.async_executing_actions.insert(
+                action_id.clone(),
+                AsyncExecutingAction {
+                    action: action.clone(),
+                    conversation_id,
+                    hook_stage: LocalActionHookStage::Preflight,
+                },
+            );
+            ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
+                action_id: action_id.clone(),
+            });
+            ctx.spawn(
+                async move { session.runtime.pre_tool_use(event).await },
+                move |me, decision, ctx| {
+                    if !me.async_executing_actions.contains_key(&action_id) {
+                        return;
+                    }
+                    if matches!(decision, OzPreToolUseDecision::Cancelled { .. }) {
+                        let running = me
+                            .async_executing_actions
+                            .remove(&action_id)
+                            .expect("preflight action was checked above");
+                        let result = running.action.action.cancelled_result();
+                        Self::emit_finished_action(running, result, None, ctx);
+                        return;
+                    }
+                    let hook_permission = match decision {
+                        OzPreToolUseDecision::Continue { .. } => HookPermission::Continue,
+                        OzPreToolUseDecision::Deny { .. } => HookPermission::Deny,
+                        OzPreToolUseDecision::Cancelled { .. } => unreachable!(),
+                    };
+                    match compose_permission(native_permission, hook_permission) {
+                        ComposedPermission::Allow => {
+                            if let Some(running) = me.async_executing_actions.get_mut(&action_id) {
+                                running.hook_stage = LocalActionHookStage::Executing;
+                            }
+                            let result = me.try_to_execute_action_inner(
+                                action,
+                                conversation_id,
+                                is_user_initiated,
+                                true,
+                                ctx,
+                            );
+                            if let TryExecuteResult::NotExecuted { action, reason } = result {
+                                me.async_executing_actions.remove(&action_id);
+                                me.oz_hook_approved_actions.insert(action_id.clone());
+                                ctx.emit(BlocklistAIActionExecutorEvent::OzPreflightNotExecuted {
+                                    action,
+                                    conversation_id,
+                                    reason,
+                                });
+                            }
+                        }
+                        ComposedPermission::DeniedByHook => {
+                            let Some(running) = me.async_executing_actions.remove(&action_id)
+                            else {
+                                return;
+                            };
+                            ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
+                                result: Arc::new(AIAgentActionResult {
+                                    id: running.action.id,
+                                    task_id: running.action.task_id,
+                                    result: running.action.action.cancelled_result(),
+                                }),
+                                conversation_id: running.conversation_id,
+                                cancellation_reason: None,
+                            });
+                        }
+                        ComposedPermission::Prompt => {
+                            let Some(running) = me.async_executing_actions.remove(&action_id)
+                            else {
+                                return;
+                            };
+                            me.oz_hook_approved_actions.insert(action_id.clone());
+                            ctx.emit(BlocklistAIActionExecutorEvent::OzPreflightNotExecuted {
+                                action: Box::new(running.action),
+                                conversation_id: running.conversation_id,
+                                reason: NotExecutedReason::NeedsConfirmation,
+                            });
+                        }
+                        ComposedPermission::DeniedByWarp => {
+                            unreachable!("native denials return before hook preflight")
+                        }
+                    }
+                },
+            );
+            return TryExecuteResult::ExecutedAsync;
+        }
+        if needs_confirmation {
+            return TryExecuteResult::NotExecuted {
+                action: Box::new(action),
+                reason: NotExecutedReason::NeedsConfirmation,
+            };
         }
 
         let action_clone = action.clone();
@@ -807,25 +979,18 @@ impl BlocklistAIActionExecutor {
                     AsyncExecutingAction {
                         action: action_clone,
                         conversation_id,
+                        hook_stage: LocalActionHookStage::Executing,
                     },
                 );
                 ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
                     action_id: action_id.clone(),
                 });
                 ctx.spawn(execute_future, move |me, result, ctx| {
-                    let Some(running) = me.async_executing_actions.remove(&action_id) else {
+                    let Some(running) = me.async_executing_actions.get(&action_id).cloned() else {
                         return;
                     };
                     let result = on_complete(result, ctx);
-                    ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
-                        result: Arc::new(AIAgentActionResult {
-                            id: action_id,
-                            task_id: running.action.task_id,
-                            result,
-                        }),
-                        conversation_id: running.conversation_id,
-                        cancellation_reason: None,
-                    });
+                    me.finish_action(running, result, None, ctx);
                 });
                 TryExecuteResult::ExecutedAsync
             }
@@ -833,18 +998,93 @@ impl BlocklistAIActionExecutor {
                 ctx.emit(BlocklistAIActionExecutorEvent::ExecutingAction {
                     action_id: action_id.clone(),
                 });
-                ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
-                    result: Arc::new(AIAgentActionResult {
-                        id: action_id,
-                        task_id: action.task_id,
-                        result: action_result,
-                    }),
-                    conversation_id,
-                    cancellation_reason: None,
-                });
-                TryExecuteResult::ExecutedSync
+                let running = self
+                    .async_executing_actions
+                    .get(&action_id)
+                    .cloned()
+                    .unwrap_or(AsyncExecutingAction {
+                        action: action_clone,
+                        conversation_id,
+                        hook_stage: LocalActionHookStage::Executing,
+                    });
+                self.finish_action(running, action_result, None, ctx);
+                if oz_preflight_complete {
+                    TryExecuteResult::ExecutedAsync
+                } else {
+                    TryExecuteResult::ExecutedSync
+                }
             }
         }
+    }
+
+    fn finish_action(
+        &mut self,
+        running: AsyncExecutingAction,
+        result: AIAgentActionResultType,
+        cancellation_reason: Option<CancellationReason>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(session) = self.oz_hook_session.clone() {
+            let action_id = running.action.id.clone();
+            let tool_use_id = action_id.to_string();
+            let (tool_name, tool_input) =
+                local_action_payload(&running.action.action, &session.redactor);
+            let mut payload_context = session.payload_context.clone();
+            payload_context.conversation_id = running.conversation_id.to_string();
+            if let Some(state) = self.async_executing_actions.get_mut(&action_id) {
+                state.hook_stage = LocalActionHookStage::Postflight;
+            } else {
+                self.async_executing_actions
+                    .insert(action_id.clone(), running.clone());
+                self.async_executing_actions
+                    .get_mut(&action_id)
+                    .expect("action was inserted")
+                    .hook_stage = LocalActionHookStage::Postflight;
+            }
+            let event = OzHookEvent {
+                invocation_id: uuid::Uuid::new_v4().to_string(),
+                tool_use_id: Some(tool_use_id.clone()),
+                payload: HookPayloadTemplate {
+                    context: payload_context,
+                    event: HookEventFields::PostToolUse {
+                        tool_name: tool_name.into(),
+                        tool_use_id,
+                        tool_input,
+                        tool_response: local_action_result_payload(&result),
+                    },
+                },
+            };
+            ctx.spawn(
+                async move { session.runtime.observe(event).await },
+                move |me, _, ctx| {
+                    if me.async_executing_actions.remove(&action_id).is_none() {
+                        return;
+                    }
+                    Self::emit_finished_action(running, result, cancellation_reason, ctx);
+                },
+            );
+            return;
+        }
+        self.async_executing_actions.remove(&running.action.id);
+        Self::emit_finished_action(running, result, cancellation_reason, ctx);
+    }
+
+    fn emit_finished_action(
+        running: AsyncExecutingAction,
+        result: AIAgentActionResultType,
+        cancellation_reason: Option<CancellationReason>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
+            result: Arc::new(AIAgentActionResult {
+                id: running.action.id,
+                task_id: running.action.task_id,
+                result,
+            }),
+            conversation_id: running.conversation_id,
+            cancellation_reason,
+        });
     }
 
     pub fn can_autoexecute_action(
@@ -873,39 +1113,45 @@ impl BlocklistAIActionExecutor {
             return;
         }
         if let Some(running) = self.async_executing_actions.remove(action_id) {
+            #[cfg(not(target_family = "wasm"))]
+            if let Some(session) = &self.oz_hook_session {
+                session
+                    .runtime
+                    .cancel(OzHookCancellationScope::Tool(action_id.to_string()));
+            }
             let action_kind = AIAgentActionTypeDiscriminants::from(&running.action.action);
             log::info!(
                 "Canceling running async action of type {action_kind:?} action_id={action_id:?}, reason={reason:?}, backtrace=\n{}",
                 std::backtrace::Backtrace::force_capture()
             );
-            if running.is_shell_command_action() {
-                self.shell_command_executor.update(ctx, |executor, ctx| {
-                    executor.cancel_execution(&running.action.id, ctx);
-                });
-            } else if matches!(running.action.action, AIAgentActionType::SearchCodebase(..)) {
-                self.search_codebase_executor.update(ctx, |executor, ctx| {
-                    executor.cancel_execution(&running.action.id, ctx);
-                });
-            } else if matches!(running.action.action, AIAgentActionType::RunAgents(..)) {
-                self.run_agents_executor.update(ctx, |executor, ctx| {
-                    executor.cancel_execution(&running.action.id, ctx);
-                });
-            } else if matches!(
-                running.action.action,
-                AIAgentActionType::StartRecording { .. }
-            ) {
-                RecordingController::handle(ctx).update(ctx, |controller, _| {
-                    controller.abort_start(running.conversation_id);
-                });
-            } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
-                &running.action.action
-            {
-                // Drop the executor's pending entry; the shared cancel
-                // path emits FinishedAction(Cancelled).
-                let tool_call_id = tool_call_id.clone();
-                self.wait_for_events_executor.update(ctx, |executor, _| {
-                    executor.cancel_execution(&tool_call_id);
-                });
+            if running.hook_stage != LocalActionHookStage::Preflight {
+                if running.is_shell_command_action() {
+                    self.shell_command_executor.update(ctx, |executor, ctx| {
+                        executor.cancel_execution(&running.action.id, ctx);
+                    });
+                } else if matches!(running.action.action, AIAgentActionType::SearchCodebase(..)) {
+                    self.search_codebase_executor.update(ctx, |executor, ctx| {
+                        executor.cancel_execution(&running.action.id, ctx);
+                    });
+                } else if matches!(running.action.action, AIAgentActionType::RunAgents(..)) {
+                    self.run_agents_executor.update(ctx, |executor, ctx| {
+                        executor.cancel_execution(&running.action.id, ctx);
+                    });
+                } else if matches!(
+                    running.action.action,
+                    AIAgentActionType::StartRecording { .. }
+                ) {
+                    RecordingController::handle(ctx).update(ctx, |controller, _| {
+                        controller.abort_start(running.conversation_id);
+                    });
+                } else if let AIAgentActionType::WaitForEvents { tool_call_id, .. } =
+                    &running.action.action
+                {
+                    let tool_call_id = tool_call_id.clone();
+                    self.wait_for_events_executor.update(ctx, |executor, _| {
+                        executor.cancel_execution(&tool_call_id);
+                    });
+                }
             }
             let result = running.action.action.cancelled_result();
             send_run_agents_completed_telemetry(
@@ -914,15 +1160,11 @@ impl BlocklistAIActionExecutor {
                 &result,
                 ctx,
             );
-            ctx.emit(BlocklistAIActionExecutorEvent::FinishedAction {
-                result: Arc::new(AIAgentActionResult {
-                    id: running.action.id.clone(),
-                    task_id: running.action.task_id,
-                    result,
-                }),
-                conversation_id: running.conversation_id,
-                cancellation_reason: reason,
-            });
+            if running.hook_stage == LocalActionHookStage::Executing {
+                self.finish_action(running, result, reason, ctx);
+            } else {
+                Self::emit_finished_action(running, result, reason, ctx);
+            }
         }
     }
 
@@ -1086,6 +1328,12 @@ pub enum BlocklistAIActionExecutorEvent {
         conversation_id: AIConversationId,
         /// The reason for cancellation, if this action was cancelled.
         cancellation_reason: Option<CancellationReason>,
+    },
+
+    OzPreflightNotExecuted {
+        action: Box<AIAgentAction>,
+        conversation_id: AIConversationId,
+        reason: NotExecutedReason,
     },
 
     InitProject(AIAgentActionId),

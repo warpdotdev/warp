@@ -62,7 +62,10 @@ use crate::ai::agent_sdk::hooks::payload::{
 };
 use crate::ai::agent_sdk::hooks::redaction::HookRedactor;
 use crate::ai::agent_sdk::hooks::runtime::{OzHookEvent, OzHookRuntime, OzHookRuntimeService};
-use crate::ai::agent_sdk::hooks::trust::{ExactHookTrustStore, HookTrustKey};
+use crate::ai::agent_sdk::hooks::trust::{
+    DenyProjectHookTrust, ExactHookTrustStore, HookTrustKey, HookTrustStore,
+    PersistentHookTrustStore,
+};
 use crate::ai::agent_sdk::hooks::{MAX_PROMPT_BYTES, OzHookSession, PAYLOAD_SCHEMA_VERSION};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
@@ -171,6 +174,16 @@ where
         result = run_future => result,
         _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+    }
+}
+
+fn secret_values(secret: &ManagedSecretValue) -> Vec<String> {
+    match secret {
+        ManagedSecretValue::RawValue { value } => vec![value.clone()],
+        secret => typed_secret_entries(secret)
+            .into_iter()
+            .map(|(_, value)| value.to_owned())
+            .collect(),
     }
 }
 
@@ -1009,12 +1022,13 @@ impl AgentDriver {
     async fn initialize_oz_hook_runtime(
         foreground: &ModelSpawner<Self>,
     ) -> Result<Option<Arc<dyn OzHookRuntime>>, AgentDriverError> {
-        let (context, cwd, task_id, hooks_enabled) = foreground
+        let (context, cwd, task_id, secrets, hooks_enabled) = foreground
             .spawn(|me, _| {
                 (
                     me.oz_lifecycle_hooks_context.clone(),
                     me.harness_working_dir.clone(),
                     me.task_id,
+                    Arc::clone(&me.secrets),
                     FeatureFlag::OzLifecycleHooks.is_enabled(),
                 )
             })
@@ -1023,8 +1037,8 @@ impl AgentDriver {
             return Ok(None);
         }
 
-        let trust_store = ExactHookTrustStore::default();
-        if let Some(context) = context {
+        let trust_store: Arc<dyn HookTrustStore> = if let Some(context) = context {
+            let trust_store = ExactHookTrustStore::default();
             for trust in context.project_trust {
                 let (Ok(git_root), Ok(config_path)) = (
                     std::fs::canonicalize(trust.git_root),
@@ -1038,8 +1052,17 @@ impl AgentDriver {
                     definition_hash: trust.sha256,
                 });
             }
-        }
-        let config = discover_hook_config(&cwd, &trust_store);
+            Arc::new(trust_store)
+        } else {
+            match PersistentHookTrustStore::load_default() {
+                Ok(trust_store) => Arc::new(trust_store),
+                Err(error) => {
+                    log::warn!("Failed to load Oz hook trust store: {error}");
+                    Arc::new(DenyProjectHookTrust)
+                }
+            }
+        };
+        let config = discover_hook_config(&cwd, trust_store.as_ref());
         for diagnostic in config.diagnostics.iter() {
             log::warn!(
                 "Oz hook configuration diagnostic: kind={:?} path={} hash_present={}",
@@ -1052,6 +1075,9 @@ impl AgentDriver {
             .enabled_events()
             .map(|event| event.protocol_value().into())
             .collect();
+        let run_id = task_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let runtime: Arc<dyn OzHookRuntime> = Arc::new(OzHookRuntimeService::new(config));
         let session = OzHookSession {
             runtime: Arc::clone(&runtime),
@@ -1059,22 +1085,28 @@ impl AgentDriver {
                 enabled_events,
                 supported_payload_schema_versions: vec![PAYLOAD_SCHEMA_VERSION.into()],
             },
+            payload_context: HookPayloadContext {
+                session_id: run_id.clone(),
+                run_id: run_id.clone(),
+                conversation_id: String::new(),
+                cwd: cwd.to_string_lossy().into_owned(),
+                model: String::new(),
+                permission_mode: "supervised".into(),
+            },
+            redactor: HookRedactor::new(secrets.values().flat_map(secret_values)),
         };
         foreground
             .spawn(move |me, ctx| {
                 me.terminal_driver.update(ctx, |driver, ctx| {
                     driver.with_terminal_view(ctx, |terminal, ctx| {
-                        terminal.ai_controller().update(ctx, |controller, _| {
-                            controller.set_oz_hook_session(Some(session));
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            controller.set_oz_hook_session(Some(session), ctx);
                         });
                     });
                 });
             })
             .await?;
 
-        let run_id = task_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
         runtime
             .observe(OzHookEvent {
                 invocation_id: Uuid::new_v4().to_string(),

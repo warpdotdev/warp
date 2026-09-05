@@ -70,6 +70,9 @@ pub(crate) enum OzPreToolUseDecision {
         source: HookConfigSource,
         diagnostics: Vec<HookInvocationDiagnostic>,
     },
+    Cancelled {
+        diagnostics: Vec<HookInvocationDiagnostic>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -164,7 +167,10 @@ impl OzHookRuntimeService {
             guard = self.queue.lock() => guard,
             () = token.cancelled() => {
                 self.remove_pending(&event.invocation_id);
-                return EventOutcome::default();
+                return EventOutcome {
+                    cancelled: true,
+                    ..Default::default()
+                };
             }
         };
 
@@ -207,6 +213,7 @@ impl OzHookRuntimeService {
                 output_truncated: false,
                 failure_category: None,
             };
+            let mut stop_handlers = false;
             match result {
                 Ok(CommandOutcome::Continue { exit_code }) => {
                     diagnostic.exit_code = exit_code;
@@ -214,9 +221,8 @@ impl OzHookRuntimeService {
                 Ok(CommandOutcome::Deny { reason, exit_code }) if pre_tool => {
                     diagnostic.result = HookInvocationResult::Denied;
                     diagnostic.exit_code = exit_code;
-                    outcome.diagnostics.push(diagnostic);
                     outcome.denial = Some((reason, handler.source));
-                    break;
+                    stop_handlers = true;
                 }
                 Ok(CommandOutcome::Deny { exit_code, .. }) => {
                     diagnostic.result = HookInvocationResult::Failed;
@@ -250,12 +256,11 @@ impl OzHookRuntimeService {
                         && handler.on_failure == FailureMode::Deny
                         && failure.category != HookFailureCategory::Cancelled
                     {
-                        outcome.diagnostics.push(diagnostic);
                         outcome.denial = Some((
                             "An Oz hook failed closed and denied this tool.".into(),
                             handler.source,
                         ));
-                        break;
+                        stop_handlers = true;
                     }
                 }
             }
@@ -277,6 +282,9 @@ impl OzHookRuntimeService {
                 diagnostic.failure_category
             );
             outcome.diagnostics.push(diagnostic);
+            if stop_handlers {
+                break;
+            }
         }
         self.remove_pending(&event.invocation_id);
         outcome
@@ -305,6 +313,9 @@ impl OzHookRuntime for OzHookRuntimeService {
             Some((reason, source)) => OzPreToolUseDecision::Deny {
                 reason,
                 source,
+                diagnostics: outcome.diagnostics,
+            },
+            None if outcome.cancelled => OzPreToolUseDecision::Cancelled {
                 diagnostics: outcome.diagnostics,
             },
             None => OzPreToolUseDecision::Continue {
@@ -337,6 +348,7 @@ impl OzHookRuntime for OzHookRuntimeService {
 struct EventOutcome {
     diagnostics: Vec<HookInvocationDiagnostic>,
     denial: Option<(String, HookConfigSource)>,
+    cancelled: bool,
 }
 
 fn effective_timeout(
@@ -389,6 +401,10 @@ async fn run_command(
         exit_code: None,
     })?;
     let process_id = child.id();
+    let process_tree = HookProcessTree::attach(process_id).map_err(|_| CommandFailure {
+        category: HookFailureCategory::Spawn,
+        exit_code: None,
+    })?;
     let mut stdin = child.stdin.take().unwrap();
     let stdin_payload = stdin_payload.to_vec();
     let stdin_task = tokio::spawn(async move {
@@ -405,9 +421,10 @@ async fn run_command(
         Cancelled,
         Overflow,
     }
+    let deadline = tokio::time::Instant::now() + timeout;
     let completion = tokio::select! {
         status = child.wait() => Completion::Exited(status),
-        () = tokio::time::sleep(timeout) => Completion::Timeout,
+        () = tokio::time::sleep_until(deadline) => Completion::Timeout,
         () = cancellation.cancelled() => Completion::Cancelled,
         Some(()) = overflow_rx.recv() => Completion::Overflow,
     };
@@ -417,38 +434,64 @@ async fn run_command(
             exit_code: None,
         })?,
         Completion::Timeout => {
-            kill_process_tree(process_id, &mut child).await;
+            process_tree.kill(process_id, &mut child).await;
             return Err(CommandFailure {
                 category: HookFailureCategory::Timeout,
                 exit_code: None,
             });
         }
         Completion::Cancelled => {
-            kill_process_tree(process_id, &mut child).await;
+            process_tree.kill(process_id, &mut child).await;
             return Err(CommandFailure {
                 category: HookFailureCategory::Cancelled,
                 exit_code: None,
             });
         }
         Completion::Overflow => {
-            kill_process_tree(process_id, &mut child).await;
+            process_tree.kill(process_id, &mut child).await;
             return Err(CommandFailure {
                 category: HookFailureCategory::OutputOverflow,
                 exit_code: None,
             });
         }
     };
-    match stdin_task.await {
-        Ok(Ok(())) => {}
-        Ok(Err(_)) | Err(_) => {
+    let exit_code = status.code();
+    let outputs = async move {
+        let stdin_failed = !matches!(stdin_task.await, Ok(Ok(())));
+        let stdout = join_output(stdout_task, exit_code).await?;
+        let stderr = join_output(stderr_task, exit_code).await?;
+        Ok((stdout, stderr, stdin_failed))
+    };
+    let (stdout, stderr, stdin_failed) = tokio::select! {
+        outputs = outputs => outputs?,
+        () = tokio::time::sleep_until(deadline) => {
+            process_tree.kill(process_id, &mut child).await;
             return Err(CommandFailure {
-                category: HookFailureCategory::Stdin,
-                exit_code: status.code(),
+                category: HookFailureCategory::Timeout,
+                exit_code,
             });
         }
+        () = cancellation.cancelled() => {
+            process_tree.kill(process_id, &mut child).await;
+            return Err(CommandFailure {
+                category: HookFailureCategory::Cancelled,
+                exit_code,
+            });
+        }
+        Some(()) = overflow_rx.recv() => {
+            process_tree.kill(process_id, &mut child).await;
+            return Err(CommandFailure {
+                category: HookFailureCategory::OutputOverflow,
+                exit_code,
+            });
+        }
+    };
+    if stdin_failed && status.success() {
+        return Err(CommandFailure {
+            category: HookFailureCategory::Stdin,
+            exit_code,
+        });
     }
-    let stdout = join_output(stdout_task, status.code()).await?;
-    let stderr = join_output(stderr_task, status.code()).await?;
     parse_command_result(payload.event_name(), status.code(), stdout, stderr)
 }
 
@@ -646,22 +689,101 @@ fn configure_process_group(command: &mut Command) {
     command.creation_flags(windows::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP.0);
 }
 
-#[cfg(unix)]
-async fn kill_process_tree(process_id: Option<u32>, child: &mut tokio::process::Child) {
-    if let Some(process_id) = process_id {
-        let _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(process_id as i32),
-            nix::sys::signal::Signal::SIGKILL,
-        );
+struct HookProcessTree {
+    #[cfg(windows)]
+    job: WindowsJob,
+}
+
+impl HookProcessTree {
+    #[cfg(unix)]
+    fn attach(_process_id: Option<u32>) -> Result<Self, ()> {
+        Ok(Self {})
     }
-    let _ = child.start_kill();
-    let _ = child.wait().await;
+
+    #[cfg(windows)]
+    fn attach(process_id: Option<u32>) -> Result<Self, ()> {
+        Ok(Self {
+            job: WindowsJob::attach(process_id.ok_or(())?)?,
+        })
+    }
+
+    #[cfg(unix)]
+    async fn kill(&self, process_id: Option<u32>, child: &mut tokio::process::Child) {
+        if let Some(process_id) = process_id {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(process_id as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+
+    #[cfg(windows)]
+    async fn kill(&self, _process_id: Option<u32>, child: &mut tokio::process::Child) {
+        self.job.terminate();
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
 }
 
 #[cfg(windows)]
-async fn kill_process_tree(_process_id: Option<u32>, child: &mut tokio::process::Child) {
-    let _ = child.start_kill();
-    let _ = child.wait().await;
+struct WindowsJob(windows::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl WindowsJob {
+    fn attach(process_id: u32) -> Result<Self, ()> {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+
+        unsafe {
+            let job = CreateJobObjectW(None, windows::core::PCWSTR::null()).map_err(|_| ())?;
+            let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::from_ref(&limits).cast(),
+                std::mem::size_of_val(&limits) as u32,
+            )
+            .is_err()
+            {
+                let _ = CloseHandle(job);
+                return Err(());
+            }
+            let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, process_id)
+                .map_err(|_| ())?;
+            let assigned = AssignProcessToJobObject(job, process);
+            let _ = CloseHandle(process);
+            if assigned.is_err() {
+                let _ = CloseHandle(job);
+                return Err(());
+            }
+            Ok(Self(job))
+        }
+    }
+
+    fn terminate(&self) {
+        unsafe {
+            let _ = windows::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsJob {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
