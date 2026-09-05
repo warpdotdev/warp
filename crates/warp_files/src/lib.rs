@@ -462,17 +462,8 @@ impl FileModel {
                 }
                 match load_result {
                     Ok(content) => {
-                        let version = ContentVersion::new();
-                        me.set_version(file_id, version);
-
-                        // Only register an individual watcher if not using a repo subscription,
-                        // and only record it once it has actually been registered.
-                        if watch_individually && let Some(watch_path) = me.watch_path(file_id) {
-                            me.register_individual_watcher(&watch_path, ctx);
-                            if let Some(FileBackend::Local(file)) = me.file_state.get_mut(file_id) {
-                                file.watcher_type = WatcherType::Individual(watch_path);
-                            }
-                        }
+                        let version =
+                            me.initialize_opened_local_file(file_id, watch_individually, ctx);
 
                         ctx.emit(FileModelEvent::FileLoaded {
                             content,
@@ -481,6 +472,9 @@ impl FileModel {
                         });
                     }
                     Err(err) => {
+                        if subscribe_to_updates && matches!(&err, FileLoadError::TooLarge { .. }) {
+                            me.initialize_opened_local_file(file_id, watch_individually, ctx);
+                        }
                         ctx.emit(FileModelEvent::FailedToLoad {
                             id: file_id,
                             error: Rc::new(err),
@@ -494,6 +488,23 @@ impl FileModel {
 
         self.abort_handles.insert(file_id, future);
         file_id
+    }
+
+    fn initialize_opened_local_file(
+        &mut self,
+        file_id: FileId,
+        watch_individually: bool,
+        ctx: &mut ModelContext<Self>,
+    ) -> ContentVersion {
+        let version = ContentVersion::new();
+        self.set_version(file_id, version);
+        if watch_individually && let Some(watch_path) = self.watch_path(file_id) {
+            self.register_individual_watcher(&watch_path, ctx);
+            if let Some(FileBackend::Local(file)) = self.file_state.get_mut(file_id) {
+                file.watcher_type = WatcherType::Individual(watch_path);
+            }
+        }
+        version
     }
 
     /// The directory an individually-watched file is watched through.

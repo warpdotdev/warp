@@ -7,7 +7,7 @@ use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
 use warp_editor::content::buffer::Buffer;
-use warp_files::{FileModel, MAX_LOADABLE_FILE_SIZE_BYTES};
+use warp_files::{FileModel, FileModelEvent, MAX_LOADABLE_FILE_SIZE_BYTES};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::{FileId, FileLoadError};
 use warp_util::host_id::HostId;
@@ -209,6 +209,35 @@ fn oversized_content_is_rejected_before_initial_and_fallback_population() {
             failed_file_ids.borrow().as_slice(),
             &[initial_id, fallback_id]
         );
+    })
+}
+
+#[test]
+fn first_file_update_after_load_failure_populates_buffer() {
+    App::test((), |mut app| async move {
+        init_app(&mut app);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let (file_id, buffer) = seed_local_buffer(&mut app, "", false);
+        let base_version = ContentVersion::new();
+        let new_version = ContentVersion::new();
+        let event = FileModelEvent::FileUpdated {
+            id: file_id,
+            content: "now loadable".to_string(),
+            base_version,
+            new_version,
+        };
+        let files = FileModel::handle(&app);
+
+        gbm(&app).update(&mut app, |model, ctx| {
+            model.handle_file_model_events(files, &event, ctx);
+        });
+        let global_buffer = gbm(&app);
+
+        app.read(|ctx| {
+            assert_eq!(buffer.as_ref(ctx).text().into_string(), "now loadable");
+            assert_eq!(buffer.as_ref(ctx).version(), new_version);
+            assert!(global_buffer.as_ref(ctx).buffer_loaded(file_id));
+        });
     })
 }
 

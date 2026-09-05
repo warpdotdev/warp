@@ -722,6 +722,20 @@ impl GlobalBufferModel {
                 base_version,
                 new_version,
             } => {
+                if self.buffers.get(id).is_some_and(|state| !state.is_loaded()) {
+                    if let Some(state) = self.buffers.get_mut(id) {
+                        state.set_initial_content_version(*new_version);
+                    }
+                    self.populate_buffer_with_read_content(
+                        *id,
+                        content,
+                        *base_version,
+                        *new_version,
+                        true,
+                        ctx,
+                    );
+                    return;
+                }
                 if let Some(buffer) = self.buffer_handle_for_id(*id, ctx) {
                     if buffer.as_ref(ctx).version_match(base_version) {
                         self.populate_buffer_with_read_content(

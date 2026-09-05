@@ -416,6 +416,46 @@ fn test_load_oversized_file_reports_too_large() {
 }
 
 #[test]
+fn test_oversized_subscribed_file_reloads_after_shrinking() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(&mut app, &files);
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("oversized.log");
+        let file = std::fs::File::create(&path).expect("create file");
+        file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+            .expect("set sparse length");
+
+        let file_id = files.update(&mut app, |model, ctx| model.open(&path, true, ctx));
+        assert!(matches!(
+            receiver.recv().await.expect("receive load failure"),
+            TestFileModelEvent::FailedToLoad(_)
+        ));
+        files.read(&app, |model, _| {
+            assert!(model.version(file_id).is_some());
+            assert_eq!(
+                model.registered_watch_path(file_id),
+                FileModel::watch_path_for(&path).as_deref()
+            );
+        });
+
+        std::fs::write(&path, "now loadable").expect("shrink file");
+        files.update(&mut app, |model, ctx| {
+            model.reload_file_paths(HashSet::from([path.clone()]), ctx);
+        });
+
+        match receiver.recv().await.expect("receive file update") {
+            TestFileModelEvent::FileUpdated { id, content } => {
+                assert_eq!(id, file_id);
+                assert_eq!(content, "now loadable");
+            }
+            event => panic!("expected update after shrinking oversized file, got {event:?}"),
+        }
+    });
+}
+
+#[test]
 fn test_read_content_for_file_reports_too_large() {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("oversized.log");
