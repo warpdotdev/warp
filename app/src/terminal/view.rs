@@ -18299,10 +18299,13 @@ impl TerminalView {
     }
 
     fn alt_mouse_action(&mut self, mouse_state: &MouseState, ctx: &mut ViewContext<Self>) {
-        let escape_sequences = mouse_state
-            .to_escape_sequence(self.model.lock().deref())
-            .unwrap();
-        self.write_user_bytes_to_pty(escape_sequences, ctx);
+        let escape_sequences = {
+            let model = self.model.lock();
+            mouse_state.to_escape_sequence(model.deref())
+        };
+        if let Some(escape_sequences) = escape_sequences {
+            self.write_user_bytes_to_pty(escape_sequences, ctx);
+        }
     }
 
     fn alt_select(&mut self, arg: &SelectAction<Point>, ctx: &mut ViewContext<Self>) {

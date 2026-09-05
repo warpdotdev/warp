@@ -4522,8 +4522,12 @@ fn test_alt_screen_select_with_sgr_mouse() {
                 model.set_mode(ansi::Mode::SwapScreen {
                     save_cursor_and_clear_screen: true,
                 });
-                model.set_mode(ansi::Mode::SgrMouse);
                 assert!(model.is_alt_screen_active());
+                model.set_mode(ansi::Mode::ReportMouseClicks);
+                assert!(!should_intercept_mouse(&model, false, ctx));
+                assert!(should_intercept_mouse(&model, true, ctx));
+
+                model.set_mode(ansi::Mode::SgrMouse);
                 assert!(!should_intercept_mouse(&model, false, ctx));
                 assert!(should_intercept_mouse(&model, true, ctx));
 
