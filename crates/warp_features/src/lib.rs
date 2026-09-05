@@ -995,6 +995,9 @@ pub enum FeatureFlag {
     /// replace inline computer-use screenshot bytes with references to
     /// Warp-managed object storage.
     StoredScreenshots,
+
+    /// Enables first-party Oz lifecycle hooks.
+    OzLifecycleHooks,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =

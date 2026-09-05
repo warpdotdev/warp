@@ -91,6 +91,8 @@ pub(crate) mod environment_snapshot;
 mod federate;
 mod harness_support;
 #[cfg(not(target_family = "wasm"))]
+pub(crate) mod hooks;
+#[cfg(not(target_family = "wasm"))]
 mod integration;
 #[cfg(not(target_family = "wasm"))]
 mod integration_output;
@@ -1064,6 +1066,16 @@ impl AgentDriverRunner {
                     .harness
                     .as_ref()
                     .and_then(|h| h.model_config());
+                if args.oz_lifecycle_hooks_context.is_some() {
+                    if args.harness != Harness::Oz {
+                        anyhow::bail!(
+                            "--oz-lifecycle-hooks-context is supported only with the Oz harness"
+                        );
+                    }
+                    if !FeatureFlag::OzLifecycleHooks.is_enabled() {
+                        anyhow::bail!("this Oz runtime does not support lifecycle hooks");
+                    }
+                }
                 let driver_options = driver::AgentDriverOptions {
                     working_dir: working_dir.clone(),
                     task_id,
@@ -1093,6 +1105,7 @@ impl AgentDriverRunner {
                     skip_initial_turn: args.skip_initial_turn,
                     strict_mcp_startup: args.strict_mcp_startup,
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
+                    oz_lifecycle_hooks_context: args.oz_lifecycle_hooks_context.clone(),
                 };
 
                 Ok((merged_config, task, driver_options))
