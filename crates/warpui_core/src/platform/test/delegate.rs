@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -509,11 +509,30 @@ impl platform::LoadedSystemFonts for LoadedSystemFonts {
 /// A no-op font cache for use in tests that don't want to use full platform
 /// functionality.
 #[derive(Default)]
-pub struct FontDB;
+pub struct FontDB {
+    missing_glyphs: HashSet<(crate::fonts::FontId, char)>,
+    advances: HashMap<crate::fonts::FontId, Vector2I>,
+}
 
 impl FontDB {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Makes `font_id` report that it cannot draw `ch`. Every font draws every character by
+    /// default, so a test that needs runs to disagree about their coverage — the shape real font
+    /// fallback produces — has to say so.
+    pub fn without_glyph(mut self, font_id: crate::fonts::FontId, ch: char) -> Self {
+        self.missing_glyphs.insert((font_id, ch));
+        self
+    }
+
+    /// Sets the advance `font_id` reports for every glyph, in font units. Fonts advance by zero by
+    /// default, which no real font does, so a test whose subject needs a usable advance has to
+    /// supply one.
+    pub fn with_advance(mut self, font_id: crate::fonts::FontId, advance: Vector2I) -> Self {
+        self.advances.insert(font_id, advance);
+        self
     }
 }
 
@@ -576,10 +595,14 @@ impl platform::FontDB for FontDB {
 
     fn glyph_advance(
         &self,
-        _font_id: crate::fonts::FontId,
+        font_id: crate::fonts::FontId,
         _glyph_id: crate::fonts::GlyphId,
     ) -> Result<Vector2I> {
-        Ok(Vector2I::zero())
+        Ok(self
+            .advances
+            .get(&font_id)
+            .copied()
+            .unwrap_or_else(Vector2I::zero))
     }
 
     fn load_family_name_from_id(&self, _id: crate::fonts::FamilyId) -> Option<String> {
@@ -628,10 +651,10 @@ impl platform::FontDB for FontDB {
 
     fn glyph_for_char(
         &self,
-        _font_id: crate::fonts::FontId,
-        _char: char,
+        font_id: crate::fonts::FontId,
+        char: char,
     ) -> Option<crate::fonts::GlyphId> {
-        Some(0)
+        (!self.missing_glyphs.contains(&(font_id, char))).then_some(0)
     }
 
     fn family_id_for_name(&self, _name: &str) -> Option<FamilyId> {
