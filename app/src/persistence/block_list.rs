@@ -206,40 +206,49 @@ fn upsert_ai_query_with_limit(
     })?)
 }
 
-/// Returns the most recent [`MAX_BLOCK_COUNT_PER_SESSION`] block list items for each session. The
-/// items are in chronological order.
+/// Returns the most recent [`MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION`] block list items for each
+/// restored terminal pane, in chronological order.
 pub(super) fn get_all_restored_blocks(
     conn: &mut SqliteConnection,
 ) -> Result<PersistedBlocks, diesel::result::Error> {
+    use diesel::sql_types::BigInt;
+
     let terminal_sessions = schema::terminal_panes::table
         .select(model::TerminalSession::as_select())
         .load::<model::TerminalSession>(conn)?;
 
-    let block_lists = Block::belonging_to(&terminal_sessions)
-        .select(Block::as_select())
-        .order_by(schema::blocks::columns::id.asc())
-        .load::<Block>(conn)?
-        .grouped_by(&terminal_sessions);
-
-    let mut all_block_items_by_pane = block_lists
+    let mut all_block_items_by_pane: PersistedBlocks = terminal_sessions
         .into_iter()
-        .zip(terminal_sessions)
-        .map(|(blocks, terminal_pane)| {
-            (
-                PaneUuid(terminal_pane.uuid),
-                blocks.into_iter().map(Into::into).collect(),
-            )
-        })
-        .collect::<HashMap<_, Vec<SerializedBlockListItem>>>();
+        .map(|session| (PaneUuid(session.uuid), Vec::new()))
+        .collect();
 
-    for (_, blocks) in all_block_items_by_pane.iter_mut() {
-        blocks.sort_by_key(|item| item.start_ts());
-        // Only keep most recent command blocks
-        blocks.drain(
-            0..blocks
-                .len()
-                .saturating_sub(MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION as usize),
-        );
+    if all_block_items_by_pane.is_empty() {
+        return Ok(all_block_items_by_pane);
+    }
+
+    let blocks = diesel::sql_query(
+        "SELECT blocks.*
+         FROM blocks
+         INNER JOIN (
+             SELECT id,
+                 ROW_NUMBER() OVER (
+                     PARTITION BY pane_leaf_uuid
+                     ORDER BY start_ts DESC, id DESC
+                 ) AS rn
+             FROM blocks
+             WHERE pane_leaf_uuid IN (SELECT uuid FROM terminal_panes)
+         ) AS ranked ON ranked.id = blocks.id
+         WHERE ranked.rn <= ?
+         ORDER BY blocks.pane_leaf_uuid ASC, blocks.start_ts ASC, blocks.id ASC",
+    )
+    .bind::<BigInt, _>(MAX_TERMINAL_BLOCKS_TO_PERSIST_PER_SESSION)
+    .load::<Block>(conn)?;
+
+    for block in blocks {
+        let pane = PaneUuid(block.pane_leaf_uuid.clone());
+        if let Some(items) = all_block_items_by_pane.get_mut(&pane) {
+            items.push(block.into());
+        }
     }
 
     Ok(all_block_items_by_pane)
