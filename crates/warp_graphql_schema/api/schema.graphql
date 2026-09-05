@@ -2365,6 +2365,37 @@ enum ManagedMcpTransportKind {
   COMMAND
 }
 
+enum ManagedMcpOwnerScope {
+  USER
+  TEAM
+}
+
+enum ManagedMcpStatus {
+  DRAFT
+  ACTIVE
+  ERROR
+}
+
+type ManagedMcpServer {
+  uid: ID!
+  displayName: String!
+  ownerScope: ManagedMcpOwnerScope!
+  teamUid: ID
+  status: ManagedMcpStatus!
+}
+
+input ManagedMcpServersInput {
+  ownerScope: ManagedMcpOwnerScope
+  teamUid: ID
+}
+
+type ManagedMcpServersOutput implements Response {
+  servers: [ManagedMcpServer!]!
+  responseContext: ResponseContext!
+}
+
+union ManagedMcpServersResult = ManagedMcpServersOutput | UserFacingError
+
 """Type of Warp-managed secret values."""
 enum ManagedSecretType {
   ANTHROPIC_API_KEY
@@ -3254,6 +3285,7 @@ type RootQuery {
   Returns all images with the 'dev-' prefix from the warpdotdev organization.
   """
   listWarpDevImages: ListWarpDevImagesResult!
+  managedMcpServers(input: ManagedMcpServersInput!, requestContext: RequestContext!): ManagedMcpServersResult!
   managedSecrets(input: ManagedSecretsInput!, requestContext: RequestContext!): ManagedSecretsResult!
   pricingInfo(requestContext: RequestContext!): PricingInfoResult!
   rerankFragments(input: RerankFragmentsInput!, requestContext: RequestContext!): RerankFragmentsResult!
