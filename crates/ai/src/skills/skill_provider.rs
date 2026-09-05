@@ -83,12 +83,12 @@ impl SkillProvider {
             SkillProvider::Gemini => Icon::GeminiLogo,
             SkillProvider::Droid => Icon::DroidLogo,
             SkillProvider::OpenCode => Icon::OpenCodeLogo,
+            SkillProvider::Kiro => Icon::KiroLogo,
             SkillProvider::Warp
             | SkillProvider::Agents
             | SkillProvider::Cursor
             | SkillProvider::Copilot
-            | SkillProvider::Github
-            | SkillProvider::Kiro => Icon::WarpLogoLight,
+            | SkillProvider::Github => Icon::WarpLogoLight,
         }
     }
 

@@ -21,6 +21,11 @@ use crate::terminal::view::TerminalAction;
 
 /// Opens the CLI-agent Rich Input for the terminal view at `tab_index`.
 pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {
+    open_cli_agent_rich_input_for_agent(tab_index, CLIAgent::Claude)
+}
+
+/// Opens the CLI-agent Rich Input for `agent` in the terminal view at `tab_index`.
+pub fn open_cli_agent_rich_input_for_agent(tab_index: usize, agent: CLIAgent) -> TestStep {
     new_step_with_default_assertions("Open CLI Agent Rich Input").with_action(
         move |app, window_id, _step_data| {
             let terminal_view = single_terminal_view_for_tab(app, window_id, tab_index);
@@ -31,7 +36,7 @@ pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {
                     sessions.set_session(
                         view_id,
                         CLIAgentSession {
-                            agent: CLIAgent::Claude,
+                            agent,
                             status: CLIAgentSessionStatus::InProgress,
                             session_context: CLIAgentSessionContext::default(),
                             input_state: CLIAgentInputState::Closed,
@@ -63,6 +68,58 @@ pub fn open_cli_agent_rich_input(tab_index: usize) -> TestStep {
             });
         },
     )
+}
+
+/// Asserts that the CLI-agent Rich Input is open for `tab_index`.
+pub fn cli_agent_rich_input_is_open(tab_index: usize) -> warpui::integration::AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, tab_index);
+        terminal_view.read(app, |view, ctx| {
+            let is_open = CLIAgentSessionsModel::as_ref(ctx)
+                .session(view.view_id())
+                .is_some_and(|session| {
+                    matches!(session.input_state, CLIAgentInputState::Open { .. })
+                });
+            warpui::async_assert!(
+                is_open,
+                "Expected CLI-agent Rich Input to be open for tab {tab_index}"
+            )
+        })
+    })
+}
+
+/// Asserts that the active CLI agent for `tab_index` matches `expected_agent`.
+pub fn active_cli_agent_is(
+    tab_index: usize,
+    expected_agent: CLIAgent,
+) -> warpui::integration::AssertionCallback {
+    Box::new(move |app, window_id| {
+        let terminal_view = single_terminal_view_for_tab(app, window_id, tab_index);
+        terminal_view.read(app, |view, ctx| {
+            let active_agent = CLIAgentSessionsModel::as_ref(ctx)
+                .session(view.view_id())
+                .map(|session| session.agent);
+            warpui::async_assert!(
+                active_agent == Some(expected_agent),
+                "Expected active CLI agent {:?}; got {:?}",
+                expected_agent,
+                active_agent
+            )
+        })
+    })
+}
+
+/// Asserts that the Rich Input editor for `tab_index` has placeholder text configured.
+pub fn rich_input_placeholder_exists(tab_index: usize) -> warpui::integration::AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input_view = single_input_view_for_tab(app, window_id, tab_index);
+        input_view.read(app, |view, ctx| {
+            warpui::async_assert!(
+                view.editor().as_ref(ctx).placeholder_text_exists(),
+                "Expected Rich Input placeholder text to exist for tab {tab_index}"
+            )
+        })
+    })
 }
 
 /// Asserts that the Rich Input buffer text for `tab_index` is empty.

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ai::skills::SkillProvider;
 use chrono::Local;
 use pathfinder_color::ColorU;
 use smol_str::SmolStr;
@@ -259,6 +260,10 @@ fn test_detect_known_agents() {
                 ("claude", CLIAgent::Claude),
                 ("gemini", CLIAgent::Gemini),
                 ("codex", CLIAgent::Codex),
+                ("kiro", CLIAgent::Kiro),
+                ("kiro-cli", CLIAgent::Kiro),
+                ("kiro-cli-chat", CLIAgent::Kiro),
+                ("kiro-cli-term", CLIAgent::Kiro),
                 ("amp", CLIAgent::Amp),
                 ("droid", CLIAgent::Droid),
                 ("opencode", CLIAgent::OpenCode),
@@ -580,6 +585,32 @@ fn test_detect_aifx_agent_run_claude_wrong_team() {
 #[test]
 fn test_oh_my_pi_supports_bash_mode() {
     assert!(CLIAgent::OhMyPi.supports_bash_mode());
+}
+
+#[test]
+fn test_kiro_variant_properties() {
+    assert_eq!(CLIAgent::Kiro.command_prefix(), "kiro-cli");
+    assert_eq!(
+        CLIAgent::Kiro.command_prefixes(),
+        &["kiro-cli", "kiro", "kiro-cli-chat", "kiro-cli-term"]
+    );
+    assert_eq!(CLIAgent::Kiro.display_name(), "Kiro");
+    assert_eq!(
+        CLIAgent::Kiro.brand_color(),
+        Some(ColorU::new(192, 156, 255, 255))
+    );
+    assert_eq!(CLIAgent::Kiro.icon(), Some(Icon::KiroLogo));
+    assert_eq!(CLIAgent::Kiro.brand_icon_color(), ColorU::black());
+    assert_eq!(
+        CLIAgent::Kiro.supported_skill_providers(),
+        &[SkillProvider::Kiro]
+    );
+    assert!(!CLIAgent::Kiro.supports_bash_mode());
+    assert!(CLIAgent::Kiro.supports_cli_agent_footer());
+    assert!(matches!(
+        crate::server::telemetry::CLIAgentType::from(CLIAgent::Kiro),
+        crate::server::telemetry::CLIAgentType::Kiro
+    ));
 }
 
 #[test]

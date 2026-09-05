@@ -71,6 +71,7 @@ fn create_handler(agent: &CLIAgent) -> Option<Box<dyn CLIAgentSessionHandler>> {
         | CLIAgent::WarpTui => Some(Box::new(DefaultSessionListener)),
         CLIAgent::Codex => Some(Box::new(CodexSessionHandler)),
         CLIAgent::Hermes
+        | CLIAgent::Kiro
         | CLIAgent::Amp
         | CLIAgent::Copilot
         | CLIAgent::CursorCli
