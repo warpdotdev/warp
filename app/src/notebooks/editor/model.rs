@@ -2194,9 +2194,13 @@ impl ChildModels {
             .cloned()
     }
 
-    /// Update the sub-model state with [`NotebookCommand`] models for every runnable command
-    /// in the buffer. This should be called after text layout completes, so that the offsets of
-    /// each block line up between the render and content models.
+    /// Update the sub-model state with [`NotebookCommand`] models for every runnable command in the
+    /// buffer.
+    ///
+    /// Synchronization after text layout keeps edited render and content offsets aligned. A lazy
+    /// model may also update before its first layout once it is bound to a window: buffer outlines
+    /// already have stable content offsets, and the child models provide the rendered Mermaid
+    /// offsets that first layout consumes.
     pub fn update<T: Entity>(
         &mut self,
         interaction_state: ModelHandle<InteractionStateModel>,
