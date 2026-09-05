@@ -602,6 +602,92 @@ fn test_fully_truncated_run_paints_no_background() {
     });
 }
 
+/// A run's glyphs are not necessarily monotonic in `x` (a purely-RTL run
+/// stores glyphs in logical order while `x` descends per glyph, since the pen
+/// sweeps right-to-left). Visibility under End+Fade clipping must therefore be
+/// decided per glyph from its own position: exactly the glyphs whose `x` falls
+/// within `[bounds.origin.x(), bounds.origin.x() + available_width)` should be
+/// painted, regardless of their order in the run.
+#[test]
+fn test_paint_line_in_narrow_bounds_paints_exactly_the_glyphs_within_bounds() {
+    App::test((), |mut app| async move {
+        app.update(|ctx| {
+            let glyph_width = 12.0;
+            let glyph_count = 10usize;
+            let available_width = 50.;
+
+            // Descending `x` per glyph, as in a purely-RTL run: index 0 is at the
+            // highest `x` (off-screen) and the last index is at `x = 0`.
+            let glyphs: Vec<Glyph> = (0..glyph_count)
+                .map(|i| Glyph {
+                    id: 0,
+                    position_along_baseline: vec2f((glyph_count - 1 - i) as f32 * glyph_width, 0.),
+                    index: i,
+                    width: glyph_width,
+                })
+                .collect();
+
+            let mut expected_visible_positions: Vec<f32> = glyphs
+                .iter()
+                .map(|glyph| glyph.position_along_baseline.x())
+                .filter(|&x| x >= 0. && x < available_width)
+                .collect();
+            expected_visible_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert!(
+                !expected_visible_positions.is_empty(),
+                "test setup should place at least one glyph within the visible bounds",
+            );
+
+            let run = Run {
+                font_id: FontId(0),
+                glyphs,
+                styles: TextStyle::default(),
+                width: glyph_width * glyph_count as f32, // 120px
+            };
+            let line = Line {
+                width: run.width,
+                trailing_whitespace_width: 0.,
+                runs: vec![run],
+                font_size: 12.,
+                line_height_ratio: 1.,
+                baseline_ratio: DEFAULT_TOP_BOTTOM_RATIO,
+                clip_config: Some(ClipConfig::default()),
+                ascent: 10.,
+                descent: 2.,
+                caret_positions: Vec::new(),
+                chars_with_missing_glyphs: Vec::new(),
+            };
+
+            // Bounds narrower than the line's natural width (120px) force truncation.
+            let mut scene = Scene::new(1., rendering::Config::default());
+            line.paint(
+                RectF::new(Vector2F::zero(), Vector2F::new(available_width, 20.)),
+                &PaintStyleOverride::default(),
+                ColorU::black(),
+                ctx.font_cache(),
+                &mut scene,
+            );
+
+            let mut painted_positions: Vec<f32> = scene
+                .layers()
+                .flat_map(|layer| layer.glyphs.iter())
+                .map(|glyph| glyph.position.x())
+                .collect();
+            painted_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            assert_eq!(
+                painted_positions.len(),
+                expected_visible_positions.len(),
+                "expected exactly the glyphs within [0, {available_width}) to be painted; \
+                 painted {painted_positions:?}, expected {expected_visible_positions:?}",
+            );
+            for (painted, expected) in painted_positions.iter().zip(&expected_visible_positions) {
+                assert_approx_eq!(f32, *painted, *expected);
+            }
+        });
+    });
+}
+
 /// When start-clipping without an ellipsis (fade style), the offset fix must
 /// not change the existing layout — visible glyphs should remain right-aligned
 /// in the paint bounds with no extra horizontal shift.

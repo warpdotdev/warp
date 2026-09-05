@@ -1478,6 +1478,15 @@ impl Line {
             itertools::Either::Right(self.runs.iter())
         };
 
+        // A glyph's visibility can only be decided from its own laid-out position,
+        // not from sequentially consuming a width budget in vector (storage) order:
+        // vector order only matches on-screen (ascending-x) order for LTR text. In a
+        // purely-RTL run, glyphs are stored in logical order while their `x`
+        // position *decreases* per glyph (the pen sweeps right-to-left), so a
+        // sequential budget would be spent on the glyphs at the visually-off-screen
+        // end of the run before ever reaching the ones within `available_width`.
+        let use_position_based_visibility = !is_start_clipping && clip_style == ClipStyle::Fade;
+
         let mut remaining_width = match clip_style {
             // For ellipsis, reserve space on the side where we will draw the ellipsis.
             ClipStyle::Ellipsis if ellipsis_width > 0. => match clip_direction {
@@ -1531,6 +1540,15 @@ impl Line {
                     itertools::Either::Right(run.glyphs.iter())
                 };
                 for glyph in sim_glyph_iter {
+                    if use_position_based_visibility {
+                        let glyph_x = line_origin.x() + glyph.position_along_baseline.x();
+                        if glyph_x >= line_origin.x() + available_width {
+                            continue;
+                        }
+                        visible_left = visible_left.min(glyph_x);
+                        visible_right = visible_right.max(glyph_x + glyph.width);
+                        continue;
+                    }
                     if clip_style == ClipStyle::Ellipsis
                         && ellipsis_width > 0.
                         && sim_remaining_width < glyph.width
@@ -1601,14 +1619,24 @@ impl Line {
                     break 'runs;
                 }
 
-                // If there is not enough space to paint even part of the glyph,
-                // stop painting glyphs but still paint run decorations
-                // (so that the decorations are still visible even if the glyphs are partially hidden).
-                if remaining_width <= 0. {
+                if use_position_based_visibility {
+                    // Skip glyphs beyond the visible edge without stopping the loop:
+                    // in vector order, a run's glyphs are not guaranteed to be
+                    // monotonic in `x`, so a later glyph can still be on-screen even
+                    // after an off-screen one.
+                    let glyph_x = line_origin.x() + glyph.position_along_baseline.x();
+                    if glyph_x >= line_origin.x() + available_width {
+                        continue;
+                    }
+                } else if remaining_width <= 0. {
+                    // If there is not enough space to paint even part of the glyph,
+                    // stop painting glyphs but still paint run decorations
+                    // (so that the decorations are still visible even if the glyphs are partially hidden).
                     should_stop_after_run = true;
                     break;
+                } else {
+                    remaining_width -= glyph.width;
                 }
-                remaining_width -= glyph.width;
 
                 let glyph_origin = if is_start_clipping {
                     line_origin
