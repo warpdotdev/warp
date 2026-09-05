@@ -151,6 +151,13 @@ impl<T: Item> SumTree<T> {
         }
     }
 
+    /// Append a single item to the end of the tree.
+    ///
+    /// This does **not** fill the rightmost leaf. The item is wrapped in a node of its own, so
+    /// once the tree is taller than a single leaf, `push_tree_recursive` adopts that node's
+    /// one-item leaf as a new child rather than merging the item into the leaf before it — and a
+    /// leaf allocation costs the same however few items it holds. Pushing `n` items one at a time
+    /// therefore costs roughly `n` leaves. Use [`SumTree::extend`] to append in bulk.
     pub fn push(&mut self, item: T) {
         let summary = item.summary();
         self.push_tree(SumTree::from_child_trees(vec![SumTree(Arc::new(
@@ -360,6 +367,34 @@ impl<T: Item> SumTree<T> {
         }))
     }
 
+    /// Walk the tree counting nodes, for measuring how densely items are packed into leaves.
+    ///
+    /// Deliberately not behind `test-util`: that feature also drops `TREE_BASE` to 2, so gating
+    /// this on it would force every consumer that wants the stats onto a 4-slot leaf.
+    pub fn node_stats(&self) -> NodeStats {
+        let mut stats = NodeStats {
+            slots_per_leaf: 2 * TREE_BASE,
+            ..Default::default()
+        };
+        self.accumulate_node_stats(&mut stats);
+        stats
+    }
+
+    fn accumulate_node_stats(&self, stats: &mut NodeStats) {
+        match self.0.as_ref() {
+            Node::Internal { child_trees, .. } => {
+                stats.internal_nodes += 1;
+                for child in child_trees {
+                    child.accumulate_node_stats(stats);
+                }
+            }
+            Node::Leaf { items, .. } => {
+                stats.leaves += 1;
+                stats.items += items.len();
+            }
+        }
+    }
+
     fn leftmost_leaf(&self) -> &Self {
         match *self.0 {
             Node::Leaf { .. } => self,
@@ -432,6 +467,33 @@ impl<T: KeyedItem> SumTree<T> {
             new_tree.push_tree(cursor.suffix());
             new_tree
         };
+    }
+}
+
+/// How many nodes a tree occupies, and how full its leaves are.
+///
+/// A leaf allocation is the size of the whole `Node` enum whatever it holds, so the ratio of
+/// `items` to `leaves * slots_per_leaf` is the fraction of allocated item slots actually in use.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NodeStats {
+    pub leaves: usize,
+    pub internal_nodes: usize,
+    pub items: usize,
+    /// Item slots in every leaf, i.e. `2 * TREE_BASE`.
+    pub slots_per_leaf: usize,
+}
+
+impl NodeStats {
+    pub fn nodes(&self) -> usize {
+        self.leaves + self.internal_nodes
+    }
+
+    /// The fraction of allocated leaf item slots that hold an item.
+    pub fn leaf_occupancy(&self) -> f64 {
+        if self.leaves == 0 {
+            return 0.;
+        }
+        self.items as f64 / (self.leaves * self.slots_per_leaf) as f64
     }
 }
 
