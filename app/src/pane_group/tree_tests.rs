@@ -1,3 +1,4 @@
+use float_cmp::assert_approx_eq;
 use warpui::App;
 
 use super::*;
@@ -9,28 +10,43 @@ fn test_resize_flex_accumulates_consecutive_drag_deltas() {
         initialize_settings_for_tests(&mut app);
         app.read(|ctx| {
             let measured_sizes = (500., 500.);
-            let total_pixel_size = measured_sizes.0 + measured_sizes.1;
             let mut cached_total_pixel_size = None;
-            let mut flex_1 = 1.;
-            let mut flex_2 = 1.;
 
-            for _ in 0..3 {
-                let total_flex = flex_1 + flex_2;
-                flex_1 = compute_new_flex(
-                    flex_1,
-                    flex_2,
-                    10.,
-                    measured_sizes,
-                    &mut cached_total_pixel_size,
-                    ctx,
-                )
-                .expect("valid resize should update flex");
-                flex_2 = total_flex - flex_1;
-            }
+            let first_resize_flex = compute_new_flex(
+                1.,
+                1.,
+                10.,
+                measured_sizes,
+                &mut cached_total_pixel_size,
+                ctx,
+            )
+            .expect("valid resize should update flex");
+            assert_approx_eq!(f32, first_resize_flex, 1.02);
+            assert_eq!(cached_total_pixel_size, Some(1000.));
 
-            let first_pane_size = flex_1 / (flex_1 + flex_2) * total_pixel_size;
-            assert!((first_pane_size - 530.).abs() < f32::EPSILON);
-            assert_eq!(cached_total_pixel_size, Some(total_pixel_size));
+            let second_resize_flex = compute_new_flex(
+                1.02,
+                0.98,
+                10.,
+                measured_sizes,
+                &mut cached_total_pixel_size,
+                ctx,
+            )
+            .expect("valid resize should update flex");
+            assert_approx_eq!(f32, second_resize_flex, 1.04);
+            assert_eq!(cached_total_pixel_size, Some(1000.));
+
+            let third_resize_flex = compute_new_flex(
+                1.04,
+                0.96,
+                10.,
+                measured_sizes,
+                &mut cached_total_pixel_size,
+                ctx,
+            )
+            .expect("valid resize should update flex");
+            assert_approx_eq!(f32, third_resize_flex, 1.06);
+            assert_eq!(cached_total_pixel_size, Some(1000.));
         });
     });
 }
@@ -41,20 +57,37 @@ fn test_resize_flex_recovers_after_invalid_initial_measurements() {
         initialize_settings_for_tests(&mut app);
         app.read(|ctx| {
             let mut cached_total_pixel_size = None;
-            for measured_sizes in [(0., 0.), (f32::NAN, 500.), (f32::INFINITY, 500.)] {
-                assert_eq!(
-                    compute_new_flex(
-                        1.,
-                        1.,
-                        10.,
-                        measured_sizes,
-                        &mut cached_total_pixel_size,
-                        ctx,
-                    ),
-                    None
-                );
-                assert_eq!(cached_total_pixel_size, None);
-            }
+            assert_eq!(
+                compute_new_flex(1., 1., 10., (0., 0.), &mut cached_total_pixel_size, ctx,),
+                None
+            );
+            assert_eq!(cached_total_pixel_size, None);
+
+            assert_eq!(
+                compute_new_flex(
+                    1.,
+                    1.,
+                    10.,
+                    (f32::NAN, 500.),
+                    &mut cached_total_pixel_size,
+                    ctx,
+                ),
+                None
+            );
+            assert_eq!(cached_total_pixel_size, None);
+
+            assert_eq!(
+                compute_new_flex(
+                    1.,
+                    1.,
+                    10.,
+                    (f32::INFINITY, 500.),
+                    &mut cached_total_pixel_size,
+                    ctx,
+                ),
+                None
+            );
+            assert_eq!(cached_total_pixel_size, None);
 
             assert!(
                 compute_new_flex(1., 1., 10., (500., 500.), &mut cached_total_pixel_size, ctx,)
@@ -70,15 +103,14 @@ fn test_resize_flex_respects_minimum_pane_size() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         app.read(|ctx| {
-            let minimum_pane_size = get_minimum_pane_size(ctx);
-            let measured_sizes = (minimum_pane_size * 2., minimum_pane_size * 2.);
+            let measured_sizes = (200., 200.);
             let mut cached_total_pixel_size = None;
 
             assert_eq!(
                 compute_new_flex(
                     1.,
                     1.,
-                    -(minimum_pane_size + 1.),
+                    -11.,
                     measured_sizes,
                     &mut cached_total_pixel_size,
                     ctx,
