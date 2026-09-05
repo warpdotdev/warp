@@ -591,7 +591,6 @@ default = [
     "artifact_command",
     "conversation_api",
     "cloud_environments",
-    "create_environment_slash_command",
     "code_review_find",
     "async_find",
     "shared_session_long_running_commands",
@@ -949,7 +948,6 @@ artifact_command = []
 cloud_environments = []
 cloud_runners = []
 cloud_agent_runners = []
-create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
 web_search_ui = []

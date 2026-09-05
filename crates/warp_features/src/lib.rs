@@ -469,9 +469,6 @@ pub enum FeatureFlag {
     /// Enables cloud environments management via CLI.
     CloudEnvironments,
 
-    /// Enables the /create-environment slash command for setting up Warp Environments
-    CreateEnvironmentSlashCommand,
-
     /// Enables the local docker sandbox entrypoints in the client.
     LocalDockerSandbox,
 
@@ -1172,9 +1169,6 @@ impl FeatureFlag {
             CloudEnvironments => {
                 Some("Enables creating and managing Warp Environments via the CLI.")
             }
-            CreateEnvironmentSlashCommand => Some(
-                "Enables the /create environment slash command for setting up Warp Environments with custom configurations.",
-            ),
             GlobalSearch => Some("Enables global search in the left panel"),
             BlocklistMarkdownTableRendering => {
                 Some("Enables rendering markdown tables inline in AI block list responses.")
