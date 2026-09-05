@@ -12,7 +12,7 @@ use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use string_offset::CharOffset;
 use vec1::{Vec1, vec1};
-use vim::vim::{Direction, InsertPosition, VimMode, VimModel, VimState, VimSubscriber};
+use vim::vim::{Direction, VimMode, VimModel, VimState, VimSubscriber};
 use warp_core::platform::SessionPlatform;
 use warp_editor::content::buffer::{
     Buffer, BufferEditAction, EditOrigin, InitialBufferState, ToBufferCharOffset as _,
@@ -65,7 +65,7 @@ use crate::code::editor::find::view::{CodeEditorFind as Find, Event as FindViewE
 use crate::code::editor::goto_line::view::{Event as GoToLineEvent, GoToLineView};
 use crate::code::editor::line::EditorLineLocation;
 use crate::code::editor::model::{
-    CodeEditorModel, CodeEditorModelEvent, HoverableLink, LineBound, StableEditorLine,
+    CodeEditorModel, CodeEditorModelEvent, HoverableLink, StableEditorLine,
 };
 use crate::code::editor::nav_bar::{NavBar, NavBarBehavior, NavBarEvent};
 use crate::code::editor::scroll::{ScrollPosition, ScrollTrigger, ScrollWheelBehavior};
@@ -2014,43 +2014,6 @@ impl CodeEditorView {
         self.vim_keystroke(&Keystroke::parse("escape").expect("escape parses"), ctx)
     }
 
-    fn vim_apply_insert_position(
-        &mut self,
-        position: &InsertPosition,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match position {
-            InsertPosition::AtCursor => {}
-            InsertPosition::AfterCursor => {
-                self.model.update(ctx, |model, ctx| {
-                    model.vim_move_horizontal_by_offset(
-                        1,
-                        &Direction::Forward,
-                        false, // keep_selection
-                        true,  // stop_at_line_boundary
-                        ctx,
-                    );
-                });
-            }
-            InsertPosition::LineFirstNonWhitespace => self.model.update(ctx, |model, ctx| {
-                model.vim_move_to_first_nonwhitespace(false, ctx);
-            }),
-            InsertPosition::LineEnd => self.model.update(ctx, |model, ctx| {
-                model.vim_move_to_line_bound(LineBound::End, false, ctx);
-            }),
-            InsertPosition::LineAbove => {
-                self.model.update(ctx, |model, ctx| {
-                    model.vim_newline(true, ctx);
-                });
-            }
-            InsertPosition::LineBelow => {
-                self.model.update(ctx, |model, ctx| {
-                    model.vim_newline(false, ctx);
-                });
-            }
-        }
-    }
-
     /// When in Vim mode, specifically normal mode, the block cursor cannot go past the last
     /// character on the line as the beam cursor can. We call this "line capping." This helper
     /// method determines if line capping needs to be enforced, and if so, enforces it.
@@ -2230,13 +2193,18 @@ impl View for CodeEditorView {
         // Align Vim visual tails with the render state's selection coordinate system.
         // The render model stores selection head/tail as (buffer_offset - 1), so apply the same
         // transformation to the visual tails to avoid off-by-one mismatches when highlighting.
-        let vim_visual_tails = self
-            .model
-            .as_ref(app)
-            .vim_visual_tails()
-            .iter()
-            .map(|t| t.saturating_sub(&CharOffset::from(1)))
-            .collect::<Vec<_>>();
+        let vim_visual_tails = if matches!(self.vim_mode(app), Some(VimMode::Visual(_))) {
+            self.model
+                .as_ref(app)
+                .buffer_selection_model()
+                .as_ref(app)
+                .selection_offsets()
+                .iter()
+                .map(|selection| selection.tail.saturating_sub(&CharOffset::from(1)))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let editor_rich_content = RichTextElement::<Self>::new(
             render_state.clone(),
             self.self_handle.clone(),

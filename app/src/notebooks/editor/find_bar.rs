@@ -584,6 +584,11 @@ impl FindBarState {
         &self.bar_view
     }
 
+    #[cfg(test)]
+    pub fn is_open(&self) -> bool {
+        self.is_open
+    }
+
     /// Whether or not the find bar is focused.
     pub fn is_focused(&self, app: &AppContext) -> bool {
         self.bar_view.is_focused(app) || self.bar_view.as_ref(app).query_editor_focused(app)

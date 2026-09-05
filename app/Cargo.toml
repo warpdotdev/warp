@@ -572,6 +572,7 @@ default = [
     "get_started_tab",
     "file_tree",
     "vim_code_editor",
+    "vim_notebook",
     "code_launch_modal",
     "allow_ignoring_input_suggestions",
     "mcp_oauth",
@@ -929,6 +930,7 @@ conversation_api = []
 sync_ambient_plans = []
 projects = []
 vim_code_editor = []
+vim_notebook = []
 allow_opening_file_links_using_editor_env = []
 undo_closed_panes = []
 revert_diff_hunk = []
