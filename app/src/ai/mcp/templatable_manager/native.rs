@@ -1025,7 +1025,7 @@ impl TemplatableMCPServerManager {
 
         let server_name = server.name.clone();
         let description = installation.templatable_mcp_server().description.clone();
-        let auth_context = FeatureFlag::McpOauth.is_enabled().then(|| {
+        let auth_context = Some({
             let persist_spawner = ctx.spawner();
             let requires_authentication_spawner = ctx.spawner();
             let authenticated_spawner = ctx.spawner();
@@ -1033,10 +1033,7 @@ impl TemplatableMCPServerManager {
                 OAuthCallbackMode::Loopback
             } else {
                 OAuthCallbackMode::CustomScheme {
-                    redirect_uri: format!(
-                        "{}://mcp/oauth2callback",
-                        ChannelState::url_scheme()
-                    ),
+                    redirect_uri: format!("{}://mcp/oauth2callback", ChannelState::url_scheme()),
                     result_rx: oauth_result_rx,
                 }
             };
@@ -1082,7 +1079,11 @@ impl TemplatableMCPServerManager {
                                     },
                                 );
                                 ctx.open_url(&auth_url);
-                                manager.change_server_state(uuid, MCPServerState::Authenticating, ctx);
+                                manager.change_server_state(
+                                    uuid,
+                                    MCPServerState::Authenticating,
+                                    ctx,
+                                );
                             })
                             .await
                             .map_err(|err| {
