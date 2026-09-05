@@ -597,7 +597,6 @@ default = [
     "shared_session_long_running_commands",
     "mcp_grouped_server_context",
     "fork_from_command",
-    "context_window_usage_v2",
     "context_window_usage_breakdown",
     "ambient_agents_command_line",
     "ambient_agents_image_upload",
@@ -955,7 +954,6 @@ mcp_grouped_server_context = []
 web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
-context_window_usage_v2 = []
 context_window_usage_breakdown = []
 global_search = []
 file_and_diff_set_comments = []

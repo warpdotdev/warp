@@ -2236,10 +2236,9 @@ impl AgentInputFooter {
             }
             AgentToolbarItemKind::FileAttach => Some(ChildView::new(&self.file_button).finish()),
             AgentToolbarItemKind::ContextWindowUsage => {
-                let has_conversation = FeatureFlag::ContextWindowUsageV2.is_enabled()
-                    && BlocklistAIHistoryModel::as_ref(app)
-                        .active_conversation(self.terminal_view_id)
-                        .is_some();
+                let has_conversation = BlocklistAIHistoryModel::as_ref(app)
+                    .active_conversation(self.terminal_view_id)
+                    .is_some();
                 has_conversation.then(|| {
                     let chip = ChildView::new(&self.context_window_button).finish();
                     if !self.prompt_cache_expired {
