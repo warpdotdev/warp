@@ -16,6 +16,7 @@ pub(crate) enum RedactedValue {
 }
 
 impl RedactedValue {
+    #[allow(dead_code)]
     pub(crate) fn object(
         fields: impl IntoIterator<Item = (impl Into<String>, RedactedValue)>,
     ) -> Self {
@@ -27,6 +28,7 @@ impl RedactedValue {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn redacted(reason: &str, byte_count: usize) -> Self {
         Self::object([
             ("redacted", Self::Bool(true)),
@@ -139,7 +141,6 @@ impl HookRedactor {
             }),
         }
     }
-
 }
 
 pub(crate) fn truncate_utf8(input: &str, maximum_bytes: usize) -> String {
@@ -155,6 +156,7 @@ fn floor_utf8_boundary(input: &str, maximum_bytes: usize) -> usize {
     boundary
 }
 
+#[allow(dead_code)]
 pub(crate) fn contains_prohibited_payload_key(value: &Value) -> bool {
     const PROHIBITED_KEYS: [&str; 9] = [
         "environment",

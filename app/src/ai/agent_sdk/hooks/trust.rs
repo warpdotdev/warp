@@ -14,6 +14,7 @@ pub(crate) trait HookTrustStore: Send + Sync {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 pub(crate) struct DenyProjectHookTrust;
 
 impl HookTrustStore for DenyProjectHookTrust {
@@ -32,6 +33,7 @@ impl ExactHookTrustStore {
         self.trusted.write().unwrap().insert(key);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn revoke(&self, key: &HookTrustKey) {
         self.trusted.write().unwrap().remove(key);
     }
