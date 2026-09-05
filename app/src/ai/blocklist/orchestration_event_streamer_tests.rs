@@ -624,6 +624,39 @@ fn make_server_metadata_with_harness(
 }
 
 #[test]
+fn repeated_harness_fetch_attempts_share_one_in_flight_request() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let run_id = "550e8400-e29b-41d4-a716-446655440620";
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_run_id(run_id.to_string());
+        let conversation_id = conversation.id();
+        history_model.update(&mut app, |history, ctx| {
+            history.restore_conversations(warpui::EntityId::new(), vec![conversation], ctx);
+        });
+
+        let mut mock = MockAIClient::new();
+        mock.expect_get_ambient_agent_task()
+            .times(1)
+            .returning(|_| Err(anyhow::anyhow!("fetch observed")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.spawn_task_harness_fetch_if_needed(conversation_id, ctx);
+            streamer.spawn_task_harness_fetch_if_needed(conversation_id, ctx);
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+    });
+}
+
+#[test]
 fn dormant_local_claude_child_skips_generic_sse_but_allows_wake_listener() {
     use std::sync::Arc;
 
@@ -1698,6 +1731,43 @@ fn make_parent_task_id_for_test(byte: u8) -> AmbientAgentTaskId {
     let s = uuid.to_string();
     s.parse().expect("valid task id")
 }
+#[test]
+fn repeated_viewer_registration_starts_one_ancestor_seed_fetch() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut mock = MockAIClient::new();
+        mock.expect_list_ambient_agent_tasks()
+            .times(1)
+            .returning(|_, _| Err(anyhow::anyhow!("fetch observed")));
+        let ai_client: Arc<dyn AIClient> = Arc::new(mock);
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let parent_task_id = make_parent_task_id_for_test(0xa0);
+        let placeholder_id = AIConversation::new(true, false).id();
+        let consumer_id = warpui::EntityId::new();
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                placeholder_id,
+                consumer_id,
+                ctx,
+            );
+            streamer.register_viewer_mode_consumer(
+                parent_task_id,
+                placeholder_id,
+                consumer_id,
+                ctx,
+            );
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+    });
+}
 
 #[test]
 fn is_known_child_dedupes_per_parent_after_first_observation() {
@@ -2249,6 +2319,45 @@ fn finish_ancestor_seed_fetch_emits_child_spawned_for_each_seeded_child() {
     });
 }
 
+#[test]
+fn repeated_ancestor_seed_results_do_not_rebroadcast_known_children() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let ai_client: Arc<dyn AIClient> = Arc::new(MockAIClient::new());
+        let server_api = ServerApiProvider::new_for_test().get();
+        let streamer = app.add_singleton_model(|ctx| {
+            OrchestrationEventStreamer::new_with_clients_for_test(ai_client, server_api, ctx)
+        });
+        let parent_task_id = make_parent_task_id_for_test(0xd4);
+        let child_task_id = make_parent_task_id_for_test(0xd5);
+        streamer.update(&mut app, |streamer, _| {
+            streamer
+                .viewer_mode_orchestrators
+                .entry(parent_task_id)
+                .or_default();
+        });
+        let captured_spawns = capture_child_spawns(&mut app, &streamer);
+
+        streamer.update(&mut app, |streamer, ctx| {
+            streamer.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![make_ambient_task_with_task_id(child_task_id, None)]),
+                ctx,
+            );
+            streamer.finish_ancestor_seed_fetch(
+                parent_task_id,
+                Ok(vec![make_ambient_task_with_task_id(child_task_id, None)]),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            captured_spawns.lock().as_slice(),
+            &[(parent_task_id, child_task_id.to_string())]
+        );
+    });
+}
 #[test]
 fn register_viewer_mode_consumer_replays_known_children_for_later_panes() {
     // Regression for the late-arriving-consumer arm of the same bug: the
