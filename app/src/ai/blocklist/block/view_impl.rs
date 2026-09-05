@@ -961,6 +961,10 @@ impl View for AIBlock {
             // Derive the display info for the participant who initiated this exchange.
             // For non-shared sessions, this is just the current user.
             // For shared sessions, this is the user who initiated the request.
+            // `get_participant_for_attribution` is used instead of `get_participant` so that
+            // self-initiated exchanges (e.g. viewer-originated prompts in the browser's
+            // shared-session view) are resolved to the correct identity and color rather than
+            // falling back to the session-wide theme accent.
             let (avatar_display_name, profile_image_path, avatar_color) = self
                 .model
                 .response_initiator(app)
@@ -969,17 +973,13 @@ impl View for AIBlock {
                         .and_then(|terminal_view| {
                             terminal_view.read(app, |view, app| {
                                 view.shared_session_presence_manager().and_then(move |pm| {
-                                    pm.as_ref(app).get_participant(&participant_id).map(
-                                        |participant| {
+                                    pm.as_ref(app)
+                                        .get_participant_for_attribution(&participant_id)
+                                        .map(|attr| {
                                             // Get the display info from the participant
                                             // who sent this query.
-                                            (
-                                                participant.info.profile_data.display_name.clone(),
-                                                participant.info.profile_data.photo_url.clone(),
-                                                Some(participant.color),
-                                            )
-                                        },
-                                    )
+                                            (attr.display_name, attr.photo_url, Some(attr.color))
+                                        })
                                 })
                             })
                         })
