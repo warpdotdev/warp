@@ -19,6 +19,7 @@ use crate::code_review::code_review_view::{
     CONTENT_TOP_MARGIN, CodeReviewAction, CodeReviewHeaderFields, CodeReviewView, LoadedState,
     get_discard_button_disabled_tooltip,
 };
+use crate::code_review::diff_selector::DiffSelector;
 use crate::code_review::diff_state::DiffStateModel;
 use crate::menu::Menu;
 use crate::ui_components::icons::Icon;
@@ -33,6 +34,8 @@ pub(crate) const HEADER_BUTTON_PADDING: Coords = Coords {
     left: 6.,
     right: 6.,
 };
+
+const BRANCH_PICKER_LEFT_MARGIN: f32 = 8.;
 
 #[derive(Default)]
 struct StateHandles {
@@ -114,7 +117,9 @@ impl CodeReviewHeader {
         let mut right_section_wide = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::End)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(ChildView::new(&code_review_header_fields.diff_selector).finish());
+            .with_child(Self::render_branch_picker(
+                &code_review_header_fields.diff_selector,
+            ));
 
         let has_no_changes = state.to_diff_stats().has_no_changes();
 
@@ -291,6 +296,12 @@ impl CodeReviewHeader {
             ChildAnchor::TopLeft,
             vec2f(0., 4.),
         )
+    }
+
+    fn render_branch_picker(diff_selector: &ViewHandle<DiffSelector>) -> Box<dyn Element> {
+        Container::new(ChildView::new(diff_selector).finish())
+            .with_margin_left(BRANCH_PICKER_LEFT_MARGIN)
+            .finish()
     }
 
     fn create_discard_button(
