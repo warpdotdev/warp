@@ -31,9 +31,78 @@ fn task_with_user_query(task_id: &str, query: &str, description: &str) -> api::T
     }
 }
 
+/// A root task holding only a passive `AutoCodeDiff` system query — the shape
+/// the startup pane-restore filter is meant to reject.
+fn task_with_auto_code_diff(task_id: &str) -> api::Task {
+    api::Task {
+        id: task_id.to_string(),
+        description: String::new(),
+        dependencies: None,
+        messages: vec![api::Message {
+            id: format!("{task_id}-auto-code-diff"),
+            task_id: task_id.to_string(),
+            message: Some(api::message::Message::SystemQuery(
+                api::message::SystemQuery {
+                    context: None,
+                    r#type: Some(api::message::system_query::Type::AutoCodeDiff(
+                        api::message::AutoCodeDiff {
+                            query: "diff".to_string(),
+                        },
+                    )),
+                },
+            )),
+            ..Default::default()
+        }],
+        summary: String::new(),
+        server_data: String::new(),
+    }
+}
+
 fn empty_conversation_data() -> AgentConversationData {
     serde_json::from_str(r#"{"server_conversation_token":null}"#)
         .expect("minimal conversation data should deserialize")
+}
+
+/// A summary as written before the `version` marker and the
+/// `is_entirely_passive` field existed.
+const LEGACY_SUMMARY_JSON: &str =
+    r#"{"initial_query":"Initial query","title":"Root title","is_restorable":true}"#;
+
+fn set_summary(
+    conn: &mut SqliteConnection,
+    conversation: &str,
+    value: Option<&str>,
+    ts: NaiveDateTime,
+) {
+    use schema::agent_conversations::dsl::*;
+    // Setting `last_modified_at` explicitly keeps the update trigger from
+    // bumping it, so history order stays comparable across the test.
+    diesel::update(agent_conversations.filter(conversation_id.eq(conversation)))
+        .set((
+            summary.eq(value.map(str::to_owned)),
+            last_modified_at.eq(ts),
+        ))
+        .execute(conn)
+        .expect("summary setup should succeed");
+}
+
+fn task_blobs(conn: &mut SqliteConnection, conversation: &str) -> Vec<Vec<u8>> {
+    use schema::agent_tasks::dsl::*;
+    agent_tasks
+        .filter(conversation_id.eq(conversation))
+        .select(task)
+        .load(conn)
+        .expect("task rows should load")
+}
+
+fn corrupt_task_blobs(conn: &mut SqliteConnection, conversation: &str) {
+    use schema::agent_tasks::dsl::*;
+    // A varint whose continuation bit is never cleared can't be decoded as a
+    // field tag, so any attempt to decode this task fails.
+    diesel::update(agent_tasks.filter(conversation_id.eq(conversation)))
+        .set(task.eq(vec![0xFF_u8; 8]))
+        .execute(conn)
+        .expect("task corruption setup should succeed");
 }
 
 fn summary_column(conn: &mut SqliteConnection, conversation: &str) -> Option<String> {
@@ -216,6 +285,107 @@ fn metadata_read_heals_invalid_non_null_summaries() {
     let (_, backfills) =
         read_agent_conversation_metadata(&mut conn).expect("metadata read should succeed");
     assert!(backfills.is_empty());
+}
+
+/// The startup pane-restore filter reads `is_entirely_passive` out of the
+/// `summary` column, which must never require touching the task blobs.
+#[test]
+fn summary_read_answers_passiveness_without_decoding_tasks() {
+    let mut conn = test_connection();
+    let task = task_with_auto_code_diff("task-1");
+    upsert_agent_conversation(&mut conn, "conv-1", [&task], empty_conversation_data())
+        .expect("upsert should succeed");
+
+    corrupt_task_blobs(&mut conn, "conv-1");
+
+    let summary = read_agent_conversation_summary_by_id(&mut conn, "conv-1")
+        .expect("summary read should succeed")
+        .expect("the write-time summary should answer the filter");
+    assert_eq!(summary.is_entirely_passive, Some(true));
+
+    // Sanity check that the blobs really are undecodable, so the assertion
+    // above is about the summary path and not a still-valid task snapshot.
+    let blobs = task_blobs(&mut conn, "conv-1");
+    assert_eq!(blobs.len(), 1);
+    assert!(
+        api::Task::decode(&blobs[0][..]).is_err(),
+        "the corrupted task blob must fail to decode"
+    );
+}
+
+/// A summary written before `is_entirely_passive` existed must read as
+/// "unknown" rather than defaulting, so callers fall back to a full load
+/// instead of silently dropping a restorable conversation.
+#[test]
+fn summary_read_reports_unknown_for_summaries_written_by_older_clients() {
+    let mut conn = test_connection();
+    let task = task_with_user_query("task-1", "Initial query", "Root title");
+    upsert_agent_conversation(&mut conn, "conv-1", [&task], empty_conversation_data())
+        .expect("upsert should succeed");
+
+    set_summary(&mut conn, "conv-1", Some(LEGACY_SUMMARY_JSON), ts(1_000));
+    assert!(
+        read_agent_conversation_summary_by_id(&mut conn, "conv-1")
+            .expect("summary read should succeed")
+            .is_none(),
+        "a stale summary must read as unknown"
+    );
+
+    set_summary(&mut conn, "conv-1", None, ts(1_000));
+    assert!(
+        read_agent_conversation_summary_by_id(&mut conn, "conv-1")
+            .expect("summary read should succeed")
+            .is_none(),
+        "a missing summary must read as unknown"
+    );
+
+    assert!(
+        read_agent_conversation_summary_by_id(&mut conn, "does-not-exist")
+            .expect("summary read should succeed")
+            .is_none(),
+        "a missing row must read as unknown rather than erroring"
+    );
+}
+
+/// Stale summaries heal through the existing read-time derive plus writer
+/// backfill, so the fallback only costs a full load once per row.
+#[test]
+fn metadata_read_rederives_summaries_written_by_older_clients() {
+    let mut conn = test_connection();
+    let task = task_with_auto_code_diff("task-1");
+    upsert_agent_conversation(&mut conn, "conv-1", [&task], empty_conversation_data())
+        .expect("upsert should succeed");
+
+    let legacy_ts = ts(1_000);
+    set_summary(&mut conn, "conv-1", Some(LEGACY_SUMMARY_JSON), legacy_ts);
+
+    let (_, backfills) =
+        read_agent_conversation_metadata(&mut conn).expect("metadata read should succeed");
+    assert_eq!(backfills.len(), 1);
+    assert_eq!(
+        backfills[0].previous_summary.as_deref(),
+        Some(LEGACY_SUMMARY_JSON),
+        "the backfill must carry the observed stale value for its compare-and-set"
+    );
+
+    backfill_conversation_summaries(&mut conn, backfills).expect("backfill should succeed");
+
+    let healed = read_agent_conversation_summary_by_id(&mut conn, "conv-1")
+        .expect("summary read should succeed")
+        .expect("the re-derived summary should be current");
+    assert_eq!(healed.is_entirely_passive, Some(true));
+    assert_eq!(
+        last_modified_column(&mut conn, "conv-1"),
+        legacy_ts,
+        "re-deriving must not reorder history by bumping last_modified_at"
+    );
+
+    let (_, backfills) =
+        read_agent_conversation_metadata(&mut conn).expect("metadata read should succeed");
+    assert!(
+        backfills.is_empty(),
+        "the re-derivation must happen at most once per row"
+    );
 }
 
 fn data_with_parent(parent: Option<&str>) -> String {
