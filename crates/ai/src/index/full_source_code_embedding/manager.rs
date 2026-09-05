@@ -48,6 +48,17 @@ const REPO_SNAPSHOT_PERSISTENCE_MINUTES: u64 = 10;
 const REPO_SNAPSHOT_PERSISTENCE_INTERVAL: Duration =
     Duration::from_secs(60 * REPO_SNAPSHOT_PERSISTENCE_MINUTES);
 
+/// Hard ceiling on how many previously-indexed codebases are proactively rebuilt and
+/// held resident in memory when the app starts, independent of the user's plan-level
+/// `max_indices` allowance (which may be `None`, i.e. unlimited). Built indices are
+/// never evicted from `codebase_indices` once loaded, so without this cap, accounts
+/// with many previously-indexed repositories would have *every one* of them fully
+/// rebuilt (merkle tree + embeddings) and kept in memory for the lifetime of the app on
+/// every launch. Codebases beyond this cap are not deleted -- their snapshots remain on
+/// disk (see `clean_up_snapshot_files`) and are loaded normally the next time the user
+/// actually opens that directory.
+const MAX_PERSISTED_INDICES_TO_AUTO_RESTORE: usize = 10;
+
 /// User-facing indexing completion status.
 pub enum CodebaseIndexFinishedStatus {
     Completed,
@@ -425,9 +436,20 @@ impl CodebaseIndexManager {
             clean_up_snapshot_files(snapshot_storage.path(), &valid_metadata);
         }
 
-        // For the moment, we've decided to load all snapshots regardless of the index count.
-        let build_queue =
-            BuildQueue::new_with_persisted(valid_metadata, restore_persisted_indices_on_startup);
+        // For the moment, we've decided to load all snapshots regardless of the index count,
+        // but we still cap how many are proactively restored on startup (prioritizing the
+        // most recently touched) to bound resident memory for accounts with many
+        // previously-indexed repositories. See MAX_PERSISTED_INDICES_TO_AUTO_RESTORE.
+        let indices_to_auto_restore = valid_metadata
+            .iter()
+            .cloned()
+            .sorted_by(WorkspaceMetadata::most_recently_touched)
+            .take(MAX_PERSISTED_INDICES_TO_AUTO_RESTORE)
+            .collect();
+        let build_queue = BuildQueue::new_with_persisted(
+            indices_to_auto_restore,
+            restore_persisted_indices_on_startup,
+        );
 
         let mut me = Self {
             codebase_indices: HashMap::new(),
