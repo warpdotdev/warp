@@ -606,6 +606,9 @@ impl Input {
             SlashCommandKind::CreateDockerSandbox => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
+            SlashCommandKind::CreateDevContainer => {
+                ctx.emit(Event::CreateDevContainer);
+            }
             SlashCommandKind::Conversations => {
                 if self.is_cloud_mode_input_v2_composing(ctx) {
                     self.suggestions_mode_model.update(ctx, |model, ctx| {

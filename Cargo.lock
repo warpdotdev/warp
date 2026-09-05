@@ -16066,6 +16066,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "session-sharing-protocol",
+ "sha2 0.10.9",
  "shellexpand",
  "signal-hook",
  "signal-hook-mio",

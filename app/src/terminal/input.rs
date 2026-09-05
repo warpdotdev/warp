@@ -6,6 +6,7 @@ mod cloud_mode_v2_history_menu;
 mod common;
 pub mod conversations;
 pub mod decorations;
+pub mod dev_container_config;
 pub(crate) mod handoff_compose;
 pub mod inline_history;
 pub mod inline_menu;
@@ -292,6 +293,9 @@ use crate::terminal::input::buffer_model::InputBufferModel;
 use crate::terminal::input::cloud_mode_v2_history_menu::CloudModeV2HistoryMenuView;
 use crate::terminal::input::conversations::{
     InlineConversationMenuEvent, InlineConversationMenuView,
+};
+use crate::terminal::input::dev_container_config::{
+    InlineDevContainerConfigSelectorEvent, InlineDevContainerConfigSelectorView,
 };
 use crate::terminal::input::inline_history::InlineHistoryMenuView;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
@@ -595,6 +599,7 @@ pub enum TelemetryInputSuggestionsMode {
     InlineHistoryMenu,
     IndexedReposMenu,
     PlanMenu,
+    DevContainerConfigSelector,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -755,6 +760,13 @@ pub enum InputSuggestionsMode {
         conversation_id: AIConversationId,
     },
 
+    /// Dev Container config selector mode for choosing among multiple `devcontainer.json`
+    /// configs discovered in the current workspace for the `/devcontainer` command.
+    DevContainerConfigSelector {
+        workspace_folder: PathBuf,
+        configs: Vec<PathBuf>,
+    },
+
     /// Mode indicating that no suggestion UI is being shown.
     Closed,
 }
@@ -792,6 +804,7 @@ impl InputSuggestionsMode {
                 | Self::UserQueryMenu { .. }
                 | Self::InlineHistoryMenu { .. }
                 | Self::PlanMenu { .. }
+                | Self::DevContainerConfigSelector { .. }
         ) || (FeatureFlag::InlineProfileSelector.is_enabled()
             && matches!(self, Self::ProfileSelector))
             || (FeatureFlag::ListSkills.is_enabled() && matches!(self, Self::SkillMenu))
@@ -835,6 +848,9 @@ impl InputSuggestionsMode {
             InputSuggestionsMode::PromptsMenu => Some("Search prompts"),
             InputSuggestionsMode::IndexedReposMenu => Some("Search indexed repos"),
             InputSuggestionsMode::PlanMenu { .. } => Some("Search plans"),
+            InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                Some("Search dev container configs")
+            }
             _ => None,
         }
     }
@@ -879,6 +895,9 @@ impl InputSuggestionsMode {
                 TelemetryInputSuggestionsMode::IndexedReposMenu
             }
             InputSuggestionsMode::PlanMenu { .. } => TelemetryInputSuggestionsMode::PlanMenu,
+            InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                TelemetryInputSuggestionsMode::DevContainerConfigSelector
+            }
             InputSuggestionsMode::Closed => unreachable!(),
         }
     }
@@ -1149,6 +1168,15 @@ pub enum Event {
         initial_prompt: Option<String>,
     },
     CreateDockerSandbox,
+    /// Prototype: brings up the `.devcontainer/devcontainer.json` config for
+    /// the current session's directory and opens a session inside it.
+    CreateDevContainer,
+    /// The user picked a config from the inline Dev Container config selector
+    /// (opened when more than one `devcontainer.json` was discovered).
+    DevContainerConfigSelected {
+        workspace_folder: PathBuf,
+        config_path: PathBuf,
+    },
     /// Exit cloud mode (ambient agent) and start a new *local* agent conversation in the root terminal.
     ///
     /// If `initial_prompt` is `Some`, it should prefill the local agent prompt but not auto-send.
@@ -1841,6 +1869,9 @@ pub struct Input {
     inline_model_selector_view: ViewHandle<InlineModelSelectorView>,
     /// Inline profile selector for choosing the active execution profile.
     inline_profile_selector_view: ViewHandle<InlineProfileSelectorView>,
+
+    /// Inline selector for choosing among multiple discovered Dev Container configs.
+    inline_dev_container_config_selector_view: ViewHandle<InlineDevContainerConfigSelectorView>,
 
     /// Inline skill selector for /open-skill command.
     inline_skill_selector_view: ViewHandle<InlineSkillSelectorView>,
@@ -3891,6 +3922,22 @@ impl Input {
             me.handle_inline_profile_selector_event(event, ctx);
         });
 
+        let inline_dev_container_config_selector_view = ctx.add_view(|ctx| {
+            InlineDevContainerConfigSelectorView::new(
+                suggestions_mode_model.clone(),
+                agent_view_controller.clone(),
+                &buffer_model,
+                &inline_terminal_menu_positioner,
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(
+            &inline_dev_container_config_selector_view,
+            |me, _, event, ctx| {
+                me.handle_inline_dev_container_config_selector_event(event, ctx);
+            },
+        );
+
         let inline_prompts_menu_view = ctx.add_view(|ctx| {
             InlinePromptsMenuView::new(
                 suggestions_mode_model.clone(),
@@ -4170,6 +4217,7 @@ impl Input {
             inline_repos_menu_view,
             inline_model_selector_view,
             inline_profile_selector_view,
+            inline_dev_container_config_selector_view,
             inline_prompts_menu_view,
             inline_skill_selector_view,
             skill_selector_should_invoke: false,
@@ -5533,6 +5581,42 @@ impl Input {
         self.focus_input_box(ctx);
     }
 
+    fn handle_inline_dev_container_config_selector_event(
+        &mut self,
+        event: &InlineDevContainerConfigSelectorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(workspace_folder) = self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .dev_container_config_selector_workspace_folder()
+        else {
+            return;
+        };
+
+        match event {
+            InlineDevContainerConfigSelectorEvent::Selected { config_path } => {
+                ctx.emit(Event::DevContainerConfigSelected {
+                    workspace_folder,
+                    config_path: config_path.clone(),
+                });
+            }
+            InlineDevContainerConfigSelectorEvent::Dismissed => {}
+        }
+
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_dev_container_config_selector()
+        {
+            self.suggestions_mode_model.update(ctx, |model, ctx| {
+                model.close_and_restore_buffer(ctx);
+            });
+            ctx.notify();
+        }
+        self.focus_input_box(ctx);
+    }
+
     fn handle_inline_prompts_menu_event(
         &mut self,
         event: &InlinePromptsMenuEvent,
@@ -5693,6 +5777,30 @@ impl Input {
         });
 
         ctx.notify();
+    }
+
+    /// Opens the inline Dev Container config selector, listing `configs` (discovered
+    /// `devcontainer.json` paths for `workspace_folder`) for the user to choose from.
+    ///
+    /// Only called when more than one config was discovered; a single match is brought up
+    /// directly without this menu.
+    pub(crate) fn open_dev_container_config_selector(
+        &mut self,
+        workspace_folder: PathBuf,
+        configs: Vec<PathBuf>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.suggestions_mode_model.update(ctx, |model, ctx| {
+            model.set_mode(
+                InputSuggestionsMode::DevContainerConfigSelector {
+                    workspace_folder,
+                    configs,
+                },
+                ctx,
+            );
+        });
+        ctx.notify();
+        self.focus_input_box(ctx);
     }
 
     fn open_prompts_menu(&mut self, ctx: &mut ViewContext<Self>) {
@@ -9143,6 +9251,10 @@ impl Input {
                     InputSuggestionsMode::PlanMenu { .. } => {
                         // Plan menu selection is handled via InlinePlanMenuView
                     }
+                    InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                        // Dev Container config selector selection is handled via
+                        // InlineDevContainerConfigSelectorView
+                    }
                     InputSuggestionsMode::Closed => {
                         log::warn!("Got a InputSuggestionsEvent::Select when the mode was Closed!");
                     }
@@ -9309,6 +9421,11 @@ impl Input {
             }
             InputSuggestionsMode::PlanMenu { .. } => {
                 // Plan menu selection is handled via InlinePlanMenuView
+                false
+            }
+            InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                // Dev Container config selector selection is handled via
+                // InlineDevContainerConfigSelectorView
                 false
             }
         }
@@ -9641,6 +9758,13 @@ impl Input {
                 self.inline_plan_menu_view.update(ctx, |view, ctx| {
                     view.select_up(ctx);
                 });
+                true
+            }
+            InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                self.inline_dev_container_config_selector_view
+                    .update(ctx, |view, ctx| {
+                        view.select_up(ctx);
+                    });
                 true
             }
             InputSuggestionsMode::HistoryUp { .. }
@@ -9995,6 +10119,13 @@ impl Input {
                 self.inline_plan_menu_view.update(ctx, |view, ctx| {
                     view.select_down(ctx);
                 });
+                true
+            }
+            InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                self.inline_dev_container_config_selector_view
+                    .update(ctx, |view, ctx| {
+                        view.select_down(ctx);
+                    });
                 true
             }
             InputSuggestionsMode::HistoryUp { .. }
@@ -11243,6 +11374,9 @@ impl Input {
                     InputSuggestionsMode::PlanMenu { .. } => {
                         // Plan menu handles its own state
                     }
+                    InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                        // Dev Container config selector handles its own state
+                    }
                 }
             }
             EditorEvent::BufferReplaced => {
@@ -11372,6 +11506,9 @@ impl Input {
                         }
                         InputSuggestionsMode::PlanMenu { .. } => {
                             // Plan menu handles its own selection state
+                        }
+                        InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                            // Dev Container config selector handles its own selection state
                         }
                     }
                 }
@@ -13861,6 +13998,16 @@ impl Input {
             .is_profile_selector()
         {
             self.inline_profile_selector_view
+                .update(ctx, |view, ctx| view.accept_selected_item(ctx));
+            return;
+        }
+
+        if self
+            .suggestions_mode_model
+            .as_ref(ctx)
+            .is_dev_container_config_selector()
+        {
+            self.inline_dev_container_config_selector_view
                 .update(ctx, |view, ctx| view.accept_selected_item(ctx));
             return;
         }

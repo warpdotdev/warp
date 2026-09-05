@@ -217,6 +217,14 @@ pub(super) fn spawn(
                 "Docker sandbox shells are not supported on Windows".to_owned(),
             ));
         }
+        ShellStarter::DevContainer(_) => {
+            // Dev Container shells are prototyped Linux-only; see the
+            // matching comment on the `DockerSandbox` arm above.
+            report_error!("Dev Container shell starter reached the Windows PTY spawn path");
+            return Err(PtySpawnError::UnsupportedShellStarter(
+                "Dev Container shells are not supported on Windows".to_owned(),
+            ));
+        }
     };
     let mut process_information = PROCESS_INFORMATION::default();
 

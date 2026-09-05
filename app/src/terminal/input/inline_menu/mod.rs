@@ -47,6 +47,7 @@ pub enum InlineMenuType {
     InlineHistoryMenu,
     IndexedReposMenu,
     PlanMenu,
+    DevContainerConfigSelector,
 }
 
 impl InlineMenuType {
@@ -63,6 +64,7 @@ impl InlineMenuType {
             InlineMenuType::InlineHistoryMenu => "History",
             InlineMenuType::IndexedReposMenu => "/Repos",
             InlineMenuType::PlanMenu => "/Plans",
+            InlineMenuType::DevContainerConfigSelector => "/DevContainer",
         }
     }
 
@@ -87,6 +89,9 @@ impl InlineMenuType {
             }
             InputSuggestionsMode::IndexedReposMenu => Some(InlineMenuType::IndexedReposMenu),
             InputSuggestionsMode::PlanMenu { .. } => Some(InlineMenuType::PlanMenu),
+            InputSuggestionsMode::DevContainerConfigSelector { .. } => {
+                Some(InlineMenuType::DevContainerConfigSelector)
+            }
             InputSuggestionsMode::Closed
             | InputSuggestionsMode::HistoryUp { .. }
             | InputSuggestionsMode::CompletionSuggestions { .. }

@@ -246,6 +246,14 @@ impl Input {
                 .is_profile_selector()
         {
             column.add_child(ChildView::new(&self.inline_profile_selector_view).finish());
+        } else if self
+            .suggestions_mode_model
+            .as_ref(app)
+            .is_dev_container_config_selector()
+        {
+            column.add_child(
+                ChildView::new(&self.inline_dev_container_config_selector_view).finish(),
+            );
         } else if self.suggestions_mode_model.as_ref(app).is_slash_commands()
             && !self.is_cloud_mode_input_v2_composing(app)
         {

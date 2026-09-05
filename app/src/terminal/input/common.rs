@@ -325,6 +325,9 @@ pub(super) fn add_input_suggestions_overlays(
         InputSuggestionsMode::IndexedReposMenu => {}
         // Plan menu is rendered separately via inline_plan_menu_view
         InputSuggestionsMode::PlanMenu { .. } => {}
+        // Dev Container config selector is rendered separately via
+        // inline_dev_container_config_selector_view
+        InputSuggestionsMode::DevContainerConfigSelector { .. } => {}
         InputSuggestionsMode::Closed => {}
     }
 }

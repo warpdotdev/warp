@@ -222,6 +222,33 @@ impl InputSuggestionsModeModel {
         }
     }
 
+    pub fn is_dev_container_config_selector(&self) -> bool {
+        matches!(
+            self.mode,
+            InputSuggestionsMode::DevContainerConfigSelector { .. }
+        )
+    }
+
+    /// Returns the discovered configs if the current mode is `DevContainerConfigSelector`.
+    pub fn dev_container_config_selector_configs(&self) -> Option<Vec<std::path::PathBuf>> {
+        match &self.mode {
+            InputSuggestionsMode::DevContainerConfigSelector { configs, .. } => {
+                Some(configs.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the workspace folder if the current mode is `DevContainerConfigSelector`.
+    pub fn dev_container_config_selector_workspace_folder(&self) -> Option<std::path::PathBuf> {
+        match &self.mode {
+            InputSuggestionsMode::DevContainerConfigSelector {
+                workspace_folder, ..
+            } => Some(workspace_folder.clone()),
+            _ => None,
+        }
+    }
+
     pub fn inline_menu_type(&self) -> Option<InlineMenuType> {
         InlineMenuType::from_suggestions_mode(&self.mode)
     }

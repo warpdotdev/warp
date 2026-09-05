@@ -285,6 +285,10 @@ impl Input {
             .is_inline_model_selector();
         let is_prompts_menu = self.suggestions_mode_model.as_ref(app).is_prompts_menu();
         let is_skill_menu = self.suggestions_mode_model.as_ref(app).is_skill_menu();
+        let is_dev_container_config_selector = self
+            .suggestions_mode_model
+            .as_ref(app)
+            .is_dev_container_config_selector();
         let is_inline_history_menu = FeatureFlag::InlineHistoryMenu.is_enabled()
             && self
                 .suggestions_mode_model
@@ -307,6 +311,11 @@ impl Input {
                             Some(ChildView::new(&self.inline_conversation_menu_view).finish())
                         } else if FeatureFlag::ListSkills.is_enabled() && is_skill_menu {
                             Some(ChildView::new(&self.inline_skill_selector_view).finish())
+                        } else if is_dev_container_config_selector {
+                            Some(
+                                ChildView::new(&self.inline_dev_container_config_selector_view)
+                                    .finish(),
+                            )
                         } else if is_inline_history_menu {
                             Some(ChildView::new(&self.inline_history_menu_view).finish())
                         } else if is_repos_menu {
@@ -336,6 +345,11 @@ impl Input {
                             Some(ChildView::new(&self.inline_conversation_menu_view).finish())
                         } else if FeatureFlag::ListSkills.is_enabled() && is_skill_menu {
                             Some(ChildView::new(&self.inline_skill_selector_view).finish())
+                        } else if is_dev_container_config_selector {
+                            Some(
+                                ChildView::new(&self.inline_dev_container_config_selector_view)
+                                    .finish(),
+                            )
                         } else if is_inline_history_menu {
                             Some(ChildView::new(&self.inline_history_menu_view).finish())
                         } else if is_repos_menu {
@@ -365,6 +379,10 @@ impl Input {
                     && !should_render_below
                 {
                     column.add_child(ChildView::new(&self.inline_skill_selector_view).finish());
+                } else if is_dev_container_config_selector && !should_render_below {
+                    column.add_child(
+                        ChildView::new(&self.inline_dev_container_config_selector_view).finish(),
+                    );
                 } else if is_inline_history_menu && !should_render_below {
                     column.add_child(ChildView::new(&self.inline_history_menu_view).finish());
                 } else if is_repos_menu && !should_render_below {
@@ -386,6 +404,10 @@ impl Input {
                     && should_render_below
                 {
                     column.add_child(ChildView::new(&self.inline_skill_selector_view).finish());
+                } else if is_dev_container_config_selector && should_render_below {
+                    column.add_child(
+                        ChildView::new(&self.inline_dev_container_config_selector_view).finish(),
+                    );
                 } else if is_inline_history_menu && should_render_below {
                     column.add_child(ChildView::new(&self.inline_history_menu_view).finish());
                 } else if is_repos_menu && should_render_below {

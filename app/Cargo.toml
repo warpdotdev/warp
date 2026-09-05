@@ -789,6 +789,7 @@ list_skills = []
 # include dependencies that should only exist in such environments.
 local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
+local_dev_container = []
 local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to

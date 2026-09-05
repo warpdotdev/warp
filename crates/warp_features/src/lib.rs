@@ -475,6 +475,11 @@ pub enum FeatureFlag {
     /// Enables the local docker sandbox entrypoints in the client.
     LocalDockerSandbox,
 
+    /// Enables the /devcontainer slash command entrypoint (prototype), which
+    /// brings up a `.devcontainer/devcontainer.json`-defined container via
+    /// the `@devcontainers/cli` and opens a session inside it.
+    LocalDevContainer,
+
     /// Enables the /compact slash command.
     SummarizationConversationCommand,
 
@@ -1055,6 +1060,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RememberFastForwardState,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
+    FeatureFlag::LocalDevContainer,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
