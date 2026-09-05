@@ -665,13 +665,12 @@ impl DriveIndex {
             .map(|space| DriveIndexSection::Space(*space))
             .collect::<Vec<_>>();
 
-        if !user_workspaces.as_ref(ctx).has_teams() {
-            let teamless_sections = Self::teamless_drive_sections(
-                user_workspaces.as_ref(ctx).current_workspace(),
-                user_workspaces.as_ref(ctx).num_joinable_teams(),
-            );
-            sections.splice(0..0, teamless_sections);
-        }
+        let team_cta_sections = Self::team_cta_sections(
+            user_workspaces.as_ref(ctx).has_teams(),
+            user_workspaces.as_ref(ctx).current_workspace(),
+            user_workspaces.as_ref(ctx).num_joinable_teams(),
+        );
+        sections.splice(0..0, team_cta_sections);
 
         // Item UI state is attached by index, not by id, so this is re-initialized whenever there's any type of change
         let item_mouse_states = num_cloud_objects_per_space
@@ -727,17 +726,14 @@ impl DriveIndex {
         }
     }
 
-    /// Determines which teamless CTA sections should appear at the top of the Warp
-    /// Drive sidebar for a user with no team membership in their current workspace.
-    ///
-    /// Native workspaces manage team membership centrally, so the create-team CTA is
-    /// suppressed there; a missing (unresolved) workspace is treated as non-native,
-    /// matching the precedent in `TeamsWidget::page_sections_for`, so the CTA isn't
-    /// hidden while workspace metadata is still loading.
-    fn teamless_drive_sections(
+    fn team_cta_sections(
+        has_teams: bool,
         current_workspace: Option<&Workspace>,
         num_joinable_teams: usize,
     ) -> Vec<DriveIndexSection> {
+        if has_teams {
+            return Vec::new();
+        }
         let is_native_workspace =
             current_workspace.is_some_and(Workspace::is_native_workspaces_enabled);
 
@@ -2160,8 +2156,7 @@ impl DriveIndex {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let button_text = "Create team".to_owned();
-        let create_button = if UserWorkspaces::as_ref(app).total_teammates_in_joinable_teams() == 0
-        {
+        let create_button = if UserWorkspaces::as_ref(app).num_joinable_teams() == 0 {
             appearance
                 .ui_builder()
                 .button(
