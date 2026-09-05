@@ -14,6 +14,22 @@ use super::diff_state::{DiffHunk, DiffLineType};
 pub const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
 
 /**
+ * Upper bound on the raw bytes read from a single-file `git diff` subprocess's
+ * stdout before the subprocess is killed and the capture is abandoned (see
+ * `run_git_command_capped` and APP-5462). This is a backstop above
+ * `MAX_DIFF_SIZE`, not a replacement for it: `get_file_diff` still checks
+ * completed output against `MAX_DIFF_SIZE`. A diff at or under `MAX_DIFF_SIZE`
+ * must still arrive intact, and diff output carries some overhead over the
+ * raw content it represents (headers, hunk markers, escaped paths), so this
+ * budget is a small multiple of `MAX_DIFF_SIZE` rather than an equal cap —
+ * enough margin to never clip a diff that would otherwise render, while still
+ * bounding a single pathological file (e.g. a huge generated/minified or
+ * binary-like text file) to a small, constant amount of memory instead of the
+ * multi-GB growth an unbounded capture allowed.
+ */
+pub const MAX_DIFF_STDOUT_CAPTURE_BYTES: usize = MAX_DIFF_SIZE * 3; // ~12.5MB in decimal
+
+/**
  * Reasonable limit for diff size. Diffs bigger than this _could_ be displayed
  * but it might cause some slowness.
  */
