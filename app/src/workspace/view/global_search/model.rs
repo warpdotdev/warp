@@ -31,6 +31,18 @@ const MAX_BATCH_AGE_MS: u64 = 4000;
 /// to its own server-side cap; both bound the single-frame response size.
 const REMOTE_MAX_MATCH_COUNT: u32 = 5_000;
 
+/// Maximum number of submatches expanded per matched line. A single line
+/// with many occurrences of the pattern (common in minified or generated
+/// files) would otherwise produce O(N) cloned copies of the full line
+/// text, causing GBs of memory growth before the view cap takes effect.
+const MAX_SUBMATCHES_PER_LINE: usize = 8;
+
+/// Model-side cap on the total number of expanded match rows streamed
+/// during a local search. This mirrors the view's MAX_MATCH_COUNT and
+/// lets the local ripgrep task exit early without waiting for the abort
+/// signal to propagate back from the view through the event system.
+const MODEL_MAX_MATCH_COUNT: usize = 20_000;
+
 /// Aggregate state for one logical search across all of its sources
 /// (one local ripgrep run plus one remote request per searched host).
 struct ActiveSearch {
@@ -427,7 +439,7 @@ impl GlobalSearch {
         let mut batch: Vec<GlobalSearchMatch> = Vec::new();
         let mut last_batch_flush_at = Instant::now();
 
-        while let Some(raw_match) = stream.next().await {
+        'outer: while let Some(raw_match) = stream.next().await {
             // Expand each submatch into its own result row (matching
             // the old per-submatch behavior). Each row gets the line
             // text trimmed up to that particular submatch.
@@ -457,6 +469,14 @@ impl GlobalSearch {
                         last_batch_flush_at = Instant::now();
                     }
                 }
+
+                // Stop as soon as we reach the model-side cap so the
+                // background task does not keep processing (and allocating)
+                // after the view has already decided to abort.
+                if total_match_count >= MODEL_MAX_MATCH_COUNT {
+                    log::info!("GlobalSearch: model-side cap ({MODEL_MAX_MATCH_COUNT}) reached; stopping local search");
+                    break 'outer;
+                }
             }
         }
 
@@ -480,6 +500,10 @@ impl GlobalSearch {
     /// Expand a single match (which may contain multiple submatches
     /// on the same line) into one result per submatch. Each result gets the
     /// line text trimmed of leading whitespace up to that submatch.
+    ///
+    /// Submatches are capped at `MAX_SUBMATCHES_PER_LINE` to avoid
+    /// allocating O(N) copies of the (potentially large) line text when a
+    /// search pattern occurs many times on a single line.
     fn expand_submatches(m: GlobalSearchMatch) -> Vec<GlobalSearchMatch> {
         if m.submatches.len() <= 1 {
             let submatch = m.submatches.into_iter().next();
@@ -495,6 +519,7 @@ impl GlobalSearch {
 
         m.submatches
             .into_iter()
+            .take(MAX_SUBMATCHES_PER_LINE)
             .map(|sub| {
                 let column_num = Self::column_from_submatch(&m.line_text, Some(&sub));
                 Self::trim_leading_whitespace_for_submatch(
