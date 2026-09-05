@@ -149,6 +149,7 @@ const HOVER_PREVIEW_Y_OFFSET: f32 = 0.;
 const CREATE_TEAM_ICON_WIDTH: f32 = 16.;
 const CREATE_TEAM_ICON_HEIGHT: f32 = 16.;
 const CREATE_TEAM_TEXT: &str = "Share commands & knowledge with your teammates.";
+const JOIN_OPEN_TEAM_TEXT: &str = "Join an open team in your workspace.";
 
 const LOADING_ICON_WIDTH: f32 = 16.;
 const LOADING_ICON_HEIGHT: f32 = 16.;
@@ -745,6 +746,18 @@ impl DriveIndex {
             sections.push(DriveIndexSection::CreateATeam);
         }
         sections
+    }
+
+    fn join_team_header_text(total_teammates: i64) -> String {
+        if total_teammates == 0 {
+            JOIN_OPEN_TEAM_TEXT.to_owned()
+        } else {
+            format!("Collaborate with {total_teammates} of your teammates already on Warp.")
+        }
+    }
+
+    fn should_show_join_separator(&self) -> bool {
+        self.sections.contains(&DriveIndexSection::CreateATeam)
     }
 
     pub fn has_initialized_sections(&self) -> impl Future<Output = ()> + use<> {
@@ -1750,11 +1763,10 @@ impl DriveIndex {
             }
             (DriveIndexVariant::MainIndex, DriveIndexSection::JoinTeam) => {
                 if self.is_online(app) {
-                    let join_teams_text = format!(
-                        "Collaborate with {} of your teammates already on Warp.",
+                    let join_teams_text = Self::join_team_header_text(
                         UserWorkspaces::handle(app)
                             .as_ref(app)
-                            .total_teammates_in_joinable_teams()
+                            .total_teammates_in_joinable_teams(),
                     );
                     Some(self.render_team_section_header(join_teams_text, appearance))
                 } else {
@@ -2388,10 +2400,8 @@ impl DriveIndex {
                     }
                     DriveIndexSection::JoinTeam => {
                         if self.is_online(app) {
-                            let show_or_separator =
-                                self.sections.contains(&DriveIndexSection::CreateATeam);
                             rendered_space.push(self.render_join_discoverable_team_section(
-                                show_or_separator,
+                                self.should_show_join_separator(),
                                 appearance,
                                 app,
                             ));
