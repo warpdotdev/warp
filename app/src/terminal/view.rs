@@ -20695,7 +20695,11 @@ impl TerminalView {
 
     fn focus_input_and_clear_selections(&mut self, ctx: &mut ViewContext<Self>) {
         self.clear_selected_text(ctx);
-        self.focus_input_box(ctx);
+        self.clear_selected_blocks_for_input_focus(ctx);
+        self.redetermine_global_focus_with_policy(
+            SelectionFocusPolicy::HoldsFocusOnlyWhileSelecting,
+            ctx,
+        );
         ctx.notify();
     }
 
@@ -20719,8 +20723,16 @@ impl TerminalView {
     }
 
     fn focus_input_box(&mut self, ctx: &mut ViewContext<Self>) {
-        // Only clear selected blocks and text if we're not in AI mode since in AI mode we don't want to clear
-        // the selected blocks or text (context) when we focus the input.
+        self.clear_selected_blocks_for_input_focus(ctx);
+
+        self.update_find_selection(ctx);
+        ctx.focus(&self.input);
+        ctx.notify();
+    }
+
+    fn clear_selected_blocks_for_input_focus(&mut self, ctx: &mut ViewContext<Self>) {
+        // Only clear selected blocks if we're not in AI mode since in AI mode we don't want to clear
+        // the selected blocks (context) when we focus the input.
         //
         // When `FeatureFlag::AgentView` is enabled, blocks are attachable as AI context in terminal
         // mode. Selections are preserved so they can be attached to the query when entering the
@@ -20730,10 +20742,6 @@ impl TerminalView {
         {
             self.clear_selected_blocks(ctx);
         }
-
-        self.update_find_selection(ctx);
-        ctx.focus(&self.input);
-        ctx.notify();
     }
 
     fn focus_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
