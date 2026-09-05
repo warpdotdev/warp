@@ -575,7 +575,6 @@ default = [
     "code_launch_modal",
     "allow_ignoring_input_suggestions",
     "mcp_oauth",
-    "expand_edit_to_pane",
     "fallback_model_load_output_messaging",
     "api_key_management",
     "summarization_cancellation_confirmation",
@@ -911,7 +910,6 @@ command_palette_file_search = []
 ai_context_menu_commands = []
 preview_channel = []
 ai_context_menu_code = []
-expand_edit_to_pane = []
 fallback_model_load_output_messaging = []
 warping_model_name = []
 profiles_design_revamp = []

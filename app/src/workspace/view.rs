@@ -8958,7 +8958,7 @@ impl Workspace {
         }
     }
 
-    /// Open a code diff view by temporarily replacing the current pane or in a new tab.
+    /// Open a code diff view by temporarily replacing the current pane.
     fn open_code_diff(&mut self, view: ViewHandle<CodeDiffView>, ctx: &mut ViewContext<Self>) {
         let focused_pane_id = self
             .active_tab_pane_group()
@@ -8968,23 +8968,15 @@ impl Workspace {
             view.set_original_pane_id(Some(focused_pane_id));
         });
 
-        // Check if the ExpandEditToPane feature flag is enabled
-        if FeatureFlag::ExpandEditToPane.is_enabled() {
-            // Try to temporarily replace the current pane with the diff view
-            let new_pane = CodeDiffPane::from_view(view.clone(), ctx);
-            self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
-                if !pane_group.replace_pane(focused_pane_id, new_pane, true, ctx) {
-                    // If replacement failed, remove the pane we just added and fall back
-                    //pane_group.close_pane(new_pane_id, ctx);
-                    log::warn!("Failed to temporarily replace pane, falling back to new tab");
-                }
-            });
-        } else {
-            // Feature flag disabled: use the original behavior of opening in a new tab
-            let new_pane = CodeDiffPane::from_view(view, ctx);
-            let (new_idx, group_id) = self.new_tab_index_and_group(ctx);
-            self.add_tab_from_existing_pane(Box::new(new_pane), new_idx, group_id, ctx);
-        }
+        // Try to temporarily replace the current pane with the diff view
+        let new_pane = CodeDiffPane::from_view(view, ctx);
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            if !pane_group.replace_pane(focused_pane_id, new_pane, true, ctx) {
+                // If replacement failed, remove the pane we just added and fall back
+                //pane_group.close_pane(new_pane_id, ctx);
+                log::warn!("Failed to temporarily replace pane, falling back to new tab");
+            }
+        });
     }
 
     /// Open the AI Fact Collection pane in a split pane (default direction is left).
