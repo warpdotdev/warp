@@ -1456,10 +1456,11 @@ impl Session {
                 Ok(result) => return Ok(result),
                 Err(e) => e,
             };
-        // Log the detailed error locally as a breadcrumb only; the failure is reported once at the
-        // sink via the registered `ReadHistoryContentsError`, whose static message keeps Sentry
-        // grouping stable and omits the (potentially sensitive/lengthy) PowerShell stderr.
-        log::error!("{powershell_error:?}");
+        // Log the detailed error as a breadcrumb; Sentry attaches it to whichever error event
+        // fires next (the report below, or the sink's report of the registered
+        // `ReadHistoryContentsError`). This keeps the (potentially lengthy) PowerShell stderr out
+        // of the events' static grouping messages while still collecting it alongside them.
+        log::error!("Failed to read history using PowerShell commands: {powershell_error:?}");
 
         // If Kaspersky is running, early return since we can't use [`async_fs`] to read the history
         // file.
@@ -1468,12 +1469,21 @@ impl Session {
         }
 
         // Otherwise, fall back to using [`async_fs`] to read the history file.
-        async_fs::read(history_file).await.map_err(|e| {
-            ReadHistoryContentsError::PowerShellAndAsyncFsError {
+        match async_fs::read(history_file).await {
+            Ok(contents) => {
+                // The fallback succeeded, so this is where the PowerShell error stops propagating:
+                // report it so we have some data on whether this method of running PowerShell
+                // commands is reliable. The static message keeps Sentry grouping stable; the
+                // verbose error rides along as the breadcrumb logged above. If this turns out to
+                // be noisy, we can remove this report.
+                report_error!("Failed to read history using PowerShell commands");
+                Ok(contents)
+            }
+            Err(e) => Err(ReadHistoryContentsError::PowerShellAndAsyncFsError {
                 powershell_error,
                 async_fs_error: e,
-            }
-        })
+            }),
+        }
     }
 
     #[cfg(windows)]
