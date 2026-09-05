@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use rayon::ThreadPoolBuilder;
 use string_offset::CharOffset;
 use warp_editor::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use warp_editor::content::edit::EditDelta;
@@ -12,18 +13,28 @@ use warp_editor::render::model::{
     BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle, InlineCodeStyle, ParagraphStyles,
     RenderLayoutOptions, RichTextStyles, TableStyle,
 };
+#[cfg(target_os = "macos")]
+use warpui::platform::mac::FontDB as MacFontDB;
 use warpui_core::App;
 use warpui_core::color::ColorU;
 use warpui_core::elements::{Border, Fill};
+#[cfg(target_os = "macos")]
+use warpui_core::fonts::Cache as FontCache;
 use warpui_core::fonts::{FamilyId, Weight};
 use warpui_core::text_layout::LayoutCache;
 use warpui_core::units::IntoPixels;
-#[cfg(target_os = "macos")]
-use {warpui::platform::mac::FontDB as MacFontDB, warpui_core::fonts::Cache as FontCache};
 
 const BLOCK_COUNT: usize = 4_096;
-const BLOCK_TEXT: &str =
-    "fn layout_parallel_editor_block(value: usize) -> usize { value.saturating_add(1) }\n";
+const RAYON_THREAD_COUNT: usize = 6;
+const SHAPING_TEXT: &str = concat!(
+    "office affinity efficient waffle: ffi ffl fi fl; ",
+    "English left-to-right text surrounds العربية: السَّلَامُ عَلَيْكُمْ ورحمة الله, ",
+    "then עברית: שלום עולם and mixed account-42 مرحبا status=ready; ",
+    "combining marks: café naïve coöperate Ångström; ",
+    "Devanagari: नमस्ते दुनिया; Thai: สวัสดีชาวโลก; ",
+    "emoji and joiners: 👩‍💻 👨‍👩‍👧‍👦; "
+);
+
 fn benchmark_block(text: String) -> StyledBufferBlock {
     let content_length = text.chars().count();
     StyledBufferBlock::Text(StyledTextBlock {
@@ -122,9 +133,23 @@ fn benchmark_delta(texts: impl IntoIterator<Item = String>) -> (EditDelta, usize
     )
 }
 
+fn layout_delta(
+    delta: &EditDelta,
+    text_layout: &TextLayout<'_>,
+    layout_options: &RenderLayoutOptions,
+    app: &warpui_core::AppContext,
+) {
+    black_box(delta.layout_delta(text_layout, None, layout_options, None, app));
+}
+
 fn text_layout_benchmarks(criterion: &mut Criterion) {
-    let (test_delta, test_chars) =
-        benchmark_delta(std::iter::repeat_n(BLOCK_TEXT.to_owned(), BLOCK_COUNT));
+    ThreadPoolBuilder::new()
+        .num_threads(RAYON_THREAD_COUNT)
+        .build_global()
+        .expect("benchmark should initialize Rayon before first use");
+    let (test_delta, test_chars) = benchmark_delta(
+        (0..BLOCK_COUNT).map(|index| format!("{SHAPING_TEXT} test-backend-block-{index:04}\n")),
+    );
     let test_styles = benchmark_styles(FamilyId(0));
     let layout_options = RenderLayoutOptions::default();
     #[cfg(target_os = "macos")]
@@ -133,21 +158,38 @@ fn text_layout_benchmarks(criterion: &mut Criterion) {
         let font_family = font_cache
             .load_system_font("Menlo")
             .expect("Menlo should be available on macOS");
-        let (delta, chars) = benchmark_delta((0..BLOCK_COUNT).map(|index| {
-            format!(
-                "fn layout_parallel_editor_block_{index}(value: usize) -> usize {{ value.saturating_add(1) }}\n"
-            )
-        }));
+        let (delta, chars) = benchmark_delta(
+            (0..BLOCK_COUNT).map(|index| format!("{SHAPING_TEXT} core-text-block-{index:04}\n")),
+        );
         (font_cache, benchmark_styles(font_family), delta, chars)
     };
     let mut criterion = std::mem::take(criterion);
 
     App::test((), move |app| async move {
         app.read(|ctx| {
+            let test_layout_cache = LayoutCache::new();
+            let test_text_layout = TextLayout::new(
+                &test_layout_cache,
+                ctx.font_cache().text_layout_system(),
+                &test_styles,
+                f32::MAX,
+            );
+            layout_delta(&test_delta, &test_text_layout, &layout_options, ctx);
+            #[cfg(target_os = "macos")]
+            {
+                let core_text_layout_cache = LayoutCache::new();
+                let core_text_layout = TextLayout::new(
+                    &core_text_layout_cache,
+                    core_text_font_cache.text_layout_system(),
+                    &core_text_styles,
+                    f32::MAX,
+                );
+                layout_delta(&core_text_delta, &core_text_layout, &layout_options, ctx);
+            }
             {
                 let mut group = criterion.benchmark_group("editor_text_layout/test_backend");
                 group.throughput(Throughput::Elements(test_chars as u64));
-                group.bench_function("layout_delta_4096_identical_blocks", |bench| {
+                group.bench_function("layout_delta_4096_shaping_blocks_6_threads", |bench| {
                     bench.iter(|| {
                         let layout_cache = LayoutCache::new();
                         let text_layout = TextLayout::new(
@@ -156,13 +198,7 @@ fn text_layout_benchmarks(criterion: &mut Criterion) {
                             &test_styles,
                             f32::MAX,
                         );
-                        black_box(test_delta.layout_delta(
-                            &text_layout,
-                            None,
-                            &layout_options,
-                            None,
-                            ctx,
-                        ))
+                        layout_delta(&test_delta, &text_layout, &layout_options, ctx)
                     })
                 });
                 group.finish();
@@ -171,7 +207,7 @@ fn text_layout_benchmarks(criterion: &mut Criterion) {
             {
                 let mut group = criterion.benchmark_group("editor_text_layout/core_text");
                 group.throughput(Throughput::Elements(core_text_chars as u64));
-                group.bench_function("layout_delta_4096_unique_blocks", |bench| {
+                group.bench_function("layout_delta_4096_shaping_blocks_6_threads", |bench| {
                     bench.iter(|| {
                         let layout_cache = LayoutCache::new();
                         let text_layout = TextLayout::new(
@@ -180,13 +216,7 @@ fn text_layout_benchmarks(criterion: &mut Criterion) {
                             &core_text_styles,
                             f32::MAX,
                         );
-                        black_box(core_text_delta.layout_delta(
-                            &text_layout,
-                            None,
-                            &layout_options,
-                            None,
-                            ctx,
-                        ))
+                        layout_delta(&core_text_delta, &text_layout, &layout_options, ctx)
                     })
                 });
                 group.finish();
