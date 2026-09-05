@@ -121,59 +121,74 @@ fn benchmark_delta(texts: impl IntoIterator<Item = String>) -> (EditDelta, usize
     )
 }
 
-fn test_backend_text_layout_benchmark(criterion: &mut Criterion) {
-    let (delta, chars) = benchmark_delta(std::iter::repeat_n(BLOCK_TEXT.to_owned(), BLOCK_COUNT));
-    let styles = benchmark_styles(FamilyId(0));
+fn text_layout_benchmarks(criterion: &mut Criterion) {
+    let (test_delta, test_chars) =
+        benchmark_delta(std::iter::repeat_n(BLOCK_TEXT.to_owned(), BLOCK_COUNT));
+    let test_styles = benchmark_styles(FamilyId(0));
     let layout_options = RenderLayoutOptions::default();
+    #[cfg(target_os = "macos")]
+    let (core_text_font_cache, core_text_styles, core_text_delta, core_text_chars) = {
+        let mut font_cache = FontCache::new(Box::new(MacFontDB::new()));
+        let font_family = font_cache
+            .load_system_font("Menlo")
+            .expect("Menlo should be available on macOS");
+        let (delta, chars) = benchmark_delta((0..BLOCK_COUNT).map(|index| {
+            format!(
+                "fn layout_parallel_editor_block_{index}(value: usize) -> usize {{ value.saturating_add(1) }}\n"
+            )
+        }));
+        (font_cache, benchmark_styles(font_family), delta, chars)
+    };
     let mut criterion = std::mem::take(criterion);
 
     App::test((), move |app| async move {
         app.read(|ctx| {
-            let mut group = criterion.benchmark_group("editor_text_layout/test_backend");
-            group.throughput(Throughput::Elements(chars as u64));
-            group.bench_function("layout_delta_4096_identical_blocks", |bench| {
-                bench.iter(|| {
-                    let text_layout =
-                        TextLayout::new(ctx.font_cache().text_layout_system(), &styles, f32::MAX);
-                    black_box(delta.layout_delta(&text_layout, None, &layout_options, None, ctx))
-                })
-            });
-            group.finish();
+            {
+                let mut group = criterion.benchmark_group("editor_text_layout/test_backend");
+                group.throughput(Throughput::Elements(test_chars as u64));
+                group.bench_function("layout_delta_4096_identical_blocks", |bench| {
+                    bench.iter(|| {
+                        let text_layout = TextLayout::new(
+                            ctx.font_cache().text_layout_system(),
+                            &test_styles,
+                            f32::MAX,
+                        );
+                        black_box(test_delta.layout_delta(
+                            &text_layout,
+                            None,
+                            &layout_options,
+                            None,
+                            ctx,
+                        ))
+                    })
+                });
+                group.finish();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let mut group = criterion.benchmark_group("editor_text_layout/core_text");
+                group.throughput(Throughput::Elements(core_text_chars as u64));
+                group.bench_function("layout_delta_4096_unique_blocks", |bench| {
+                    bench.iter(|| {
+                        let text_layout = TextLayout::new(
+                            core_text_font_cache.text_layout_system(),
+                            &core_text_styles,
+                            f32::MAX,
+                        );
+                        black_box(core_text_delta.layout_delta(
+                            &text_layout,
+                            None,
+                            &layout_options,
+                            None,
+                            ctx,
+                        ))
+                    })
+                });
+                group.finish();
+            }
         });
     });
 }
-#[cfg(target_os = "macos")]
-fn core_text_layout_benchmark(criterion: &mut Criterion) {
-    let mut font_cache = FontCache::new(Box::new(MacFontDB::new()));
-    let font_family = font_cache
-        .load_system_font("Menlo")
-        .expect("Menlo should be available on macOS");
-    let (delta, chars) = benchmark_delta((0..BLOCK_COUNT).map(|index| {
-        format!(
-            "fn layout_parallel_editor_block_{index}(value: usize) -> usize {{ value.saturating_add(1) }}\n"
-        )
-    }));
-    let styles = benchmark_styles(font_family);
-    let layout_options = RenderLayoutOptions::default();
-    let mut criterion = std::mem::take(criterion);
-
-    App::test((), move |app| async move {
-        app.read(|ctx| {
-            let mut group = criterion.benchmark_group("editor_text_layout/core_text");
-            group.throughput(Throughput::Elements(chars as u64));
-            group.bench_function("layout_delta_4096_unique_blocks", |bench| {
-                bench.iter(|| {
-                    let text_layout =
-                        TextLayout::new(font_cache.text_layout_system(), &styles, f32::MAX);
-                    black_box(delta.layout_delta(&text_layout, None, &layout_options, None, ctx))
-                })
-            });
-            group.finish();
-        });
-    });
-}
-
-#[cfg(target_os = "macos")]
 
 criterion_group! {
     name = benches;
@@ -181,15 +196,6 @@ criterion_group! {
         .sample_size(20)
         .warm_up_time(Duration::from_secs(2))
         .measurement_time(Duration::from_secs(5));
-    targets = test_backend_text_layout_benchmark, core_text_layout_benchmark
-}
-#[cfg(not(target_os = "macos"))]
-criterion_group! {
-    name = benches;
-    config = Criterion::default()
-        .sample_size(20)
-        .warm_up_time(Duration::from_secs(2))
-        .measurement_time(Duration::from_secs(5));
-    targets = test_backend_text_layout_benchmark
+    targets = text_layout_benchmarks
 }
 criterion_main!(benches);
