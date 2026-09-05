@@ -198,6 +198,7 @@ pub(crate) fn write_envelope(
 pub(crate) fn rehydrate_codex_transcript(
     envelope: &mut CodexTranscriptEnvelope,
     local_cwd: &Path,
+    sessions_root: &Path,
 ) -> Result<CodexLocalContinuation> {
     envelope.cwd = local_cwd.to_path_buf();
     if let Some(Value::Object(entry)) = envelope.entries.first_mut()
@@ -211,9 +212,8 @@ pub(crate) fn rehydrate_codex_transcript(
     }
 
     let session_id = envelope.session_id;
-    let sessions_root = codex_sessions_root().context("Failed to resolve codex sessions root")?;
     let transcript_path =
-        write_envelope(envelope, &sessions_root).context("Failed to rehydrate codex transcript")?;
+        write_envelope(envelope, sessions_root).context("Failed to rehydrate codex transcript")?;
 
     Ok(CodexLocalContinuation {
         command: format!("codex resume {session_id}"),

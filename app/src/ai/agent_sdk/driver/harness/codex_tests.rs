@@ -25,160 +25,160 @@ fn prepare_codex_auth_writes_fresh_file_with_api_key_mode() {
 }
 
 fn factory_mcp_server(token: &str) -> JSONMCPServer {
+    factory_mcp_server_at("https://app.warp.dev/api/v1/mcp/factory", token)
+}
+
+fn factory_mcp_server_at(url: &str, token: &str) -> JSONMCPServer {
     JSONMCPServer {
         transport_type: JSONTransportType::SSEServer {
-            url: "https://app.warp.dev/api/v1/mcp/factory".to_string(),
+            url: url.to_string(),
             headers: HashMap::from([("Authorization".to_string(), format!("Bearer {token}"))]),
         },
     }
 }
 
 #[test]
-fn factory_mcp_config_guard_restores_preexisting_entry() {
+#[serial_test::serial]
+fn codex_runs_isolate_builtin_and_explicit_factory_mcp_config() {
     let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("config.toml");
-    let working_dir = tmp.path().join("workspace");
-    fs::create_dir_all(&working_dir).unwrap();
-    fs::write(
-        &config_path,
-        r#"
+    let persistent_home = tmp.path().join("persistent-codex-home");
+    let builtin_working_dir = tmp.path().join("builtin-workspace");
+    let explicit_working_dir = tmp.path().join("explicit-workspace");
+    let persistent_config = r#"
+[mcp_servers.warp-factory]
+url = "https://persistent.example.com/factory"
+
 [mcp_servers.user-server]
 command = "user-command"
-
-[mcp_servers.warp-factory]
-url = "https://user.example.com/factory"
-http_headers = { Authorization = "Bearer user-token" }
-"#,
+"#;
+    let persistent_auth = r#"{"auth_mode":"Chatgpt","tokens":{"access_token":"user-token"}}"#;
+    fs::create_dir_all(persistent_home.join("plugins/example-plugin")).unwrap();
+    fs::create_dir_all(&builtin_working_dir).unwrap();
+    fs::create_dir_all(&explicit_working_dir).unwrap();
+    fs::write(persistent_home.join("config.toml"), persistent_config).unwrap();
+    fs::write(persistent_home.join("auth.json"), persistent_auth).unwrap();
+    fs::write(
+        persistent_home.join("plugins/example-plugin/plugin.json"),
+        "{}",
     )
     .unwrap();
-    let guard = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
 
-    prepare_codex_config_toml(
-        &config_path,
-        &working_dir,
-        &HashMap::from([(
-            FACTORY_MCP_SERVER_NAME.to_string(),
-            factory_mcp_server("parent-token"),
-        )]),
-        None,
-        None,
-    )
-    .unwrap();
-    guard.cleanup().unwrap();
+    let previous_codex_home = std::env::var_os(CODEX_HOME_ENV);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var(CODEX_HOME_ENV, &persistent_home) };
 
-    let cfg = read_codex_config(&config_path);
+    let (builtin_home, explicit_home) = std::thread::scope(|scope| {
+        let builtin = scope.spawn(|| {
+            prepare_codex_environment_config(
+                &builtin_working_dir,
+                &builtin_working_dir,
+                None,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::from([(
+                    FACTORY_MCP_SERVER_NAME.to_string(),
+                    factory_mcp_server("parent-token"),
+                )]),
+                None,
+            )
+            .unwrap()
+        });
+        let explicit = scope.spawn(|| {
+            prepare_codex_environment_config(
+                &explicit_working_dir,
+                &explicit_working_dir,
+                None,
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashMap::from([(
+                    FACTORY_MCP_SERVER_NAME.to_string(),
+                    factory_mcp_server_at("https://user.example.com/factory", "explicit-token"),
+                )]),
+                None,
+            )
+            .unwrap()
+        });
+        (builtin.join().unwrap(), explicit.join().unwrap())
+    });
+
+    match previous_codex_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(value) => unsafe { std::env::set_var(CODEX_HOME_ENV, value) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var(CODEX_HOME_ENV) },
+    }
+
+    let builtin_path = builtin_home.path().to_path_buf();
+    let explicit_path = explicit_home.path().to_path_buf();
+    assert_ne!(builtin_path, explicit_path);
     assert_eq!(
-        cfg["mcp_servers"][FACTORY_MCP_SERVER_NAME]["url"].as_str(),
+        read_codex_config(&builtin_path.join("config.toml"))["mcp_servers"]
+            [FACTORY_MCP_SERVER_NAME]["url"]
+            .as_str(),
+        Some("https://app.warp.dev/api/v1/mcp/factory")
+    );
+    assert_eq!(
+        read_codex_config(&builtin_path.join("config.toml"))["mcp_servers"]
+            [FACTORY_MCP_SERVER_NAME]["http_headers"]["Authorization"]
+            .as_str(),
+        Some("Bearer parent-token")
+    );
+    assert_eq!(
+        read_codex_config(&explicit_path.join("config.toml"))["mcp_servers"]
+            [FACTORY_MCP_SERVER_NAME]["url"]
+            .as_str(),
         Some("https://user.example.com/factory")
     );
     assert_eq!(
-        cfg["mcp_servers"][FACTORY_MCP_SERVER_NAME]["http_headers"]["Authorization"].as_str(),
-        Some("Bearer user-token")
+        read_codex_config(&explicit_path.join("config.toml"))["mcp_servers"]
+            [FACTORY_MCP_SERVER_NAME]["http_headers"]["Authorization"]
+            .as_str(),
+        Some("Bearer explicit-token")
     );
     assert_eq!(
-        cfg["mcp_servers"]["user-server"]["command"].as_str(),
-        Some("user-command")
+        fs::read_to_string(persistent_home.join("config.toml")).unwrap(),
+        persistent_config
     );
-}
+    assert_eq!(
+        fs::read_to_string(persistent_home.join("auth.json")).unwrap(),
+        persistent_auth
+    );
+    assert!(
+        builtin_path
+            .join("plugins/example-plugin/plugin.json")
+            .exists()
+    );
+    assert!(
+        explicit_path
+            .join("plugins/example-plugin/plugin.json")
+            .exists()
+    );
 
-#[test]
-fn dropping_factory_mcp_config_guard_prevents_stale_credential_reuse() {
-    let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("config.toml");
-    let working_dir = tmp.path().join("workspace");
-    fs::create_dir_all(&working_dir).unwrap();
-    fs::write(
-        &config_path,
-        "[mcp_servers.user-server]\ncommand = \"user-command\"\n",
-    )
-    .unwrap();
-
+    #[cfg(unix)]
     {
-        let _guard = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
-        prepare_codex_config_toml(
-            &config_path,
-            &working_dir,
-            &HashMap::from([(
-                FACTORY_MCP_SERVER_NAME.to_string(),
-                factory_mcp_server("parent-token"),
-            )]),
-            None,
-            None,
-        )
-        .unwrap();
+        use std::os::unix::fs::PermissionsExt as _;
+
         assert_eq!(
-            read_codex_config(&config_path)["mcp_servers"][FACTORY_MCP_SERVER_NAME]["http_headers"]
-                ["Authorization"]
-                .as_str(),
-            Some("Bearer parent-token")
+            fs::metadata(&builtin_path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(builtin_path.join("config.toml"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
         );
     }
 
-    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
-    let cfg = read_codex_config(&config_path);
-    assert!(cfg["mcp_servers"].get(FACTORY_MCP_SERVER_NAME).is_none());
-    assert_eq!(
-        cfg["mcp_servers"]["user-server"]["command"].as_str(),
-        Some("user-command")
-    );
+    drop(builtin_home);
+    assert!(!builtin_path.exists());
+    assert!(explicit_path.exists());
+    drop(explicit_home);
+    assert!(!explicit_path.exists());
 }
 
-#[test]
-fn overlapping_factory_mcp_config_guards_restore_original_entry_after_last_cleanup() {
-    let tmp = TempDir::new().unwrap();
-    let config_path = tmp.path().join("config.toml");
-    let working_dir = tmp.path().join("workspace");
-    fs::create_dir_all(&working_dir).unwrap();
-    fs::write(
-        &config_path,
-        "[mcp_servers.warp-factory]\nurl = \"https://user.example.com/factory\"\n",
-    )
-    .unwrap();
-
-    let first = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
-    first
-        .prepare_config(|| {
-            prepare_codex_config_toml(
-                &config_path,
-                &working_dir,
-                &HashMap::from([(
-                    FACTORY_MCP_SERVER_NAME.to_string(),
-                    factory_mcp_server("first-parent-token"),
-                )]),
-                None,
-                None,
-            )
-        })
-        .unwrap();
-    let second = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
-    second
-        .prepare_config(|| {
-            prepare_codex_config_toml(
-                &config_path,
-                &working_dir,
-                &HashMap::from([(
-                    FACTORY_MCP_SERVER_NAME.to_string(),
-                    factory_mcp_server("second-parent-token"),
-                )]),
-                None,
-                None,
-            )
-        })
-        .unwrap();
-
-    first.cleanup().unwrap();
-    assert_eq!(
-        read_codex_config(&config_path)["mcp_servers"][FACTORY_MCP_SERVER_NAME]["http_headers"]
-            ["Authorization"]
-            .as_str(),
-        Some("Bearer second-parent-token")
-    );
-    second.cleanup().unwrap();
-    assert_eq!(
-        read_codex_config(&config_path)["mcp_servers"][FACTORY_MCP_SERVER_NAME]["url"].as_str(),
-        Some("https://user.example.com/factory")
-    );
-}
 #[cfg(unix)]
 #[test]
 fn factory_mcp_config_is_written_with_0600_permissions() {
@@ -366,7 +366,13 @@ fn prepare_codex_environment_config_honors_codex_home() {
     let tmp = TempDir::new().unwrap();
     let codex_home = tmp.path().join("codex-home");
     let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&codex_home).unwrap();
     fs::create_dir_all(&working_dir).unwrap();
+    fs::write(
+        codex_home.join(CODEX_CONFIG_TOML_FILE_NAME),
+        "[mcp_servers.persistent]\ncommand = \"persistent-command\"\n",
+    )
+    .unwrap();
     let prev_codex_home = std::env::var(CODEX_HOME_ENV).ok();
     let prev_openai_api_key = std::env::var(OPENAI_API_KEY_ENV).ok();
     // TODO: Audit that the environment access only happens in single-threaded code.
@@ -379,18 +385,16 @@ fn prepare_codex_environment_config_honors_codex_home() {
     )]);
 
     let model_config = harness_model_config("gpt-5.5", None);
-    let result = prepare_codex_environment_config(
+    let run_home = prepare_codex_environment_config(
         &working_dir,
         &working_dir,
         Some("system prompt"),
         &resolved,
         &HashMap::new(),
-        CodexMcpConfig {
-            servers: &HashMap::new(),
-            builtin_factory_attached: false,
-        },
+        &HashMap::new(),
         Some(&model_config),
-    );
+    )
+    .unwrap();
 
     match prev_codex_home {
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -404,19 +408,26 @@ fn prepare_codex_environment_config_honors_codex_home() {
         // TODO: Audit that the environment access only happens in single-threaded code.
         None => unsafe { std::env::remove_var(OPENAI_API_KEY_ENV) },
     }
-
-    result.unwrap();
+    let auth: Value =
+        serde_json::from_slice(&fs::read(run_home.path().join(CODEX_AUTH_FILE_NAME)).unwrap())
+            .unwrap();
     assert_eq!(
-        fs::read_to_string(codex_home.join(CODEX_AGENTS_OVERRIDE_FILE_NAME)).unwrap(),
+        fs::read_to_string(run_home.path().join(CODEX_AGENTS_OVERRIDE_FILE_NAME)).unwrap(),
         "system prompt"
     );
-    let auth: Value =
-        serde_json::from_slice(&fs::read(codex_home.join(CODEX_AUTH_FILE_NAME)).unwrap()).unwrap();
     assert_eq!(auth["OPENAI_API_KEY"], "sk-from-secret");
-    let cfg = read_codex_config(&codex_home.join(CODEX_CONFIG_TOML_FILE_NAME));
+    let cfg = read_codex_config(&run_home.path().join(CODEX_CONFIG_TOML_FILE_NAME));
     assert_eq!(cfg["model"].as_str(), Some("gpt-5.5"));
+    assert_eq!(
+        cfg["mcp_servers"]["persistent"]["command"].as_str(),
+        Some("persistent-command")
+    );
     assert!(!cfg.contains_key("openai_base_url"));
-    assert!(!tmp.path().join(CODEX_CONFIG_DIR).exists());
+    assert!(!codex_home.join(CODEX_AUTH_FILE_NAME).exists());
+    assert_eq!(
+        fs::read_to_string(codex_home.join(CODEX_CONFIG_TOML_FILE_NAME)).unwrap(),
+        "[mcp_servers.persistent]\ncommand = \"persistent-command\"\n"
+    );
 }
 
 fn read_codex_config(path: &std::path::Path) -> toml::Table {
@@ -863,7 +874,16 @@ fn find_child_git_repos_returns_empty_when_dir_missing() {
 #[test]
 fn codex_command_with_session_id_invokes_resume_subcommand() {
     let uuid = Uuid::new_v4();
-    let cmd = codex_command("codex", Some(&uuid), "/tmp/prompt.txt");
+    let cmd = codex_command(
+        "codex",
+        Some(&uuid),
+        "/tmp/prompt.txt",
+        std::path::Path::new("/tmp/run-codex-home"),
+    );
+    assert!(
+        cmd.starts_with("CODEX_HOME='/tmp/run-codex-home' "),
+        "command should set the isolated Codex home: {cmd}"
+    );
     assert!(
         cmd.contains(&format!(
             "resume --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust {uuid}"
@@ -878,7 +898,16 @@ fn codex_command_with_session_id_invokes_resume_subcommand() {
 
 #[test]
 fn codex_command_without_session_id_bypasses_hook_trust() {
-    let cmd = codex_command("codex", None, "/tmp/prompt.txt");
+    let cmd = codex_command(
+        "codex",
+        None,
+        "/tmp/prompt.txt",
+        std::path::Path::new("/tmp/run-codex-home"),
+    );
+    assert!(
+        cmd.starts_with("CODEX_HOME='/tmp/run-codex-home' "),
+        "command should set the isolated Codex home: {cmd}"
+    );
     assert!(
         cmd.contains("--dangerously-bypass-approvals-and-sandbox"),
         "command should bypass approvals and sandbox: {cmd}"

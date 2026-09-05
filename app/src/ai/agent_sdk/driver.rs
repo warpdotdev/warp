@@ -3060,13 +3060,13 @@ impl AgentDriver {
 
         // Resolve MCP specs into harness-native JSON format.
         let mcp_specs = mcp_specs.to_vec();
-        let resolved_mcp =
+        let resolved_mcp_servers =
             Self::resolve_mcp_specs_to_json(&mcp_specs, secrets, managed_mcp_client, foreground)
                 .await?;
-        if !resolved_mcp.servers.is_empty() {
+        if !resolved_mcp_servers.is_empty() {
             log::info!(
                 "Resolved {} MCP server(s) for third-party harness",
-                resolved_mcp.servers.len()
+                resolved_mcp_servers.len()
             );
         }
 
@@ -3093,8 +3093,7 @@ impl AgentDriver {
                 resume,
                 &resolved_env_vars,
                 &secrets_for_harness,
-                &resolved_mcp.servers,
-                resolved_mcp.builtin_factory_mcp_attached,
+                &resolved_mcp_servers,
                 third_party_harness_model_config.as_ref(),
             )?
             .into();

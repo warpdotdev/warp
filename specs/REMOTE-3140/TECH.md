@@ -27,7 +27,7 @@ Update `AgentDriver::resolve_mcp_specs_to_json` in `mcp_startup.rs`:
 3. Build the taken-name set from the keys of the explicit resolved map. This uses the exact names the harness will receive.
 4. Call `builtin_factory_mcp_for_run(credentials, taken_names)`.
 5. When it returns an installation, pass that installation through `mcp_installations_to_json` and add it to the resolved map.
-6. Return whether the built-in was attached alongside the resolved map so harness setup can distinguish it from an exact-name user configuration.
+6. Return the resolved map. Harness setup treats built-in and explicit servers identically after exact-name precedence has been resolved.
 
 Do not gate this code on `task_id`, sandbox detection, or local/cloud execution mode. Any run that reaches the third-party Warp driver follows the same code. The existing feature, credential, and collision checks decide whether attachment occurs.
 
@@ -36,8 +36,9 @@ Do not gate this code on `task_id`, sandbox detection, or local/cloud execution 
 - Put the bearer only in the ephemeral resolved MCP map and the harness-native runtime configuration that consumes it.
 - Do not add Factory MCP to `AgentConfigSnapshot.MCPServers`, mutate `Task.mcp_specs`, upload it as a managed secret, include it in the prompt, or emit it in logs and setup events.
 - Claude Code writes a temporary `--mcp-config` that is deleted with its runner.
-- Codex writes the server into its existing `config.toml` with owner-only permissions. A run guard captures any preexisting exact-name entry, then restores it—or removes the injected entry when none existed—on every cleanup disposition. The guard also restores on drop if setup or execution exits before normal cleanup. Overlapping runs share the first pre-run value and restore it after the final guard exits, so one run cannot preserve another run's parent credential.
-- Codex cleanup changes only `mcp_servers.warp-factory`; unrelated and explicitly configured servers remain intact. No new credential file is introduced.
+- Every Codex run gets a unique owner-only temporary `CODEX_HOME`. Warp seeds its `config.toml` and `auth.json` from the user's persistent Codex home, exposes the verified persistent plugin directory, and then writes the run's resolved MCP map and auth overrides only into that isolated home.
+- The Codex command receives the isolated path through `CODEX_HOME`, so simultaneous built-in and explicit exact-name runs cannot overwrite each other's configuration. Fresh and resumed transcripts are created in that run home's `sessions` tree and uploaded from there.
+- Codex cleanup removes the complete temporary home on every cleanup disposition. `TempDir` drop is the fallback when setup or execution exits before normal cleanup. The user's persistent `config.toml`, `auth.json`, plugins, and sessions are never mutated by driver setup or cleanup.
 - A missing credential is fail-open for Factory MCP only. It must not fail harness preparation or remove explicit MCP servers.
 
 ### Factory skill and resources
@@ -55,7 +56,7 @@ Update the bootstrap text to define the resource fallback in Product behavior 6.
 ## Supported harness matrix
 - **Oz:** No behavior change. The driver starts the built-in server, `SkillManager` exposes the bundled bootstrap, and Warp's MCP resource reader reads the canonical resource.
 - **Claude Code:** Attach HTTP MCP with `headers` through `--mcp-config`. Publish the bootstrap under `.claude/skills`. Use MCP resources when the installed Claude version exposes them; otherwise use the documented fallback.
-- **Codex:** Attach HTTP MCP with `http_headers` in owner-only `config.toml`, then restore the pre-run exact-name entry when the runner exits. Publish the bootstrap under `.agents/skills`. Use MCP resources when the installed Codex version exposes them; otherwise use the documented fallback.
+- **Codex:** Attach HTTP MCP with `http_headers` in an owner-only, per-run `CODEX_HOME`, then remove the complete temporary home when the runner exits. Publish the bootstrap under `.agents/skills`. Use MCP resources when the installed Codex version exposes them; otherwise use the documented fallback.
 - **Gemini:** Deferred. Its adapter currently ignores `resolved_mcp_servers` and has no equivalent skill publication path in this ticket.
 
 ## Decisions
@@ -87,7 +88,8 @@ Add focused tests under `app/src/ai/agent_sdk/driver`:
 5. Resolution leaves the input `MCPSpec` list unchanged. No snapshot, prompt, UI, or log assertion contains the API key.
 6. Harness setup publishes the bundled bootstrap into the Claude and Codex native roots when the flag is on, omits it when off, is idempotent, and follows existing sandbox and non-sandbox collision behavior.
 7. A bundled-skill test pins the canonical resource URI and the reduced-capability fallback text.
-8. Codex writes credential-bearing `config.toml` with mode `0600` on Unix, removes the injected entry on normal cleanup and drop, restores a preexisting exact-name entry, preserves unrelated entries, and does not leave a stale bearer for a subsequent flag-off or missing-credential run.
+8. Codex gives each run a distinct temporary home with mode `0700` and writes credential-bearing `config.toml` with mode `0600` on Unix. Simultaneous built-in and explicit exact-name runs retain independent MCP values, while the persistent `config.toml` and `auth.json` remain byte-for-byte unchanged and verified plugins remain available.
+9. Codex uses the isolated `sessions` tree for fresh transcript discovery and resume rehydration, removes the temporary home during cleanup, and relies on `TempDir` drop as the fallback.
 
 Run:
 

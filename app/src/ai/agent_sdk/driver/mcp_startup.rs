@@ -110,11 +110,6 @@ struct ResolvedMcpSpecs {
     ephemeral_installations: Vec<TemplatableMCPServerInstallation>,
 }
 
-pub(super) struct ResolvedMcpJson {
-    pub(super) servers: HashMap<String, JSONMCPServer>,
-    pub(super) builtin_factory_mcp_attached: bool,
-}
-
 /// Why an [`AgentDriver::await_model_event`] wait resolved without a value.
 #[derive(Debug)]
 enum ModelEventWaitError {
@@ -188,7 +183,7 @@ impl AgentDriver {
         secrets: Arc<HashMap<String, ManagedSecretValue>>,
         managed_mcp_client: Arc<dyn ManagedMcpClient>,
         foreground: &ModelSpawner<Self>,
-    ) -> Result<ResolvedMcpJson, AgentDriverError> {
+    ) -> Result<HashMap<String, JSONMCPServer>, AgentDriverError> {
         let resolved_specs = Self::resolve_mcp_specs(specs, managed_mcp_client, foreground).await?;
 
         let local_uuids = resolved_specs.local_uuids;
@@ -216,27 +211,23 @@ impl AgentDriver {
                     .flatten()
             })
             .await?;
-        let builtin_factory_mcp_attached =
-            Self::add_builtin_factory_mcp_to_json(&mut resolved, credentials.as_ref())?;
-        Ok(ResolvedMcpJson {
-            servers: resolved,
-            builtin_factory_mcp_attached,
-        })
+        Self::add_builtin_factory_mcp_to_json(&mut resolved, credentials.as_ref())?;
+        Ok(resolved)
     }
 
     fn add_builtin_factory_mcp_to_json(
         resolved: &mut HashMap<String, JSONMCPServer>,
         credentials: Option<&Credentials>,
-    ) -> Result<bool, AgentDriverError> {
+    ) -> Result<(), AgentDriverError> {
         let taken_server_names = resolved.keys().cloned().collect();
         let Some(installation) =
             Self::builtin_factory_mcp_for_run(credentials, &taken_server_names)
         else {
-            return Ok(false);
+            return Ok(());
         };
         let builtin = Self::mcp_installations_to_json(vec![installation], &HashMap::new())?;
         resolved.extend(builtin);
-        Ok(true)
+        Ok(())
     }
 
     fn mcp_installations_to_json(

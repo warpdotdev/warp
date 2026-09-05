@@ -158,17 +158,16 @@ fn resolve_mcp_specs_to_json_attaches_factory_and_preserves_explicit_specs() {
         .await
         .unwrap();
 
-        assert!(resolved.builtin_factory_mcp_attached);
-        assert_eq!(resolved.servers.len(), 2);
+        assert_eq!(resolved.len(), 2);
         assert_eq!(
-            resolved.servers["explicit"].transport_type,
+            resolved["explicit"].transport_type,
             JSONTransportType::SSEServer {
                 url: "https://example.com/mcp".to_string(),
                 headers: HashMap::from([("X-Test".to_string(), "value".to_string())]),
             }
         );
         let JSONTransportType::SSEServer { url, headers } =
-            &resolved.servers[FACTORY_MCP_SERVER_NAME].transport_type
+            &resolved[FACTORY_MCP_SERVER_NAME].transport_type
         else {
             panic!("built-in Factory MCP must use HTTP transport");
         };
@@ -217,9 +216,8 @@ fn resolve_mcp_specs_to_json_skips_factory_when_flag_disabled() {
         .await
         .unwrap();
 
-        assert!(!resolved.builtin_factory_mcp_attached);
         assert_eq!(
-            resolved.servers,
+            resolved,
             HashMap::from([(
                 "explicit".to_string(),
                 explicit_http_server("https://example.com/mcp")
@@ -253,9 +251,8 @@ fn resolve_mcp_specs_to_json_skips_factory_without_credentials() {
         .await
         .unwrap();
 
-        assert!(!resolved.builtin_factory_mcp_attached);
         assert_eq!(
-            resolved.servers,
+            resolved,
             HashMap::from([(
                 "explicit".to_string(),
                 explicit_http_server("https://example.com/mcp")
@@ -290,10 +287,9 @@ fn resolve_mcp_specs_to_json_preserves_exact_name_collision() {
         .await
         .unwrap();
 
-        assert!(!resolved.builtin_factory_mcp_attached);
-        assert_eq!(resolved.servers.len(), 1);
+        assert_eq!(resolved.len(), 1);
         assert_eq!(
-            resolved.servers[FACTORY_MCP_SERVER_NAME].transport_type,
+            resolved[FACTORY_MCP_SERVER_NAME].transport_type,
             explicit_http_server("https://user.example.com/factory").transport_type
         );
     });
