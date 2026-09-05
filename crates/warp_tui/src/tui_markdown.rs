@@ -5,6 +5,8 @@
 //! composable TUI element tree, with an optional hook for stateful code-block
 //! child views.
 
+use std::rc::Rc;
+
 use markdown_parser::{
     CodeBlockText, FormattedImage, FormattedText, FormattedTextFragment, FormattedTextInline,
     FormattedTextLine, Hyperlink,
@@ -12,9 +14,9 @@ use markdown_parser::{
 use unicode_width::UnicodeWidthStr;
 use warpui_core::AppContext;
 use warpui_core::elements::tui::{
-    Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext, TuiPaintContext,
-    TuiPaintSurface, TuiParentElement, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition,
-    TuiSize, TuiStyle, TuiText,
+    Color, Modifier, TuiConstraint, TuiContainer, TuiElement, TuiFlex, TuiLayoutContext,
+    TuiPaintContext, TuiPaintSurface, TuiParentElement, TuiPresentationContext, TuiScreenPoint,
+    TuiScreenPosition, TuiSize, TuiStyle, TuiText,
 };
 use warpui_core::elements::{CrossAxisAlignment, ListNumbering};
 
@@ -195,7 +197,11 @@ fn inline_text(
     base: TuiStyle,
     palette: TuiMarkdownPalette,
 ) -> Box<dyn TuiElement> {
-    TuiText::from_spans(inline_spans(inline, base, palette)).finish()
+    let mut hyperlinks = Vec::new();
+    let spans = inline_spans(inline, base, palette, &mut hyperlinks);
+    TuiText::from_spans(spans)
+        .with_hyperlinks(hyperlinks)
+        .finish()
 }
 
 fn list_item(
@@ -229,6 +235,7 @@ fn inline_spans(
     inline: &FormattedTextInline,
     base: TuiStyle,
     palette: TuiMarkdownPalette,
+    hyperlinks: &mut Vec<Rc<str>>,
 ) -> Vec<(String, TuiStyle)> {
     let mut spans = Vec::new();
     let mut active_url: Option<(String, String)> = None;
@@ -239,7 +246,7 @@ fn inline_spans(
             Some(Hyperlink::Action(_)) | None => None,
         };
         if active_url.as_ref().map(|(url, _)| url.as_str()) != fragment_url {
-            finish_link(&mut spans, active_url.take(), palette.link);
+            finish_link(&mut spans, active_url.take(), palette.link, hyperlinks);
             if let Some(url) = fragment_url {
                 active_url = Some((url.to_owned(), String::new()));
             }
@@ -248,13 +255,13 @@ fn inline_spans(
             display.push_str(&fragment.text);
         }
 
-        push_span(
-            &mut spans,
-            fragment.text.clone(),
-            fragment_style(fragment, base, palette),
-        );
+        let mut style = fragment_style(fragment, base, palette);
+        if let Some(url) = fragment_url {
+            style = sentinel_style(style, url, hyperlinks);
+        }
+        push_span(&mut spans, fragment.text.clone(), style);
     }
-    finish_link(&mut spans, active_url, palette.link);
+    finish_link(&mut spans, active_url, palette.link, hyperlinks);
     spans
 }
 
@@ -262,12 +269,35 @@ fn finish_link(
     spans: &mut Vec<(String, TuiStyle)>,
     link: Option<(String, String)>,
     style: TuiStyle,
+    hyperlinks: &mut Vec<Rc<str>>,
 ) {
     if let Some((url, display)) = link
         && url != display
     {
+        let style = sentinel_style(style, &url, hyperlinks);
         push_span(spans, format!(" ({url})"), style);
     }
+}
+
+/// Tags `style`'s `underline_color` with `url`'s index in `hyperlinks`
+/// (adding it if new), so `TuiText::render` can recover which cells a
+/// hyperlink span landed in after `Paragraph` wraps the text. Link spans
+/// never set an explicit underline color otherwise, so this channel is free
+/// to repurpose (see `TuiText::record_hyperlinks`). Silently leaves `style`
+/// untagged past 256 distinct links in one text, which only drops
+/// clickability for the overflow, not correctness.
+fn sentinel_style(style: TuiStyle, url: &str, hyperlinks: &mut Vec<Rc<str>>) -> TuiStyle {
+    let index = hyperlinks
+        .iter()
+        .position(|existing| existing.as_ref() == url)
+        .unwrap_or_else(|| {
+            hyperlinks.push(url.into());
+            hyperlinks.len() - 1
+        });
+    let Ok(index) = u8::try_from(index) else {
+        return style;
+    };
+    style.underline_color(Color::Indexed(index))
 }
 
 fn fragment_style(
