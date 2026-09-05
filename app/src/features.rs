@@ -363,8 +363,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::TeamApiKeys,
         #[cfg(feature = "named_agents")]
         FeatureFlag::NamedAgents,
-        #[cfg(feature = "cloud_conversations")]
-        FeatureFlag::CloudConversations,
         #[cfg(feature = "agent_toolbar_editor")]
         FeatureFlag::AgentToolbarEditor,
         #[cfg(feature = "configurable_toolbar")]

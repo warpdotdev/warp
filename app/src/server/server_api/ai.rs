@@ -19,7 +19,6 @@ use itertools::Itertools;
 use mockall::automock;
 use prost::Message;
 use warp_core::channel::ChannelState;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
@@ -2531,9 +2530,6 @@ impl AIClient for ServerApi {
         &self,
         conversation_ids: Option<Vec<String>>,
     ) -> anyhow::Result<Vec<ServerAIConversationMetadata>> {
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return Ok(vec![]);
-        }
         use warp_graphql::queries::list_ai_conversations::{
             ListAIConversationMetadata, ListAIConversationMetadataResult,
             ListAIConversationMetadataVariables, ListAIConversationsInput,

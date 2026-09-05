@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use session_sharing_protocol::common::SessionId;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
 use super::{
@@ -24,8 +23,6 @@ use crate::auth::{AuthStateProvider, UserUid};
 use crate::util::time_format::human_readable_precise_duration;
 use crate::workspace::RestoreConversationLayout;
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
-
-const SESSION_EXPIRATION_TIME: chrono::Duration = chrono::Duration::weeks(1);
 
 /// Stable projection identity used by list and navigation surfaces.
 ///
@@ -343,18 +340,8 @@ fn task_session_id(task: &AmbientAgentTask) -> Option<SessionId> {
 }
 
 fn task_session_status(task: &AmbientAgentTask) -> SessionStatus {
-    if FeatureFlag::CloudConversations.is_enabled() {
-        return if task.active_run_execution().session_link.is_some() {
-            SessionStatus::Available
-        } else {
-            SessionStatus::Unavailable
-        };
-    }
-
-    if task.active_run_execution().session_id.is_some() {
+    if task.active_run_execution().session_link.is_some() {
         SessionStatus::Available
-    } else if (Utc::now() - task.created_at) > SESSION_EXPIRATION_TIME {
-        SessionStatus::Expired
     } else {
         SessionStatus::Unavailable
     }

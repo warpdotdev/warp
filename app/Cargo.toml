@@ -613,7 +613,6 @@ default = [
     "agent_onboarding",
     "account_first_onboarding",
     "global_search",
-    "cloud_conversations",
     "list_skills",
     "ask_user_question",
     "bundled_skills",
@@ -967,7 +966,6 @@ warp_managed_secrets = []
 v4a_file_diffs = []
 agent_tips = []
 agent_toolbar_editor = ["agent_view"]
-cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]
 ambient_agents_rtc = []
 team_api_keys = []

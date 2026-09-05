@@ -269,11 +269,6 @@ fn run_agent(
             if args.environment.is_some() && !FeatureFlag::CloudEnvironments.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
             }
-            if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
-                return Err(anyhow::anyhow!(
-                    "unexpected argument '--conversation' found"
-                ));
-            }
             if args.skill.is_some() && !FeatureFlag::OzPlatformSkills.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--skill' found"));
             }
@@ -315,11 +310,6 @@ fn run_agent(
                 && !FeatureFlag::CloudEnvironments.is_enabled()
             {
                 return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
-            }
-            if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
-                return Err(anyhow::anyhow!(
-                    "unexpected argument '--conversation' found"
-                ));
             }
             if args.harness != Harness::Oz && !FeatureFlag::AgentHarness.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--harness' found"));

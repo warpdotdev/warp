@@ -13,7 +13,6 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
-use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
 use warp_multi_agent_api::response_event::stream_finished::{
@@ -2113,8 +2112,7 @@ impl BlocklistAIHistoryModel {
 
         // If this conversation doesn't have server metadata yet, and it has a server conversation token,
         // fetch the metadata from the server.
-        let should_fetch_metadata = FeatureFlag::CloudConversations.is_enabled()
-            && conversation.server_metadata().is_none()
+        let should_fetch_metadata = conversation.server_metadata().is_none()
             && conversation.server_conversation_token().is_some();
 
         if should_fetch_metadata {

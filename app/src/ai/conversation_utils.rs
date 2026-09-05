@@ -1,5 +1,4 @@
 use anyhow::Context as _;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warpui::{AppContext, EntityId, SingletonEntity};
 
@@ -21,27 +20,25 @@ pub fn delete_conversation(
         history.delete_conversation(conversation_id, terminal_view_id, model_ctx);
 
         if let Some(token) = server_conversation_token {
-            if FeatureFlag::CloudConversations.is_enabled() {
-                // Delete the conversation from the cloud.
-                let server_api = server_api.clone();
-                model_ctx.spawn(
-                    async move {
-                        match server_api
-                            .delete_ai_conversation(token.clone())
-                            .await
-                            .context("Failed to delete conversation from cloud")
-                        {
-                            Err(e) => {
-                                report_error!(e);
-                            }
-                            _ => {
-                                log::info!("Successfully deleted conversation from cloud: {token}");
-                            }
+            // Delete the conversation from the cloud.
+            let server_api = server_api.clone();
+            model_ctx.spawn(
+                async move {
+                    match server_api
+                        .delete_ai_conversation(token.clone())
+                        .await
+                        .context("Failed to delete conversation from cloud")
+                    {
+                        Err(e) => {
+                            report_error!(e);
                         }
-                    },
-                    |_, _, _| {},
-                );
-            }
+                        _ => {
+                            log::info!("Successfully deleted conversation from cloud: {token}");
+                        }
+                    }
+                },
+                |_, _, _| {},
+            );
         } else {
             log::info!(
                 "No server conversation token found for conversation to delete: {conversation_id}"
@@ -79,18 +76,17 @@ pub fn remove_conversation(
     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, model_ctx| {
         history.remove_conversation(conversation_id, terminal_view_id, model_ctx);
 
-        if let (Some(token), Some(server_api)) = (server_conversation_token, server_api)
-            && FeatureFlag::CloudConversations.is_enabled() {
-                // Delete the conversation from the cloud.
-                model_ctx.spawn(
-                    async move {
-                        if let Err(e) = server_api.delete_ai_conversation(token).await {
-                            log::warn!("Failed to delete conversation from cloud during remove_conversation: {e:?}");
-                        }
-                    },
-                    |_, _, _| {},
-                );
-            }
+        if let (Some(token), Some(server_api)) = (server_conversation_token, server_api) {
+            // Delete the conversation from the cloud.
+            model_ctx.spawn(
+                async move {
+                    if let Err(e) = server_api.delete_ai_conversation(token).await {
+                        log::warn!("Failed to delete conversation from cloud during remove_conversation: {e:?}");
+                    }
+                },
+                |_, _, _| {},
+            );
+        }
     });
 }
 
