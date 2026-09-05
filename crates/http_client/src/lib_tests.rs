@@ -1,5 +1,6 @@
 use opentelemetry::trace::{TraceContextExt as _, TracerProvider as _};
 use opentelemetry_sdk::trace::SdkTracerProvider;
+use prost::Message as _;
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 
@@ -75,4 +76,53 @@ fn request_carries_trace_link_header_on_warp_header_path() {
 
     let value = value.expect("trace-link header should be added on the warp-header path");
     assert!(value.starts_with("00-"), "unexpected header value: {value}");
+}
+
+#[test]
+fn json_skips_serialized_payload_without_a_hook() {
+    let client = Client::new();
+    let builder = client
+        .post("http://example.com/")
+        .json(&serde_json::json!({"a": 1}));
+    assert!(builder.serialized_payload.is_none());
+}
+
+#[test]
+fn json_populates_serialized_payload_with_a_hook_registered() {
+    let mut client = Client::new();
+    client.set_before_request_fn(Box::new(|_request, _payload| {}));
+    let payload = serde_json::json!({"a": 1});
+
+    let builder = client.post("http://example.com/").json(&payload);
+
+    assert_eq!(
+        builder.serialized_payload,
+        Some(serde_json::to_string_pretty(&payload).unwrap())
+    );
+}
+
+#[test]
+fn proto_skips_serialized_payload_without_a_hook() {
+    let client = Client::new();
+    let message = prost_types::FieldMask {
+        paths: vec!["a".to_owned(), "b".to_owned()],
+    };
+
+    let builder = client.post("http://example.com/").proto(&message);
+
+    assert!(builder.serialized_payload.is_none());
+}
+
+#[test]
+fn proto_populates_serialized_payload_with_a_hook_registered() {
+    let mut client = Client::new();
+    client.set_before_request_fn(Box::new(|_request, _payload| {}));
+    let message = prost_types::FieldMask {
+        paths: vec!["a".to_owned(), "b".to_owned()],
+    };
+
+    let builder = client.post("http://example.com/").proto(&message);
+
+    let expected = String::from_utf8(message.encode_to_vec()).unwrap();
+    assert_eq!(builder.serialized_payload, Some(expected));
 }
