@@ -3402,6 +3402,13 @@ impl AppContext {
                 break;
             }
 
+            let dropped_subscriber_ids: EntityIdSet = dropped_items
+                .models
+                .iter()
+                .copied()
+                .chain(dropped_items.views.iter().map(|(_, view_id)| *view_id))
+                .collect();
+
             for model_id in dropped_items.models {
                 self.models.remove(&model_id);
                 self.subscriptions.remove(&model_id);
@@ -3455,7 +3462,40 @@ impl AppContext {
 
                 autotracking::remove_view(current_window_id, view_id);
             }
+
+            // Emitter-keyed maps only hold incoming subscribers. A dropped view or model also
+            // leaves FromView/FromModel records under still-live sources until those sources emit.
+            self.remove_subscriber_records(&dropped_subscriber_ids);
+            self.remove_observer_records(&dropped_subscriber_ids);
         }
+    }
+
+    fn remove_subscriber_records(&mut self, dropped: &EntityIdSet) {
+        if dropped.is_empty() {
+            return;
+        }
+        self.subscriptions.retain(|_source_id, subs| {
+            subs.retain(|subscription| match subscription {
+                Subscription::FromModel { model_id, .. } => !dropped.contains(model_id),
+                Subscription::FromView { view_id, .. } => !dropped.contains(view_id),
+                Subscription::FromApp { .. } => true,
+            });
+            !subs.is_empty()
+        });
+    }
+
+    fn remove_observer_records(&mut self, dropped: &EntityIdSet) {
+        if dropped.is_empty() {
+            return;
+        }
+        self.observations.retain(|_observed_id, observers| {
+            observers.retain(|observation| match observation {
+                Observation::FromModel { model_id, .. } => !dropped.contains(model_id),
+                Observation::FromView { view_id, .. } => !dropped.contains(view_id),
+                Observation::FromApp { .. } => true,
+            });
+            !observers.is_empty()
+        });
     }
 
     fn flush_effects(&mut self) {
