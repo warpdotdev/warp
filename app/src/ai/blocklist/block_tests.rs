@@ -1,33 +1,48 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode};
 use ai::skills::SkillReference;
 use settings::Setting;
 use warp_core::channel::ChannelState;
+use warp_core::ui::appearance::Appearance;
+use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
-use warpui::{App, SingletonEntity};
+use warpui::platform::WindowStyle;
+use warpui::{App, SingletonEntity, ViewHandle};
 
 #[cfg(feature = "local_fs")]
 use super::{AIBlockEvent, open_code_action_event};
 use super::{
-    CollapsibleElementState, CollapsibleExpansionState, UserAvatarInfo,
+    CodeEditorRenderOptions, CodeEditorView, CollapsibleElementState, CollapsibleExpansionState,
+    StreamedCodeUpdate, UserAvatarInfo, apply_streamed_code_update,
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
-    recording_artifact_view_url, user_avatar_info_for_conversation_creator,
+    recording_artifact_view_url, streamed_code_update, user_avatar_info_for_conversation_creator,
 };
+use crate::AuthStateProvider;
 use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
 };
 use crate::auth::UserUid;
+use crate::cloud_object::model::persistence::CloudModel;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
+use crate::notebooks::editor::keys::NotebookKeybindings;
+use crate::server::server_api::team::MockTeamClient;
+use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings::{AISettings, OrchestrationMessageDisplayMode};
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::vim_registers::VimRegisters;
+use crate::workspace::ActiveSession;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[test]
 fn reasoning_auto_collapses_when_user_has_not_manually_toggled() {
@@ -131,6 +146,172 @@ fn recording_artifact_view_url_uses_configured_oz_origin() {
 #[test]
 fn recording_artifact_view_url_requires_task_id() {
     assert_eq!(recording_artifact_view_url(None, "recording-123"), None);
+}
+
+#[test]
+fn streamed_code_update_appends_suffix_when_new_value_extends_previous() {
+    assert_eq!(
+        streamed_code_update("abc", "ab"),
+        StreamedCodeUpdate::Append("c")
+    );
+}
+
+#[test]
+fn streamed_code_update_appends_multibyte_suffix_from_empty() {
+    // "你" is a 3-byte character; growing from an empty buffer must not
+    // require (or incorrectly reject on) a char-boundary check.
+    assert_eq!(
+        streamed_code_update("你b", ""),
+        StreamedCodeUpdate::Append("你b")
+    );
+}
+
+#[test]
+fn streamed_code_update_resets_on_boundary_aligned_non_prefix_grow() {
+    // Regression test for a follow-up finding on APP-5288: "abc" -> "XYZq" has a
+    // byte-boundary-valid split offset (3), but "XYZq" does not actually extend
+    // "abc". A boundary-only check would append "q" and corrupt the buffer to
+    // "abcq" instead of resetting it to "XYZq".
+    assert_eq!(
+        streamed_code_update("XYZq", "abc"),
+        StreamedCodeUpdate::Reset
+    );
+}
+
+#[test]
+fn streamed_code_update_resets_on_non_prefix_grow_with_multibyte_content() {
+    // Byte offset 2 is a valid char boundary in "你b" (4 bytes: 3 for 你, 1 for
+    // b), but "你b" does not extend "ab" -- must reset rather than panic or
+    // silently corrupt the buffer.
+    assert_eq!(streamed_code_update("你b", "ab"), StreamedCodeUpdate::Reset);
+}
+
+#[test]
+fn streamed_code_update_truncates_when_previous_extends_new_value() {
+    assert_eq!(
+        streamed_code_update("a += 12", "a += 12\n``"),
+        StreamedCodeUpdate::Truncate
+    );
+}
+
+#[test]
+fn streamed_code_update_resets_on_non_prefix_shrink() {
+    // A shorter rewrite that isn't actually a prefix of the previous text must
+    // reset rather than truncate to unrelated, stale content.
+    assert_eq!(
+        streamed_code_update("xyz", "abcdef"),
+        StreamedCodeUpdate::Reset
+    );
+}
+
+#[test]
+fn streamed_code_update_resets_on_equal_length_rewrite() {
+    // Same-length rewrites are a form of non-prefix update that a length-only
+    // check misses entirely (an `Ordering::Equal` naively short-circuits to a
+    // no-op).
+    assert_eq!(
+        streamed_code_update("xyz", "abc"),
+        StreamedCodeUpdate::Reset
+    );
+}
+
+#[test]
+fn streamed_code_update_is_noop_when_unchanged() {
+    assert_eq!(
+        streamed_code_update("a += 12", "a += 12"),
+        StreamedCodeUpdate::NoOp
+    );
+}
+
+/// Constructs a bare `CodeEditorView` in a fresh window, wired up with the
+/// minimal singleton mocks it depends on (mirroring
+/// `code::editor::view::view_tests::initialize_editor`). Used to exercise
+/// `apply_streamed_code_update` -- the exact function `AIBlock` and
+/// `CLISubagentView` call while streaming -- against a real buffer.
+fn test_code_editor(app: &mut App) -> ViewHandle<CodeEditorView> {
+    initialize_settings_for_tests(app);
+    app.add_singleton_model(|_| Appearance::mock());
+    app.add_singleton_model(|_| SyncedInputState::mock());
+    app.add_singleton_model(|_| VimRegisters::new());
+    app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(|_| ActiveSession::default());
+    app.add_singleton_model(NotebookKeybindings::new);
+
+    let team_client_mock = Arc::new(MockTeamClient::new());
+    let workspace_client_mock = Arc::new(MockWorkspaceClient::new());
+    app.add_singleton_model(|ctx| {
+        UserWorkspaces::mock(
+            team_client_mock.clone(),
+            workspace_client_mock.clone(),
+            vec![],
+            ctx,
+        )
+    });
+
+    let (_window, editor_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        CodeEditorView::new(
+            None,
+            None,
+            CodeEditorRenderOptions::new(VerticalExpansionBehavior::InfiniteHeight),
+            ctx,
+        )
+    });
+    editor_view
+}
+
+#[test]
+fn apply_streamed_code_update_through_real_editor_appends_then_resets_on_non_prefix_rewrite() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+
+        editor.update(&mut app, |view, ctx| {
+            apply_streamed_code_update(view, "abc", "", ctx);
+        });
+        let text = editor.update(&mut app, |view, ctx| view.text(ctx).as_str().to_string());
+        assert_eq!(text, "abc");
+
+        // Boundary-aligned, non-prefix rewrite on an *existing, populated* editor:
+        // must reset the real buffer to "XYZq", not corrupt it into "abcq".
+        editor.update(&mut app, |view, ctx| {
+            apply_streamed_code_update(view, "XYZq", "abc", ctx);
+        });
+        let text = editor.update(&mut app, |view, ctx| view.text(ctx).as_str().to_string());
+        assert_eq!(text, "XYZq");
+    });
+}
+
+#[test]
+fn apply_streamed_code_update_through_real_editor_truncates_on_valid_shrink() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+        editor.update(&mut app, |view, ctx| {
+            apply_streamed_code_update(view, "a += 12\n``", "", ctx);
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            apply_streamed_code_update(view, "a += 12", "a += 12\n``", ctx);
+        });
+        let text = editor.update(&mut app, |view, ctx| view.text(ctx).as_str().to_string());
+        assert_eq!(text, "a += 12");
+    });
+}
+
+#[test]
+fn apply_streamed_code_update_through_real_editor_resets_on_non_prefix_shrink() {
+    App::test((), |mut app| async move {
+        let editor = test_code_editor(&mut app);
+        editor.update(&mut app, |view, ctx| {
+            apply_streamed_code_update(view, "abcdef", "", ctx);
+        });
+
+        editor.update(&mut app, |view, ctx| {
+            apply_streamed_code_update(view, "xyz", "abcdef", ctx);
+        });
+        let text = editor.update(&mut app, |view, ctx| view.text(ctx).as_str().to_string());
+        assert_eq!(text, "xyz");
+    });
 }
 
 #[cfg(feature = "local_fs")]

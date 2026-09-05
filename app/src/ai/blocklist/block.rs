@@ -1116,8 +1116,93 @@ pub struct AIBlock {
 struct EmbeddedCodeEditorView {
     view: ViewHandle<CodeEditorView>,
     language: Option<ProgrammingLanguage>,
-    length: usize,
+    /// The full text most recently applied to `view`. Used to decide whether
+    /// the next streamed update is a content-stable append/truncate of this
+    /// text (safe to apply incrementally) or an unrelated rewrite that must
+    /// reset the buffer instead (see `streamed_code_update`).
+    rendered_code: String,
 }
+
+/// How a streamed update should be applied to a buffer that currently holds
+/// `previous_value`, given the newly received `new_value`.
+///
+/// Streamed AI code blocks (and, e.g., streamed MCP/requested-command text)
+/// are assumed to only change at the end of the string: either a suffix was
+/// appended, or a few trailing bytes (typically a partially-received closing
+/// code-fence marker, e.g. `` ` `` `` ` ``) were removed. Under that
+/// assumption, `new_value` is a byte-for-byte extension of `previous_value`
+/// (grow) or `previous_value` is a byte-for-byte extension of `new_value`
+/// (shrink). But a streamed rewrite is not always a clean append/truncate --
+/// e.g. a non-prefix rewrite from the server, or a same-length correction --
+/// so [`streamed_code_update`] verifies the actual byte contents (not just
+/// lengths) before deciding to append or truncate, and asks the caller to
+/// reset the buffer wholesale otherwise (see `apply_streamed_code_update`).
+/// This also makes it safe with respect to UTF-8 char boundaries: comparing
+/// and slicing by matched content, rather than by a raw byte offset that
+/// could land mid-character, can never panic.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(super) enum StreamedCodeUpdate<'a> {
+    /// Append this suffix to the end of the existing buffer.
+    Append(&'a str),
+    /// `new_value` is not a content-stable append/truncate of
+    /// `previous_value` (e.g. a non-prefix rewrite, or a same-length
+    /// rewrite with different content); the buffer should be reset to the
+    /// full `new_value` instead of patched in place.
+    Reset,
+    /// Truncate the buffer so it holds exactly `new_value`.
+    Truncate,
+    /// `new_value` is unchanged from `previous_value`.
+    NoOp,
+}
+
+/// Extracted for unit testing. See [`StreamedCodeUpdate`] for the rationale.
+pub(super) fn streamed_code_update<'a>(
+    new_value: &'a str,
+    previous_value: &str,
+) -> StreamedCodeUpdate<'a> {
+    match new_value.len().cmp(&previous_value.len()) {
+        Ordering::Greater => {
+            if let Some(suffix) = new_value.strip_prefix(previous_value) {
+                StreamedCodeUpdate::Append(suffix)
+            } else {
+                StreamedCodeUpdate::Reset
+            }
+        }
+        Ordering::Less => {
+            if previous_value.starts_with(new_value) {
+                StreamedCodeUpdate::Truncate
+            } else {
+                StreamedCodeUpdate::Reset
+            }
+        }
+        Ordering::Equal => {
+            if new_value == previous_value {
+                StreamedCodeUpdate::NoOp
+            } else {
+                StreamedCodeUpdate::Reset
+            }
+        }
+    }
+}
+
+/// Applies a streamed code update to `view`, given the full text (`previous_code`)
+/// most recently rendered into it. Shared by `AIBlock` and `CLISubagentView`,
+/// whose code-streaming logic is otherwise identical.
+fn apply_streamed_code_update(
+    view: &CodeEditorView,
+    code: &str,
+    previous_code: &str,
+    ctx: &mut ViewContext<CodeEditorView>,
+) {
+    match streamed_code_update(code, previous_code) {
+        StreamedCodeUpdate::Append(suffix) => view.append_at_end(suffix, ctx),
+        StreamedCodeUpdate::Reset => view.reset(InitialBufferState::plain_text(code), ctx),
+        StreamedCodeUpdate::Truncate => view.truncate(code.len(), ctx),
+        StreamedCodeUpdate::NoOp => return,
+    }
+    ctx.notify();
+}
+
 /// Builds the authenticated Oz run-page URL for a recording artifact.
 ///
 /// The task ID is assigned to the conversation by the server when the run
@@ -3073,18 +3158,11 @@ impl AIBlock {
                     // received the ``` end marker.
                     // Ex: Iteration 57: "a += 12\n``"
                     // Ex: Iteration 58: "a += 12"
-                    match code.len().cmp(&embedded_view.length) {
-                        Ordering::Greater => {
-                            view.append_at_end(&code[embedded_view.length..], ctx);
-                            ctx.notify();
-                        }
-                        Ordering::Less => {
-                            view.truncate(code.len(), ctx);
-                            ctx.notify();
-                        }
-                        Ordering::Equal => {}
-                    }
-                    embedded_view.length = code.len();
+                    //
+                    // See `apply_streamed_code_update`/`streamed_code_update`: a non-prefix
+                    // rewrite resets the buffer instead of corrupting it.
+                    apply_streamed_code_update(view, code, &embedded_view.rendered_code, ctx);
+                    embedded_view.rendered_code = code.to_string();
                 });
             }
             None => {
@@ -3144,7 +3222,7 @@ impl AIBlock {
                 self.code_editor_views.push(EmbeddedCodeEditorView {
                     view,
                     language: language.clone(),
-                    length: code.len(),
+                    rendered_code: code.to_string(),
                 });
             }
         }
