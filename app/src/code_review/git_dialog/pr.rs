@@ -19,10 +19,12 @@ use crate::code_review::git_dialog::{
 use crate::code_review::telemetry_event::{
     CodeReviewTelemetryEvent, GitDialogStatus, GitOperationKind,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::icons::Icon;
 use crate::util::git::{FileChangeEntry, PrInfo};
 use crate::view_components::{DismissibleToast, ToastLink};
 use crate::workspace::ToastStack;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// PR-mode sub-actions, dispatched wrapped in `GitDialogAction::Pr`.
 #[derive(Clone, Debug, PartialEq)]
@@ -126,8 +128,10 @@ pub(super) fn start_confirm(me: &mut GitDialog, ctx: &mut ViewContext<GitDialog>
 
     me.set_loading(loading_label_for(), ctx);
 
+    let team_scope =
+        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
     me.diff_state_model().update(ctx, |m, ctx| {
-        m.create_pr(branch_name, autogenerate_content, ctx);
+        m.create_pr(branch_name, autogenerate_content, team_scope, ctx);
     });
 }
 
