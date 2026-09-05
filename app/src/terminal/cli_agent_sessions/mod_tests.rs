@@ -1,3 +1,8 @@
+use std::time::Duration;
+
+use warpui::r#async::Timer;
+use warpui::{App, EntityId};
+
 use super::event::{
     CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource, CLIAgentEventType, parse_event,
 };
@@ -696,4 +701,576 @@ fn permission_request_still_populates_summary_and_tool_fields() {
         session.status,
         CLIAgentSessionStatus::Blocked { .. },
     ));
+}
+
+// --- Ctrl-C pending-cancel state machine ---
+
+/// Grace window used by the tests below. Long enough to comfortably
+/// distinguish "fired at the original deadline" from "reset" under CI
+/// scheduling jitter, short enough to keep the suite fast.
+const TEST_WINDOW: Duration = Duration::from_millis(200);
+/// Extra margin added when waiting for `TEST_WINDOW` to lapse.
+const TEST_WINDOW_BUFFER: Duration = Duration::from_millis(150);
+
+fn cli_agent_session(
+    status: CLIAgentSessionStatus,
+    received_rich_notification: bool,
+) -> CLIAgentSession {
+    CLIAgentSession {
+        agent: CLIAgent::Claude,
+        status,
+        session_context: CLIAgentSessionContext::default(),
+        input_state: CLIAgentInputState::Closed,
+        should_auto_toggle_input: false,
+        listener: None,
+        plugin_version: None,
+        remote_host: None,
+        draft_text: None,
+        custom_command_prefix: None,
+        received_rich_notification,
+    }
+}
+
+fn plugin_event(source: CLIAgentEventSource, event: CLIAgentEventType) -> CLIAgentEvent {
+    CLIAgentEvent {
+        source,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event,
+        session_id: None,
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    }
+}
+
+fn rich_event(event: CLIAgentEventType) -> CLIAgentEvent {
+    plugin_event(CLIAgentEventSource::RichPlugin, event)
+}
+
+#[test]
+fn ctrl_c_does_not_arm_on_optimistic_in_progress_before_prompt_submit() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+
+        assert!(
+            !model.read(&app, |m, _| m
+                .has_pending_or_resolved_ctrl_c_cancel(view_id)),
+            "must not arm on the optimistic InProgress set at registration, before any turn started"
+        );
+    });
+}
+
+#[test]
+fn ctrl_c_arms_when_in_progress_rich_and_prompt_submitted() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+
+        assert!(model.read(&app, |m, _| {
+            m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+        }));
+    });
+}
+
+#[test]
+fn ctrl_c_arms_when_blocked_rich_and_prompt_submitted() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(
+                view_id,
+                &rich_event(CLIAgentEventType::PermissionRequest),
+                ctx,
+            );
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+
+        assert!(model.read(&app, |m, _| {
+            m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+        }));
+    });
+}
+
+#[test]
+fn ctrl_c_does_not_arm_when_status_is_success() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::Stop), ctx);
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+
+        assert!(!model.read(&app, |m, _| {
+            m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+        }));
+    });
+}
+
+#[test]
+fn ctrl_c_does_not_arm_for_codex_osc9_fallback_session() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, false),
+                ctx,
+            );
+        });
+        // Codex's OSC 9 fallback never latches `received_rich_notification`,
+        // even though `has_seen_prompt_submit` is still tracked.
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(
+                view_id,
+                &plugin_event(
+                    CLIAgentEventSource::CodexOsc9Fallback,
+                    CLIAgentEventType::PromptSubmit,
+                ),
+                ctx,
+            );
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+
+        assert!(
+            !model.read(&app, |m, _| m
+                .has_pending_or_resolved_ctrl_c_cancel(view_id)),
+            "a Codex OSC 9 fallback session must never arm the Ctrl-C cancel window"
+        );
+    });
+}
+
+#[test]
+fn window_lapse_transitions_session_to_cancelled() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+
+        Timer::after(TEST_WINDOW + TEST_WINDOW_BUFFER).await;
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled)
+            );
+            assert!(m.has_pending_or_resolved_ctrl_c_cancel(view_id));
+        });
+    });
+}
+
+/// Arms a window for an InProgress+rich session that has seen `prompt_submit`,
+/// then applies `disarming_event` immediately and asserts the window no
+/// longer resolves to `Cancelled` once it would have lapsed.
+fn assert_event_disarms_pending_cancel(disarming_event: CLIAgentEvent) {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+        assert!(model.read(&app, |m, _| {
+            m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+        }));
+
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &disarming_event, ctx);
+        });
+        assert!(!model.read(&app, |m, _| {
+            m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+        }));
+
+        Timer::after(TEST_WINDOW + TEST_WINDOW_BUFFER).await;
+
+        model.read(&app, |m, _| {
+            assert_ne!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled),
+                "a disarming event must prevent the lapsed window from cancelling the session"
+            );
+        });
+    });
+}
+
+#[test]
+fn stop_event_disarms_pending_cancel() {
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::Stop));
+}
+
+#[test]
+fn stop_failure_event_disarms_pending_cancel() {
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::StopFailure));
+}
+
+#[test]
+fn permission_request_event_disarms_pending_cancel() {
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::PermissionRequest));
+}
+
+#[test]
+fn question_asked_event_disarms_pending_cancel() {
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::QuestionAsked));
+}
+
+#[test]
+fn prompt_submit_event_disarms_pending_cancel() {
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::PromptSubmit));
+}
+
+#[test]
+fn tool_complete_event_disarms_pending_cancel() {
+    // ToolComplete only drives a status transition when the session is
+    // Blocked, but any plugin traffic must still disarm the window.
+    assert_event_disarms_pending_cancel(rich_event(CLIAgentEventType::ToolComplete));
+}
+
+#[test]
+fn idle_prompt_does_not_disarm_pending_cancel() {
+    // Unlike other plugin events, `IdlePrompt` means the CLI is sitting
+    // idle at its interactive prompt -- evidence of idleness, not
+    // aliveness. If it disarmed the window, an idle notification arriving
+    // instead of a genuine `stop`/`stop_failure` after an interrupt would
+    // leave the session stuck exactly like the bug this feature exists to
+    // fix, so the window must survive it and still resolve to `Cancelled`
+    // once it lapses.
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+        assert!(model.read(&app, |m, _| {
+            m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+        }));
+
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::IdlePrompt), ctx);
+        });
+        assert!(
+            model.read(&app, |m, _| {
+                m.has_pending_or_resolved_ctrl_c_cancel(view_id)
+            }),
+            "an IdlePrompt must not disarm the pending-cancel window"
+        );
+
+        Timer::after(TEST_WINDOW + TEST_WINDOW_BUFFER).await;
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled),
+                "an IdlePrompt must not prevent the lapsed window from cancelling the session"
+            );
+        });
+    });
+}
+
+#[test]
+fn late_stop_after_cancelled_flips_status_to_success() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+        Timer::after(TEST_WINDOW + TEST_WINDOW_BUFFER).await;
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled)
+            );
+        });
+
+        // A `stop` hook that arrives after the window already marked the
+        // session Cancelled must still flow through and flip to Success.
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::Stop), ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Success)
+            );
+        });
+    });
+}
+
+#[test]
+fn prompt_submit_after_cancelled_returns_session_to_in_progress() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+        Timer::after(TEST_WINDOW + TEST_WINDOW_BUFFER).await;
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled)
+            );
+        });
+
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::InProgress)
+            );
+        });
+    });
+}
+
+#[test]
+fn stale_timer_callback_after_disarming_event_does_not_overwrite_newer_status() {
+    // WarpUI's `SpawnedFutureHandle::abort` only takes effect the next time
+    // the future is polled: if the timer already completed and queued its
+    // resolve callback before a disarming event arrives, that callback can
+    // still run after `abort()` was called on it. The token guard in
+    // `resolve_pending_cancel` must make the stale callback a no-op instead
+    // of overwriting the disarming event's status.
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+        let armed_token = model
+            .read(&app, |m, _| {
+                m.ctrl_c_cancel_state
+                    .get(&view_id)
+                    .and_then(|s| s.armed_token)
+            })
+            .expect("window should be armed");
+
+        // A disarming event arrives before the queued callback runs.
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::Stop), ctx);
+        });
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Success)
+            );
+        });
+
+        // The stale callback finally runs with the pre-disarm token. It must
+        // be a no-op: the disarming event's Success status must survive.
+        model.update(&mut app, |m, ctx| {
+            m.resolve_pending_cancel(view_id, armed_token, ctx);
+        });
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Success),
+                "a stale timer callback must not overwrite a newer disarming event's status"
+            );
+        });
+    });
+}
+
+#[test]
+fn remove_session_clears_pending_cancel_state() {
+    // The model is a process-lifetime singleton, so a closed session that
+    // saw a `prompt_submit` (and possibly armed a window) must not leave an
+    // orphaned `ctrl_c_cancel_state` entry behind.
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+        });
+        assert!(model.read(&app, |m, _| m.ctrl_c_cancel_state.contains_key(&view_id)));
+
+        model.update(&mut app, |m, ctx| {
+            m.remove_session(view_id, ctx);
+        });
+
+        assert!(
+            model.read(&app, |m, _| !m.ctrl_c_cancel_state.contains_key(&view_id)),
+            "remove_session must clear the ctrl_c_cancel_state entry for the closed session"
+        );
+    });
+}
+
+#[test]
+fn second_ctrl_c_while_armed_reuses_the_existing_window() {
+    // Deliberately larger/looser than `TEST_WINDOW` so the checkpoint below
+    // has a wide, unambiguous margin on both sides: comfortably after the
+    // original deadline, and comfortably before what a reset (rather than
+    // reused) window would require.
+    let window = Duration::from_millis(300);
+    let before_deadline = Duration::from_millis(250);
+    let checkpoint_after_second_ctrl_c = Duration::from_millis(100);
+
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+        });
+        model.update(&mut app, |m, ctx| {
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+        });
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, window, ctx);
+        });
+
+        // Second Ctrl-C at t=250ms, shortly before the original t=300ms
+        // deadline. Check at t=350ms: 50ms past the original deadline, but
+        // 200ms short of a reset deadline (250+300=550ms) — reuse and reset
+        // are unambiguous at this checkpoint.
+        Timer::after(before_deadline).await;
+        model.update(&mut app, |m, ctx| {
+            m.observe_ctrl_c_write_with_window(view_id, window, ctx);
+        });
+        Timer::after(checkpoint_after_second_ctrl_c).await;
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled),
+                "a second Ctrl-C while armed must reuse the existing window, not reset it"
+            );
+        });
+    });
 }

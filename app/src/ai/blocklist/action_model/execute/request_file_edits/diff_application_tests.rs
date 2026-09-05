@@ -55,6 +55,13 @@ fn test_apply_diffs_error_when_no_diffs_applied() {
             }
             other => panic!("Expected a single UnmatchedDiffs error, got {other:?}"),
         }
+
+        let message = DiffApplicationError::error_for_conversation(&errors);
+        assert!(
+            message
+                .contains("The following search blocks did not match the current file contents:")
+        );
+        assert!(message.contains("Search block 1."));
     });
 }
 
@@ -391,10 +398,12 @@ fn test_multiple_file_create_edits_for_same_path() {
         let create_edit1 = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("First content".to_string()),
+            allow_overwrite: false,
         };
         let create_edit2 = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("Second content".to_string()),
+            allow_overwrite: false,
         };
 
         let ai_identifiers = &AIIdentifiers::default();
@@ -433,6 +442,7 @@ fn test_mixed_create_and_edit_for_same_path() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            allow_overwrite: false,
         };
         let edit_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
@@ -481,6 +491,7 @@ fn test_delete_and_create_same_path_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            allow_overwrite: false,
         };
 
         let result = apply_edits(
@@ -517,6 +528,7 @@ fn test_create_then_delete_same_path_replaces_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            allow_overwrite: false,
         };
         let delete_edit = FileEdit::Delete {
             file: Some(file_path.clone()),
@@ -558,6 +570,7 @@ fn test_delete_create_and_edit_same_path_still_fails() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New file content".to_string()),
+            allow_overwrite: false,
         };
         let edit_diff = ParsedDiff::StrReplaceEdit {
             file: Some(file_path.clone()),
@@ -598,6 +611,7 @@ fn test_create_edit_for_existing_file() {
         let create_edit = FileEdit::Create {
             file: Some(file_path.clone()),
             content: Some("New content".to_string()),
+            allow_overwrite: false,
         };
 
         let ai_identifiers = &AIIdentifiers::default();
@@ -624,6 +638,92 @@ fn test_create_edit_for_existing_file() {
             }
             other => panic!("Expected a single AlreadyExists error, got {other:?}"),
         }
+
+        // The message stays neutral (doesn't name `allow_overwrite: true`): this client always
+        // advertises the capability, but a server predating it ignores the flag and serves a
+        // create_file schema without `allow_overwrite`, so naming it here could send the model
+        // into a retry the server can't honor. A model whose schema does include
+        // `allow_overwrite` already knows about it independently of this message.
+        let message = DiffApplicationError::error_for_conversation(&errors);
+        assert!(!message.contains("allow_overwrite"));
+        assert!(message.contains("already exists"));
+    });
+}
+
+#[test]
+fn test_create_with_overwrite_replaces_existing_file() {
+    App::test((), |app| async move {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temporary file");
+        let file_path = temp_file.path().to_string_lossy().to_string();
+        writeln!(&mut temp_file, "Old line one\nOld line two").unwrap();
+
+        let create_edit = FileEdit::Create {
+            file: Some(file_path.clone()),
+            content: Some("New file content".to_string()),
+            allow_overwrite: true,
+        };
+
+        let result = apply_edits(
+            vec![create_edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        // allow_overwrite: true on an existing file should succeed with a full replacement, not
+        // the AlreadyExists error a plain create_file call would raise.
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, file_path);
+        assert_eq!(diffs[0].original_content, "Old line one\nOld line two\n");
+
+        let deltas = update_deltas(&diffs[0]);
+        assert_eq!(deltas.len(), 1);
+        assert_eq!(deltas[0].replacement_line_range, 1..3);
+        assert_eq!(deltas[0].insertion, "New file content");
+    });
+}
+
+#[test]
+fn test_create_with_overwrite_on_nonexistent_file_creates_normally() {
+    App::test((), |app| async move {
+        let non_existent_file = "non_existent_overwrite_file.txt".to_string();
+
+        let create_edit = FileEdit::Create {
+            file: Some(non_existent_file.clone()),
+            content: Some("New file content".to_string()),
+            allow_overwrite: true,
+        };
+
+        let result = apply_edits(
+            vec![create_edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            |path| async move { FileReadResult::from(std::fs::read_to_string(path)) },
+        )
+        .await;
+
+        // allow_overwrite is a no-op when the file doesn't already exist: it's just a normal
+        // creation.
+        assert!(result.is_ok(), "Expected Ok result but got: {result:?}");
+        let diffs = result.unwrap();
+        assert_eq!(diffs.len(), 1);
+        assert_eq!(diffs[0].file_name, non_existent_file);
+
+        match &diffs[0].diff_type {
+            DiffType::Create { delta } => {
+                assert_eq!(delta.insertion, "New file content");
+            }
+            other => panic!("Expected Create diff_type, got {other:?}"),
+        }
     });
 }
 
@@ -635,12 +735,13 @@ fn test_format_match_error() {
             fuzzy_match_failures: 1,
             noop_deltas: 0,
             missing_line_numbers: 0,
+            fuzzy_match_failure_details: vec![DiffMatchFailure { block_number: 1 }],
         },
     };
 
     assert_eq!(
         err.to_conversation_message(),
-        "Could not apply all diffs to file.txt."
+        "Could not apply all diffs to file.txt. The following search blocks did not match the current file contents:\nSearch block 1."
     );
 
     let err = DiffApplicationError::UnmatchedDiffs {
@@ -649,6 +750,7 @@ fn test_format_match_error() {
             fuzzy_match_failures: 0,
             noop_deltas: 1,
             missing_line_numbers: 0,
+            fuzzy_match_failure_details: Vec::new(),
         },
     };
 
@@ -660,16 +762,59 @@ fn test_format_match_error() {
     let err = DiffApplicationError::UnmatchedDiffs {
         file: "file.txt".to_string(),
         match_failures: DiffMatchFailures {
+            fuzzy_match_failures: 1,
+            noop_deltas: 1,
+            missing_line_numbers: 0,
+            fuzzy_match_failure_details: Vec::new(),
+        },
+    };
+
+    // If no fuzzy match failures are surfaced, the error message should only contain the file name
+    // and the message that the changes were already made.
+    assert_eq!(
+        err.to_conversation_message(),
+        "Could not apply all diffs to file.txt. The changes to file.txt were already made."
+    );
+
+    let err = DiffApplicationError::UnmatchedDiffs {
+        file: "file.txt".to_string(),
+        match_failures: DiffMatchFailures {
             fuzzy_match_failures: 2,
             noop_deltas: 2,
             missing_line_numbers: 0,
+            fuzzy_match_failure_details: vec![DiffMatchFailure { block_number: 2 }],
         },
     };
 
     assert_eq!(
         err.to_conversation_message(),
-        "Could not apply all diffs to file.txt. The changes to file.txt were already made."
+        "Could not apply all diffs to file.txt. The following search blocks did not match the current file contents:\nSearch block 2.\nThe changes to file.txt were already made."
     );
+}
+
+#[test]
+fn test_format_match_error_includes_all_failure_details() {
+    let details = vec![
+        DiffMatchFailure { block_number: 1 },
+        DiffMatchFailure { block_number: 5 },
+        DiffMatchFailure { block_number: 6 },
+    ];
+    let err = DiffApplicationError::UnmatchedDiffs {
+        file: "file.txt".to_string(),
+        match_failures: DiffMatchFailures {
+            fuzzy_match_failures: 3,
+            noop_deltas: 0,
+            missing_line_numbers: 0,
+            fuzzy_match_failure_details: details,
+        },
+    };
+
+    let message = err.to_conversation_message();
+    assert!(message.contains("Search block 1."));
+    assert!(message.contains("Search block 5."));
+    assert!(message.contains("Search block 6."));
+    assert!(!message.contains("more failed diff"));
+    assert!(!message.contains("Search:"));
 }
 
 #[test]
@@ -684,13 +829,14 @@ fn test_format_multiple_errors() {
                 fuzzy_match_failures: 1,
                 noop_deltas: 0,
                 missing_line_numbers: 0,
+                fuzzy_match_failure_details: vec![DiffMatchFailure { block_number: 1 }],
             },
         },
     ];
 
     assert_eq!(
         DiffApplicationError::error_for_conversation(&errs),
-        "* missing.rs does not exist. Is the path correct?\n* Could not apply all diffs to unmatched.rs."
+        "* missing.rs does not exist. Is the path correct?\n* Could not apply all diffs to unmatched.rs. The following search blocks did not match the current file contents:\nSearch block 1."
     );
 }
 
@@ -851,6 +997,10 @@ fn test_apply_v4a_edits_no_match() {
             }
             other => panic!("Expected a single UnmatchedDiffs error, got {other:?}"),
         }
+
+        let message = DiffApplicationError::error_for_conversation(&errors);
+        assert!(message.contains("Search block 1."));
+        assert!(!message.contains("Expected line"));
     });
 }
 

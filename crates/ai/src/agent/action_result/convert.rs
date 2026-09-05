@@ -3,6 +3,8 @@ use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_multi_agent_api::ask_user_question_result::answer_item::{
     self, Answer as AskUserQuestionAnswer,
 };
+use warp_multi_agent_api::long_running_shell_command_activity::ProcessActivity as ApiProcessActivity;
+use warp_multi_agent_api::long_running_shell_command_activity::process_activity::State as ApiProcessState;
 use warp_multi_agent_api::{self as api};
 
 use super::*;
@@ -13,6 +15,91 @@ fn local_datetime_to_timestamp(timestamp: DateTime<Local>) -> prost_types::Times
     prost_types::Timestamp {
         seconds: timestamp.timestamp(),
         nanos: timestamp.timestamp_subsec_nanos() as i32,
+    }
+}
+
+/// `None` for durations that cannot have come from this client (negative
+/// components), rather than clamping them into a plausible-looking reading.
+fn proto_to_duration(duration: &prost_types::Duration) -> Option<Duration> {
+    let seconds = u64::try_from(duration.seconds).ok()?;
+    let nanos = u32::try_from(duration.nanos).ok()?;
+    Some(Duration::new(seconds, nanos))
+}
+
+impl From<LrcActivity> for api::LongRunningShellCommandActivity {
+    fn from(activity: LrcActivity) -> Self {
+        Self {
+            since_last_activity: activity.since_last_activity.map(duration_to_proto),
+            process: activity.process.map(Into::into),
+        }
+    }
+}
+
+impl From<LrcProcessActivity> for ApiProcessActivity {
+    fn from(process: LrcProcessActivity) -> Self {
+        Self {
+            cpu_time_delta_ms: process.cpu_time_delta.as_millis() as u64,
+            state: ApiProcessState::from(process.state) as i32,
+            live_process_count: process.live_process_count,
+            io_write_bytes_delta: process.io_write_bytes_delta,
+        }
+    }
+}
+
+/// Restores activity from the wire, for rebuilding a conversation that was
+/// previously sent to the server.
+impl From<&api::LongRunningShellCommandActivity> for LrcActivity {
+    fn from(activity: &api::LongRunningShellCommandActivity) -> Self {
+        Self {
+            since_last_activity: activity
+                .since_last_activity
+                .as_ref()
+                .and_then(proto_to_duration),
+            process: activity.process.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<&ApiProcessActivity> for LrcProcessActivity {
+    fn from(process: &ApiProcessActivity) -> Self {
+        Self {
+            cpu_time_delta: Duration::from_millis(process.cpu_time_delta_ms),
+            // The prost getter resolves an unrecognized wire value to
+            // `Unspecified`, which maps to `Unknown` below.
+            state: process.state().into(),
+            live_process_count: process.live_process_count,
+            io_write_bytes_delta: process.io_write_bytes_delta,
+        }
+    }
+}
+
+impl From<LrcProcessState> for ApiProcessState {
+    fn from(state: LrcProcessState) -> Self {
+        match state {
+            LrcProcessState::Running => ApiProcessState::Running,
+            LrcProcessState::Sleeping => ApiProcessState::Sleeping,
+            LrcProcessState::DiskWait => ApiProcessState::DiskWait,
+            LrcProcessState::Stopped => ApiProcessState::Stopped,
+            LrcProcessState::Zombie => ApiProcessState::Zombie,
+            // Explicitly `Unknown`, never the `Unspecified` zero value: the
+            // proto3-rewritten Rust bindings omit zero-valued enums from the
+            // wire, and "the client looked and could not classify" must not
+            // read back as "never populated".
+            LrcProcessState::Unknown => ApiProcessState::Unknown,
+        }
+    }
+}
+
+impl From<ApiProcessState> for LrcProcessState {
+    fn from(state: ApiProcessState) -> Self {
+        match state {
+            ApiProcessState::Running => LrcProcessState::Running,
+            ApiProcessState::Sleeping => LrcProcessState::Sleeping,
+            ApiProcessState::DiskWait => LrcProcessState::DiskWait,
+            ApiProcessState::Stopped => LrcProcessState::Stopped,
+            ApiProcessState::Zombie => LrcProcessState::Zombie,
+            ApiProcessState::Unspecified | ApiProcessState::Unknown => LrcProcessState::Unknown,
+        }
     }
 }
 
@@ -53,6 +140,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                 grid_contents,
                 cursor,
                 is_alt_screen_active,
+                activity,
             } => Ok(
                 api::request::input::tool_call_result::Result::RunShellCommand(
                     #[allow(deprecated)]
@@ -68,6 +156,7 @@ impl TryFrom<RequestCommandOutputResult> for api::request::input::tool_call_resu
                                     cursor: cursor.to_owned(),
                                     is_alt_screen_active,
                                     is_preempted: false,
+                                    activity: activity.map(Into::into),
                                 },
                             ),
                         ),
@@ -108,7 +197,7 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
 
     fn try_from(result: WriteToLongRunningShellCommandResult) -> Result<Self, Self::Error> {
         match result {
-            WriteToLongRunningShellCommandResult::Snapshot { block_id, grid_contents, cursor, is_alt_screen_active, is_preempted } => Ok(
+            WriteToLongRunningShellCommandResult::Snapshot { block_id, grid_contents, cursor, is_alt_screen_active, is_preempted, activity } => Ok(
                 api::request::input::tool_call_result::Result::WriteToLongRunningShellCommand(
                     api::WriteToLongRunningShellCommandResult {
                         result: Some(api::write_to_long_running_shell_command_result::Result::LongRunningCommandSnapshot(
@@ -118,6 +207,7 @@ impl TryFrom<WriteToLongRunningShellCommandResult>
                                 cursor: cursor.to_owned(),
                                 is_alt_screen_active,
                                 is_preempted,
+                                activity: activity.map(Into::into),
                             }
                         ))
                     },
@@ -699,6 +789,7 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                 cursor,
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             } => Ok(
                 api::request::input::tool_call_result::Result::ReadShellCommandOutput(
                     api::ReadShellCommandOutputResult {
@@ -711,6 +802,7 @@ impl TryFrom<ReadShellCommandOutputResult> for api::request::input::tool_call_re
                                     cursor: cursor.to_owned(),
                                     is_alt_screen_active,
                                     is_preempted,
+                                    activity: activity.map(Into::into),
                                 },
                             ),
                         ),
@@ -750,6 +842,7 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                 cursor,
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             } => Ok(
                 api::request::input::tool_call_result::Result::TransferShellCommandControlToUser(
                     api::TransferShellCommandControlToUserResult {
@@ -761,6 +854,7 @@ impl TryFrom<TransferShellCommandControlToUserResult>
                                     cursor,
                                     is_alt_screen_active,
                                     is_preempted,
+                                    activity: activity.map(Into::into),
                                 },
                             ),
                         ),
@@ -994,7 +1088,7 @@ impl TryFrom<RequestComputerUseResult> for api::request::input::tool_call_result
                                     height_px: screenshot.original_height as i32,
                                 }),
                                 initial_screenshot: Some(api::RawImage {
-                                    data: screenshot.data,
+                                    source: Some(api::raw_image::Source::Data(screenshot.data)),
                                     mime_type: screenshot.mime_type.to_string(),
                                     width: screenshot.width as i32,
                                     height: screenshot.height as i32,
@@ -1033,40 +1127,31 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
 
     fn try_from(result: UseComputerResult) -> Result<Self, Self::Error> {
         match result {
-            UseComputerResult::Success(result) => {
-                // Copy out the captured-window metadata (if any) before the owned fields of
-                // `result` are moved into the message below.
-                let captured = result.captured_window;
-                Ok(api::request::input::tool_call_result::Result::UseComputer(
-                    api::UseComputerResult {
-                        result: Some(api::use_computer_result::Result::Success(
-                            api::use_computer_result::Success {
-                                screenshot: result.screenshot.map(|s| api::RawImage {
-                                    data: s.data,
-                                    mime_type: s.mime_type.to_string(),
-                                    width: s.width as i32,
-                                    height: s.height as i32,
-                                }),
-                                cursor_position: result.cursor_position.map(vec_to_coordinates),
-                                windows: result
-                                    .windows
-                                    .into_iter()
-                                    .map(convert_window_info)
-                                    .collect(),
-                                // The window id is an opaque string on the wire; on macOS it is a
-                                // CGWindowID, so format the u32 back to a string at the boundary.
-                                captured_window: captured.map(|c| {
-                                    api::use_computer_result::success::CapturedWindow {
-                                        window_id: c.window_id.to_string(),
-                                        width_px: c.width_px,
-                                        height_px: c.height_px,
-                                    }
-                                }),
-                            },
-                        )),
-                    },
-                ))
-            }
+            UseComputerResult::Success {
+                screenshot,
+                cursor_position,
+                windows,
+                captured_window,
+            } => Ok(api::request::input::tool_call_result::Result::UseComputer(
+                api::UseComputerResult {
+                    result: Some(api::use_computer_result::Result::Success(
+                        api::use_computer_result::Success {
+                            screenshot: screenshot.map(convert_screenshot_source),
+                            cursor_position: cursor_position.map(vec_to_coordinates),
+                            windows: windows.into_iter().map(convert_window_info).collect(),
+                            // The window id is an opaque string on the wire; on macOS it is a
+                            // CGWindowID, so format the u32 back to a string at the boundary.
+                            captured_window: captured_window.map(|c| {
+                                api::use_computer_result::success::CapturedWindow {
+                                    window_id: c.window_id.to_string(),
+                                    width_px: c.width_px,
+                                    height_px: c.height_px,
+                                }
+                            }),
+                        },
+                    )),
+                },
+            )),
             UseComputerResult::Error(error) => {
                 Ok(api::request::input::tool_call_result::Result::UseComputer(
                     api::UseComputerResult {
@@ -1078,6 +1163,30 @@ impl TryFrom<UseComputerResult> for api::request::input::tool_call_result::Resul
             }
             UseComputerResult::Cancelled => Err(ConvertToAPITypeError::Ignore),
         }
+    }
+}
+
+/// Converts a screenshot source to the wire `RawImage`, preserving whether the
+/// bytes are inline or a stored object-storage ref.
+fn convert_screenshot_source(source: ScreenshotSource) -> api::RawImage {
+    match source {
+        ScreenshotSource::Inline(screenshot) => api::RawImage {
+            source: Some(api::raw_image::Source::Data(screenshot.data)),
+            mime_type: screenshot.mime_type.to_string(),
+            width: screenshot.width as i32,
+            height: screenshot.height as i32,
+        },
+        ScreenshotSource::Stored {
+            stored_ref,
+            mime_type,
+            width,
+            height,
+        } => api::RawImage {
+            source: Some(api::raw_image::Source::StoredRef(stored_ref)),
+            mime_type,
+            width,
+            height,
+        },
     }
 }
 

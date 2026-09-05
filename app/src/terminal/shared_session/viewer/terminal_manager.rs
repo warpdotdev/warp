@@ -21,13 +21,14 @@ use warpui::{
 
 use super::event_loop::SharedSessionInitialLoadMode;
 use super::network::{
-    Network, NetworkEvent, agent_prompt_failure_reason_string,
+    FailedToJoinReason, Network, NetworkEvent, agent_prompt_failure_reason_string,
     command_execution_failure_reason_string, control_action_failure_reason_string,
     session_ended_reason_string, viewer_removed_reason_string, write_to_pty_failure_reason_string,
 };
 use super::orchestration_viewer_model::OrchestrationViewerModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::ConversationStatus;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
@@ -67,6 +68,7 @@ use crate::terminal::{
     Event as TerminalViewEvent, PTY_READS_BROADCAST_CHANNEL_SIZE, TerminalModel, TerminalView,
 };
 use crate::view_components::ToastFlavor;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 enum NetworkState {
     /// No viewer network is attached yet; deferred cloud-mode viewers start here until the
@@ -110,6 +112,10 @@ pub struct TerminalManager {
     /// duplicated REST traffic and grandchild double-registration via the
     /// transitive `ancestor_run_id` filter.
     enable_orchestration_polling: bool,
+    /// Dedicated orchestration child viewers recover missing or inaccessible
+    /// live sessions through their pane group instead of the generic join
+    /// failure UI.
+    orchestration_child_conversation_id: Option<AIConversationId>,
 }
 
 pub struct TerminalManagerInit {
@@ -139,6 +145,42 @@ impl TerminalManager {
             update,
             ctx,
         );
+    }
+
+    /// Creates the live-session viewer for an orchestration child pane, with
+    /// both ambient-agent controls and the `FailedToJoin` recovery routing
+    /// that a known child conversation enables. Callers are responsible for
+    /// wiring ambient session events after construction.
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_for_ambient_orchestration_child(
+        session_id: SessionId,
+        conversation_id: AIConversationId,
+        resources: TerminalViewResources,
+        initial_size: Vector2F,
+        window_id: WindowId,
+        ctx: &mut AppContext,
+    ) -> TerminalManagerInit {
+        let TerminalManagerInit {
+            manager: mut terminal_manager,
+            view: terminal_view,
+        } = Self::new_internal(
+            resources,
+            initial_size,
+            window_id,
+            false,
+            true,
+            Some(conversation_id),
+            ctx,
+        );
+        terminal_manager.connect_session(
+            session_id,
+            SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
+            ctx,
+        );
+        TerminalManagerInit {
+            manager: terminal_manager,
+            view: terminal_view,
+        }
     }
 
     fn current_network(
@@ -206,6 +248,7 @@ impl TerminalManager {
         window_id: WindowId,
         enable_orchestration_polling: bool,
         is_ambient_agent: bool,
+        orchestration_child_conversation_id: Option<AIConversationId>,
         ctx: &mut AppContext,
     ) -> TerminalManagerInit {
         // Create all the necessary channels we need for communication.
@@ -324,6 +367,7 @@ impl TerminalManager {
             outbound_handlers_registered: false,
             orchestration_viewer_model: Arc::new(FairMutex::new(None)),
             enable_orchestration_polling,
+            orchestration_child_conversation_id,
         };
         TerminalManagerInit {
             manager,
@@ -360,6 +404,7 @@ impl TerminalManager {
             window_id,
             enable_orchestration_polling,
             is_ambient_agent,
+            None,
             ctx,
         );
 
@@ -391,6 +436,7 @@ impl TerminalManager {
             window_id,
             enable_orchestration_polling,
             true, // is_ambient_agent
+            None,
             ctx,
         )
     }
@@ -527,6 +573,7 @@ impl TerminalManager {
             self.viewer_remote_update_guard.clone(),
             self.orchestration_viewer_model.clone(),
             self.enable_orchestration_polling,
+            self.orchestration_child_conversation_id,
             ctx,
         );
         if !self.outbound_handlers_registered {
@@ -542,6 +589,7 @@ impl TerminalManager {
             // Send model selection updates during session sharing (if viewer has Editor role)
             let current_network_for_models = self.current_network.clone();
             let terminal_view_id = self.view.id();
+            let weak_view_for_models = self.view.downgrade();
             let model_clone = self.model.clone();
             let model_remote_update_guard = self.viewer_remote_update_guard.clone();
             ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
@@ -550,9 +598,15 @@ impl TerminalManager {
                     return;
                 }
 
+                let Some(window_id) = weak_view_for_models.window_id(ctx) else {
+                    return;
+                };
+                let scope = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+                );
                 let llm_prefs = &LLMPreferences::as_ref(ctx);
                 let selected_model_id: String = llm_prefs
-                    .get_active_base_model(ctx, Some(terminal_view_id))
+                    .get_active_base_model(&scope, ctx, Some(terminal_view_id))
                     .id
                     .clone()
                     .into();
@@ -770,6 +824,7 @@ impl TerminalManager {
         viewer_remote_update_guard: RemoteUpdateGuard,
         orchestration_viewer_model: Arc<FairMutex<Option<ModelHandle<OrchestrationViewerModel>>>>,
         enable_orchestration_polling: bool,
+        orchestration_child_conversation_id: Option<AIConversationId>,
         ctx: &mut AppContext,
     ) {
         // We use a weak view handle instead of a strong reference because we may add a subscription to the view which moves a strong reference of the Model into the callback,
@@ -842,6 +897,14 @@ impl TerminalManager {
                     if let Some(task_id) = ambient_task_id {
                         ActiveAgentViewsModel::handle(ctx).update(ctx, |model, ctx| {
                             model.register_ambient_session(terminal_view_id, task_id, ctx);
+                        });
+
+                        // REMOTE-2661: `resolve_ai_query_routing` reads this cache synchronously,
+                        // so warm it eagerly here rather than depend on the task list's own
+                        // polling having reached this task already (e.g. a direct session-link
+                        // join, bypassing the task list).
+                        AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.get_or_async_fetch_task_data(&task_id, ctx);
                         });
                     }
                 }
@@ -968,14 +1031,32 @@ impl TerminalManager {
             }
             NetworkEvent::FailedToJoin { reason } => {
                 let session_id = network.as_ref(ctx).session_id();
-                log::warn!(
-                    "viewer TerminalManager: NetworkEvent::FailedToJoin \
-                     session_id={session_id} reason={reason:?}; pane stays in ViewPending \
-                     until manual retry or a fresh ensure_shared_session_viewer_child_pane"
+                log::debug!(
+                    "[shared-session] viewer TerminalManager: NetworkEvent::FailedToJoin \
+                     session_id={session_id} reason={reason:?} \
+                     orchestration_child_conversation_id={orchestration_child_conversation_id:?}"
                 );
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
                 };
+                if FeatureFlag::OrchestrationUnifiedStack.is_enabled()
+                    && matches!(
+                        reason,
+                        FailedToJoinReason::SessionNotFound
+                            | FailedToJoinReason::SessionNotAccessible
+                    )
+                    && let Some(conversation_id) = orchestration_child_conversation_id
+                {
+                    view.update(ctx, |_terminal_view, ctx| {
+                        ctx.emit(
+                            TerminalViewEvent::OrchestrationChildSharedSessionJoinFailed {
+                                conversation_id,
+                                session_id,
+                            },
+                        );
+                    });
+                    return;
+                }
                 view.update(ctx, |terminal_view, ctx| {
                     terminal_view.show_persistent_toast(
                         reason.user_facing_error_message().to_string(),
@@ -1468,7 +1549,13 @@ impl TerminalManager {
         };
 
         let terminal_view_id = view.id();
-        apply_selected_agent_model_update(terminal_view_id, selected_model, guard, ctx);
+        apply_selected_agent_model_update(
+            weak_view_handle,
+            terminal_view_id,
+            selected_model,
+            guard,
+            ctx,
+        );
     }
 
     fn handle_input_mode_update(

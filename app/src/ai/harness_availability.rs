@@ -23,6 +23,24 @@ use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const CACHE_KEY: &str = "AvailableHarnesses";
 const AUTH_SECRET_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CloudAgentStartBlocker {
+    TeamRequired,
+    NoEnabledHarnesses,
+}
+
+pub(crate) fn cloud_agent_start_blocker(
+    team_required: bool,
+    has_enabled_harness: bool,
+) -> Option<CloudAgentStartBlocker> {
+    if team_required {
+        Some(CloudAgentStartBlocker::TeamRequired)
+    } else if !has_enabled_harness {
+        Some(CloudAgentStartBlocker::NoEnabledHarnesses)
+    } else {
+        None
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HarnessModelInfo {

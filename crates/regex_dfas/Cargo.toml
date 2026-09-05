@@ -1,0 +1,10 @@
+[package]
+authors = ["Warp Team <dev@warp.dev>"]
+edition = "2024"
+name = "regex_dfas"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+regex.workspace = true
+regex-automata.workspace = true

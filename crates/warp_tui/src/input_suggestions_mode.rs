@@ -16,6 +16,7 @@ pub(crate) enum TuiInputSuggestionsMode {
     ApiKeys,
     ConversationMenu,
     ModelSelector,
+    TeamSelector,
     SkillMenu,
     Mcp,
     McpInstall,
@@ -37,6 +38,7 @@ impl TuiInputSuggestionsMode {
             | Self::ApiKeys
             | Self::ConversationMenu
             | Self::ModelSelector
+            | Self::TeamSelector
             | Self::SkillMenu
             | Self::Mcp
             | Self::McpInstall
@@ -94,6 +96,7 @@ impl TuiInputSuggestionsModeModel {
             | TuiInputSuggestionsMode::ApiKeys
             | TuiInputSuggestionsMode::ConversationMenu
             | TuiInputSuggestionsMode::ModelSelector
+            | TuiInputSuggestionsMode::TeamSelector
             | TuiInputSuggestionsMode::SkillMenu
             | TuiInputSuggestionsMode::Mcp
             | TuiInputSuggestionsMode::McpInstall

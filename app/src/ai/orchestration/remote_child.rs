@@ -104,25 +104,17 @@ pub struct PreparedRemoteChildLaunch {
 }
 
 /// Failure while constructing the remote child request, before calling the server.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PrepareRemoteChildLaunchError {
+    #[error("Remote child agents require the parent run_id to be available.")]
     MissingParentRunId,
+    #[error("Failed to resolve child agent skills: {}", references.join(", "))]
     UnresolvedSkills { references: Vec<String> },
 }
 
 impl PrepareRemoteChildLaunchError {
     pub fn user_message(&self) -> String {
-        match self {
-            Self::MissingParentRunId => {
-                "Remote child agents require the parent run_id to be available.".to_string()
-            }
-            Self::UnresolvedSkills { references } => {
-                format!(
-                    "Failed to resolve child agent skills: {}",
-                    references.join(", ")
-                )
-            }
-        }
+        self.to_string()
     }
 }
 

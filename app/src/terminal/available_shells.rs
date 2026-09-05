@@ -25,6 +25,13 @@ struct LocalConfig {
     shell_type: ShellType,
 }
 
+#[cfg(feature = "local_tty")]
+impl crate::terminal::local_tty::shell::AvailableShell for AvailableShell {
+    fn get_valid_shell_path_and_type(&self) -> Option<ShellLaunchData> {
+        AvailableShell::get_valid_shell_path_and_type(self)
+    }
+}
+
 impl TryFrom<StartupShell> for LocalConfig {
     type Error = ();
 
@@ -464,7 +471,7 @@ impl AvailableShells {
         // to search.
         #[cfg(windows)]
         {
-            use crate::util::windows;
+            use warp_util::path::windows;
 
             paths_to_search.extend(windows::powershell_7_install_paths());
             paths_to_search.push(windows::powershell_5_install_path());

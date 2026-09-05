@@ -101,8 +101,10 @@ use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
 use crate::terminal::shell::ShellType;
 use crate::terminal::universal_developer_input::UniversalDeveloperInputButtonBarEvent;
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::terminal::view::inline_banner::ByoLlmAuthBannerSessionState;
 use crate::terminal::writeable_pty::command_history::update_command_history;
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
@@ -114,6 +116,57 @@ use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
 };
+
+fn pending_ctrl_r_handoff() -> PendingShellWidgetHandoff {
+    PendingShellWidgetHandoff {
+        session_id: SessionId::from(1),
+        original_buffer: "draft".to_string(),
+        selection: None,
+        block_id: BlockId::new(),
+        apply_mode: ShellWidgetApplyMode::Replace,
+        cursor_offset: None,
+    }
+}
+
+fn pending_ctrl_t_handoff() -> PendingShellWidgetHandoff {
+    PendingShellWidgetHandoff {
+        session_id: SessionId::from(1),
+        original_buffer: "echo ".to_string(),
+        selection: None,
+        block_id: BlockId::new(),
+        apply_mode: ShellWidgetApplyMode::Splice,
+        cursor_offset: Some(ByteOffset::from(5)),
+    }
+}
+
+#[test]
+fn matching_shell_widget_handoff_selection_is_applied() {
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "echo selected");
+    assert_eq!(handoff.restore_text(), "echo selected");
+
+    let mut handoff = pending_ctrl_t_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "selected/file.txt");
+    assert_eq!(handoff.selection, Some("selected/file.txt".to_string()));
+}
+
+#[test]
+fn unsolicited_or_stale_shell_widget_handoff_selection_is_ignored() {
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(2), "echo selected");
+    assert_eq!(handoff.restore_text(), "draft");
+}
+
+#[test]
+fn empty_shell_widget_handoff_selection_keeps_original_buffer() {
+    let mut handoff = pending_ctrl_r_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "");
+    assert_eq!(handoff.restore_text(), "draft");
+
+    let mut handoff = pending_ctrl_t_handoff();
+    handoff.maybe_apply_selection(SessionId::from(1), "");
+    assert_eq!(handoff.selection, None);
+}
 
 #[test]
 fn renders_git_checkout_prompt_chip_command_as_single_shell_argument() {
@@ -411,11 +464,12 @@ pub async fn add_window_with_bootstrapped_terminal_and_window_id(
 ) -> (WindowId, ViewHandle<TerminalView>) {
     let tips_model = app.add_model(|_| TipsCompleted::default());
 
-    let shell_starter_source = ShellStarter::init(Default::default())
-        .expect("Could not create a shell starter source or wsl name")
-        .to_shell_starter_source()
-        .await
-        .expect("Could not create a shell starter source");
+    let shell_starter_source =
+        ShellStarter::init(crate::terminal::available_shells::AvailableShell::default())
+            .expect("Could not create a shell starter source or wsl name")
+            .to_shell_starter_source()
+            .await
+            .expect("Could not create a shell starter source");
     let shell_type = shell_starter_source.shell_type();
 
     let session_info = session_info
@@ -1450,6 +1504,32 @@ fn maybe_route_ai_query_to_remote_target_blocks_read_only_viewer() {
 }
 
 #[test]
+fn unresolved_ambient_task_blocks_submission() {
+    // REMOTE-2661: eligibility that is merely unresolved (the ambient task is not in
+    // `AgentConversationsModel` yet) must fail closed for every submission path, rather than
+    // fall back to the direct viewer path or a new local conversation.
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let (_, terminal) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_model, None, ctx)
+        });
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let task_id: crate::ai::ambient_agents::AmbientAgentTaskId =
+            "550e8400-e29b-41d4-a716-000000000099".parse().unwrap();
+
+        let blocked = input.update(&mut app, |input, ctx| {
+            input.block_submission_while_ambient_task_unresolved(Some(task_id), ctx)
+        });
+        assert!(
+            blocked,
+            "an uncached ambient task must block the submission instead of resolving eligibility"
+        );
+    });
+}
+
+#[test]
 fn maybe_route_ai_query_to_remote_target_forwards_executor_viewer_prompt() {
     // An executor viewer forwards the prompt to the sharer (SendAgentPrompt) instead of running
     // it on the viewer's local machine.
@@ -1523,8 +1603,10 @@ fn attach_ambient_view_model_builds_composer_selectors_for_fresh_cloud_pane_in_v
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1567,8 +1649,10 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
 
             assert!(
@@ -1609,8 +1693,10 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
         });
 
         let input = terminal.read(&app, |view, _| view.input().clone());
+        let weak_terminal = terminal.downgrade();
         input.update(&mut app, |input, ctx| {
-            let view_model = ctx.add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, ctx));
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, weak_terminal, ctx));
             input.attach_ambient_agent_view_model(view_model, ctx);
         });
 
@@ -1799,21 +1885,18 @@ fn queued_command_completion_preserves_draft() {
             input.deferred_remote_operations.latest_block_id = BlockId::new();
             input.handle_block_completed_event(
                 BlockCompletedEvent {
-                    block_type: BlockType::User(UserBlockCompleted {
-                        index: BlockIndex::zero(),
-                        serialized_block: Arc::new(SerializedBlock::new_for_test(
-                            b"echo 1".to_vec(),
-                            vec![],
-                        )),
-                        command: "echo 1".to_owned(),
-                        command_with_obfuscated_secrets: "echo 1".to_owned(),
-                        output_truncated: String::new(),
-                        output_truncated_with_obfuscated_secrets: String::new(),
-                        was_part_of_agent_interaction: false,
-                        started_at: None,
-                        num_output_lines: 0,
-                        num_output_lines_truncated: 0,
-                    }),
+                    block_type: BlockType::User(UserBlockCompleted::new_for_test(
+                        BlockIndex::zero(),
+                        Arc::new(SerializedBlock::new_for_test(b"echo 1".to_vec(), vec![])),
+                        "echo 1".to_owned(),
+                        "echo 1".to_owned(),
+                        String::new(),
+                        String::new(),
+                        false,
+                        None,
+                        0,
+                        0,
+                    )),
                     num_secrets_obfuscated: 0,
                     block_index: BlockIndex::zero(),
                     block_id: BlockId::new(),
@@ -1826,6 +1909,341 @@ fn queued_command_completion_preserves_draft() {
 
         input.read(&app, |input, ctx| {
             assert_eq!(input.buffer_text(ctx), "draft in progress");
+        });
+    });
+}
+
+fn user_block_completed_for_test(command: &str) -> BlockType {
+    BlockType::User(UserBlockCompleted::new_for_test(
+        BlockIndex::zero(),
+        Arc::new(SerializedBlock::new_for_test(
+            command.as_bytes().to_vec(),
+            vec![],
+        )),
+        command.to_owned(),
+        command.to_owned(),
+        String::new(),
+        String::new(),
+        false,
+        None,
+        0,
+        0,
+    ))
+}
+
+async fn complete_ctrl_t_handoff(
+    app: &mut App,
+    apply_mode: ShellWidgetApplyMode,
+    original_buffer: &str,
+    cursor_offset: usize,
+    insertion: Option<&str>,
+) -> (String, ByteOffset) {
+    let terminal = add_window_with_bootstrapped_terminal(app, None, None).await;
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let block_id = BlockId::new();
+    input.update(app, |input, ctx| {
+        input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
+            session_id: SessionId::from(1),
+            original_buffer: original_buffer.to_string(),
+            selection: insertion.map(str::to_string),
+            block_id: block_id.clone(),
+            apply_mode,
+            cursor_offset: Some(ByteOffset::from(cursor_offset)),
+        });
+        input.deferred_remote_operations.latest_block_id = BlockId::new();
+        input.handle_block_completed_event(
+            BlockCompletedEvent {
+                block_type: user_block_completed_for_test(original_buffer),
+                num_secrets_obfuscated: 0,
+                block_index: BlockIndex::zero(),
+                block_id,
+                session_id: None,
+                restored_block_was_local: None,
+            },
+            ctx,
+        );
+    });
+    input.read(app, |input, ctx| {
+        (
+            input.buffer_text(ctx),
+            input
+                .editor()
+                .as_ref(ctx)
+                .end_byte_index_of_last_selection(ctx),
+        )
+    })
+}
+
+async fn complete_ctrl_r_handoff(
+    app: &mut App,
+    original_buffer: &str,
+    selection: Option<&str>,
+) -> String {
+    let terminal = add_window_with_bootstrapped_terminal(app, None, None).await;
+    let input = terminal.read(app, |view, _| view.input().clone());
+    let block_id = BlockId::new();
+    input.update(app, |input, ctx| {
+        input.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
+            session_id: SessionId::from(1),
+            original_buffer: original_buffer.to_string(),
+            selection: selection.map(str::to_string),
+            block_id: block_id.clone(),
+            apply_mode: ShellWidgetApplyMode::Replace,
+            cursor_offset: None,
+        });
+        input.deferred_remote_operations.latest_block_id = BlockId::new();
+        input.handle_block_completed_event(
+            BlockCompletedEvent {
+                block_type: user_block_completed_for_test(original_buffer),
+                num_secrets_obfuscated: 0,
+                block_index: BlockIndex::zero(),
+                block_id,
+                session_id: None,
+                restored_block_was_local: None,
+            },
+            ctx,
+        );
+    });
+    input.read(app, |input, ctx| input.buffer_text(ctx))
+}
+
+#[test]
+fn ctrl_r_handoff_replace_lands_selection() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let buffer = complete_ctrl_r_handoff(&mut app, "draft", Some("echo selected")).await;
+        assert_eq!(buffer, "echo selected");
+    });
+}
+
+#[test]
+fn ctrl_r_handoff_cancel_restores_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let buffer = complete_ctrl_r_handoff(&mut app, "draft", None).await;
+        assert_eq!(buffer, "draft");
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_in_middle_of_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "echo START END",
+            11,
+            Some("FILE.txt "),
+        )
+        .await;
+        assert_eq!(buffer, "echo START FILE.txt END");
+        assert_eq!(cursor, ByteOffset::from("echo START FILE.txt ".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_at_end_of_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "echo ",
+            5,
+            Some("FILE.txt"),
+        )
+        .await;
+        assert_eq!(buffer, "echo FILE.txt");
+        assert_eq!(cursor, ByteOffset::from("echo FILE.txt".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_into_empty_buffer() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "",
+            0,
+            Some("FILE.txt"),
+        )
+        .await;
+        assert_eq!(buffer, "FILE.txt");
+        assert_eq!(cursor, ByteOffset::from("FILE.txt".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_splices_selection_after_multi_byte_character() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let original = "caf\u{e9} ";
+        let cursor_offset = original.len();
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            original,
+            cursor_offset,
+            Some("dest.txt"),
+        )
+        .await;
+        assert_eq!(buffer, "caf\u{e9} dest.txt");
+        assert_eq!(cursor, ByteOffset::from("caf\u{e9} dest.txt".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_cancel_restores_cursor_to_original_offset_mid_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        for apply_mode in [ShellWidgetApplyMode::Splice, ShellWidgetApplyMode::Replace] {
+            let (buffer, cursor) =
+                complete_ctrl_t_handoff(&mut app, apply_mode, "echo START END", 11, None).await;
+            assert_eq!(
+                buffer, "echo START END",
+                "{apply_mode:?}: cancelling must leave the original text untouched"
+            );
+            assert_eq!(
+                cursor,
+                ByteOffset::from(11),
+                "{apply_mode:?}: cancelling must restore the cursor to where ctrl-t was pressed, \
+                 not the end of the buffer"
+            );
+        }
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_cancel_restores_cursor_captured_by_a_real_trigger() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("echo START MIDDLE", ctx);
+            input.editor().update(ctx, |editor, ctx| {
+                editor.select_ranges_by_byte_offset(
+                    [ByteOffset::from(11)..ByteOffset::from(11)],
+                    ctx,
+                );
+            });
+        });
+
+        let started = input.update(&mut app, |input, ctx| {
+            input.trigger_external_shell_widget_handoff(
+                "warp_run_external_ctrl_t_widget",
+                ShellWidgetApplyMode::Splice,
+                true,
+                ctx,
+            )
+        });
+        assert!(started, "the handoff command should have started");
+
+        let block_id = terminal.read(&app, |terminal, _| {
+            terminal.model.lock().block_list().active_block_id().clone()
+        });
+
+        input.update(&mut app, |input, _ctx| {
+            input.deferred_remote_operations.latest_block_id = BlockId::new();
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.handle_block_completed_event(
+                BlockCompletedEvent {
+                    block_type: user_block_completed_for_test(" warp_run_external_ctrl_t_widget"),
+                    num_secrets_obfuscated: 0,
+                    block_index: BlockIndex::zero(),
+                    block_id,
+                    session_id: None,
+                    restored_block_was_local: None,
+                },
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "echo START MIDDLE");
+            assert_eq!(
+                input
+                    .editor()
+                    .as_ref(ctx)
+                    .end_byte_index_of_last_selection(ctx),
+                ByteOffset::from(11),
+                "cancelling a handoff whose cursor was captured by a real trigger must restore \
+                 the cursor to where ctrl-t was pressed, not the end of the buffer"
+            );
+        });
+    });
+}
+
+#[test]
+fn ctrl_t_handoff_replace_mode_lands_selection_wholesale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let (buffer, cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Replace,
+            "vim src/ END",
+            8,
+            Some("vim src/nested.rs "),
+        )
+        .await;
+        assert_eq!(buffer, "vim src/nested.rs ");
+        assert_eq!(cursor, ByteOffset::from("vim src/nested.rs ".len()));
+    });
+}
+
+#[test]
+fn ctrl_t_apply_mode_forks_between_splice_and_replace_for_the_same_draft() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let (splice_buffer, splice_cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Splice,
+            "vim src/ END",
+            8,
+            Some("nested.rs "),
+        )
+        .await;
+        assert_eq!(splice_buffer, "vim src/nested.rs  END");
+        assert_eq!(splice_cursor, ByteOffset::from("vim src/nested.rs ".len()));
+
+        let (replace_buffer, replace_cursor) = complete_ctrl_t_handoff(
+            &mut app,
+            ShellWidgetApplyMode::Replace,
+            "vim src/ END",
+            8,
+            Some("vim src/nested.rs  END"),
+        )
+        .await;
+        assert_eq!(replace_buffer, "vim src/nested.rs  END");
+        assert_eq!(
+            replace_cursor,
+            ByteOffset::from("vim src/nested.rs  END".len())
+        );
+    });
+}
+
+#[test]
+fn ctrl_t_binding_is_ineligible_when_shell_widget_handoff_flag_is_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        assert!(
+            !FeatureFlag::ShellWidgetHandoff.is_enabled(),
+            "this test assumes the flag defaults to disabled in the test harness"
+        );
+        app.read(|ctx| {
+            assert!(
+                ctx.get_binding_by_name("workspace:trigger_external_ctrl_t_file_search")
+                    .is_none(),
+                "the ctrl-t binding must be ineligible while ShellWidgetHandoff is disabled"
+            );
         });
     });
 }
@@ -2919,6 +3337,211 @@ fn build_suggestion_results<S: Into<Span>>(
         suggestions,
         match_strategy: matcher,
     })
+}
+
+#[test]
+fn native_completions_after_empty_specs_bails_when_stale() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app, None, /* history_file_commands */
+            None,
+        )
+        .await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        // Fresh dispatch: the buffer still matches what the request was computed from, so the
+        // shell is asked and the abort handle is armed.
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+        });
+        let snapshot_git = input.update(&mut app, |input, ctx| editor_model_snapshot(input, ctx));
+        input.update(&mut app, |input, ctx| {
+            input.dispatch_native_shell_completions(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_some(),
+                "a real dispatch arms the completions abort handle"
+            );
+        });
+
+        // Stale dispatch: the buffer moved on while the (async) spec pass was running, so this
+        // phase-two callback -- computed from the older snapshot -- must not ask the shell, and
+        // must leave the abort handle a newer request may already own untouched.
+        input.update(&mut app, |input, ctx| {
+            input.completions_abort_handle = None;
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git checkout", ctx);
+            input.dispatch_native_shell_completions(
+                "git ".to_string(),
+                "git ".len(),
+                CompletionsTrigger::Keybinding,
+                snapshot_git.clone(),
+                ctx,
+            );
+            assert!(
+                input.completions_abort_handle.is_none(),
+                "a stale request must not ask the shell or arm/clobber the abort handle"
+            );
+        });
+    });
+}
+
+fn count_native_shell_completions_dispatches(
+    app: &mut App,
+    terminal: &ViewHandle<TerminalView>,
+) -> Rc<RefCell<u32>> {
+    let count = Rc::new(RefCell::new(0));
+    let count_clone = count.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(terminal, move |_, event: &TerminalViewEvent, _| {
+            if let TerminalViewEvent::RunNativeShellCompletions { .. } = event {
+                *count_clone.borrow_mut() += 1;
+            }
+        });
+    });
+    count
+}
+
+#[test]
+fn input_tab_does_not_ask_the_shell_when_bundled_specs_are_non_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("git ", ctx);
+            input.input_tab(ctx);
+        });
+
+        assert_eventually!(
+            600 => input.read(&app, |input, ctx| {
+                input.suggestions_mode_model.as_ref(ctx).is_visible()
+            }),
+            "gave up after 600 attempts waiting for the bundled-spec completions menu to open"
+        );
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            0,
+            "a command with a real bundled spec must never ask the shell"
+        );
+    });
+}
+
+#[test]
+fn input_tab_asks_the_shell_once_when_bundled_specs_are_empty() {
+    let _native_completions_flag = FeatureFlag::NativeShellCompletions.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal = add_window_with_bootstrapped_terminal(
+            &mut app,
+            None, /* history_file_commands */
+            Some(session_info),
+        )
+        .await;
+        simulate_directory_for_completion(session_id, &terminal, &mut app, "/usr/bin");
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        let dispatch_count = count_native_shell_completions_dispatches(&mut app, &terminal);
+
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+            input.user_insert("definitelynotarealcommand ", ctx);
+            input.input_tab(ctx);
+        });
+
+        assert_eventually!(
+            600 => *dispatch_count.borrow() == 1,
+            "gave up after 600 attempts waiting for the shell to be asked"
+        );
+
+        assert_eq!(
+            *dispatch_count.borrow(),
+            1,
+            "an unrecognized command must reach the shell exactly once, not fall back to \
+             file-path completions"
+        );
+    });
+}
+
+#[test]
+fn native_shell_replacement_span_is_clamped_into_the_buffer_before_the_cursor() {
+    let buffer_text = "cd app/D";
+    let cursor_position = buffer_text.len();
+
+    let honored = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(3, 8)),
+        buffer_text,
+        cursor_position,
+    );
+    assert_eq!(
+        honored.replacement_span,
+        Span::new(3, 8),
+        "a span a shell can really report must survive untouched"
+    );
+
+    let out_of_range = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(1_000_000, 1_000_001)),
+        buffer_text,
+        cursor_position,
+    );
+    assert_eq!(out_of_range.replacement_span, Span::new(8, 8));
+
+    let saturated = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(usize::MAX, usize::MAX)),
+        buffer_text,
+        cursor_position,
+    );
+    assert_eq!(saturated.replacement_span, Span::new(8, 8));
+}
+
+#[test]
+fn native_shell_replacement_span_is_clamped_to_the_cursor_not_the_whole_buffer() {
+    let buffer_text = "cd app/Documents";
+    let cursor_position = "cd app/D".len();
+
+    let results = native_shell_suggestion_results(
+        Vec::new(),
+        Some(Span::new(12, 16)),
+        buffer_text,
+        cursor_position,
+    );
+
+    assert_eq!(results.replacement_span, Span::new(8, 8));
+}
+
+#[test]
+fn native_shell_replacement_span_falls_back_to_the_whitespace_token_when_none_is_reported() {
+    let buffer_text = "cd app/D";
+
+    let results = native_shell_suggestion_results(Vec::new(), None, buffer_text, buffer_text.len());
+
+    assert_eq!(results.replacement_span, Span::new(3, 8));
 }
 
 #[test]
@@ -9638,4 +10261,218 @@ fn upload_files_then_submit_cloud_followup_restores_input_on_upload_error() {
             "input must be restored to the original prompt after a failed attachment upload"
         );
     });
+}
+
+/// With the '#' AI Command Search trigger disabled (APP-5557), typing '#' at the start of the
+/// buffer must leave it (and any text typed after it) as literal input, and must not open AI
+/// Command Search — this is what lets the text be finished and submitted as a shell comment
+/// instead of trapping the user in the panel.
+#[test]
+fn hash_trigger_disabled_keeps_hash_literal_and_does_not_open_ai_command_search() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        InputSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .enable_ai_command_search_hash_trigger
+                .set_value(false, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        let open_count = Rc::new(RefCell::new(0));
+        let open_count_for_subscription = open_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if matches!(event, Event::ShowCommandSearch(_)) {
+                    *open_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("#", ctx);
+            input.user_insert(" this is a test comment", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.buffer_text(ctx),
+                "# this is a test comment",
+                "the '#' and the text typed after it must remain literal input"
+            );
+        });
+        assert_eq!(
+            *open_count.borrow(),
+            0,
+            "AI Command Search must not open when the '#' trigger setting is disabled"
+        );
+    });
+}
+
+/// With the '#' trigger left at its default (enabled), typing '#' at the start of the buffer
+/// must still open AI Command Search, preserving pre-existing behavior.
+#[test]
+fn hash_trigger_enabled_by_default_opens_ai_command_search() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        let open_count = Rc::new(RefCell::new(0));
+        let open_count_for_subscription = open_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if matches!(event, Event::ShowCommandSearch(_)) {
+                    *open_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("#", ctx);
+        });
+
+        assert_eq!(
+            *open_count.borrow(),
+            1,
+            "AI Command Search must open on typing '#' when the trigger setting defaults to enabled"
+        );
+    });
+}
+
+#[test]
+fn hotkey_opens_ai_command_search_even_when_hash_trigger_disabled() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        InputSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .enable_ai_command_search_hash_trigger
+                .set_value(false, ctx)
+                .expect("setting value must succeed");
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        let open_count = Rc::new(RefCell::new(0));
+        let open_count_for_subscription = open_count.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&input, move |_, event, _| {
+                if matches!(event, Event::ShowCommandSearch(_)) {
+                    *open_count_for_subscription.borrow_mut() += 1;
+                }
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.handle_action(&InputAction::ShowAiCommandSearch, ctx);
+        });
+
+        assert_eq!(
+            *open_count.borrow(),
+            1,
+            "the AI Command Search hotkey must still open the panel when the '#' trigger is disabled"
+        );
+    });
+}
+
+#[cfg(test)]
+mod completion_sources_resolution_tests {
+    use super::super::{CompletionSources, CompletionsTrigger, resolve_completion_sources};
+
+    #[test]
+    fn feature_flag_off_is_warp_only_regardless_of_toggles() {
+        for warp_completions_enabled in [true, false] {
+            for native_shell_completions_enabled in [true, false] {
+                assert_eq!(
+                    resolve_completion_sources(
+                        false,
+                        false,
+                        false,
+                        CompletionsTrigger::Keybinding,
+                        warp_completions_enabled,
+                        native_shell_completions_enabled,
+                    ),
+                    CompletionSources::WarpOnly,
+                    "flag off must resolve to WarpOnly (warp={warp_completions_enabled}, native={native_shell_completions_enabled})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ai_input_is_warp_only_regardless_of_flag_and_toggles() {
+        for feature_flag_enabled in [true, false] {
+            for warp_completions_enabled in [true, false] {
+                for native_shell_completions_enabled in [true, false] {
+                    assert_eq!(
+                        resolve_completion_sources(
+                            feature_flag_enabled,
+                            true,
+                            false,
+                            CompletionsTrigger::Keybinding,
+                            warp_completions_enabled,
+                            native_shell_completions_enabled,
+                        ),
+                        CompletionSources::WarpOnly,
+                        "AI input must resolve to WarpOnly (flag={feature_flag_enabled}, warp={warp_completions_enabled}, native={native_shell_completions_enabled})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn feature_flag_on_maps_the_four_toggle_states() {
+        let resolve = |warp_completions_enabled, native_shell_completions_enabled| {
+            resolve_completion_sources(
+                true,
+                false,
+                false,
+                CompletionsTrigger::Keybinding,
+                warp_completions_enabled,
+                native_shell_completions_enabled,
+            )
+        };
+        assert_eq!(resolve(true, true), CompletionSources::WarpThenNative);
+        assert_eq!(resolve(true, false), CompletionSources::WarpOnly);
+        assert_eq!(resolve(false, true), CompletionSources::NativeOnly);
+        assert_eq!(resolve(false, false), CompletionSources::None);
+    }
+
+    #[test]
+    fn as_you_type_never_selects_native_even_with_both_toggles_on() {
+        assert_eq!(
+            resolve_completion_sources(
+                true,  // feature flag on
+                false, // not AI input
+                false, // single-line
+                CompletionsTrigger::AsYouType,
+                true, // warp completions on
+                true, // native shell completions on
+            ),
+            CompletionSources::WarpOnly
+        );
+    }
+
+    // A multi-line buffer disables native completions even on a Tab trigger with both toggles on.
+    #[test]
+    fn multiline_buffer_never_selects_native() {
+        assert_eq!(
+            resolve_completion_sources(
+                true,  // feature flag on
+                false, // not AI input
+                true,  // multi-line
+                CompletionsTrigger::Keybinding,
+                true, // warp completions on
+                true, // native shell completions on
+            ),
+            CompletionSources::WarpOnly
+        );
+    }
 }

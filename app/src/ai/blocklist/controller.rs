@@ -27,9 +27,11 @@ use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
 use warp_multi_agent_api::{Task, ToolType, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
-use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
+};
 
-use self::response_stream::{ResponseStream, ResponseStreamEvent};
+use self::response_stream::{PendingResume, RecoveryBudget, ResponseStream, ResponseStreamEvent};
 use super::action_model::{BlocklistAIActionEvent, BlocklistAIActionModel};
 use super::context_model::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use super::conversation_selection::{ConversationSelectionEvent, ConversationSelectionHandle};
@@ -71,6 +73,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::server_api::AIApiError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::ShellLaunchData;
 use crate::terminal::model::block::{
@@ -82,7 +85,9 @@ use crate::terminal::model::terminal_model::TerminalModel;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::workspace::OneTimeModalModel;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope, UserWorkspaces,
+};
 
 #[derive(Debug, Clone)]
 pub struct SessionContext {
@@ -207,6 +212,7 @@ pub struct RequestInput {
 }
 
 impl RequestInput {
+    #[allow(clippy::too_many_arguments)]
     fn for_task(
         inputs: Vec<AIAgentInput>,
         task_id: TaskId,
@@ -214,6 +220,7 @@ impl RequestInput {
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
@@ -221,12 +228,14 @@ impl RequestInput {
             active_session,
             shared_session_response_initiator,
             terminal_surface_id,
+            scope,
             app,
         );
         me.input_messages.insert(task_id, inputs);
         me
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn for_actions_results(
         action_results: Vec<AIAgentActionResult>,
         context: Arc<[AIAgentContext]>,
@@ -234,6 +243,7 @@ impl RequestInput {
         shared_session_response_initiator: Option<ParticipantId>,
         conversation_id: AIConversationId,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let mut me = Self::new_with_common_fields(
@@ -241,6 +251,7 @@ impl RequestInput {
             active_session,
             shared_session_response_initiator,
             terminal_surface_id,
+            scope,
             app,
         );
         for result in action_results.into_iter() {
@@ -269,23 +280,24 @@ impl RequestInput {
         active_session: &ModelHandle<ActiveSession>,
         shared_session_response_initiator: Option<ParticipantId>,
         terminal_surface_id: EntityId,
+        scope: &impl TeamScope,
         app: &AppContext,
     ) -> Self {
         let llm_prefs = LLMPreferences::as_ref(app);
         let model_id = llm_prefs
-            .get_active_base_model(app, Some(terminal_surface_id))
+            .get_active_base_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let coding_model_id = llm_prefs
-            .get_active_coding_model(app, Some(terminal_surface_id))
+            .get_active_coding_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let cli_agent_model_id = llm_prefs
-            .get_active_cli_agent_model(app, Some(terminal_surface_id))
+            .get_active_cli_agent_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let computer_use_model_id = llm_prefs
-            .get_active_computer_use_model(app, Some(terminal_surface_id))
+            .get_active_computer_use_model(scope, app, Some(terminal_surface_id))
             .id
             .clone();
         let working_directory = active_session
@@ -322,6 +334,7 @@ pub struct BlocklistAIController {
 
     /// The ID of the terminal surface this controller is associated with.
     terminal_surface_id: EntityId,
+    team_context_resolver: TeamContextResolver,
 
     should_refresh_available_llms_on_stream_finish: bool,
 
@@ -422,9 +435,13 @@ impl BlocklistAIController {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
     }
 
+    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        (self.team_context_resolver)(app)
+    }
+
     /// Creates a controller for a terminal surface.
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new<T: Entity>(
         input_model: ModelHandle<BlocklistAIInputModel>,
         context_model: ModelHandle<BlocklistAIContextModel>,
         conversation_selection: ConversationSelectionHandle,
@@ -432,8 +449,10 @@ impl BlocklistAIController {
         active_session: ModelHandle<ActiveSession>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
         terminal_surface_id: EntityId,
+        terminal_surface: WeakViewHandle<T>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let team_context_resolver = UserWorkspaces::team_context_resolver(terminal_surface);
         ctx.subscribe_to_model(&action_model, move |me, _, event, ctx| {
             let BlocklistAIActionEvent::FinishedAction {
                 conversation_id,
@@ -626,6 +645,7 @@ impl BlocklistAIController {
             terminal_model,
             in_flight_response_streams: PendingResponseStreams::new(),
             terminal_surface_id,
+            team_context_resolver,
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
             ambient_agent_task_id: None,
@@ -834,6 +854,7 @@ impl BlocklistAIController {
             });
         }
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let send_result = self.send_request_input(
             RequestInput::for_task(
                 inputs,
@@ -842,6 +863,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 conversation_id,
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -849,7 +871,7 @@ impl BlocklistAIController {
                 entrypoint: entrypoint_type,
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             is_queued_prompt,
             ctx,
         );
@@ -1611,6 +1633,7 @@ impl BlocklistAIController {
             vec![],
             ctx,
         );
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let mut request_input = RequestInput::for_actions_results(
             finished_results,
             context,
@@ -1618,6 +1641,7 @@ impl BlocklistAIController {
             self.get_current_response_initiator(),
             conversation_id,
             self.terminal_surface_id,
+            &scope,
             ctx,
         );
 
@@ -1652,7 +1676,7 @@ impl BlocklistAIController {
         let result = self.send_request_input(
             request_input,
             None,
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
             ctx,
         );
@@ -1677,11 +1701,16 @@ impl BlocklistAIController {
         let has_active_stream = self
             .in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, ctx);
+        // Once the conversation's ambient run has begun a terminal exit with no idle
+        // window left to cancel it, starting a new request here would only race that
+        // teardown and get cancelled, leaving the run stuck `InProgress` (QUALITY-1801).
+        let is_exiting =
+            OrchestrationEventService::as_ref(ctx).is_conversation_exiting(conversation_id);
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream}"
+                "Pending events are not ready: conversation_id={conversation_id:?} reason=conversation_missing owns_conversation={owns} has_active_stream={has_active_stream} is_exiting={is_exiting}"
             );
             return false;
         };
@@ -1692,9 +1721,9 @@ impl BlocklistAIController {
             conversation.status(),
             ConversationStatus::Success | ConversationStatus::WaitingForEvents,
         );
-        if !owns || has_active_stream || !is_ready_status {
+        if !owns || has_active_stream || !is_ready_status || is_exiting {
             log::info!(
-                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?}",
+                "Pending events are not ready: conversation_id={conversation_id:?} owns_conversation={owns} has_active_stream={has_active_stream} status={:?} is_exiting={is_exiting}",
                 conversation.status()
             );
             return false;
@@ -1910,6 +1939,7 @@ impl BlocklistAIController {
             action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
         });
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         if self
             .send_request_input(
                 RequestInput::for_task(
@@ -1919,10 +1949,11 @@ impl BlocklistAIController {
                     self.get_current_response_initiator(),
                     conversation_id,
                     self.terminal_surface_id,
+                    &scope,
                     ctx,
                 ),
                 None,
-                /*can_attempt_resume_on_error*/ true,
+                RecoveryBudget::fresh(),
                 /*is_queued_prompt*/ false,
                 ctx,
             )
@@ -1981,10 +2012,33 @@ impl BlocklistAIController {
         }
     }
 
+    /// Resumes the conversation with a request that is not itself recovering another, so it
+    /// starts with a full recovery budget. Automatic resumes go through
+    /// [`Self::resume_conversation_with_recovery_budget`] instead, to inherit the failed
+    /// request's remaining budget.
     pub fn resume_conversation(
         &mut self,
         conversation_id: AIConversationId,
-        can_attempt_resume_on_error: bool,
+        additional_context: Vec<AIAgentContext>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.resume_conversation_with_recovery_budget(
+            conversation_id,
+            RecoveryBudget::fresh(),
+            /*is_auto_resume_after_error*/ false,
+            additional_context,
+            ctx,
+        );
+    }
+
+    /// Resumes the conversation with `recovery` as the new request's retry/resume budget.
+    ///
+    /// An automatic resume passes the failed request's remaining budget so the recovery
+    /// chain stays bounded; see [`RecoveryBudget`].
+    fn resume_conversation_with_recovery_budget(
+        &mut self,
+        conversation_id: AIConversationId,
+        recovery: RecoveryBudget,
         is_auto_resume_after_error: bool,
         additional_context: Vec<AIAgentContext>,
         ctx: &mut ModelContext<Self>,
@@ -2035,6 +2089,7 @@ impl BlocklistAIController {
         } else {
             None
         };
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let _ = self.send_request_input(
             RequestInput::for_task(
                 inputs,
@@ -2043,27 +2098,39 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 conversation_id,
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             metadata,
-            can_attempt_resume_on_error,
+            recovery,
             /*is_queued_prompt*/ false,
             ctx,
         );
     }
 
-    /// Schedules an auto-resume-after-error for the conversation once the network is online
-    /// and the auto-handoff sleep modal is closed, so the resume doesn't race the user's
-    /// enable/dismiss decision on wake.
+    /// Schedules an auto-resume-after-error for the conversation, once the recovery backoff
+    /// carried by `resume` has elapsed, the network is online, and the auto-handoff sleep
+    /// modal is closed, so the resume doesn't race the user's enable/dismiss decision on
+    /// wake.
+    ///
+    /// `resume` carries the failed request's budget with this resume already charged against
+    /// it, so the resumed request continues the same bounded chain instead of getting a
+    /// fresh budget. The backoff matters as much as the extra attempts: without it, a
+    /// resume fires ~1s after the reset and lands right back in the rolling deploy that
+    /// caused it.
     fn schedule_auto_resume_after_error(
         &mut self,
         conversation_id: AIConversationId,
+        resume: PendingResume,
         ctx: &mut ModelContext<Self>,
     ) {
+        let backoff = resume.backoff();
+        let recovery = resume.recovery();
         let wait_for_online = NetworkStatus::as_ref(ctx).wait_until_online();
         let wait_for_modal_closed =
             OneTimeModalModel::as_ref(ctx).wait_until_auto_handoff_sleep_modal_closed();
         let wait = async move {
+            Timer::after(backoff).await;
             wait_for_online.await;
             // Await the modal second: the future reads live modal state at
             // poll time, so a modal surfaced on wake (after connectivity
@@ -2073,11 +2140,9 @@ impl BlocklistAIController {
         let handle = ctx.spawn(wait, move |me, _, ctx| {
             // Clean up the pending handle now that the resume is executing.
             me.pending_auto_resume_handles.remove(&conversation_id);
-            me.resume_conversation(
+            me.resume_conversation_with_recovery_budget(
                 conversation_id,
-                // Don't allow a second resume-on-error to prevent a persistent loop.
-                /*can_attempt_resume_on_error*/
-                false,
+                recovery,
                 /*is_auto_resume_after_error*/ true,
                 vec![],
                 ctx,
@@ -2106,6 +2171,7 @@ impl BlocklistAIController {
             input_context.push(block_context);
         }
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let new_conversation = self.start_new_conversation_for_request(ctx);
         self.send_request_input(
             RequestInput::for_task(
@@ -2118,6 +2184,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 new_conversation.id(),
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -2128,7 +2195,7 @@ impl BlocklistAIController {
                 },
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
             ctx,
         )
@@ -2223,6 +2290,7 @@ impl BlocklistAIController {
             trigger: trigger.clone(),
         }];
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let request_input = RequestInput::for_task(
             inputs,
             task_id,
@@ -2230,6 +2298,7 @@ impl BlocklistAIController {
             self.get_current_response_initiator(),
             conversation_id,
             self.terminal_surface_id,
+            &scope,
             ctx,
         )
         .with_supported_tools(supported_tools);
@@ -2242,12 +2311,14 @@ impl BlocklistAIController {
             is_auto_resume_after_error: false,
         });
 
+        let scope = self.team_context(ctx);
         let request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data,
             metadata,
+            &scope,
             ctx,
         );
 
@@ -2275,6 +2346,7 @@ impl BlocklistAIController {
             trigger,
         }];
 
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
         let new_conversation = self.start_new_conversation_for_request(ctx);
         self.send_request_input(
             RequestInput::for_task(
@@ -2284,6 +2356,7 @@ impl BlocklistAIController {
                 self.get_current_response_initiator(),
                 new_conversation.id(),
                 self.terminal_surface_id,
+                &scope,
                 ctx,
             ),
             Some(RequestMetadata {
@@ -2293,7 +2366,7 @@ impl BlocklistAIController {
                 },
                 is_auto_resume_after_error: false,
             }),
-            /*can_attempt_resume_on_error*/ true,
+            RecoveryBudget::fresh(),
             /*is_queued_prompt*/ false,
             ctx,
         )
@@ -2362,7 +2435,7 @@ impl BlocklistAIController {
         &mut self,
         request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
-        can_attempt_resume_on_error: bool,
+        recovery: RecoveryBudget,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<(AIConversationId, ResponseStreamId)> {
@@ -2413,7 +2486,11 @@ impl BlocklistAIController {
         let is_passive_request = request_input
             .all_inputs()
             .any(|input| input.is_passive_request());
-        let can_attempt_resume_on_error = can_attempt_resume_on_error && !is_passive_request;
+        let recovery = if is_passive_request {
+            recovery.without_resume()
+        } else {
+            recovery
+        };
 
         // Make sure there's no existing response stream for the conversation. If
         // there is, something has gone wrong.
@@ -2473,12 +2550,16 @@ impl BlocklistAIController {
             });
         }
 
+        let scope = self.team_context(ctx);
+        // Pinned at send, so the request keeps the team the surface was on when the user sent it.
+        let team_scope = RequestTeamScope::from_scope(&scope);
         let mut request_params = api::RequestParams::new(
             Some(self.terminal_surface_id),
             SessionContext::from_session(self.active_session.as_ref(ctx), ctx),
             &request_input,
             conversation_data.clone(),
             query_metadata,
+            &scope,
             ctx,
         );
         request_params.parent_agent_id = parent_agent_id;
@@ -2499,7 +2580,8 @@ impl BlocklistAIController {
             ResponseStream::new(
                 request_params.clone(),
                 ai_identifiers,
-                can_attempt_resume_on_error,
+                recovery,
+                team_scope,
                 ctx,
             )
         });
@@ -3151,11 +3233,11 @@ impl BlocklistAIController {
                 }
 
                 // Before cleaning up the response stream, check if we should attempt to resume.
-                if response_stream
-                    .as_ref(ctx)
-                    .should_resume_conversation_after_stream_finished()
-                {
-                    self.schedule_auto_resume_after_error(conversation_id, ctx);
+                // The resume inherits the failed request's remaining recovery budget, so
+                // retries and resumes stay bounded by one shared counter.
+                let pending_resume = response_stream.as_ref(ctx).pending_resume();
+                if let Some(resume) = pending_resume {
+                    self.schedule_auto_resume_after_error(conversation_id, resume, ctx);
                 }
 
                 // Clean up the response stream tracking entry now that the stream is complete.
@@ -3168,8 +3250,8 @@ impl BlocklistAIController {
 
                 if self.should_refresh_available_llms_on_stream_finish {
                     self.should_refresh_available_llms_on_stream_finish = false;
-                    LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                        llm_preferences.refresh_authed_models(ctx);
+                    TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                        drop(manager.refresh_workspace_metadata(ctx));
                     });
                 }
                 ctx.emit(BlocklistAIControllerEvent::FinishedReceivingOutput {
@@ -3248,12 +3330,15 @@ impl BlocklistAIController {
         history_model.update(ctx, |history_model, ctx| {
             // Update conversation cost and usage information before updating and
             // persisting the conversation.
+            #[allow(deprecated)]
+            let request_cost = finished_event.request_cost.map(|cost| {
+                // Total credits charged for this request = inference (`exact`) + platform.
+                RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
+            });
             history_model.update_conversation_cost_and_usage_for_request(
                 conversation_id,
-                finished_event.request_cost.map(|cost| {
-                    // Total credits charged for this request = inference (`exact`) + platform.
-                    RequestCost::new(f64::from(cost.exact) + f64::from(cost.platform_credits))
-                }),
+                request_cost,
+                finished_event.request_charges.take(),
                 finished_event.token_usage,
                 finished_event.conversation_usage_metadata.take(),
                 did_request_contain_user_query,
@@ -3420,8 +3505,8 @@ impl BlocklistAIController {
         }
 
         if finished_event.should_refresh_model_config {
-            LLMPreferences::handle(ctx).update(ctx, |llm_preferences, ctx| {
-                llm_preferences.refresh_authed_models(ctx);
+            TeamUpdateManager::handle(ctx).update(ctx, |manager, ctx| {
+                drop(manager.refresh_workspace_metadata(ctx));
             });
         }
     }

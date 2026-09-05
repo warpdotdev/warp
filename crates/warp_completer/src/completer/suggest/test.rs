@@ -22,7 +22,7 @@ use crate::signatures::testing::{
 cfg_if::cfg_if! {
     if #[cfg(not(feature = "v2"))] {
         use std::collections::HashSet;
-        use crate::signatures::testing::add_content_signature;
+        use crate::signatures::testing::{add_content_signature, enum_then_path_option_signature};
     }
 }
 
@@ -990,6 +990,97 @@ pub fn test_multiple_required_args_for_option() {
     assert_eq!(
         complete_at_end_of_line("test --required-args arg-1-1 a", &ctx),
         vec!["arg-2-1", "arg-2-2"]
+    );
+}
+
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_option_first_arg_resolves_by_position() {
+    let registry = create_test_command_registry([test_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    assert_eq!(
+        complete_at_end_of_line("test --required-args a", &ctx),
+        vec!["arg-1-1", "arg-1-2"]
+    );
+}
+
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_option_equals_form_resolves_first_arg() {
+    let registry = create_test_command_registry([test_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    assert_eq!(
+        complete_at_end_of_line("test --required-args=a", &ctx),
+        vec!["arg-1-1", "arg-1-2"]
+    );
+}
+
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_repeated_option_resolves_args_per_instance() {
+    let registry = create_test_command_registry([test_signature()]);
+    let ctx = FakeCompletionContext::new(registry);
+
+    assert_eq!(
+        complete_at_end_of_line(
+            "test --required-args arg-1-1 arg-2-1 --required-args a",
+            &ctx
+        ),
+        vec!["arg-1-1", "arg-1-2"]
+    );
+    assert_eq!(
+        complete_at_end_of_line(
+            "test --required-args arg-1-1 arg-2-1 --required-args arg-1-1 a",
+            &ctx
+        ),
+        vec!["arg-2-1", "arg-2-2"]
+    );
+}
+
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_option_first_value_offers_enum_not_path() {
+    let pwd = TypedPathBuf::from(TEST_WORK_DIR);
+    let path_ctx = MockPathCompletionContext::new(pwd.clone()).with_entries_in_pwd([
+        EngineDirEntry::test_dir("minimize"),
+        EngineDirEntry::test_file("default.bak"),
+    ]);
+    let ctx = FakeCompletionContext::new(create_test_command_registry([
+        enum_then_path_option_signature(),
+    ]))
+    .with_path_completion_context(path_ctx);
+
+    let complete_no_fallback = |line: &str| {
+        suggestions_for_test(
+            line,
+            line.len(),
+            CompleterOptions {
+                match_strategy: MatchStrategy::CaseInsensitive,
+                fallback_strategy: CompletionsFallbackStrategy::None,
+                suggest_file_path_completions_only: false,
+                parse_quotes_as_literals: false,
+            },
+            &ctx,
+        )
+        .into_iter()
+        .flat_map(|res| res.suggestions)
+        .filter_map(|s| match s.suggestion_type() {
+            SuggestionType::Option(..) => None,
+            _ => Some(s.suggestion.display.to_string()),
+        })
+        .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        complete_no_fallback("rustfmt --print-config "),
+        vec!["default", "minimal", "current"]
+    );
+
+    assert_eq!(
+        complete_no_fallback("rustfmt --print-config min"),
+        vec!["minimal"]
     );
 }
 

@@ -466,7 +466,7 @@ impl SettingsWidget for PlatformPageWidget {
     type View = PlatformPageView;
 
     fn search_terms(&self) -> &str {
-        "oz cloud platform api keys authentication"
+        "cloud agents platform api keys authentication"
     }
 
     fn render(
@@ -490,7 +490,7 @@ impl PlatformPageWidget {
     ) -> Box<dyn Element> {
         let text = vec![
             FormattedTextFragment::plain_text(
-                "Create and manage API keys to allow other Oz cloud agents to access your Warp account.\nFor more information, visit the ",
+                "Create and manage API keys to allow cloud agents to access your Warp account.\nFor more information, visit the ",
             ),
             FormattedTextFragment::hyperlink("Documentation.", API_KEY_DOCS_URL),
         ];
@@ -526,7 +526,7 @@ impl PlatformPageWidget {
             Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
-                    Text::new_inline("Oz Cloud API Keys", appearance.ui_font_family(), 16.)
+                    Text::new_inline("API keys", appearance.ui_font_family(), 16.)
                         .with_style(Properties::default().weight(Weight::Bold))
                         .with_color(appearance.theme().active_ui_text_color().into())
                         .with_clip(ClipConfig::end())
@@ -908,7 +908,7 @@ impl PlatformPageWidget {
 
 impl SettingsPageMeta for PlatformPageView {
     fn section() -> SettingsSection {
-        SettingsSection::OzCloudAPIKeys
+        SettingsSection::WarpCloudAgentAPIKeys
     }
 
     fn should_render(&self, ctx: &AppContext) -> bool {
@@ -939,7 +939,7 @@ impl SettingsPageMeta for PlatformPageView {
 
 impl From<ViewHandle<PlatformPageView>> for SettingsPageViewHandle {
     fn from(view_handle: ViewHandle<PlatformPageView>) -> Self {
-        SettingsPageViewHandle::OzCloudAPIKeys(view_handle)
+        SettingsPageViewHandle::WarpCloudAgentAPIKeys(view_handle)
     }
 }
 

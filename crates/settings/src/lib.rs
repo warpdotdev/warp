@@ -1,6 +1,7 @@
 #[macro_use]
 pub mod macros;
 pub mod manager;
+pub mod registration;
 pub mod schema;
 
 // Re-export commonly used types and traits
@@ -638,6 +639,17 @@ pub trait Setting {
 
     /// Returns true if this setting was explicitly set by the user (i.e., not using the default value).
     fn is_value_explicitly_set(&self) -> bool;
+}
+
+/// A trait that maps a setting to the change event of its settings group.
+///
+/// The setting macros implement this trait for each setting they define. This
+/// lets the shared `Setting` implementations construct the correct group event
+/// variant without expanding per-setting event code at each emit site.
+pub trait SettingChangeEvent: Setting {
+    /// Returns the group event that reports a change to this setting for the
+    /// given reason.
+    fn change_event(reason: ChangeEventReason) -> <Self::Group as Entity>::Event;
 }
 
 /// Shared persistence operations for typed settings backed by secure storage.

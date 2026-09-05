@@ -20,11 +20,7 @@ where
                     let object = cloud_model
                         .get_object_of_type::<K, M>(&id)
                         .expect("object should exist");
-                    object
-                        .metadata
-                        .revision
-                        .clone()
-                        .expect("revision should exist")
+                    object.metadata.revision.expect("revision should exist")
                 });
         async_assert!(
             revision

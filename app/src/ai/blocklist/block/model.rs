@@ -1,7 +1,7 @@
 mod helper;
 mod model_impl;
 
-use chrono::TimeDelta;
+use chrono::{DateTime, Local, TimeDelta};
 pub use helper::AIBlockModelHelper;
 pub use model_impl::*;
 use session_sharing_protocol::common::ParticipantId;
@@ -180,6 +180,9 @@ pub trait AIBlockModel {
     ///
     /// `None` if there was no request for data in this block (e.g. if it's for a restored AI block).
     fn time_since_request_start(&self, _app: &AppContext) -> Option<TimeDelta> {
+        None
+    }
+    fn query_sent_at(&self, _app: &AppContext) -> Option<DateTime<Local>> {
         None
     }
 

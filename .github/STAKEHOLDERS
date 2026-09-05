@@ -106,8 +106,8 @@
 /app/src/ai/agent/ @zachbai
 
 # Vertical tabs
-/app/src/workspace/view/vertical_tabs.rs @johnturcoo
-/app/src/workspace/view/vertical_tabs/ @johnturcoo
+/app/src/workspace/view/vertical_tabs.rs @peicodes
+/app/src/workspace/view/vertical_tabs/ @peicodes
 
 # Image attachment, voice input, and passive suggestions
 /app/src/ai/attachment_utils.rs @Advait-M

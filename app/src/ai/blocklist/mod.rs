@@ -12,6 +12,7 @@ pub(crate) mod diff_types;
 pub(crate) mod handoff;
 
 pub(crate) mod local_agent_task_sync_model;
+pub(crate) mod orchestration_child_tracker;
 pub(crate) mod orchestration_event_streamer;
 pub(crate) mod orchestration_events;
 pub(crate) mod orchestration_topology;
@@ -78,7 +79,8 @@ pub use child_agent_launch::inherit_child_agent_settings;
 #[cfg(not(target_family = "wasm"))]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use child_agent_launch::{
-    PreparedLocalOzChildLaunch, apply_child_agent_model_override, prepare_local_oz_child_launch,
+    PreparedLocalOzChildLaunch, apply_child_agent_model_override,
+    finish_local_oz_child_conversation, prepare_local_oz_child_launch,
 };
 #[cfg(feature = "tui")]
 pub use context_model::PendingAttachmentSummary;
@@ -120,6 +122,8 @@ pub(crate) use passive_suggestions::{
     LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
     MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
 };
+#[cfg(test)]
+pub(crate) use permissions::is_agent_mode_autonomy_allowed;
 pub use permissions::{BlocklistAIPermissions, CommandExecutionPermissionAllowedReason};
 #[cfg_attr(target_family = "wasm", allow(unused))]
 pub(crate) use persistence::PersistedAIInputType;

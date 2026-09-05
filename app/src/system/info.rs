@@ -16,8 +16,8 @@ use crate::system::memory_footprint;
 use crate::terminal::TerminalView;
 use crate::{TelemetryEvent, send_telemetry_from_app_ctx, send_telemetry_sync_from_ctx};
 
-/// The threshold at which we emit a memory usage warning.
-const MEMORY_USAGE_WARNING_THRESHOLD: Option<Byte> = byte_unit::Byte::GIGABYTE.multiply(10);
+/// The threshold at which we emit a memory usage warning, in bytes.
+const MEMORY_USAGE_WARNING_THRESHOLD_BYTES: u64 = Byte::GIGABYTE.as_u64() * 10;
 
 /// The refresh interval for system information, in seconds.
 const REFRESH_INTERVAL_S: usize = 5;
@@ -46,6 +46,10 @@ pub struct SystemInfo {
     system: sysinfo::System,
     /// Whether or not we've already emitted an event due to high memory usage.
     has_emitted_memory_warning_event: bool,
+    /// Set to the memory footprint that crossed `MEMORY_USAGE_WARNING_THRESHOLD_BYTES` on the
+    /// previous poll tick, while we wait for the next tick to confirm the spike is sustained rather
+    /// than a transient blip.  `None` when there is no pending confirmation.
+    pending_excessive_memory_footprint_bytes: Option<u64>,
     /// A circular buffer storing resource usage data.
     stats: StatsBuffer,
     /// A helper structure for reporting resource usage via telemetry events.
@@ -64,6 +68,7 @@ impl SystemInfo {
         let mut me = Self {
             system: sysinfo::System::new(),
             has_emitted_memory_warning_event: false,
+            pending_excessive_memory_footprint_bytes: None,
             stats: Default::default(),
             resource_usage_reporter: Default::default(),
             long_os_version: sysinfo::System::long_os_version(),
@@ -168,6 +173,12 @@ impl SystemInfo {
     /// and compressed pages) so we actually detect high memory situations.
     /// The Rudderstack telemetry event still reports `rss` so existing
     /// dashboards are unaffected.
+    ///
+    /// A crossing of the threshold is only reported once it's confirmed still excessive on the next
+    /// poll tick, rather than on the tick that first observed it, so a short-lived spike that's
+    /// freed moments later is skipped instead of producing a worthless Sentry event and heap
+    /// profile.  A skip does not consume `has_emitted_memory_warning_event`, so an early transient
+    /// spike doesn't silence the process for the rest of its lifetime.
     fn check_for_excessive_memory_usage(
         &mut self,
         rss: Byte,
@@ -180,9 +191,29 @@ impl SystemInfo {
 
         // Use footprint (not RSS) for the threshold so we catch memory
         // that has been swapped out or compressed by the OS.
-        if memory_footprint
-            < MEMORY_USAGE_WARNING_THRESHOLD.expect("Threshold should not overflow u64")
-        {
+        let footprint_bytes = memory_footprint.as_u64();
+        let is_excessive = footprint_bytes >= MEMORY_USAGE_WARNING_THRESHOLD_BYTES;
+
+        let Some(triggering_footprint_bytes) = self.pending_excessive_memory_footprint_bytes else {
+            self.pending_excessive_memory_footprint_bytes = is_excessive.then_some(footprint_bytes);
+            return;
+        };
+        self.pending_excessive_memory_footprint_bytes = None;
+
+        if !is_excessive {
+            log::info!(
+                "Memory footprint returned to {footprint_bytes} bytes, back under the \
+                 excessive-usage threshold, before confirming a spike that had crossed it at \
+                 {triggering_footprint_bytes} bytes; skipping the excessive-memory-usage report \
+                 for what looks like a transient spike."
+            );
+            send_telemetry_sync_from_ctx!(
+                TelemetryEvent::TransientMemorySpike {
+                    triggering_footprint_bytes,
+                    confirmation_footprint_bytes: footprint_bytes,
+                },
+                ctx
+            );
             return;
         }
 

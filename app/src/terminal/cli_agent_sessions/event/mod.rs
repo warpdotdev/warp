@@ -64,18 +64,9 @@ pub struct CLIAgentEvent {
 }
 
 /// Version-specific parsers, indexed by (version - 1).
-/// Adding a new version means appending a parser here,
-/// which automatically bumps `current_protocol_version()`.
+/// Adding a new version means appending a parser here.
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
 const VERSIONED_PARSERS: &[EventParser] = &[v1::parse];
-
-/// The current CLI agent protocol version this build of Warp supports.
-/// Exported as the `WARP_CLI_AGENT_PROTOCOL_VERSION` env var on the PTY
-/// so plugins can negotiate a compatible payload format.
-#[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
-pub const fn current_protocol_version() -> u32 {
-    VERSIONED_PARSERS.len() as u32
-}
 
 /// Attempts to parse an OSC 777 `PluggableNotification` into a typed `CLIAgentEvent`.
 /// Dispatches to the correct version-specific parser based on the `"v"` field. Returns `None`

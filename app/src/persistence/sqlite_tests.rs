@@ -35,7 +35,9 @@ use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workspace::tab_group::TabGroupId;
+use crate::workspaces::team::{MembershipRole, Team, TeamMember};
 use crate::workspaces::user_profiles::UserProfileWithUID;
+use crate::workspaces::workspace::Workspace;
 
 #[test]
 fn app_scope_database_path_matches_app_database_path() {
@@ -1092,4 +1094,68 @@ fn test_sqlite_drops_too_small_bounds_on_read() {
         restored.windows[0].bounds.is_none(),
         "tiny persisted bounds must be discarded on read so users recover from a corrupt DB"
     );
+}
+
+#[test]
+fn team_member_is_disabled_round_trips_through_sqlite_cache() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let conn = setup_database(&database_path).expect("database should initialize");
+
+    let team = Team::from_local_cache(
+        ServerId::from_string_lossy(format!("{:0>22}", "team")),
+        "Team".to_string(),
+        None,
+        None,
+        Some(vec![
+            TeamMember {
+                uid: UserUid::new("active-user"),
+                email: "active@example.com".to_string(),
+                role: MembershipRole::User,
+                is_disabled: false,
+            },
+            TeamMember {
+                uid: UserUid::new("disabled-user"),
+                email: "disabled@example.com".to_string(),
+                role: MembershipRole::User,
+                is_disabled: true,
+            },
+        ]),
+        None,
+    );
+    let workspace = Workspace::from_local_cache(
+        format!("{:0>22}", "workspace").into(),
+        "Workspace".to_string(),
+        Some(vec![team]),
+        None,
+    );
+
+    let writer = start_writer(conn, database_path.clone()).expect("writer should start");
+    writer
+        .sender
+        .send(ModelEvent::UpsertWorkspaces {
+            workspaces: vec![workspace],
+        })
+        .expect("upsert workspaces event should send");
+    writer
+        .sender
+        .send(ModelEvent::Terminate)
+        .expect("terminate event should send");
+    writer.handle.join().expect("writer should terminate");
+
+    let mut conn = setup_database(&database_path).expect("database should reopen");
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("persisted data should load");
+
+    let members = &restored.workspaces[0].teams[0].members;
+    let active_member = members
+        .iter()
+        .find(|member| member.email == "active@example.com")
+        .expect("active member should be present");
+    let disabled_member = members
+        .iter()
+        .find(|member| member.email == "disabled@example.com")
+        .expect("disabled member should be present");
+    assert!(!active_member.is_disabled);
+    assert!(disabled_member.is_disabled);
 }

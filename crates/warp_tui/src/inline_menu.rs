@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use string_offset::CharOffset;
 use warp::tui_export::{
-    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, TuiMcpAction,
+    AcceptSlashCommandOrSavedPrompt, AgentConversationEntryId, LLMId, ServerId, TuiMcpAction,
     TuiUpArrowHistoryItemKind,
 };
 use warp_search_core::inline_menu::{InlineMenuResultsUpdate, InlineMenuSelection};
@@ -27,6 +27,7 @@ use crate::model_menu::TuiModelMenuModel;
 use crate::prompt_and_command_history_menu::TuiPromptAndCommandHistoryMenuModel;
 use crate::skills_menu::TuiSkillMenuModel;
 use crate::slash_commands::TuiSlashCommandModel;
+use crate::team_menu::TuiTeamMenuModel;
 use crate::tui_builder::TuiUiBuilder;
 use crate::tui_column_layout::{
     TuiTwoColumnConstraints, TuiTwoColumnLayout, format_tui_first_column, tui_two_column_layout,
@@ -403,6 +404,7 @@ pub(crate) enum TuiInlineMenuAccepted {
     SlashCommand(AcceptSlashCommandOrSavedPrompt),
     Conversation(AgentConversationEntryId),
     Model(LLMId),
+    Team(ServerId),
     Mcp(TuiMcpAction),
     McpInstall(TuiMcpInstallFlowAction),
     PromptAndCommandHistory {
@@ -858,6 +860,55 @@ impl TuiInlineMenuHandle for ModelHandle<TuiModelMenuModel> {
         self.as_ref(ctx)
             .accept_selected(ctx)
             .map(TuiInlineMenuAccepted::Model)
+    }
+
+    fn dismiss(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.dismiss(ctx));
+    }
+
+    fn snapshot(&self, ctx: &AppContext) -> Option<TuiInlineMenuSnapshot> {
+        self.as_ref(ctx).snapshot(ctx)
+    }
+
+    fn select_by_snapshot_index(&self, index: usize, ctx: &mut AppContext) -> bool {
+        self.update(ctx, |model, ctx| model.select_at_snapshot_index(index, ctx))
+    }
+
+    fn scroll_by_delta(&self, delta: isize, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.scroll_by_delta(delta, ctx));
+    }
+}
+
+impl TuiInlineMenuHandle for ModelHandle<TuiTeamMenuModel> {
+    fn mode(&self) -> TuiInputSuggestionsMode {
+        TuiInputSuggestionsMode::TeamSelector
+    }
+    fn is_open(&self, ctx: &AppContext) -> bool {
+        self.as_ref(ctx).is_open(ctx)
+    }
+    fn open(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.open(ctx));
+    }
+    fn input_highlight_range(&self, _ctx: &AppContext) -> Option<Range<CharOffset>> {
+        None
+    }
+
+    fn input_argument_hint_text(&self, _ctx: &AppContext) -> Option<&'static str> {
+        None
+    }
+
+    fn select_previous(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_previous(ctx));
+    }
+
+    fn select_next(&self, ctx: &mut AppContext) {
+        self.update(ctx, |model, ctx| model.select_next(ctx));
+    }
+
+    fn accept(&self, ctx: &mut AppContext) -> Option<TuiInlineMenuAccepted> {
+        self.as_ref(ctx)
+            .accept_selected(ctx)
+            .map(TuiInlineMenuAccepted::Team)
     }
 
     fn dismiss(&self, ctx: &mut AppContext) {

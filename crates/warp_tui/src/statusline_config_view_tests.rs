@@ -81,6 +81,7 @@ fn toggle_and_reorder_are_reflected_in_saved_config() {
                 TuiStatuslineItem::VimModeIndicator,
                 TuiStatuslineItem::AutoApprove,
                 TuiStatuslineItem::Model,
+                TuiStatuslineItem::Team,
                 TuiStatuslineItem::WorkingDirectory,
                 TuiStatuslineItem::GitBranch,
                 TuiStatuslineItem::GitBranchStatus,

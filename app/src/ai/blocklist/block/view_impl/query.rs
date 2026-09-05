@@ -1,15 +1,16 @@
 //! Renders the user query portion of the AI block, if there is one.
 //!
 //! Queries are not rendered in blocks corresponding to requested command or requested action responses.
-
+use chrono::{DateTime, Local};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::color::Opacity;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Border, Container, CornerRadius, DispatchEventResult, DropShadow, EventHandler, Flex,
-    MainAxisAlignment, MainAxisSize, ParentElement, Radius, Shrinkable, Wrap,
+    Border, ChildAnchor, Container, CornerRadius, DispatchEventResult, DropShadow, EventHandler,
+    Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentAnchor, ParentElement, Radius,
+    Shrinkable, Wrap,
 };
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::ui_components::chip::Chip;
@@ -23,6 +24,7 @@ use crate::ai::blocklist::block::{AIBlockAction, DetectedLinksState, SecretRedac
 use crate::appearance::Appearance;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::util::time_format::format_message_timestamp;
 
 /// Width of the accent ring drawn around the user avatar while agent-view transcript
 /// navigation targets this query.
@@ -40,6 +42,8 @@ pub(super) struct Props<'a> {
     pub(super) user_display_name: &'a String,
     pub(super) profile_image_path: Option<&'a String>,
     pub(super) avatar_color: Option<ColorU>,
+    pub(super) query_sent_at: Option<DateTime<Local>>,
+    pub(super) query_timestamp_tooltip_handle: &'a MouseStateHandle,
     pub(super) query_and_index: Option<(&'a str, usize)>,
     pub(super) query_prefix_highlight_len: Option<usize>,
     pub(super) detected_links_state: &'a DetectedLinksState,
@@ -58,6 +62,8 @@ pub(super) fn maybe_render(props: Props, app: &AppContext) -> Option<Box<dyn Ele
             props.user_display_name,
             props.profile_image_path,
             props.avatar_color,
+            props.query_sent_at,
+            props.query_timestamp_tooltip_handle.clone(),
             props.detected_links_state,
             props.secret_redaction_state,
             input_index,
@@ -78,6 +84,8 @@ pub(crate) fn render_query(
     user_display_name: &str,
     profile_image_path: Option<&String>,
     avatar_color: Option<ColorU>,
+    query_sent_at: Option<DateTime<Local>>,
+    query_timestamp_tooltip_handle: MouseStateHandle,
     detected_links_state: &DetectedLinksState,
     secret_redaction_state: &SecretRedactionState,
     input_index: usize,
@@ -89,13 +97,13 @@ pub(crate) fn render_query(
     is_agent_transcript_navigation_target: bool,
     app: &AppContext,
 ) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
     let mut avatar_container = Container::new(render_user_avatar(
         user_display_name,
         profile_image_path,
         avatar_color,
         app,
-    ))
-    .with_margin_right(16.);
+    ));
     if is_agent_transcript_navigation_target {
         // Cmd-Up/Cmd-Down transcript navigation is stopped on this query: ring the avatar
         // with the theme accent plus a soft accent halo so the stop is unmistakable even
@@ -116,6 +124,19 @@ pub(crate) fn render_query(
             .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
     }
     let avatar = avatar_container.finish();
+    let avatar = if let Some(timestamp) = query_sent_at {
+        appearance.ui_builder().overlay_tool_tip_on_element(
+            format!("Message sent {}", format_message_timestamp(&timestamp)),
+            query_timestamp_tooltip_handle,
+            avatar,
+            ParentAnchor::TopLeft,
+            ChildAnchor::BottomLeft,
+            vec2f(0., -8.),
+        )
+    } else {
+        avatar
+    };
+    let avatar = Container::new(avatar).with_margin_right(16.).finish();
 
     let properties = Properties {
         style: Style::Normal,
@@ -137,7 +158,6 @@ pub(crate) fn render_query(
         app,
     );
 
-    let appearance = Appearance::as_ref(app);
     let mut query = Flex::column().with_child(text_element.finish());
 
     if FeatureFlag::ImageAsContext.is_enabled() {

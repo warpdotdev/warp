@@ -136,7 +136,6 @@ impl EnvironmentDisplayData {
         let last_edited_ts = env
             .metadata
             .revision
-            .clone()
             .map(ServerTimestamp::from)
             .or(env.metadata.metadata_last_updated_ts);
 
@@ -791,7 +790,7 @@ impl EnvironmentsPageView {
                 };
 
                 // Get the revision from the existing environment
-                let revision = existing_env.metadata.revision.clone();
+                let revision = existing_env.metadata.revision;
 
                 // Track the pending save to show success toast when complete
                 self.pending_save_env_id = Some(*env_id);

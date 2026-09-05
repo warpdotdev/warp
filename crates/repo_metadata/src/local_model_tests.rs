@@ -601,7 +601,7 @@ fn test_get_repo_contents() {
                     )
                     .unwrap()
             });
-            let state = FileTreeState::new(root, vec![gitignore], Some(repo_handle));
+            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], Some(repo_handle));
 
             let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
 
@@ -1188,7 +1188,7 @@ fn test_get_repo_contents_include_ignored() {
                     )
                     .unwrap()
             });
-            let state = FileTreeState::new(root, vec![gitignore], Some(repo_handle));
+            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], Some(repo_handle));
 
             let model_handle = app.add_model(|_| LocalRepoMetadataModel::new_for_test());
 
@@ -1289,7 +1289,7 @@ fn test_should_include_path_respects_gitignore() {
 
         // Create the gitignore object
         let (gitignore, _) = Gitignore::new(&gitignore_path);
-        let gitignores = vec![gitignore];
+        let gitignores = vec![Arc::new(gitignore)];
 
         // Test files that should be excluded
         let excluded_paths = vec![
@@ -1343,7 +1343,7 @@ fn test_update_file_tree_entry_respects_gitignore() {
 
         let gitignore_path = repo_path.join(".gitignore");
         let (gitignore, _) = Gitignore::new(&gitignore_path);
-        let gitignores = vec![gitignore];
+        let gitignores = vec![Arc::new(gitignore)];
 
         // Create an initial file tree
         let root_entry = Entry::Directory(DirectoryEntry {
@@ -1490,7 +1490,7 @@ Thumbs.db
         let gitignore_path = repo_path.join(".gitignore");
 
         let (gitignore, _) = Gitignore::new(&gitignore_path);
-        let gitignores = vec![gitignore];
+        let gitignores = vec![Arc::new(gitignore)];
 
         // Test various patterns
         let test_cases = vec![
@@ -1591,7 +1591,7 @@ fn test_nested_gitignore_rules() {
 
         let (root_gitignore, _) = Gitignore::new(&root_gitignore_path);
         let (frontend_gitignore, _) = Gitignore::new(&frontend_gitignore_path);
-        let gitignores = vec![root_gitignore, frontend_gitignore];
+        let gitignores = vec![Arc::new(root_gitignore), Arc::new(frontend_gitignore)];
 
         // Test that nested gitignore rules are respected
         assert!(LocalRepoMetadataModel::path_is_ignored(
@@ -2508,7 +2508,7 @@ fn test_repository_operations_with_standardized_paths() {
                         )
                         .unwrap()
                 });
-                let state = FileTreeState::new(root, vec![gitignore], Some(repo_handle));
+                let state = FileTreeState::new(root, vec![Arc::new(gitignore)], Some(repo_handle));
 
                 // Test adding repository using different path representations
                 model_handle.update(&mut app, |model, ctx| {
@@ -3381,7 +3381,7 @@ fn load_directory_watches_expanded_gitignored_dir_for_git_repo() {
                 ignored: false,
                 loaded: true,
             });
-            let state = FileTreeState::new(root, vec![gitignore], None);
+            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], None);
 
             model_handle.update(&mut app, |model, ctx| {
                 model
@@ -3440,7 +3440,7 @@ fn remove_repository_clears_extra_dir_watches() {
                 ignored: false,
                 loaded: true,
             });
-            let state = FileTreeState::new(root, vec![gitignore], None);
+            let state = FileTreeState::new(root, vec![Arc::new(gitignore)], None);
 
             model_handle.update(&mut app, |model, ctx| {
                 model

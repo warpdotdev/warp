@@ -687,7 +687,7 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
     unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new()).unwrap();
 
     assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
     assert!(
@@ -732,7 +732,7 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path()) };
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new()).unwrap();
 
     assert!(
         claude_config_dir
@@ -850,6 +850,9 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
     assert!(command.contains(&format!("{OZ_HARNESS_ENV}={}", shell_quote("claude"))));
     assert!(!command.contains(OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV));
     assert!(!command.contains("OZ_PARENT_LISTENER_MANAGED_EXTERNALLY"));
+    // The WARP_ aliases are injected alongside the OZ_ names, so they must be dropped with them.
+    assert!(!command.contains("WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY"));
+    assert!(!command.contains("WARP_PARENT_LISTENER_MANAGED_EXTERNALLY"));
     assert_eq!(
         fs::read_to_string(&prompt_path).unwrap(),
         "resume prompt\n\nwake prompt"
@@ -857,7 +860,7 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
     assert!(!parent_bridge_hook_output_file(&state_dir).exists());
 
     let restored_envelope =
-        read_envelope(session_id, &working_dir, claude_config_dir.path()).unwrap();
+        read_envelope(session_id, &working_dir, claude_config_dir.path(), false).unwrap();
     assert_eq!(restored_envelope.cwd, working_dir);
     assert_eq!(
         restored_envelope.entries,

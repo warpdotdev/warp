@@ -161,8 +161,7 @@ impl EarlyOutput {
                 );
             }
 
-            self.event_proxy
-                .send_terminal_event(TerminalEvent::Typeahead);
+            self.event_proxy.send_app_event(TerminalEvent::Typeahead);
         }
         is_typeahead
     }
@@ -355,7 +354,7 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
                     me.typeahead
                 );
             }
-            me.event_proxy.send_terminal_event(TerminalEvent::Typeahead);
+            me.event_proxy.send_app_event(TerminalEvent::Typeahead);
             safe_debug!(
                 safe: ("Received shell input buffer for typeahead"),
                 full: ("Received shell input buffer for typeahead: {:?}", me.typeahead)
@@ -399,7 +398,7 @@ impl ansi::Handler for EarlyOutputHandler<'_> {
                 if CONTROL_MASTER_ERROR_REGEX.is_match(&last_line) {
                     self.inner()
                         .event_proxy
-                        .send_terminal_event(TerminalEvent::SSHControlMasterError);
+                        .send_app_event(TerminalEvent::SSHControlMasterError);
                 }
             }
 

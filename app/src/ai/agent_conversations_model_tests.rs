@@ -79,6 +79,8 @@ fn create_test_task(
         is_sandbox_running: false,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -928,6 +930,8 @@ fn create_server_conversation_metadata(
             platform_credits_spent: 0.0,
             total_provider_cost_in_cents: None,
             credits_spent_for_last_block: None,
+            charged_usage_for_last_block: None,
+            total_charged_usage: None,
             token_usage: vec![],
             tool_usage_metadata: Default::default(),
             context_window_segments: Vec::new(),
@@ -2437,6 +2441,8 @@ fn test_task_status_maps_blocked_state_to_blocked() {
         task.status_message = Some(TaskStatusMessage {
             message: "Needs clarification".to_string(),
             error_code: None,
+            session_debug_until: None,
+            debug_agent_active: false,
         });
 
         app.update(|ctx| {

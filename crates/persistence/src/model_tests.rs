@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use warp_multi_agent_api as api;
 
 use super::{
-    AgentConversation, AgentConversationData, AgentConversationSummary, ConversationUsageMetadata,
-    ModelTokenUsage,
+    AgentConversation, AgentConversationData, AgentConversationSummary, ChargedUsageTotals,
+    ConversationUsageMetadata, ModelTokenUsage,
 };
 
 fn parentless_task(id: &str, message_count: usize) -> api::Task {
@@ -133,6 +133,100 @@ fn conversation_usage_metadata_preserves_known_zero_provider_cost() {
             .unwrap()
             .contains("\"total_provider_cost_in_cents\":0.0")
     );
+}
+
+fn inference_usage_with_web_search(
+    input: u32,
+    output: u32,
+    input_cost_in_cents: f32,
+    output_cost_in_cents: f32,
+    web_search_count: u32,
+    web_search_cost_in_cents: f32,
+) -> api::response_event::stream_finished::InferenceUsage {
+    api::response_event::stream_finished::InferenceUsage {
+        token_count: Some(api::response_event::stream_finished::TokenCount {
+            input,
+            output,
+            input_cache_read: 0,
+            input_cache_write: 0,
+        }),
+        token_cost: Some(api::response_event::stream_finished::TokenCost {
+            input_cost_in_cents,
+            output_cost_in_cents,
+            input_cache_read_cost_in_cents: 0.0,
+            input_cache_write_cost_in_cents: 0.0,
+        }),
+        web_search_count,
+        web_search_cost_in_cents,
+    }
+}
+
+#[test]
+fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
+    let mut usage_by_category = HashMap::new();
+    usage_by_category.insert(
+        "primary_agent".to_string(),
+        api::response_event::stream_finished::ChargedUsage {
+            direct_api_inference_usage: HashMap::from([(
+                "claude-4.5".to_string(),
+                inference_usage_with_web_search(1000, 200, 3.0, 6.0, 2, 5.0),
+            )]),
+            byok_inference_usage: HashMap::new(),
+            custom_endpoint_inference_usage: HashMap::new(),
+            platform_usage_in_cents: 1.0,
+        },
+    );
+    usage_by_category.insert(
+        "compaction".to_string(),
+        api::response_event::stream_finished::ChargedUsage {
+            direct_api_inference_usage: HashMap::from([(
+                "claude-4.5".to_string(),
+                inference_usage_with_web_search(500, 100, 1.5, 3.0, 1, 2.5),
+            )]),
+            byok_inference_usage: HashMap::new(),
+            custom_endpoint_inference_usage: HashMap::new(),
+            platform_usage_in_cents: 0.0,
+        },
+    );
+    let charges = api::response_event::stream_finished::RequestCharges { usage_by_category };
+
+    let totals = ChargedUsageTotals::from(&charges);
+
+    assert_eq!(totals.web_search_count, 3);
+    assert!((totals.web_search_cost_in_cents - 7.5).abs() < 1e-6);
+    // Total cost must include web search cost alongside the token + platform costs.
+    assert!((totals.total_cost_in_cents() - (3.0 + 6.0 + 1.5 + 3.0 + 1.0 + 7.5)).abs() < 1e-6);
+}
+
+#[test]
+fn charged_usage_totals_add_assign_sums_web_search_fields() {
+    let mut a = ChargedUsageTotals {
+        web_search_count: 2,
+        web_search_cost_in_cents: 4.0,
+        ..Default::default()
+    };
+    let b = ChargedUsageTotals {
+        web_search_count: 3,
+        web_search_cost_in_cents: 6.0,
+        ..Default::default()
+    };
+
+    a += b;
+
+    assert_eq!(a.web_search_count, 5);
+    assert!((a.web_search_cost_in_cents - 10.0).abs() < 1e-6);
+}
+
+#[test]
+fn charged_usage_totals_deserializes_legacy_payload_without_web_search_fields() {
+    let totals: ChargedUsageTotals = serde_json::from_str(
+        r#"{"input_cost_in_cents":1.0,"output_cost_in_cents":2.0,"input_cache_read_cost_in_cents":0.0,"input_cache_write_cost_in_cents":0.0,"platform_cost_in_cents":0.0,"input_tokens":10,"output_tokens":5,"input_cache_read_tokens":0,"input_cache_write_tokens":0}"#,
+    )
+    .unwrap();
+
+    assert_eq!(totals.web_search_count, 0);
+    assert_eq!(totals.web_search_cost_in_cents, 0.0);
+    assert!((totals.total_cost_in_cents() - 3.0).abs() < 1e-6);
 }
 
 fn user_query_message(task_id: &str, query: &str, pwd: Option<&str>) -> api::Message {

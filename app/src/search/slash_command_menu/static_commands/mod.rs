@@ -94,6 +94,7 @@ pub enum SlashCommandKind {
     New,
     Clear,
     Model,
+    Team,
     Host,
     Harness,
     Environment,

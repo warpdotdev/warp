@@ -13,7 +13,6 @@ pub struct Workspace {
     pub billing_cycle_usage_history: Option<BillingCycleUsageHistory>,
     pub settings: WorkspaceSettings,
     pub has_billing_history: bool,
-    pub invite_code: Option<String>,
     pub pending_email_invites: Vec<EmailInvite>,
     pub invite_link_domain_restrictions: Vec<InviteLinkDomainRestriction>,
     pub is_eligible_for_discovery: bool,
@@ -112,6 +111,7 @@ pub struct WorkspaceMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
     pub usage_info: WorkspaceMemberUsageInfo,
 }
 
@@ -301,6 +301,20 @@ pub struct Team {
     pub members: Vec<TeamMember>,
     pub settings: TeamSettings,
     pub color: Option<String>,
+    pub invite_link: Option<String>,
+    pub visibility: TeamVisibility,
+    pub feature_model_choice: FeatureModelChoice,
+}
+
+/// Governs which workspace members can discover and join a team. Orthogonal to
+/// workspace-level discoverability (`is_discoverable`).
+#[derive(cynic::Enum, Clone, Debug, PartialEq, Eq)]
+pub enum TeamVisibility {
+    Open,
+    Private,
+    Hidden,
+    #[cynic(fallback)]
+    Other(String),
 }
 
 /// The effective settings that apply to a team, combining the workspace layer
@@ -416,6 +430,7 @@ pub struct TeamMember {
     pub uid: cynic::Id,
     pub email: String,
     pub role: MembershipRole,
+    pub is_disabled: bool,
 }
 
 #[derive(cynic::Enum, Clone, Debug, PartialEq, Eq, Copy)]
@@ -475,6 +490,7 @@ pub struct InviteLinkDomainRestriction {
 pub struct EmailInvite {
     pub email: String,
     pub expired: bool,
+    pub team_uid: Option<cynic::Id>,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]

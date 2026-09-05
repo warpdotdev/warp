@@ -1359,12 +1359,15 @@ impl AIExecutionProfilesModel {
                 return;
             };
             let llm_preferences = LLMPreferences::as_ref(ctx);
+            let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
             let model_info = profile
                 .data()
                 .base_model
                 .as_ref()
-                .and_then(|id| llm_preferences.get_llm_info(id))
-                .unwrap_or_else(|| llm_preferences.get_default_base_model(ctx));
+                .and_then(|id| llm_preferences.get_llm_info(id, ctx))
+                .unwrap_or_else(|| {
+                    llm_preferences.get_default_base_model_for_team_uid(team_uid, ctx)
+                });
             send_telemetry_from_ctx!(
                 TelemetryEvent::AIExecutionProfileContextWindowSelected {
                     tokens: limit,

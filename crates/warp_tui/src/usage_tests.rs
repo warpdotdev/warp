@@ -13,6 +13,7 @@ fn totals(credits_spent: f32, cost_in_cents: f32) -> ConversationUsageTotals {
         credits_spent,
         cost_in_cents: Some(cost_in_cents),
         has_usage: true,
+        charged_usage: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn cost_mode_explicitly_marks_unknown_historical_cost() {
                 credits_spent: 0.0,
                 cost_in_cents: None,
                 has_usage: true,
+                charged_usage: None,
             },
         ),
         "Cost unavailable"

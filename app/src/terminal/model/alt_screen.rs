@@ -239,13 +239,13 @@ impl AltScreen {
     fn set_selection(&mut self, value: Selection) {
         self.selection = Some(value);
         self.event_proxy
-            .send_terminal_event(TerminalEvent::TextSelectionChanged);
+            .send_app_event(TerminalEvent::TextSelectionChanged);
     }
 
     pub fn clear_selection(&mut self) {
         self.selection = None;
         self.event_proxy
-            .send_terminal_event(TerminalEvent::TextSelectionChanged);
+            .send_app_event(TerminalEvent::TextSelectionChanged);
     }
 
     pub fn selection_to_string(&self, semantic_selection: &SemanticSelection) -> Option<String> {

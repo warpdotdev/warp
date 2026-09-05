@@ -57,7 +57,7 @@ impl CodebaseIndex {
             leaf_node_to_fragment_metadatas: LeafToFragmentMetadata::new_for_test(
                 fragment_metadata,
             ),
-            gitignores: Arc::new(vec![]),
+            gitignores: vec![],
             tree_sync_state: TreeSourceSyncState::unsynced(),
             retrieval_requests: HashMap::new(),
             store_client: Arc::new(MockStoreClient {}),

@@ -56,6 +56,7 @@ fn serialize_environment_without_docker_image_omits_field() {
         name: "no-image-env".into(),
         description: None,
         code_forge: None,
+        code_forges: None,
         github_repos: vec![],
         source_repos: None,
         base_image: None,
@@ -75,6 +76,7 @@ fn roundtrip_serde_without_docker_image() {
         name: "no-image-rt".into(),
         description: None,
         code_forge: None,
+        code_forges: None,
         github_repos: vec![GithubRepo::new("owner".into(), "repo".into())],
         source_repos: None,
         base_image: None,
@@ -107,6 +109,47 @@ fn source_repo_checkout_ref_round_trips_and_is_optional() {
     let parsed: SourceRepo =
         serde_json::from_value(serde_json::json!({"owner": "warpdotdev", "repo": "warp"})).unwrap();
     assert_eq!(parsed.checkout_ref, None);
+}
+
+#[test]
+fn deserialize_repo_less_environment_resolves_to_none_forge() {
+    let json = serde_json::json!({
+        "name": "repo-less-env",
+        "code_forge": "NONE",
+        "github_repos": [],
+        "source_repos": [],
+        "setup_commands": ["echo hello"]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::None);
+    assert!(env.effective_repos().is_empty());
+}
+
+#[test]
+fn deserialize_environment_with_unrecognized_forge_still_succeeds() {
+    // A forge value this client build doesn't know about yet (e.g. the
+    // server introduces a new one before this client updates) must not fail
+    // deserialization of the whole environment.
+    let json = serde_json::json!({
+        "name": "future-forge-env",
+        "code_forge": "BITBUCKET",
+        "github_repos": [],
+        "setup_commands": ["echo hello"]
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.effective_code_forge(), CodeForge::Unknown);
+}
+
+#[test]
+fn none_and_unknown_forges_have_no_clonable_host() {
+    // Neither identifies a real host; a caller falling back to GitHub's host
+    // for either would authenticate against the wrong one.
+    assert_eq!(CodeForge::None.host(), "");
+    assert_eq!(CodeForge::Unknown.host(), "");
 }
 
 #[test]
@@ -168,7 +211,113 @@ fn legacy_environment_serialization_omits_provider_neutral_fields() {
     let json = serde_json::to_value(&env).unwrap();
 
     assert!(!json.as_object().unwrap().contains_key("code_forge"));
+    assert!(!json.as_object().unwrap().contains_key("code_forges"));
     assert!(!json.as_object().unwrap().contains_key("source_repos"));
+}
+
+#[test]
+fn deserialize_mixed_environment_uses_per_repo_forges() {
+    let json = serde_json::json!({
+        "name": "mixed-env",
+        "code_forge": "GITHUB",
+        "code_forges": ["GITHUB", "GITLAB"],
+        "github_repos": [{"owner": "warpdotdev", "repo": "warp"}],
+        "source_repos": [
+            {"code_forge": "GITHUB", "owner": "warpdotdev", "repo": "warp"},
+            {"code_forge": "GITLAB", "owner": "platform/backend", "repo": "api"}
+        ],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.code_forge, Some(CodeForge::GitHub));
+    assert_eq!(
+        env.code_forges.as_deref(),
+        Some(&[CodeForge::GitHub, CodeForge::GitLab][..])
+    );
+    assert_eq!(
+        env.effective_code_forges(),
+        vec![CodeForge::GitHub, CodeForge::GitLab]
+    );
+    let repos = env.effective_repos();
+    assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
+    assert_eq!(repos[1].code_forge, Some(CodeForge::GitLab));
+    assert_eq!(
+        repos[0].https_clone_url(),
+        "https://github.com/warpdotdev/warp.git"
+    );
+    assert_eq!(
+        repos[1].https_clone_url(),
+        "https://gitlab.com/platform/backend/api.git"
+    );
+}
+
+#[test]
+fn mixed_environment_does_not_fill_omitted_repo_forge() {
+    let json = serde_json::json!({
+        "name": "mixed-omitted-env",
+        "code_forge": "GITHUB",
+        "code_forges": ["GITHUB", "GITLAB"],
+        "source_repos": [
+            {"code_forge": "GITHUB", "owner": "warpdotdev", "repo": "warp"},
+            {"owner": "platform/backend", "repo": "api"}
+        ],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+    let repos = env.effective_repos();
+
+    assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
+    assert_eq!(repos[1].code_forge, None);
+    assert_eq!(
+        repos[1].https_clone_url(),
+        "https:///platform/backend/api.git"
+    );
+}
+
+#[test]
+fn github_plus_unknown_forge_does_not_fill_omitted_repo_forge() {
+    let json = serde_json::json!({
+        "name": "github-plus-future-env",
+        "code_forge": "GITHUB",
+        "code_forges": ["GITHUB", "BITBUCKET"],
+        "source_repos": [
+            {"code_forge": "GITHUB", "owner": "warpdotdev", "repo": "warp"},
+            {"owner": "acme", "repo": "widgets"}
+        ],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(
+        env.effective_code_forges(),
+        vec![CodeForge::GitHub, CodeForge::Unknown]
+    );
+    let repos = env.effective_repos();
+    assert_eq!(repos[0].code_forge, Some(CodeForge::GitHub));
+    assert_eq!(repos[1].code_forge, None);
+}
+
+#[test]
+fn singular_code_forge_payload_remains_backward_compatible() {
+    let json = serde_json::json!({
+        "name": "legacy-gitlab-env",
+        "code_forge": "GITLAB",
+        "source_repos": [{"owner": "platform/backend", "repo": "api"}],
+        "docker_image": "ubuntu:latest"
+    });
+
+    let env: AmbientAgentEnvironment = serde_json::from_value(json).unwrap();
+
+    assert_eq!(env.code_forges, None);
+    assert_eq!(env.effective_code_forges(), vec![CodeForge::GitLab]);
+    assert_eq!(
+        env.effective_repos()[0].https_clone_url(),
+        "https://gitlab.com/platform/backend/api.git"
+    );
 }
 
 #[test]
