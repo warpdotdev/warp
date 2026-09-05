@@ -59,7 +59,7 @@ use crate::settings::{
 };
 pub use crate::terminal::CLIAgent;
 use crate::terminal::TerminalModel;
-use crate::terminal::cli_agent_sessions::CLIAgentRichInputCloseReason;
+use crate::terminal::cli_agent_sessions::{CLIAgentRichInputCloseReason, CLIAgentSessionStatus};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -115,6 +115,11 @@ enum RichInputSubmitStrategy {
     /// For agents that don't respond to `\r` when it arrives in the same
     /// buffer as the text and don't support bracketed paste reliably.
     DelayedEnter,
+    /// Send text first, then `\r` after a longer delay (300 ms).
+    /// Used when the agent's TUI is transitioning between states (e.g. Claude
+    /// Code returning to its idle prompt after finishing a task) and needs
+    /// more time to settle before it will treat `\r` as a submit keystroke.
+    DelayedEnterLong,
     /// Wrap text in bracketed paste (reliable buffer insertion), then send
     /// `\r` after a delay. For agents like Copilot that need bracketed paste
     /// for reliable text delivery but also need a separate delayed Enter.
@@ -141,6 +146,31 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         | CLIAgent::Antigravity
         | CLIAgent::WarpTui
         | CLIAgent::Unknown => RichInputSubmitStrategy::Inline,
+    }
+}
+
+/// Returns the submit strategy for a CLI agent taking its current session
+/// status into account.
+///
+/// For agents that use `DelayedEnter`, when the agent is in an idle state
+/// (Success or Failed) rather than actively running (InProgress / Blocked),
+/// its TUI needs extra time after a batch PTY write before the trailing `\r`
+/// is interpreted as a submit rather than a newline.  `DelayedEnterLong` gives
+/// it that breathing room without changing any other agent's strategy.
+fn rich_input_submit_strategy_for_session(
+    agent: CLIAgent,
+    status: &CLIAgentSessionStatus,
+) -> RichInputSubmitStrategy {
+    let base = rich_input_submit_strategy(agent);
+    if base == RichInputSubmitStrategy::DelayedEnter
+        && matches!(
+            status,
+            CLIAgentSessionStatus::Success | CLIAgentSessionStatus::Failed { .. }
+        )
+    {
+        RichInputSubmitStrategy::DelayedEnterLong
+    } else {
+        base
     }
 }
 
@@ -682,9 +712,12 @@ impl TerminalView {
             sessions_model.clear_draft(view_id);
         });
 
+        // Use the status-aware strategy so that Claude Code in its idle
+        // (Success / Failed) state gets a longer Enter delay, giving the TUI
+        // time to settle before the submit keystroke arrives.
         let strategy = CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
-            .map(|s| rich_input_submit_strategy(s.agent))
+            .map(|s| rich_input_submit_strategy_for_session(s.agent, &s.status))
             .unwrap_or(RichInputSubmitStrategy::Inline);
 
         let text_bytes = text.into_bytes();
@@ -1045,6 +1078,20 @@ impl TerminalView {
                 self.write_user_bytes_to_pty(text_bytes, ctx);
                 ctx.spawn(
                     Timer::after(CLI_AGENT_PTY_WRITE_DELAY),
+                    move |me, _, ctx| {
+                        me.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
+                        me.maybe_close_rich_input_after_submit(ctx);
+                    },
+                );
+            }
+            RichInputSubmitStrategy::DelayedEnterLong => {
+                // Same as DelayedEnter but with a longer delay so that the
+                // agent's TUI (e.g. Claude Code transitioning from task-complete
+                // back to its idle prompt) has enough time to settle before the
+                // submit keystroke arrives.
+                self.write_user_bytes_to_pty(text_bytes, ctx);
+                ctx.spawn(
+                    Timer::after(CLI_AGENT_BRACKETED_PASTE_ENTER_DELAY),
                     move |me, _, ctx| {
                         me.write_user_bytes_to_pty(b"\r".to_vec(), ctx);
                         me.maybe_close_rich_input_after_submit(ctx);

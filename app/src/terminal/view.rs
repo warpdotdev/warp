@@ -13752,11 +13752,30 @@ impl TerminalView {
                 match status {
                     CLIAgentSessionStatus::Blocked { .. } => {
                         // Auto-close rich input when the agent is blocked
-                        // (it requires direct keyboard interaction in the terminal).
-                        self.close_cli_agent_rich_input(
-                            CLIAgentRichInputCloseReason::AutoToggle,
-                            ctx,
-                        );
+                        // (awaiting keyboard approval/response) ONLY if the
+                        // rich input was auto-opened by the system. If the user
+                        // manually opened rich input (Ctrl-G / footer button),
+                        // keep it open so they can type approval responses
+                        // (e.g. 'y' or 'n') directly through rich input.
+                        let was_auto_opened = CLIAgentSessionsModel::as_ref(ctx)
+                            .session(self.view_id)
+                            .and_then(|s| match s.input_state {
+                                CLIAgentInputState::Open { entrypoint, .. } => Some(entrypoint),
+                                CLIAgentInputState::Closed => None,
+                            })
+                            .is_some_and(|e| {
+                                matches!(
+                                    e,
+                                    CLIAgentInputEntrypoint::AutoShow
+                                        | CLIAgentInputEntrypoint::SharedSessionSync
+                                )
+                            });
+                        if was_auto_opened {
+                            self.close_cli_agent_rich_input(
+                                CLIAgentRichInputCloseReason::AutoToggle,
+                                ctx,
+                            );
+                        }
                     }
                     CLIAgentSessionStatus::InProgress
                     | CLIAgentSessionStatus::Success
