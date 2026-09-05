@@ -487,9 +487,6 @@ pub enum FeatureFlag {
     /// Enables the artifact command for uploading and downloading CLI artifacts.
     ArtifactCommand,
 
-    /// Groups MCP tools and resources by their originating server when sending context to the AI backend.
-    MCPGroupedServerContext,
-
     /// Enables the web search UI (when the model executes a web search).
     WebSearchUI,
 
