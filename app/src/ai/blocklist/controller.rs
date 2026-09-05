@@ -1410,10 +1410,24 @@ impl BlocklistAIController {
         ctx: &AppContext,
     ) -> Result<ParsedSkill, ActiveSkillLookupError> {
         let path_origin = self.skill_path_origin(ctx);
-        SkillManager::handle(ctx)
+        let mut skill = SkillManager::handle(ctx)
             .as_ref(ctx)
             .active_skill_by_reference_with_origin(reference, &path_origin, ctx)
-            .cloned()
+            .cloned()?;
+        if let Err(error) = skill.refresh_local_file_for_invocation() {
+            warp_core::safe_warn!(
+                safe: ("[Skills] Failed to refresh skill body for invocation"),
+                full: (
+                    "[Skills] Failed to refresh skill body for invocation path={} error={error:#}",
+                    skill.path.display_path()
+                )
+            );
+            return Err(ActiveSkillLookupError::for_reference(
+                reference,
+                &path_origin,
+            ));
+        }
+        Ok(skill)
     }
 
     /// Sends an already-resolved skill invocation through the shared slash-command request path.

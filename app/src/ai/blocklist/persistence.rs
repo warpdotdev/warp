@@ -54,6 +54,30 @@ pub(crate) enum PersistedAIInputType {
     },
 }
 
+impl PersistedAIInputType {
+    pub(crate) fn drop_skill_snapshots(&mut self) {
+        match self {
+            Self::Query { context, .. } => {
+                *context = context_without_skill_snapshots(context);
+            }
+        }
+    }
+}
+
+fn context_without_skill_snapshots(context: &Arc<[AIAgentContext]>) -> Arc<[AIAgentContext]> {
+    if !context
+        .iter()
+        .any(|item| matches!(item, AIAgentContext::Skills { .. }))
+    {
+        return context.clone();
+    }
+    context
+        .iter()
+        .filter(|item| !matches!(item, AIAgentContext::Skills { .. }))
+        .cloned()
+        .collect()
+}
+
 impl TryFrom<&AIAgentInput> for PersistedAIInputType {
     type Error = anyhow::Error;
 
@@ -66,12 +90,12 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
                 ..
             } => Ok(Self::Query {
                 text: query.clone(),
-                context: context.clone(),
+                context: context_without_skill_snapshots(context),
                 referenced_attachments: referenced_attachments.clone(),
             }),
             AIAgentInput::AutoCodeDiffQuery { query, context } => Ok(Self::Query {
                 text: query.clone(),
-                context: context.clone(),
+                context: context_without_skill_snapshots(context),
                 referenced_attachments: Default::default(),
             }),
             AIAgentInput::PassiveSuggestionResult {
@@ -80,7 +104,7 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
                 ..
             } => Ok(Self::Query {
                 text: prompt.clone(),
-                context: context.clone(),
+                context: context_without_skill_snapshots(context),
                 referenced_attachments: Default::default(),
             }),
             AIAgentInput::PassiveSuggestionResult {
@@ -120,7 +144,7 @@ impl TryFrom<PersistedAIInputType> for AIAgentInput {
                 referenced_attachments,
             } => Ok(Self::UserQuery {
                 query: text,
-                context,
+                context: context_without_skill_snapshots(&context),
                 referenced_attachments,
                 static_query_type: None,
                 user_query_mode: UserQueryMode::default(),

@@ -119,7 +119,11 @@ pub fn read_skills_from_directories(
 pub fn read_skills_from_files(skill_files: impl IntoIterator<Item = PathBuf>) -> Vec<ParsedSkill> {
     skill_files
         .into_iter()
-        .filter_map(|path| parse_skill(&path).ok())
+        .filter_map(|path| {
+            let mut skill = parse_skill(&path).ok()?;
+            skill.drop_listing_body();
+            Some(skill)
+        })
         .collect()
 }
 

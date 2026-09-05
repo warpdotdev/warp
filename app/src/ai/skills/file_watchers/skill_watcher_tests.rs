@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use ai::skills::{ParsedSkill, SkillProvider, SkillScope};
+use ai::skills::{ParsedSkill, SkillProvider, parse_skill};
 use repo_metadata::entry::{DirectoryEntry, Entry, FileMetadata};
 use repo_metadata::file_tree_store::FileTreeState;
 use repo_metadata::repositories::DetectedRepositories;
@@ -47,17 +47,9 @@ description: {}
 
     fs::create_dir_all(&skill_dir_path).unwrap();
     fs::write(&skill_file_path, skill_content.clone()).unwrap();
-    let line_range_start = skill_content.clone().lines().count() - content.lines().count() + 1;
-    let line_range_end = skill_content.clone().lines().count() + 1;
-    ParsedSkill {
-        path: LocalOrRemotePath::Local(skill_file_path),
-        name: name.to_string(),
-        description: description.to_string(),
-        content: skill_content.clone(),
-        line_range: Some(line_range_start..line_range_end),
-        provider: SkillProvider::Agents,
-        scope: SkillScope::Project,
-    }
+    let mut skill = parse_skill(&skill_file_path).unwrap();
+    skill.drop_listing_body();
+    skill
 }
 
 fn skill_local_path(skill: &ParsedSkill) -> PathBuf {
