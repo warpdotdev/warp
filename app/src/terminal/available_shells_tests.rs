@@ -110,19 +110,283 @@ fn test_dedupe_symlinks_when_discovering_paths() {
             let fallback_shells =
                 AvailableShells::load_known_shells(&paths_to_search, Some(etc_shells.as_path()));
 
-            // We should expect there to be only one shell, with the path and id for that shell being
-            // the canonical path to the executable.
+            // We should expect there to be only one shell: canonical paths dedupe the symlink
+            // aliases, but the stored path is the discovered one from the first search location.
             assert_eq!(
                 fallback_shells,
                 vec![AvailableShell {
-                    id: Some(format!("local:{}", usr_bin_bash.display())),
+                    id: Some(format!("local:{}", bin_bash.display())),
                     state: Arc::new(Config::KnownLocal(LocalConfig {
                         command: "bash".to_string(),
-                        executable_path: usr_bin_bash,
+                        executable_path: bin_bash,
                         shell_type: ShellType::Bash,
                     }))
                 }]
             )
+        },
+    );
+}
+
+#[test]
+fn test_keeps_stable_symlink_path_for_homebrew_shells() {
+    FeatureFlag::ShellSelector.set_enabled(true);
+    VirtualFS::test(
+        "test_keeps_stable_symlink_path_for_homebrew_shells",
+        |dirs, mut sandbox| {
+            let bin_fish = dirs.tests().join("bin").join("fish");
+            let cellar_fish = dirs
+                .tests()
+                .join("Cellar")
+                .join("fish")
+                .join("1.0")
+                .join("bin")
+                .join("fish");
+
+            sandbox.mkdir("Cellar/fish/1.0/bin");
+            sandbox.mkdir("bin");
+            sandbox.with_files(vec![Stub::MockExecutable("Cellar/fish/1.0/bin/fish")]);
+            sandbox.ln("Cellar/fish/1.0/bin/fish", "bin/fish");
+
+            let shells = AvailableShells::load_known_shells(&[dirs.tests().join("bin")], None);
+
+            // The stored path must be the stable symlink (bin/fish), which survives a Homebrew
+            // upgrade; the versioned Cellar path is removed when a new version is installed.
+            assert_eq!(
+                shells,
+                vec![AvailableShell {
+                    id: Some(format!("local:{}", bin_fish.display())),
+                    state: Arc::new(Config::KnownLocal(LocalConfig {
+                        command: "fish".to_string(),
+                        executable_path: bin_fish,
+                        shell_type: ShellType::Fish,
+                    }))
+                }],
+                "expected the stable bin path, but shells contained {shells:?} (cellar path: {})",
+                cellar_fish.display()
+            );
+        },
+    );
+}
+
+#[test]
+fn test_recovers_executable_preference_via_canonical_alias() {
+    // A preference persisted by an older build carries the canonical Cellar path, while
+    // detection now reports the stable bin symlink. Right after the Warp update both
+    // still exist, and recovery must follow the canonical alias.
+    VirtualFS::test(
+        "test_recovers_executable_preference_via_canonical_alias",
+        |dirs, mut sandbox| {
+            let bin_fish = dirs.tests().join("bin").join("fish");
+            let cellar_fish = dirs
+                .tests()
+                .join("Cellar")
+                .join("fish")
+                .join("1.0")
+                .join("bin")
+                .join("fish");
+
+            sandbox.mkdir("Cellar/fish/1.0/bin");
+            sandbox.mkdir("bin");
+            sandbox.with_files(vec![Stub::MockExecutable("Cellar/fish/1.0/bin/fish")]);
+            sandbox.ln("Cellar/fish/1.0/bin/fish", "bin/fish");
+
+            let shells = make_available_shells(vec![AvailableShell::new_local_executable(
+                "fish".to_string(),
+                bin_fish.clone(),
+                ShellType::Fish,
+            )]);
+
+            let recovered = shells
+                .recover_unmatched_executable_preference(&NewSessionShell::Executable(
+                    cellar_fish.display().to_string(),
+                ))
+                .expect("should recover to the detected fish");
+
+            if let Config::KnownLocal(config) = recovered.state.as_ref() {
+                assert_eq!(config.executable_path, bin_fish);
+            } else {
+                panic!("expected a KnownLocal shell, got {recovered:?}");
+            }
+        },
+    );
+}
+
+#[test]
+fn test_recovers_stale_executable_preference_by_shell_type() {
+    // After the persisted Cellar path is removed by a formula upgrade, recovery
+    // falls back to the detected shell of the same type.
+    VirtualFS::test(
+        "test_recovers_stale_executable_preference_by_shell_type",
+        |dirs, mut sandbox| {
+            let bin_fish = dirs.tests().join("bin").join("fish");
+            let removed_cellar_fish = dirs
+                .tests()
+                .join("Cellar")
+                .join("fish")
+                .join("1.0")
+                .join("bin")
+                .join("fish");
+
+            sandbox.mkdir("bin");
+            sandbox.with_files(vec![Stub::MockExecutable("bin/fish")]);
+
+            let shells = make_available_shells(vec![AvailableShell::new_local_executable(
+                "fish".to_string(),
+                bin_fish.clone(),
+                ShellType::Fish,
+            )]);
+
+            let recovered = shells
+                .recover_unmatched_executable_preference(&NewSessionShell::Executable(
+                    removed_cellar_fish.display().to_string(),
+                ))
+                .expect("should recover to the detected fish");
+
+            if let Config::KnownLocal(config) = recovered.state.as_ref() {
+                assert_eq!(config.executable_path, bin_fish);
+            } else {
+                panic!("expected a KnownLocal shell, got {recovered:?}");
+            }
+        },
+    );
+}
+
+#[test]
+fn test_recovery_prefers_the_closest_install_prefix() {
+    // With several installs of the same shell on the machine, a stale preference
+    // recovers to the detected shell closest to where the stale one lived.
+    VirtualFS::test(
+        "test_recovery_prefers_the_closest_install_prefix",
+        |dirs, _sandbox| {
+            let macports_fish = dirs.tests().join("opt/local/bin").join("fish");
+            let homebrew_fish = dirs.tests().join("opt/homebrew/bin").join("fish");
+            let removed_cellar_fish = dirs
+                .tests()
+                .join("opt/homebrew/Cellar")
+                .join("fish")
+                .join("1.0")
+                .join("bin")
+                .join("fish");
+
+            let shells = make_available_shells(vec![
+                AvailableShell::new_local_executable(
+                    "fish".to_string(),
+                    macports_fish,
+                    ShellType::Fish,
+                ),
+                AvailableShell::new_local_executable(
+                    "fish".to_string(),
+                    homebrew_fish.clone(),
+                    ShellType::Fish,
+                ),
+            ]);
+
+            let recovered = shells
+                .recover_unmatched_executable_preference(&NewSessionShell::Executable(
+                    removed_cellar_fish.display().to_string(),
+                ))
+                .expect("should recover to a detected fish");
+
+            if let Config::KnownLocal(config) = recovered.state.as_ref() {
+                assert_eq!(config.executable_path, homebrew_fish);
+            } else {
+                panic!("expected a KnownLocal shell, got {recovered:?}");
+            }
+        },
+    );
+}
+
+#[test]
+fn test_does_not_recover_existing_unmatched_or_non_shell_preference() {
+    VirtualFS::test(
+        "test_does_not_recover_existing_unmatched_or_non_shell_preference",
+        |dirs, mut sandbox| {
+            sandbox.mkdir("usr/bin");
+            sandbox.with_files(vec![Stub::MockExecutable("usr/bin/zsh")]);
+
+            // The detected zsh lives at a different path with no file behind it,
+            // so its canonical form cannot alias the existing preference path.
+            let shells = make_available_shells(vec![AvailableShell::new_local_executable(
+                "zsh".to_string(),
+                dirs.tests().join("usr/local/bin").join("zsh"),
+                ShellType::Zsh,
+            )]);
+
+            // An existing executable that matches no detected binary is a deliberate
+            // out-of-catalog choice and is left to the launch-time fallback.
+            assert!(
+                shells
+                    .recover_unmatched_executable_preference(&NewSessionShell::Executable(
+                        dirs.tests().join("usr/bin").join("zsh").display().to_string(),
+                    ))
+                    .is_none()
+            );
+
+            // A stale path whose file name is not a supported shell does not recover either.
+            assert!(
+                shells
+                    .recover_unmatched_executable_preference(&NewSessionShell::Executable(
+                        dirs.tests().join("removed/bin").join("nu").display().to_string(),
+                    ))
+                    .is_none()
+            );
+        },
+    );
+}
+
+#[test]
+fn test_get_from_shell_launch_data_recovers_stale_snapshot_path() {
+    VirtualFS::test(
+        "test_get_from_shell_launch_data_recovers_stale_snapshot_path",
+        |dirs, mut sandbox| {
+            let bin_fish = dirs.tests().join("bin").join("fish");
+
+            sandbox.mkdir("bin");
+            sandbox.with_files(vec![Stub::MockExecutable("bin/fish")]);
+
+            let shells = make_available_shells(vec![AvailableShell::new_local_executable(
+                "fish".to_string(),
+                bin_fish.clone(),
+                ShellType::Fish,
+            )]);
+
+            // A snapshot carrying a Cellar path removed by a formula upgrade restores
+            // to the detected shell instead of a dead custom path.
+            let stale = ShellLaunchData::Executable {
+                executable_path: dirs
+                    .tests()
+                    .join("Cellar")
+                    .join("fish")
+                    .join("1.0")
+                    .join("bin")
+                    .join("fish"),
+                shell_type: ShellType::Fish,
+            };
+            let recovered = shells
+                .get_from_shell_launch_data(&stale)
+                .expect("should recover from the stale snapshot path");
+            if let Config::KnownLocal(config) = recovered.state.as_ref() {
+                assert_eq!(config.executable_path, bin_fish);
+            } else {
+                panic!("expected a KnownLocal shell, got {recovered:?}");
+            }
+
+            // An existing out-of-catalog path still restores as a custom shell.
+            sandbox.mkdir("usr/bin");
+            sandbox.with_files(vec![Stub::MockExecutable("usr/bin/zsh")]);
+            let custom_path = dirs.tests().join("usr/bin").join("zsh");
+            let existing = ShellLaunchData::Executable {
+                executable_path: custom_path.clone(),
+                shell_type: ShellType::Zsh,
+            };
+            assert_eq!(
+                shells.get_from_shell_launch_data(&existing),
+                Some(AvailableShell::new_custom_shell(
+                    "zsh".to_string(),
+                    custom_path,
+                    ShellType::Zsh,
+                ))
+            );
         },
     );
 }
