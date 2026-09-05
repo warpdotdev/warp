@@ -66,20 +66,12 @@ fn command_entry(
     is_agent_executed: bool,
     workflow_command: Option<&str>,
 ) -> HistoryEntry {
-    HistoryEntry {
-        session_id: Some(session_id),
-        command: command.to_owned(),
-        pwd: None,
-        start_ts: Some(Local::now() + Duration::milliseconds(age)),
-        completed_ts: None,
-        exit_code: None,
-        git_head: None,
-        shell_host: None,
-        workflow_id: None,
-        workflow_command: workflow_command.map(str::to_owned),
-        is_for_restored_block: false,
-        is_agent_executed,
-    }
+    let mut entry = HistoryEntry::command_only(command);
+    entry.session_id = Some(session_id);
+    entry.start_ts = Some(Local::now() + Duration::milliseconds(age));
+    entry.is_agent_executed = is_agent_executed;
+    entry.set_linked_workflow(None, workflow_command.map(str::to_owned));
+    entry
 }
 
 fn combined_history(
