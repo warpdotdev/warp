@@ -13,6 +13,7 @@ use crate::ai::agent::AIAgentExchange;
 use crate::ai::agent::conversation::AIConversation;
 use crate::ai::blocklist::SerializedBlockListItem;
 use crate::terminal::TerminalModel;
+use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::view::blocklist_filter::exchanges_for_blocklist;
 
@@ -58,14 +59,15 @@ pub fn prepare_conversation_block_restoration(
 ) -> ConversationBlockRestorationPlan {
     let serialized_items = conversation.to_serialized_blocklist_items();
     if !serialized_items.is_empty() {
-        let block_list = terminal_model.block_list_mut();
-        for item in &serialized_items {
-            match item {
-                SerializedBlockListItem::Command { block } => {
-                    block_list.insert_restored_block(block);
-                }
-            }
-        }
+        let blocks: Vec<&SerializedBlock> = serialized_items
+            .iter()
+            .map(|item| match item {
+                SerializedBlockListItem::Command { block } => block.as_ref(),
+            })
+            .collect();
+        terminal_model
+            .block_list_mut()
+            .insert_restored_blocks(&blocks);
     }
 
     let exchanges = exchanges_for_blocklist(conversation);

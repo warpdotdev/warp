@@ -184,12 +184,18 @@ pub(crate) fn terminal_view_restored_blocks(
                 Some(conversation.to_serialized_blocklist_items())
             }
             Some(ConversationRestorationInNewPaneType::Startup { conversations, .. }) => {
+                // Collect each conversation's *uncapped* command blocks first: capping
+                // each conversation independently here would still let the combined
+                // total grow unboundedly with the number of conversations recorded for
+                // this terminal surface (see `MAX_RESTORED_COMMAND_BLOCKS`). Merge, sort,
+                // then apply a single aggregate cap across the whole surface.
                 let mut items: Vec<_> = conversations
                     .iter()
-                    .flat_map(|c| c.to_serialized_blocklist_items())
+                    .flat_map(|c| c.extract_serialized_command_blocks())
                     .collect();
                 // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
                 items.sort_by_key(|item| item.start_ts());
+                let items = AIConversation::cap_restored_command_blocks(items, None);
                 if items.is_empty() { None } else { Some(items) }
             }
             _ => None,

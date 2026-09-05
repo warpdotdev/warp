@@ -347,6 +347,7 @@ impl PaneContent for TerminalPane {
                     *conversation_id,
                     terminal_pane_id.into(),
                     true,
+                    None,
                     ctx,
                 );
             }
