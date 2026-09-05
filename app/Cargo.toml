@@ -592,7 +592,6 @@ default = [
     "conversation_api",
     "cloud_environments",
     "create_environment_slash_command",
-    "code_review_find",
     "async_find",
     "shared_session_long_running_commands",
     "mcp_grouped_server_context",
@@ -941,7 +940,6 @@ diff_set_as_context = []
 discard_per_file_and_all_changes = []
 ui_zoom = []
 summarization_cancellation_confirmation = []
-code_review_find = []
 auto_open_code_review_pane = []
 inline_code_review = []
 integration_command = []

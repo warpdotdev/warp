@@ -444,9 +444,6 @@ pub enum FeatureFlag {
     /// Shows a confirmation dialog when cancelling an active summarization via Ctrl-C or stop.
     SummarizationCancellationConfirmation,
 
-    /// Enables find/search in code review pane
-    CodeReviewFind,
-
     /// Enables asynchronous find in terminal, running search on a background thread.
     AsyncFind,
 
@@ -1165,7 +1162,6 @@ impl FeatureFlag {
             AgentSharedSessions => {
                 Some("Enables viewing agent conversations within shared sessions.")
             }
-            CodeReviewFind => Some("Enables the find bar in the code review pane."),
             BlocklistMarkdownImages => {
                 Some("Enables rendering markdown images inline in AI block list responses.")
             }
