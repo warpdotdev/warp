@@ -1441,6 +1441,11 @@ impl CompleterData {
             .as_ref()
             .and_then(BlockMetadata::current_working_directory)
             .map(str::to_owned);
+        let session_env_vars = self
+            .sessions
+            .as_ref(app)
+            .get_env_vars_for_session(active_block_session_id)
+            .unwrap_or_default();
 
         current_session.zip(pwd).map(|(current_session, pwd)| {
             // TODO(abhishek): Ideally, BlockMetadata::current_working_directory should directly
@@ -1454,6 +1459,7 @@ impl CompleterData {
                 current_working_directory,
                 app,
             )
+            .with_environment_variables(session_env_vars)
         })
     }
 }

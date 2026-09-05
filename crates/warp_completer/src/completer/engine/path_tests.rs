@@ -22,49 +22,40 @@ use unix_constants::*;
 #[test]
 fn test_split_path() {
     let path = TypedPathBuf::from_unix("/Users/warpuser");
-    let split_path = SplitPath::new(
-        path.to_path(),
-        "~/Warp.app",
-        Some("/Users/warpuser"),
-        &['/'],
-    );
+    let ctx = MockPathCompletionContext::new(path.clone())
+        .with_home_directory("/Users/warpuser".to_owned());
+
+    let split_path = SplitPath::new("~/Warp.app", &ctx);
 
     assert_eq!(
         split_path,
         SplitPath {
             directory_absolute_path: path.clone(),
             directory_relative_path_name: "~/".to_owned(),
-            file_name: "Warp.app".to_owned()
+            file_name: "Warp.app".to_owned(),
+            unresolved_environment_variable: false,
         }
     );
 
-    let split_path = SplitPath::new(
-        path.to_path(),
-        "Warp.app/Contents",
-        Some("/Users/warpuser"),
-        &['/'],
-    );
+    let split_path = SplitPath::new("Warp.app/Contents", &ctx);
     assert_eq!(
         split_path,
         SplitPath {
             directory_absolute_path: TypedPathBuf::from("/Users/warpuser/Warp.app/"),
             directory_relative_path_name: "Warp.app/".to_owned(),
-            file_name: "Contents".to_owned()
+            file_name: "Contents".to_owned(),
+            unresolved_environment_variable: false,
         }
     );
 
-    let split_path = SplitPath::new(
-        path.to_path(),
-        "Warp.app/macOS/bin/warp.o",
-        Some("/Users/warpuser"),
-        &['/'],
-    );
+    let split_path = SplitPath::new("Warp.app/macOS/bin/warp.o", &ctx);
     assert_eq!(
         split_path,
         SplitPath {
             directory_absolute_path: TypedPathBuf::from("/Users/warpuser/Warp.app/macOS/bin/"),
             directory_relative_path_name: "Warp.app/macOS/bin/".to_owned(),
-            file_name: "warp.o".to_owned()
+            file_name: "warp.o".to_owned(),
+            unresolved_environment_variable: false,
         }
     );
 }
@@ -678,4 +669,274 @@ pub fn test_sorted_cd_directories_pwd_at_dot_in_middle() {
     .map(|m| m.suggestion.display.to_string())
     .collect();
     assert_eq!(displays, vec!["from-a/", "from-pwd/", "from-b/"]);
+}
+
+#[cfg(unix)]
+fn mock_path_completion_ctx_env_var() -> MockPathCompletionContext {
+    MockPathCompletionContext::new(TypedPathBuf::from("/work/proj"))
+        .with_entries_in_pwd([dir_entry("local-only")])
+        .with_entries(
+            TypedPathBuf::from("/tmp/proj"),
+            [dir_entry("src"), file_entry("README.md")],
+        )
+        .with_entries(TypedPathBuf::from("/tmp/proj/src"), [dir_entry("app")])
+        .with_environment_variable("PROJ", "/tmp/proj")
+}
+
+/// A set variable resolves, and the replacement keeps the original `$VAR/` prefix, exactly as
+/// `$HOME/` does today (see `test_path_completions_home_env_var_special_characters`).
+#[cfg(unix)]
+#[test]
+pub fn test_path_completions_env_var_resolves() {
+    let ctx = mock_path_completion_ctx_env_var();
+
+    assert_eq!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("$PROJ/"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .into_iter()
+        .map(|matched_suggestion| matched_suggestion.suggestion)
+        .collect_vec(),
+        vec![
+            Suggestion::new(
+                "src/",
+                "$PROJ/src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
+    );
+}
+
+/// The `${VAR}/` brace form resolves the same way as the bare `$VAR/` form.
+#[cfg(unix)]
+#[test]
+pub fn test_path_completions_env_var_brace_form_resolves() {
+    let ctx = mock_path_completion_ctx_env_var();
+
+    assert_eq!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("${PROJ}/"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .into_iter()
+        .map(|matched_suggestion| matched_suggestion.suggestion)
+        .collect_vec(),
+        vec![
+            Suggestion::new(
+                "src/",
+                "${PROJ}/src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
+    );
+}
+
+/// A `$VAR` reference nested deeper in the token (e.g. `$PROJ/src/`) resolves against the
+/// variable's value joined with the rest of the token.
+#[cfg(unix)]
+#[test]
+pub fn test_path_completions_env_var_nested_path_resolves() {
+    let ctx = mock_path_completion_ctx_env_var();
+
+    assert_eq!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("$PROJ/src/"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .into_iter()
+        .map(|matched_suggestion| matched_suggestion.suggestion)
+        .collect_vec(),
+        vec![
+            Suggestion::new(
+                "app/",
+                "$PROJ/src/app/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
+    );
+}
+
+/// An unset variable yields no suggestions at all -- not even `.`/`..` -- rather than falling
+/// back to treating the token as a literal relative path.
+#[cfg(unix)]
+#[test]
+pub fn test_path_completions_unset_env_var_yields_no_suggestions() {
+    let ctx = mock_path_completion_ctx_env_var();
+
+    assert!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("$MISSING/"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .is_empty()
+    );
+
+    assert!(
+        warpui_core::r#async::block_on(sorted_paths_relative_to(
+            &ParsedToken::new("$MISSING/"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .is_empty()
+    );
+}
+
+/// Once a `$VAR/` token expands to an absolute path, `$CDPATH` must be skipped for it, just as
+/// it is for any other absolute token (e.g. `/abs/`).
+#[cfg(unix)]
+#[test]
+pub fn test_sorted_cd_directories_ignores_cdpath_for_env_var_token() {
+    let ctx = mock_path_completion_ctx_env_var()
+        .with_entries(
+            TypedPathBuf::from("/srv/projects"),
+            [dir_entry("extra-dir")],
+        )
+        .with_cdpath("/srv/projects".to_owned());
+
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
+        &ParsedToken::new("$PROJ/"),
+        MatchStrategy::CaseInsensitive,
+        &ctx,
+    ))
+    .into_iter()
+    .map(|m| m.suggestion.display.to_string())
+    .collect();
+
+    assert_eq!(displays, vec!["src/"]);
+}
+
+/// A repeated separator immediately after the variable reference (e.g. `$VAR//App`) must not be
+/// treated as an absolute suffix that discards the resolved variable base: `TypedPathBuf::push`
+/// replaces its receiver outright when pushed an absolute path, so an unstripped remainder like
+/// `/src` would otherwise search `/` instead of the variable's value. Covers both the bare and
+/// brace forms.
+#[cfg(unix)]
+#[test]
+pub fn test_path_completions_env_var_repeated_separator_resolves() {
+    let ctx = mock_path_completion_ctx_env_var();
+
+    assert_eq!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("$PROJ//src"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .into_iter()
+        .map(|matched_suggestion| matched_suggestion.suggestion)
+        .collect_vec(),
+        vec![
+            Suggestion::new(
+                "src/",
+                "$PROJ//src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
+    );
+
+    assert_eq!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("${PROJ}//src"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .into_iter()
+        .map(|matched_suggestion| matched_suggestion.suggestion)
+        .collect_vec(),
+        vec![
+            Suggestion::new(
+                "src/",
+                "${PROJ}//src/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
+    );
+}
+
+/// A variable whose value is relative (rather than absolute) resolves against the shell's pwd,
+/// not the Warp process's own cwd.
+#[cfg(unix)]
+#[test]
+pub fn test_path_completions_env_var_relative_value_resolves_against_pwd() {
+    let ctx = MockPathCompletionContext::new(TypedPathBuf::from("/work/proj"))
+        .with_entries_in_pwd([dir_entry("local-only")])
+        .with_entries(
+            TypedPathBuf::from("/work/proj/projects"),
+            [dir_entry("app")],
+        )
+        .with_environment_variable("ROOT", "projects");
+
+    assert_eq!(
+        warpui_core::r#async::block_on(sorted_directories_relative_to(
+            &ParsedToken::new("$ROOT/"),
+            MatchStrategy::Fuzzy,
+            &ctx
+        ))
+        .into_iter()
+        .map(|matched_suggestion| matched_suggestion.suggestion)
+        .collect_vec(),
+        vec![
+            Suggestion::new(
+                "app/",
+                "$ROOT/app/",
+                Some("Directory".into()),
+                SuggestionType::Argument,
+                Priority::default(),
+            )
+            .with_icon_override(IconType::Folder)
+            .with_file_type(EngineFileType::Directory),
+        ]
+    );
+}
+
+/// When a `$VAR/` token resolves to a *relative* path, `$CDPATH` eligibility must follow that
+/// resolved-path semantics (not assume every `$VAR/` token is absolute): the relative value gets
+/// resolved against each `$CDPATH` entry in turn, exactly like a relative `$CDPATH` entry itself
+/// is resolved against pwd.
+#[cfg(unix)]
+#[test]
+pub fn test_sorted_cd_directories_applies_cdpath_for_relative_env_var_value() {
+    let ctx = MockPathCompletionContext::new(TypedPathBuf::from("/work/proj"))
+        .with_entries_in_pwd([dir_entry("local-only")])
+        .with_entries(
+            TypedPathBuf::from("/srv/projects/relvar"),
+            [dir_entry("from-cdpath")],
+        )
+        .with_environment_variable("RELVAR", "relvar")
+        .with_cdpath("/srv/projects".to_owned());
+
+    let displays: Vec<String> = warpui_core::r#async::block_on(sorted_cd_directories(
+        &ParsedToken::new("$RELVAR/"),
+        MatchStrategy::CaseInsensitive,
+        &ctx,
+    ))
+    .into_iter()
+    .map(|m| m.suggestion.display.to_string())
+    .collect();
+
+    assert_eq!(displays, vec!["from-cdpath/"]);
 }

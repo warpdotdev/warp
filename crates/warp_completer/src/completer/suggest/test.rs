@@ -1420,6 +1420,54 @@ pub fn test_env_var_completion() {
     );
 }
 
+/// Covers GH-3592: a `$VAR/`-prefixed path token should resolve using the variable's value,
+/// while leaving name completion (a bare `$VAR`, with no trailing separator) untouched.
+#[cfg(not(feature = "v2"))]
+#[test]
+pub fn test_env_var_path_completion() {
+    let pwd = TypedPathBuf::from(TEST_WORK_DIR);
+    let proj_dir = pwd.join("target");
+    let path_ctx = MockPathCompletionContext::new(pwd.clone())
+        .with_home_directory(TEST_WORK_DIR.to_owned())
+        .with_entries_in_pwd([EngineDirEntry::test_dir("target")])
+        .with_entries(
+            proj_dir.clone(),
+            [
+                EngineDirEntry::test_dir("debug"),
+                EngineDirEntry::test_dir("release"),
+            ],
+        )
+        .with_environment_variable("PROJ", proj_dir.to_string_lossy().to_string());
+
+    let env_vars = HashSet::from_iter([("PROJ".into())]);
+    // Use a test-only registry (rather than `CommandRegistry::default()`) so this test doesn't
+    // depend on the real `warp` CLI signature registration, which checks feature flags that
+    // aren't initialized in this crate's test binary.
+    let ctx = FakeCompletionContext::new(create_test_command_registry([cd_signature()]))
+        .with_path_completion_context(path_ctx)
+        .with_top_level_commands(["cd"])
+        .with_environment_variable_names(env_vars);
+
+    // A set variable resolves, and the replacement text keeps the `$VAR/` prefix.
+    assert_eq!(
+        complete_at_end_of_line("cd $PROJ/", &ctx),
+        vec!["debug/", "release/"]
+    );
+
+    // The `${VAR}/` brace form resolves the same way.
+    assert_eq!(
+        complete_at_end_of_line("cd ${PROJ}/", &ctx),
+        vec!["debug/", "release/"]
+    );
+
+    // An unset variable yields no suggestions rather than falling back to a literal path.
+    assert!(complete_at_end_of_line("cd $MISSING/", &ctx).is_empty());
+
+    // A bare variable name (no trailing separator) still does name completion, not path
+    // completion.
+    assert_eq!(complete_at_end_of_line("cd $PROJ", &ctx), vec!["$PROJ"]);
+}
+
 #[cfg(not(feature = "v2"))]
 #[test]
 pub fn test_alias_completion() {

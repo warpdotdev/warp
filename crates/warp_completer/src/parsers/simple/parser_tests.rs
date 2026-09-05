@@ -121,6 +121,39 @@ cat "Hello $(ls -la)" && echo `ps \`; {echo Goodbye😀}"#;
     );
 }
 
+// A `${VAR}` brace-form dollar expression must stay part of the same word as the rest of the
+// token, rather than having `{`/`}` misparsed as a `{ ... }` command-grouping boundary (see
+// `is_command_terminator`).
+#[test]
+fn test_parse_brace_form_dollar_expression() {
+    let source = "cd ${PROJ}/src";
+    let command = Parser::new(Lexer::new(source, EscapeChar::Backslash, false)).parse_command();
+
+    assert_eq!(
+        command,
+        Command::new(vec![
+            Part::Literal("cd".into()).spanned((0, 2)),
+            Part::Literal("${PROJ}/src".into()).spanned((3, 14)),
+        ])
+        .spanned((0, 14))
+    );
+}
+
+// A bare `{...}` (not preceded by `$`) is still treated as a command-grouping boundary, so this
+// distinguishes that case from the `${VAR}` handling above.
+#[test]
+fn test_parse_brace_group_without_dollar_is_unaffected() {
+    let source = "{ls}";
+    let commands = Parser::new(Lexer::new(source, EscapeChar::Backslash, false))
+        .parse()
+        .commands;
+
+    assert_eq!(
+        commands,
+        vec![Command::new(vec![Part::Literal("ls".into()).spanned((1, 3))]).spanned((1, 3))]
+    );
+}
+
 // Test that a backslash is retained when preceding a command.
 #[test]
 fn test_backslash_before_command() {
