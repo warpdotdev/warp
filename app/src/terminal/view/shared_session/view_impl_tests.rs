@@ -958,8 +958,6 @@ fn handoff_request_for_test() -> SpawnAgentRequest {
 
 #[test]
 fn test_ambient_session_join_auto_opens_details_panel() {
-    let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
-
     App::test((), |mut app| async move {
         let terminal = cloud_mode_terminal_for_test(&mut app);
         let firebase_uid = UserUid::new("mock_firebase_uid");
@@ -989,8 +987,6 @@ fn test_ambient_session_join_auto_opens_details_panel() {
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 #[test]
 fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
-    let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
-
     App::test((), |mut app| async move {
         let terminal = cloud_mode_terminal_for_test(&mut app);
         let firebase_uid = UserUid::new("mock_firebase_uid");
@@ -1028,7 +1024,6 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
 
 #[test]
 fn test_cloud_cloud_handoff_session_join_keeps_closed_details_panel_hidden() {
-    let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
@@ -1087,7 +1082,6 @@ fn test_cloud_cloud_handoff_session_join_keeps_closed_details_panel_hidden() {
 
 #[test]
 fn test_cloud_cloud_handoff_session_join_respects_details_panel_closed_after_followup_input() {
-    let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 
@@ -2380,7 +2374,6 @@ fn test_non_owned_tombstone_is_removed_for_followup_and_reinserted_after_complet
 
 #[test]
 fn test_on_ambient_agent_execution_ended_refreshes_open_details_panel_to_terminal_status() {
-    let _cloud_mode_flag = FeatureFlag::CloudMode.override_enabled(true);
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
     let _setup_v2_flag = FeatureFlag::CloudModeSetupV2.override_enabled(true);
 

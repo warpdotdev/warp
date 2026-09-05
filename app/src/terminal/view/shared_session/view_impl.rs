@@ -837,8 +837,7 @@ impl TerminalView {
             .ambient_agent_view_model
             .as_ref()
             .is_some_and(|model| model.as_ref(ctx).is_local_to_cloud_handoff());
-        if FeatureFlag::CloudMode.is_enabled()
-            && matches!(source_type, SessionSourceType::AmbientAgent { .. })
+        if matches!(source_type, SessionSourceType::AmbientAgent { .. })
             && !is_local_to_cloud_handoff
         {
             self.maybe_auto_open_conversation_details_panel(ctx);

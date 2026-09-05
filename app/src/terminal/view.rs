@@ -6566,8 +6566,7 @@ impl TerminalView {
                 self.maybe_send_agent_mode_desktop_notification(conversation_id, ctx);
 
                 // Show AI credits modal for cloud-mode out-of-credits failures.
-                if FeatureFlag::CloudMode.is_enabled()
-                    && self.is_ambient_agent_session(ctx)
+                if self.is_ambient_agent_session(ctx)
                     && !self.model.lock().is_shared_ambient_agent_session()
                     && let Some(conversation) =
                         BlocklistAIHistoryModel::as_ref(ctx).conversation(conversation_id)
@@ -22508,9 +22507,7 @@ impl TerminalView {
         initial_prompt: Option<String>,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::CloudMode.is_enabled()
-            || !self.model.lock().shared_session_status().is_view_pending()
-        {
+        if !self.model.lock().shared_session_status().is_view_pending() {
             // Ambient agent setup can only be done inside a shared session viewer; otherwise the backing terminal manager is incorrect.
             return;
         }

@@ -1069,11 +1069,10 @@ impl View for AIBlock {
         drop(terminal_model);
 
         #[cfg(not(target_family = "wasm"))]
-        let is_cloud_agent_context = FeatureFlag::CloudMode.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|model| model.as_ref(app).is_ambient_agent());
+        let is_cloud_agent_context = self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|model| model.as_ref(app).is_ambient_agent());
 
         contents.add_child(output::render(
             output::Props {
