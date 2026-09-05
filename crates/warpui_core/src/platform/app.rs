@@ -224,7 +224,11 @@ impl AppCallbackDispatcher {
     }
 
     pub fn window_resized(&mut self) {
-        log::info!("window resized");
+        // Use debug! instead of info! to avoid sentry_log capturing every resize event
+        // as a Sentry breadcrumb. Window resize fires continuously during live resizing,
+        // and INFO-level logs are stored in the sentry breadcrumb VecDeque, leading to
+        // unbounded memory growth (16+ GB observed in heap profiles). See APP-4775.
+        log::debug!("window resized");
         if let Some(callback) = &mut self.callbacks.on_window_resized {
             self.ui_app.update(|ctx| callback(ctx));
         }
