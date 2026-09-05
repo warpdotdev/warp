@@ -1,6 +1,8 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use vec1::vec1;
+
 use super::*;
 use crate::fonts::{ExternalFontFamily, FamilyId, FontFallbackCache, Properties};
 use crate::text_layout::{StyleAndFont, TextStyle};
@@ -37,14 +39,16 @@ impl platform::TextLayoutSystem for RecordingLayoutSystem {
         style_runs: &[(Range<usize>, StyleAndFont)],
         _max_width: f32,
         _max_height: f32,
-        _alignment: TextAlignment,
+        alignment: TextAlignment,
         _first_line_head_indent: Option<f32>,
     ) -> TextFrame {
         *self.text_input.lock().unwrap() = Some((
             text.to_owned(),
             style_runs.iter().map(|(range, _)| range.clone()).collect(),
         ));
-        TextFrame::empty(line_style.font_size, line_style.line_height_ratio)
+        let mut line = Line::empty(line_style.font_size, line_style.line_height_ratio, 0);
+        line.chars_with_missing_glyphs.extend(self.missing_glyph);
+        TextFrame::new(vec1![line], 0., alignment)
     }
 }
 
@@ -110,7 +114,7 @@ fn uncached_text_layout_strips_a_leading_bom_and_adjusts_styles() {
 }
 
 #[test]
-fn uncached_layout_requests_fallback_fonts_for_missing_glyphs() {
+fn uncached_text_layout_requests_fallback_fonts_for_missing_glyphs() {
     let missing_glyph = '🦀';
     let platform = RecordingLayoutSystem {
         missing_glyph: Some(missing_glyph),
@@ -130,12 +134,14 @@ fn uncached_layout_requests_fallback_fonts_for_missing_glyphs() {
         cache: &cache,
     };
 
-    system.layout_line_uncached(
+    system.layout_text_uncached(
         "🦀",
         line_style(),
         &[(0..1, style())],
         100.,
-        ClipConfig::end(),
+        100.,
+        TextAlignment::Left,
+        None,
     );
 
     let requested = cache
