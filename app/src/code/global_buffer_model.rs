@@ -31,7 +31,7 @@ use super::buffer_location::{LocalOrRemotePath, SyncClock};
 cfg_if::cfg_if! {
     if #[cfg(feature = "local_fs")] {
         use lsp::LspManagerModelEvent;
-        use warp_files::{FileModelEvent, FileModel};
+        use warp_files::{FileModelEvent, FileModel, MAX_LOADABLE_FILE_SIZE_BYTES};
         use warp_editor::content::text::IndentBehavior;
         use warp_editor::content::text::IndentUnit;
         use warp_editor::content::buffer::EditOrigin;
@@ -493,6 +493,19 @@ impl GlobalBufferModel {
         let Some(state) = self.buffers.get_mut(&file_id) else {
             return;
         };
+        #[cfg(feature = "local_fs")]
+        {
+            if content.len() as u64 > MAX_LOADABLE_FILE_SIZE_BYTES {
+                ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                    file_id,
+                    error: Rc::new(FileLoadError::TooLarge {
+                        size_estimate: Some(content.len() as u64),
+                        limit_bytes: MAX_LOADABLE_FILE_SIZE_BYTES,
+                    }),
+                });
+                return;
+            }
+        }
 
         let Some(buffer) = state.buffer.upgrade(ctx) else {
             self.cleanup_file_id(file_id, ctx);

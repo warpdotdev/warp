@@ -1361,6 +1361,15 @@ async fn read_binary_file_context(
         Ok(content) => content,
         Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::NotFound),
         Err(FileLoadError::IOError(e)) => return Err(anyhow::anyhow!(e)),
+        Err(FileLoadError::TooLarge {
+            size_estimate,
+            limit_bytes,
+        }) => {
+            return Ok(BinaryFileReadResult::TooLarge {
+                size_bytes: size_estimate.unwrap_or(limit_bytes.saturating_add(1)) as usize,
+                limit_bytes: limit_bytes as usize,
+            });
+        }
     };
 
     let mime_type = from_path(path).first_or_octet_stream().to_string();

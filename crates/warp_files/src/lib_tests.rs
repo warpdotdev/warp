@@ -16,6 +16,10 @@ enum TestFileModelEvent {
         content: String,
         _version: ContentVersion,
     },
+    FileUpdated {
+        id: FileId,
+        content: String,
+    },
     FileSaved,
     FailedToLoad(String),
     FailedToSave,
@@ -39,15 +43,10 @@ impl From<&FileModelEvent> for TestFileModelEvent {
                 error: err,
             } => TestFileModelEvent::FailedToLoad(format!("{err:?}")),
             FileModelEvent::FailedToSave { .. } => TestFileModelEvent::FailedToSave,
-            FileModelEvent::FileUpdated { .. } => {
-                // For now, we don't handle file updated events in tests
-                // This could be extended to include a FileUpdated variant in TestFileModelEvent if needed
-                TestFileModelEvent::FileLoaded {
-                    id: event.file_id(),
-                    content: String::new(),
-                    _version: ContentVersion::new(),
-                }
-            }
+            FileModelEvent::FileUpdated { id, content, .. } => TestFileModelEvent::FileUpdated {
+                id: *id,
+                content: content.clone(),
+            },
         }
     }
 }
@@ -356,4 +355,125 @@ fn test_a_failed_open_registers_no_watcher() {
     });
 }
 
+#[test]
+fn test_bounded_read_accepts_exact_limit_and_rejects_oversized_content() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let exact_path = directory.path().join("exact.txt");
+    std::fs::write(&exact_path, "1234").expect("write exact file");
+    let oversized_path = directory.path().join("oversized.txt");
+    std::fs::write(&oversized_path, "12345").expect("write oversized file");
+
+    assert_eq!(
+        block_on(read_to_string_bounded(&exact_path, 4)).expect("read exact-limit file"),
+        "1234"
+    );
+    assert!(matches!(
+        block_on(read_to_string_bounded(&oversized_path, 4)),
+        Err(FileLoadError::TooLarge {
+            size_estimate: Some(5),
+            limit_bytes: 4
+        })
+    ));
+}
+
+#[test]
+fn test_bounded_stream_read_enforces_limit_without_metadata() {
+    assert_eq!(
+        block_on(read_bytes_bounded(futures::io::Cursor::new(b"1234"), 4, 0))
+            .expect("read exact-limit stream"),
+        b"1234"
+    );
+    assert!(matches!(
+        block_on(read_bytes_bounded(futures::io::Cursor::new(b"12345"), 4, 0)),
+        Err(FileLoadError::TooLarge {
+            size_estimate: None,
+            limit_bytes: 4
+        })
+    ));
+}
+#[test]
+fn test_load_oversized_file_reports_too_large() {
+    App::test((), |mut app| async move {
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(&mut app, &files);
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("oversized.log");
+        let file = std::fs::File::create(&path).expect("create file");
+        file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+            .expect("set sparse length");
+
+        files.update(&mut app, |model, ctx| {
+            model.open(&path, false, ctx);
+        });
+
+        match receiver.recv().await.expect("receive load result") {
+            TestFileModelEvent::FailedToLoad(error) => {
+                assert!(error.contains("TooLarge"), "unexpected error: {error}");
+            }
+            event => panic!("expected oversized load failure, got {event:?}"),
+        }
+    });
+}
+
+#[test]
+fn test_read_content_for_file_reports_too_large() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("oversized.log");
+    let file = std::fs::File::create(&path).expect("create file");
+    file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+        .expect("set sparse length");
+
+    assert!(matches!(
+        block_on(FileModel::read_content_for_file(&path)),
+        Err(FileLoadError::TooLarge {
+            size_estimate: Some(size),
+            limit_bytes: MAX_LOADABLE_FILE_SIZE_BYTES
+        }) if size == MAX_LOADABLE_FILE_SIZE_BYTES + 1
+    ));
+}
+
+#[test]
+fn test_reload_file_paths_skips_oversized_replacement() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| DetectedRepositories::default());
+        let files = app.add_singleton_model(FileModel::new);
+        let receiver = setup_event_channel(&mut app, &files);
+        let directory = tempfile::tempdir().expect("temp dir");
+        let small_path = directory.path().join("small.txt");
+        let oversized_path = directory.path().join("oversized.txt");
+        std::fs::write(&small_path, "small").expect("write small file");
+        std::fs::write(&oversized_path, "small").expect("write initial oversized file");
+
+        let small_id = files.update(&mut app, |model, ctx| model.open(&small_path, true, ctx));
+        await_load(&receiver).await;
+        files.update(&mut app, |model, ctx| {
+            model.open(&oversized_path, true, ctx)
+        });
+        await_load(&receiver).await;
+
+        std::fs::write(&small_path, "updated").expect("update small file");
+        let file = std::fs::File::create(&oversized_path).expect("replace oversized file");
+        file.set_len(MAX_LOADABLE_FILE_SIZE_BYTES + 1)
+            .expect("set sparse length");
+
+        files.update(&mut app, |model, ctx| {
+            model.reload_file_paths(
+                HashSet::from([small_path.clone(), oversized_path.clone()]),
+                ctx,
+            );
+        });
+
+        match receiver.recv().await.expect("receive update") {
+            TestFileModelEvent::FileUpdated { id, content } => {
+                assert_eq!(id, small_id);
+                assert_eq!(content, "updated");
+            }
+            event => panic!("expected small-file update, got {event:?}"),
+        }
+        assert!(
+            receiver.try_recv().is_err(),
+            "oversized file must not emit an update"
+        );
+    });
+}
 static TEST_FILE_CONTENT: &[u8] = include_bytes!("../test_data/test_file.rs");
