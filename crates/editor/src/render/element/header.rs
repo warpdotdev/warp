@@ -30,8 +30,12 @@ impl RenderableBlock for RenderableHeader {
         ctx: &mut warpui_core::LayoutContext,
         app: &warpui_core::AppContext,
     ) {
-        self.placeholder
-            .layout(&self.viewport_item, model, ctx, app, |block| {
+        self.placeholder.layout(
+            &self.viewport_item,
+            model,
+            ctx.text_layout_cache,
+            app,
+            |block| {
                 let header_size = match block {
                     BlockItem::Header { header_size, .. } => *header_size,
                     other => {
@@ -46,7 +50,8 @@ impl RenderableBlock for RenderableHeader {
                     text: header_size.label(),
                     block_style: BufferBlockStyle::Header { header_size },
                 }
-            });
+            },
+        );
     }
 
     fn paint(
