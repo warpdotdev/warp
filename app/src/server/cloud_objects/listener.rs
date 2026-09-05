@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_channel::Sender;
@@ -70,6 +71,19 @@ pub struct Listener {
     /// Abort handle for a pending delayed refresh spawned after a long reconnection. Tracked so
     /// that it can be cancelled if the websocket disconnects again before the refresh fires.
     pending_refresh_abort_handle: Option<AbortHandle>,
+    /// Monotonically increasing counter bumped every time `get_warp_drive_updates` starts a new
+    /// connection/retry chain. Each chain captures the generation it was started with and checks
+    /// it before making a new connection attempt.
+    ///
+    /// This exists because `spawn_with_retry_on_error`'s returned abort handle only ever refers
+    /// to the *first* attempt in a retry chain: once an attempt fails and a retry is scheduled,
+    /// the handle stored in `current_subscription_abort_handle` becomes stale and calling
+    /// `.abort()` on it (e.g. on network-status changes or CPU sleep/wake) no longer stops the
+    /// pending retry. Without this fencing, repeated reconnect events (e.g. a flapping network)
+    /// can spawn new connection/retry chains faster than old ones exhaust their retries, causing
+    /// an unbounded number of concurrent zombie websocket connection attempts and their
+    /// associated per-connection tasks/buffers to accumulate.
+    connection_generation: Arc<AtomicU64>,
 }
 
 impl Listener {
@@ -82,6 +96,7 @@ impl Listener {
             subscription_ready_tx,
             last_disconnected_at: None,
             pending_refresh_abort_handle: None,
+            connection_generation: Arc::new(AtomicU64::new(0)),
         };
 
         // When the websocket signals readiness, decide whether to refresh cloud objects
@@ -305,6 +320,13 @@ impl Listener {
         let (message_sender, message_receiver) = async_channel::unbounded();
         let subscription_ready_tx = self.subscription_ready_tx.clone();
 
+        // Bump the generation so that any previous (now-stale) connection/retry chain
+        // recognizes it has been superseded. See the doc comment on `connection_generation`
+        // for why this is necessary: `current_subscription_abort_handle` alone cannot reliably
+        // stop an in-flight retry once the first attempt in a chain has failed.
+        let generation = self.connection_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let current_generation = Arc::clone(&self.connection_generation);
+
         // On every message we receive (over the message_receiver), send it
         // to the UpdateManager.
         let _ = ctx.spawn_stream_local(
@@ -332,7 +354,16 @@ impl Listener {
                 let object_client = object_client.clone();
                 let message_sender = message_sender.clone();
                 let subscription_ready_tx = subscription_ready_tx.clone();
+                let current_generation = Arc::clone(&current_generation);
                 async move {
+                    if current_generation.load(Ordering::SeqCst) != generation {
+                        // A newer call to `get_warp_drive_updates` has superseded this chain
+                        // (e.g. triggered by another network-status/CPU-wake event before this
+                        // chain exhausted its retries). Bail out without opening a new
+                        // websocket connection so this stale chain winds down quickly instead
+                        // of running concurrently with the new one indefinitely.
+                        return Ok(Duration::ZERO);
+                    }
                     let start_time = Instant::now();
                     log::info!("Attempting to start websocket connection in CloudObjects::Listener");
                     let res = object_client
@@ -344,7 +375,12 @@ impl Listener {
                 }
             },
             LISTENER_RETRY_STRATEGY,
-            |me, req_state, ctx| {
+            move |me, req_state, ctx| {
+                if me.connection_generation.load(Ordering::SeqCst) != generation {
+                    // This chain has been superseded; ignore its outcome entirely so it
+                    // neither restarts itself nor reports spurious errors.
+                    return;
+                }
                 match req_state {
                     RequestState::RequestSucceeded(elapsed_time) => {
                         // Record the disconnection time now that a live connection has ended.
