@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 
 /// Secret-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -217,7 +217,8 @@ pub struct UpdateSecretArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ListSecretsArgs {
-    // TODO: consider flags to filter secrets.
+    #[clap(flatten)]
+    pub team_selection: TeamSelection,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -252,3 +253,7 @@ impl fmt::Display for SecretType {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secret_tests.rs"]
+mod tests;

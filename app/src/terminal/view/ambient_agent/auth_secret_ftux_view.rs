@@ -28,13 +28,14 @@ use crate::editor::{
     SingleLineEditorOptions, TextOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ambient_agent::auth_secret_ftux_dropdown::{
     AuthSecretFtuxDropdown, FtuxDropdownEvent,
 };
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::view_components::DismissibleToast;
 use crate::workspace::ToastStack;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const DESCRIPTION_FONT_SIZE: f32 = 14.;
 
@@ -106,6 +107,7 @@ struct SecretCreationState {
     /// cancel. Used to filter the global `AuthSecretCreated` event so
     /// another concurrent FTUX view's success can't close us.
     pending_name: Option<String>,
+    pending_team_scope: Option<RequestTeamScope>,
 }
 
 /// Validated, ready-to-submit snapshot of the creation form.
@@ -157,8 +159,9 @@ impl AuthSecretFtuxView {
         ctx.subscribe_to_view(&ftux_dropdown, |me, _, event, ctx| {
             if matches!(event, FtuxDropdownEvent::Opened) {
                 let harness = me.harness;
+                let team_scope = me.request_team_scope(ctx);
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.ensure_auth_secrets_fetched(harness, ctx);
+                    model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
                 });
             }
         });
@@ -195,7 +198,11 @@ impl AuthSecretFtuxView {
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
-                HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
+                HarnessAvailabilityEvent::AuthSecretCreated {
+                    team_scope,
+                    harness,
+                    name,
+                } => {
                     // Only consume the event when it matches the request
                     // *this* view actually fired. Without the harness/name
                     // match a concurrent FTUX view's success would close
@@ -205,20 +212,22 @@ impl AuthSecretFtuxView {
                         state.is_saving
                             && state.harness == *harness
                             && state.pending_name.as_deref() == Some(name.as_str())
+                            && state.pending_team_scope == Some(*team_scope)
                     });
                     if is_ours {
                         me.handle_secret_created(*harness, name.clone(), ctx);
                     }
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { error } => {
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { team_scope, error } => {
                     // Only react if *we* are mid-save; otherwise this
                     // failure belongs to another FTUX view's request.
                     if let Some(state) = me.creation_state.as_mut() {
-                        if !state.is_saving {
+                        if !state.is_saving || state.pending_team_scope != Some(*team_scope) {
                             return;
                         }
                         state.is_saving = false;
                         state.pending_name = None;
+                        state.pending_team_scope = None;
                         let window_id = ctx.window_id();
                         let message = format!("Failed to save API key: {error}");
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
@@ -235,12 +244,24 @@ impl AuthSecretFtuxView {
                     }
                 }
                 HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
+                | HarnessAvailabilityEvent::AuthSecretsLoaded { .. }
+                | HarnessAvailabilityEvent::AuthSecretsFetchFailed { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.clear_creation_state(ctx);
+                ctx.notify();
+            }
+        });
 
         Self {
             view_handle: ctx.handle(),
@@ -260,6 +281,12 @@ impl AuthSecretFtuxView {
             is_harness_menu_open: false,
             harness_menu: None,
         }
+    }
+
+    fn request_team_scope(&self, ctx: &AppContext) -> RequestTeamScope {
+        RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx),
+        )
     }
 
     /// Switch to the orchestration modal's compact presentation. See the
@@ -571,6 +598,7 @@ impl AuthSecretFtuxView {
             secret_type_index: type_index,
             is_saving: false,
             pending_name: None,
+            pending_team_scope: None,
         });
         self.ftux_dropdown.update(ctx, |dropdown, ctx| {
             dropdown.set_display_label(Some(info.display_name.to_string()), ctx);
@@ -666,8 +694,12 @@ impl AuthSecretFtuxView {
                 // Defensive: `validated_form_snapshot` already enforces
                 // the same required-field rules.
                 let msg = err.to_string();
+                let team_scope = self.request_team_scope(ctx);
                 HarnessAvailabilityModel::handle(ctx).update(ctx, |_model, ctx| {
-                    ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed { error: msg });
+                    ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed {
+                        team_scope,
+                        error: msg,
+                    });
                 });
                 return;
             }
@@ -677,23 +709,29 @@ impl AuthSecretFtuxView {
             state.is_saving = true;
             state.pending_name = Some(name.clone());
         }
-        ctx.notify();
-
-        let owner = self.resolve_secret_owner(ctx);
-        HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-            model.create_auth_secret(harness, name, value, owner, ctx);
-        });
-    }
-
-    fn resolve_secret_owner(&self, ctx: &ViewContext<Self>) -> SecretOwner {
-        if self.share_with_team
-            && let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx)
-        {
-            return SecretOwner::Team {
-                team_uid: team.uid.uid(),
+        let (team_scope, owner) = {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let team_context = workspaces.team_context_for_operation(ctx);
+            let team_scope = RequestTeamScope::from_scope(&team_context);
+            let owner = if self.share_with_team {
+                workspaces
+                    .team_for_view(ctx)
+                    .map(|team| SecretOwner::Team {
+                        team_uid: team.uid.uid(),
+                    })
+                    .unwrap_or(SecretOwner::CurrentUser)
+            } else {
+                SecretOwner::CurrentUser
             };
+            (team_scope, owner)
+        };
+        if let Some(state) = self.creation_state.as_mut() {
+            state.pending_team_scope = Some(team_scope);
         }
-        SecretOwner::CurrentUser
+        ctx.notify();
+        HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
+            model.create_auth_secret(team_scope, harness, name, value, owner, ctx);
+        });
     }
 
     fn clear_creation_state(&mut self, ctx: &mut ViewContext<Self>) {

@@ -148,7 +148,7 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
 }
 
 /// The team a CLI command's policy reads are scoped to.
-fn resolve_team_scope(
+pub(super) fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {

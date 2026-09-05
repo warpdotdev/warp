@@ -2,9 +2,9 @@
 
 use warp::tui_export::{
     AIActionStatus, AIAgentActionId, BlocklistAIActionModel, OptionSnapshot,
-    OrchestrationConfigState, OrchestrationEditState, RunAgentsExecutionMode, RunAgentsRequest,
-    TeamContext, accept_disabled_reason_with_auth, api_key_snapshot, environment_snapshot,
-    harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
+    OrchestrationConfigState, OrchestrationEditState, RequestTeamScope, RunAgentsExecutionMode,
+    RunAgentsRequest, TeamContext, accept_disabled_reason_with_auth, api_key_snapshot,
+    environment_snapshot, harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
     persist_environment_selection, persist_host_selection,
 };
 use warpui_core::{AppContext, ModelHandle};
@@ -98,6 +98,7 @@ pub(super) trait OrchestrationBlockController {
         id: &str,
         edit_state: &mut OrchestrationEditState,
         fallback_base_model_id: Option<String>,
+        team_scope: RequestTeamScope,
         ctx: &mut AppContext,
     );
 
@@ -136,7 +137,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         match page {
             ConfigPage::Location => location_snapshot(state, ctx),
             ConfigPage::Harness => harness_snapshot(state, ctx),
-            ConfigPage::ApiKey => api_key_snapshot(state, ctx),
+            ConfigPage::ApiKey => api_key_snapshot(state, RequestTeamScope::from_scope(scope), ctx),
             ConfigPage::Host => host_snapshot(state, scope, ctx),
             ConfigPage::Environment => environment_snapshot(state, ctx),
             ConfigPage::Model => model_snapshot(state, ctx),
@@ -149,6 +150,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         id: &str,
         edit_state: &mut OrchestrationEditState,
         fallback_base_model_id: Option<String>,
+        team_scope: RequestTeamScope,
         ctx: &mut AppContext,
     ) {
         match page {
@@ -156,7 +158,12 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
                 let is_remote = id == LOCATION_CLOUD_ID;
                 if !is_remote {
                     // For now, we only allow local runs to use the oz harness
-                    edit_state.apply_harness_change("oz", fallback_base_model_id.clone(), ctx);
+                    edit_state.apply_harness_change(
+                        team_scope,
+                        "oz",
+                        fallback_base_model_id.clone(),
+                        ctx,
+                    );
                 }
 
                 edit_state
@@ -165,13 +172,13 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
                 normalize_tui_local_harness(&mut edit_state.orchestration_config_state);
             }
             ConfigPage::Harness => {
-                edit_state.apply_harness_change(id, fallback_base_model_id, ctx);
+                edit_state.apply_harness_change(team_scope, id, fallback_base_model_id, ctx);
             }
             ConfigPage::ApiKey => {
                 let name = (!id.is_empty()).then(|| id.to_string());
                 edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(name, ctx);
+                    .apply_auth_secret_change(team_scope, name, ctx);
             }
             ConfigPage::Host => {
                 edit_state

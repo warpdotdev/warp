@@ -71,7 +71,7 @@ use crate::view_components::compactible_action_button::{
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
 use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
@@ -480,6 +480,27 @@ impl RunAgentsCardView {
                 );
             }
         });
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_window {
+                return;
+            }
+            me.orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection = AuthSecretSelection::Unset;
+            oc::repopulate_all_pickers(
+                &mut me.orchestration_edit_state.orchestration_config_state,
+                &me.handles.pickers,
+                ctx,
+            );
+            me.refresh_accept_button_state(ctx);
+            ctx.notify();
+        });
 
         // Repopulate pickers when the server-provided harness list,
         // harness model catalogs, or per-harness auth secrets change.
@@ -487,41 +508,50 @@ impl RunAgentsCardView {
         // "Loading…" forever after the lazy fetch completes.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
-            |me, _, event, ctx| match event {
-                HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
-                    // Adopt the new secret before repopulating the picker.
-                    oc::apply_created_auth_secret_if_matches(
-                        &mut me.orchestration_edit_state.orchestration_config_state,
-                        *harness,
-                        name,
-                        ctx,
-                    );
-                    oc::repopulate_all_pickers(
-                        &mut me.orchestration_edit_state.orchestration_config_state,
-                        &me.handles.pickers,
-                        ctx,
-                    );
-                    me.refresh_accept_button_state(ctx);
-                    ctx.notify();
+            |me, _, event, ctx| {
+                let team_scope = oc::request_team_scope(ctx);
+                if event
+                    .team_scope()
+                    .is_some_and(|event_scope| event_scope != team_scope)
+                {
+                    return;
                 }
-                HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
-                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
-                    // Repopulate even on fetch failure to replace "Loading…".
-                    // Deleted events also force a repopulate so this card
-                    // stops surfacing the deleted secret as an option.
-                    oc::repopulate_all_pickers(
-                        &mut me.orchestration_edit_state.orchestration_config_state,
-                        &me.handles.pickers,
-                        ctx,
-                    );
-                    me.refresh_accept_button_state(ctx);
-                    me.maybe_auto_open_create_modal(ctx);
-                    ctx.notify();
+                match event {
+                    HarnessAvailabilityEvent::AuthSecretCreated { harness, name, .. } => {
+                        // Adopt the new secret before repopulating the picker.
+                        oc::apply_created_auth_secret_if_matches(
+                            &mut me.orchestration_edit_state.orchestration_config_state,
+                            *harness,
+                            name,
+                            ctx,
+                        );
+                        oc::repopulate_all_pickers(
+                            &mut me.orchestration_edit_state.orchestration_config_state,
+                            &me.handles.pickers,
+                            ctx,
+                        );
+                        me.refresh_accept_button_state(ctx);
+                        ctx.notify();
+                    }
+                    HarnessAvailabilityEvent::Changed
+                    | HarnessAvailabilityEvent::AuthSecretsLoaded { .. }
+                    | HarnessAvailabilityEvent::AuthSecretsFetchFailed { .. }
+                    | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
+                        // Repopulate even on fetch failure to replace "Loading…".
+                        // Deleted events also force a repopulate so this card
+                        // stops surfacing the deleted secret as an option.
+                        oc::repopulate_all_pickers(
+                            &mut me.orchestration_edit_state.orchestration_config_state,
+                            &me.handles.pickers,
+                            ctx,
+                        );
+                        me.refresh_accept_button_state(ctx);
+                        me.maybe_auto_open_create_modal(ctx);
+                        ctx.notify();
+                    }
+                    HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                    | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
-                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 
@@ -633,6 +663,7 @@ impl RunAgentsCardView {
         ) {
             new_state.orchestration_config_state.auth_secret_selection =
                 oc::resolve_auth_secret_selection_for_harness(
+                    oc::request_team_scope(ctx),
                     &new_state.orchestration_config_state.harness_type,
                     ctx,
                 );
@@ -825,7 +856,8 @@ impl RunAgentsCardView {
         // Only auto-open on `Loaded([])`. Other fetch states are
         // ambiguous; the `AuthSecretsLoaded` subscription will retry.
         let has_zero_loaded = matches!(
-            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness),
+            HarnessAvailabilityModel::as_ref(ctx)
+                .auth_secrets_for(oc::request_team_scope(ctx), harness),
             AuthSecretFetchState::Loaded(secrets) if secrets.is_empty()
         );
         if !has_zero_loaded {
@@ -968,6 +1000,7 @@ impl RunAgentsCardView {
                 self.orchestration_edit_state
                     .orchestration_config_state
                     .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
+                    oc::request_team_scope(ctx),
                     &self
                         .orchestration_edit_state
                         .orchestration_config_state
@@ -1421,7 +1454,11 @@ impl TypedActionView for RunAgentsCardView {
             RunAgentsCardViewAction::AuthSecretChanged { auth_secret_name } => {
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
+                    .apply_auth_secret_change(
+                        oc::request_team_scope(ctx),
+                        auth_secret_name.clone(),
+                        ctx,
+                    );
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }

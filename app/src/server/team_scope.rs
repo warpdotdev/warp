@@ -13,12 +13,28 @@ use crate::workspaces::user_workspaces::TeamScope;
 /// scope cannot be stashed where it outlives its window. A resolved snapshot has no such hazard,
 /// so `ResponseStream` can reuse one capture across every retry rather than re-resolving to
 /// whatever team its window switched to since.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 pub struct RequestTeamScope(Option<ServerId>);
+
+impl settings_value::SettingsValue for RequestTeamScope {}
 
 impl RequestTeamScope {
     pub fn from_scope(scope: &impl TeamScope) -> Self {
         Self(scope.team_uid())
+    }
+
+    pub(crate) fn is_personal(self) -> bool {
+        self.0.is_none()
     }
 
     /// The wire uid. `None` sends no team header, leaving the server to its own default.

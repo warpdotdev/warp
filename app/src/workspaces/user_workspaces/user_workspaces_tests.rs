@@ -67,6 +67,7 @@ use crate::server::ids::ClientId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::{MockTeamClient, TeamClient};
 use crate::server::sync_queue::SyncQueue;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::{
     AISettings, AgentModeCommandExecutionPredicate, CodeSettings, FocusedTerminalInfo,
@@ -89,6 +90,36 @@ use crate::workspaces::workspace::{
 #[derive(Default)]
 struct CachedResources {
     workspaces: Vec<Workspace>,
+}
+
+#[test]
+fn long_lived_view_resolvers_follow_only_their_own_window_team_switch() {
+    let (platform, security, workspace) = platform_and_security();
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        let (window_a, view_a) = create_test_window(&mut app);
+        let (window_b, view_b) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_a, Some(platform.uid), ctx);
+            user_workspaces.register_window(window_b, Some(platform.uid), ctx);
+        });
+        let resolver_a = UserWorkspaces::team_context_resolver(view_a.downgrade());
+        let resolver_b = UserWorkspaces::team_context_resolver(view_b.downgrade());
+        let original_scope = app.read(|ctx| RequestTeamScope::from_scope(&resolver_a(ctx)));
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.switch_window_to_team(window_a, security.uid, ctx);
+        });
+
+        app.read(|ctx| {
+            let switched_scope = RequestTeamScope::from_scope(&resolver_a(ctx));
+            let sibling_scope = RequestTeamScope::from_scope(&resolver_b(ctx));
+            assert_ne!(switched_scope, original_scope);
+            assert_eq!(sibling_scope, original_scope);
+        });
+    })
 }
 
 fn initialize_app(

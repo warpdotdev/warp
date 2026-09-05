@@ -186,7 +186,7 @@ use crate::ai::blocklist::{
     QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
     render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -2640,22 +2640,24 @@ impl Input {
             }
         });
 
-        // Cloud-mode side effects on FTUX events: update the pane's harness auth secret, persist
-        // `last_selected_auth_secret`, mark FTUX completed.
         let vm_for_events = view_model.clone();
-        ctx.subscribe_to_view(&ftux_view, move |_me, _, event, ctx| match event {
+        ctx.subscribe_to_view(&ftux_view, move |me, _, event, ctx| match event {
             AuthSecretFtuxViewEvent::SecretSelected { harness, name }
             | AuthSecretFtuxViewEvent::Created { harness, name } => {
                 let harness = *harness;
                 let name = name.clone();
+                let team_scope = RequestTeamScope::from_scope(&me.team_scope(ctx));
                 vm_for_events.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.insert(harness.config_name().to_string(), name);
-                    let _ = settings.last_selected_auth_secret.set_value(map, ctx);
+                    settings.persist_auth_secret_preference(
+                        team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Named(name)),
+                        ctx,
+                    );
                 });
             }
             AuthSecretFtuxViewEvent::Cancelled => {

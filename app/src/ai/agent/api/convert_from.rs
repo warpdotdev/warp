@@ -143,9 +143,8 @@ fn convert_run_agents(
             })
             .collect(),
         plan_id,
-        // Auth secret is a client-side dispatch concern populated by the
-        // confirmation card from `CloudAgentSettings.last_selected_auth_secret`
-        // before Accept. The proto does not carry it.
+        // Auth secret is a client-side dispatch concern populated from scoped settings before
+        // Accept. The proto does not carry it.
         harness_auth_secret_name: None,
     })
 }
