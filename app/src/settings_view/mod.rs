@@ -525,6 +525,7 @@ pub mod flags {
     pub const WARP_COMPLETIONS_CONTEXT_FLAG: &str = "Warp_Completions";
     pub const NATIVE_SHELL_COMPLETIONS_CONTEXT_FLAG: &str = "Native_Shell_Completions";
     pub const COMMAND_CORRECTIONS_CONTEXT_FLAG: &str = "Command_Corrections";
+    pub const COMMAND_SEARCH_FUZZY_MATCHING_FLAG: &str = "Command_Search_Fuzzy_Matching";
     pub const ERROR_UNDERLINING_FLAG: &str = "error_underlining";
     pub const SYNTAX_HIGHLIGHTING_FLAG: &str = "syntax_highlighting";
     pub const SAME_LINE_PROMPT: &str = "Same_Line_Prompt_Enabled";

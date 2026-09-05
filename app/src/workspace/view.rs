@@ -23059,6 +23059,12 @@ impl Workspace {
             context.set.insert(flags::COMMAND_CORRECTIONS_CONTEXT_FLAG);
         }
 
+        if *input_settings.command_search_fuzzy_matching_enabled.value() {
+            context
+                .set
+                .insert(flags::COMMAND_SEARCH_FUZZY_MATCHING_FLAG);
+        }
+
         if *input_settings.error_underlining.value() {
             context.set.insert(flags::ERROR_UNDERLINING_FLAG);
         }
