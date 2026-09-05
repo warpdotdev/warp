@@ -680,6 +680,47 @@ const NOTIFICATIONS_LEARN_MORE_URL: &str =
 pub const NOTIFICATIONS_TROUBLESHOOT_URL: &str =
     "https://docs.warp.dev/terminal/more-features/notifications#troubleshooting-notifications";
 
+/// Bundle identifier for the Notifications pane on macOS 13 (Ventura) and later, where System
+/// Preferences was replaced by System Settings and the pane moved to an extension bundle.
+#[cfg(target_os = "macos")]
+const MAC_SYSTEM_SETTINGS_NOTIFICATIONS_PANE_ID: &str =
+    "com.apple.Notifications-Settings.extension";
+
+/// Bundle identifier for the Notifications pane on pre-Ventura macOS (System Preferences),
+/// down through the project's minimum-supported macOS 10.14.
+#[cfg(target_os = "macos")]
+const MAC_LEGACY_SYSTEM_PREFERENCES_NOTIFICATIONS_PANE_ID: &str =
+    "com.apple.preference.notifications";
+
+/// Builds the `x-apple.systempreferences:` URL that deep-links into the Notifications pane of
+/// macOS System Settings (or System Preferences on older macOS), given whether the current OS
+/// is in the "System Settings" era (see [`warp_core::macos::is_system_settings_era`]) and the
+/// app's bundle identifier. Split out from [`mac_notification_settings_url`] so both branches can
+/// be exercised deterministically in tests regardless of which macOS version they run on.
+///
+/// When possible, the URL is scoped with Warp's own bundle identifier (via the undocumented but
+/// widely-relied-upon `?id=` query parameter) so the user lands directly on Warp's entry instead
+/// of the generic Notifications list.
+#[cfg(target_os = "macos")]
+fn mac_notification_settings_url_for(is_system_settings_era: bool, app_id: &str) -> String {
+    let pane_id = if is_system_settings_era {
+        MAC_SYSTEM_SETTINGS_NOTIFICATIONS_PANE_ID
+    } else {
+        MAC_LEGACY_SYSTEM_PREFERENCES_NOTIFICATIONS_PANE_ID
+    };
+    format!("x-apple.systempreferences:{pane_id}?id={app_id}")
+}
+
+/// Builds the `x-apple.systempreferences:` URL that deep-links into the Notifications pane of
+/// macOS System Settings for the current OS version and app.
+#[cfg(target_os = "macos")]
+fn mac_notification_settings_url() -> String {
+    mac_notification_settings_url_for(
+        warp_core::macos::is_system_settings_era(),
+        &ChannelState::app_id().to_string(),
+    )
+}
+
 const DEBOUNCE_PERIOD: Duration = Duration::from_millis(40);
 
 /// Key used in user preferences to persist the "don't show again" choice for the OSC 52
@@ -813,7 +854,7 @@ pub struct BlockNotification {
 }
 
 /// The reason for sending/discovering the notification
-#[derive(Copy, Clone, Debug, Serialize)]
+#[derive(Copy, Clone, Debug, Serialize, PartialEq, Eq)]
 pub enum NotificationsTrigger {
     LongRunningCommand(bool /* command_succeeded */, Duration),
     AgentTaskCompleted(bool /* task_succeeded */),
@@ -25845,6 +25886,10 @@ impl TerminalView {
                     }
                 });
             }
+            #[cfg(target_os = "macos")]
+            OpenSystemSettings => {
+                ctx.open_url(&mac_notification_settings_url());
+            }
         }
 
         send_telemetry_from_ctx!(TelemetryEvent::NotificationsErrorBannerAction(action), ctx);
@@ -25962,6 +26007,10 @@ impl TerminalView {
                 self.inline_banners_state.notifications_discovery_banner =
                     NotificationsDiscoveryBanner::Closed;
                 ctx.notify();
+            }
+            #[cfg(target_os = "macos")]
+            OpenSystemSettings => {
+                ctx.open_url(&mac_notification_settings_url());
             }
         }
 

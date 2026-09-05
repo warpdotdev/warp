@@ -10217,3 +10217,152 @@ fn back_button_label_resolves_token_only_parent_linkage() {
         });
     });
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_notification_settings_url_for_selects_pane_by_os_era() {
+    let app_id = "dev.warp.Warp-Local";
+
+    assert_eq!(
+        mac_notification_settings_url_for(true, app_id),
+        "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.warp.Warp-Local"
+    );
+    assert_eq!(
+        mac_notification_settings_url_for(false, app_id),
+        "x-apple.systempreferences:com.apple.preference.notifications?id=dev.warp.Warp-Local"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn mac_notification_settings_url_uses_current_app_id() {
+    let url = mac_notification_settings_url();
+    let app_id = warp_core::channel::ChannelState::app_id().to_string();
+    assert!(
+        url.ends_with(&format!("?id={app_id}")),
+        "expected the URL to be scoped to the current app ID ({app_id}), got: {url}"
+    );
+    assert!(
+        url.starts_with(&format!(
+            "x-apple.systempreferences:{MAC_SYSTEM_SETTINGS_NOTIFICATIONS_PANE_ID}"
+        )) || url.starts_with(&format!(
+            "x-apple.systempreferences:{MAC_LEGACY_SYSTEM_PREFERENCES_NOTIFICATIONS_PANE_ID}"
+        )),
+        "expected a deep link into a known Notifications pane, got: {url}"
+    );
+}
+
+/// Regression test for the denied-notifications error banner: drives the banner into a real
+/// `PermissionsDenied` state via the same production code path a failed notification send
+/// takes, then dispatches the exact action the rendered CTA fires, and captures the URL that
+/// reaches the platform's open-url hook.
+#[cfg(target_os = "macos")]
+#[test]
+fn error_banner_open_system_settings_action_opens_correct_url() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_clone = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _ctx| {
+                opened_urls_clone.borrow_mut().push(url.to_string());
+                url.to_string()
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.show_notification_error(NotificationSendError::PermissionsDenied, ctx);
+        });
+
+        // Confirm we actually reached the denied state the CTA's render condition checks.
+        terminal.read(&app, |view, _| {
+            assert!(
+                matches!(
+                    view.inline_banners_state
+                        .notifications_error_banner
+                        .banner_type,
+                    NotificationsErrorBannerType::Open { .. }
+                ),
+                "expected the error banner to be open"
+            );
+            assert!(matches!(
+                view.inline_banners_state.notifications_error_banner.error,
+                Some(NotificationSendError::PermissionsDenied)
+            ));
+        });
+
+        // Dispatch the exact action the rendered "Open System Settings" button fires.
+        terminal.update(&mut app, |view, ctx| {
+            view.notifications_error_banner_action(
+                NotificationsErrorBannerAction::OpenSystemSettings,
+                ctx,
+            );
+        });
+
+        let urls = opened_urls.borrow();
+        assert_eq!(
+            urls.len(),
+            1,
+            "expected exactly one URL to be opened: {urls:?}"
+        );
+        let app_id = warp_core::channel::ChannelState::app_id().to_string();
+        assert!(
+            urls[0].ends_with(&format!("?id={app_id}")),
+            "unexpected URL opened: {}",
+            urls[0]
+        );
+    });
+}
+
+/// Regression test for the notifications discovery banner's denied-outcome branch (the banner
+/// shown immediately after the user denies the macOS permission prompt from "Enable").
+#[cfg(target_os = "macos")]
+#[test]
+fn discovery_banner_open_system_settings_action_opens_correct_url() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let opened_urls = Rc::new(RefCell::new(Vec::new()));
+        let opened_urls_clone = opened_urls.clone();
+        app.update(|ctx| {
+            ctx.set_before_open_url(move |url, _ctx| {
+                opened_urls_clone.borrow_mut().push(url.to_string());
+                url.to_string()
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            let banner_id = view.inline_banners_state.next_banner_id();
+            view.inline_banners_state.notifications_discovery_banner =
+                NotificationsDiscoveryBanner::Open {
+                    trigger: NotificationsTrigger::NeedsAttention,
+                    request_outcome: Some(RequestPermissionsOutcome::PermissionsDenied),
+                    state: NotificationsDiscoveryBannerState {
+                        banner_id,
+                        mouse_states: Default::default(),
+                    },
+                };
+
+            view.notifications_discovery_banner_action(
+                NotificationsDiscoveryBannerAction::OpenSystemSettings,
+                ctx,
+            );
+        });
+
+        let urls = opened_urls.borrow();
+        assert_eq!(
+            urls.len(),
+            1,
+            "expected exactly one URL to be opened: {urls:?}"
+        );
+        let app_id = warp_core::channel::ChannelState::app_id().to_string();
+        assert!(
+            urls[0].ends_with(&format!("?id={app_id}")),
+            "unexpected URL opened: {}",
+            urls[0]
+        );
+    });
+}
