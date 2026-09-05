@@ -990,14 +990,14 @@ impl Buffer {
         EditResult {
             undo_item: None,
             delta: Some(EditDelta {
-                precise_deltas: vec![PreciseDelta {
+                precise_deltas: Arc::new(vec![PreciseDelta {
                     replaced_range: CharOffset::from(1)..old_offset.end,
                     replaced_points,
                     resolved_range: CharOffset::from(1)..self.max_charoffset(),
                     replaced_byte_range: old_byte_start..old_byte_end,
                     new_byte_length,
                     new_end_point,
-                }],
+                }]),
                 old_offset,
                 new_lines: Arc::new(self.styled_blocks_in_range(
                     CharOffset::from(1)..self.max_charoffset(),
@@ -2593,7 +2593,7 @@ impl Buffer {
         let old_byte_start = range.start.to_buffer_byte_offset(self);
         let old_byte_end = range.end.to_buffer_byte_offset(self);
         EditDelta {
-            precise_deltas: vec![PreciseDelta {
+            precise_deltas: Arc::new(vec![PreciseDelta {
                 replaced_range: range.clone(),
                 replaced_points: full_points.clone(),
                 resolved_range: range.clone(),
@@ -2602,7 +2602,7 @@ impl Buffer {
                     .as_usize()
                     .saturating_sub(old_byte_start.as_usize()),
                 new_end_point: full_points.end,
-            }],
+            }]),
             old_offset: range.clone(),
             new_lines: Arc::new(
                 self.styled_blocks_in_range(range, StyledBlockBoundaryBehavior::Exclusive),
@@ -4859,14 +4859,14 @@ impl Buffer {
         EditResult {
             undo_item: None,
             delta: Some(EditDelta {
-                precise_deltas: vec![PreciseDelta {
+                precise_deltas: Arc::new(vec![PreciseDelta {
                     replaced_range: old_range.clone(),
                     replaced_points,
                     resolved_range: old_range.clone(),
                     replaced_byte_range: old_byte_start..old_byte_end,
                     new_byte_length,
                     new_end_point,
-                }],
+                }]),
                 // Note that we need to shift the range to the right by one here since
                 // the offset we take as the parameter is right before the block item
                 // marker.
@@ -5001,14 +5001,14 @@ impl Buffer {
         EditResult {
             undo_item: None,
             delta: Some(EditDelta {
-                precise_deltas: vec![PreciseDelta {
+                precise_deltas: Arc::new(vec![PreciseDelta {
                     replaced_range: old_range.clone(),
                     replaced_points,
                     resolved_range: old_range.clone(),
                     replaced_byte_range: old_byte_start..old_byte_end,
                     new_byte_length,
                     new_end_point,
-                }],
+                }]),
                 old_offset: old_range.clone(),
                 new_lines: Arc::new(
                     self.styled_blocks_in_range(old_range, StyledBlockBoundaryBehavior::Exclusive),
@@ -5084,14 +5084,14 @@ impl Buffer {
         EditResult {
             undo_item: None,
             delta: Some(EditDelta {
-                precise_deltas: vec![PreciseDelta {
+                precise_deltas: Arc::new(vec![PreciseDelta {
                     replaced_range: at..at,
                     replaced_points,
                     resolved_range: at..at + 1,
                     replaced_byte_range: byte_at..byte_at,
                     new_byte_length,
                     new_end_point,
-                }],
+                }]),
                 old_offset: old_range,
                 new_lines: Arc::new(
                     self.styled_blocks_in_range(new_range, StyledBlockBoundaryBehavior::Exclusive),
@@ -5211,7 +5211,7 @@ impl Buffer {
         EditResult {
             undo_item: None,
             delta: Some(EditDelta {
-                precise_deltas,
+                precise_deltas: Arc::new(precise_deltas),
                 old_offset: undo_item.replacement_range.old_range,
                 new_lines: Arc::new(self.styled_blocks_in_range(
                     undo_item.replacement_range.new_range,
@@ -5240,7 +5240,10 @@ impl Buffer {
             anchor_updates.extend(result.anchor_updates);
 
             if let Some(delta) = result.delta {
-                precise_deltas.extend(delta.precise_deltas);
+                // `delta` is a fresh `EditDelta` this call alone produced and immediately
+                // consumes, so `precise_deltas` has no other owner and this always takes the
+                // O(1) unwrap path; it only falls back to a clone if that invariant changes.
+                precise_deltas.extend(Arc::unwrap_or_clone(delta.precise_deltas));
             }
         }
 
@@ -5260,7 +5263,7 @@ impl Buffer {
         EditResult {
             undo_item: None,
             delta: Some(EditDelta {
-                precise_deltas,
+                precise_deltas: Arc::new(precise_deltas),
                 old_offset: undo_item.replacement_range.old_range,
                 new_lines: Arc::new(self.styled_blocks_in_range(
                     undo_item.replacement_range.new_range,
