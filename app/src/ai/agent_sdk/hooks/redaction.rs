@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum RedactedValue {
     Null,
@@ -67,7 +67,7 @@ impl From<u64> for RedactedValue {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct TruncationMetadata {
     pub(crate) truncated: bool,
     pub(crate) original_bytes: usize,
@@ -140,26 +140,6 @@ impl HookRedactor {
         }
     }
 
-    pub(crate) fn redact_json_preview(
-        &self,
-        value: &RedactedValue,
-        maximum_bytes: usize,
-    ) -> RedactedValue {
-        if value.serialized_len() <= maximum_bytes {
-            return value.clone();
-        }
-        RedactedValue::object([
-            ("truncated", RedactedValue::Bool(true)),
-            (
-                "original_bytes",
-                RedactedValue::Number(value.serialized_len().into()),
-            ),
-            (
-                "preview",
-                RedactedValue::redacted("size_limit", value.serialized_len()),
-            ),
-        ])
-    }
 }
 
 pub(crate) fn truncate_utf8(input: &str, maximum_bytes: usize) -> String {

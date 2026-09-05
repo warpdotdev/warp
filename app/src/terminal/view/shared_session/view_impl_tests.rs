@@ -2213,6 +2213,7 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
                         request_id: request_id.to_string(),
                         conversation_id: conversation_token.to_string(),
                         run_id: String::new(),
+                        supported_oz_hook_payload_schema_versions: vec![],
                     },
                 )),
             };

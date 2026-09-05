@@ -315,6 +315,7 @@ fn mock_response_stream_updates_history_through_controller() {
                         request_id: "test-request".to_string(),
                         conversation_id: "test-server-conversation".to_string(),
                         run_id: String::new(),
+                        supported_oz_hook_payload_schema_versions: vec![],
                     })),
                 },
                 ctx,

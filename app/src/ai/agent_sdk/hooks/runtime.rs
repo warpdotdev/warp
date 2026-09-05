@@ -29,6 +29,11 @@ pub(crate) struct OzHookEvent {
     pub(crate) payload: HookPayloadTemplate,
 }
 
+enum ReaderFailure {
+    Overflow,
+    Io,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct OzPreToolUseEvent(OzHookEvent);
 
@@ -45,6 +50,7 @@ impl OzPreToolUseEvent {
 pub(crate) enum OzHookCancellationScope {
     Session,
     Invocation(String),
+    #[allow(dead_code)]
     Tool(String),
 }
 
@@ -82,6 +88,7 @@ pub(crate) enum HookFailureCategory {
     Timeout,
     Cancelled,
     OutputOverflow,
+    OutputRead,
     InvalidUtf8,
     NonZeroExit,
     InvalidDecision,
@@ -218,12 +225,15 @@ impl OzHookRuntimeService {
                 Err(failure) => {
                     diagnostic.exit_code = failure.exit_code;
                     diagnostic.failure_category = Some(failure.category);
+                    diagnostic.output_truncated =
+                        failure.category == HookFailureCategory::OutputOverflow;
                     diagnostic.result = match failure.category {
                         HookFailureCategory::Timeout => HookInvocationResult::TimedOut,
                         HookFailureCategory::Cancelled => HookInvocationResult::Cancelled,
                         HookFailureCategory::Spawn
                         | HookFailureCategory::Stdin
                         | HookFailureCategory::OutputOverflow
+                        | HookFailureCategory::OutputRead
                         | HookFailureCategory::InvalidUtf8
                         | HookFailureCategory::NonZeroExit
                         | HookFailureCategory::InvalidDecision
@@ -248,6 +258,23 @@ impl OzHookRuntimeService {
                     }
                 }
             }
+            log::info!(
+                "Oz hook invocation: event={} source={} config_path={} definition_hash={} \
+                 matcher_present={} started_at={:?} finished_at={:?} duration_ms={} result={:?} \
+                 exit_code={:?} output_truncated={} failure_category={:?}",
+                diagnostic.event,
+                diagnostic.source.as_str(),
+                diagnostic.config_path.display(),
+                diagnostic.definition_hash,
+                diagnostic.matcher.is_some(),
+                diagnostic.started_at,
+                diagnostic.finished_at,
+                diagnostic.duration.as_millis(),
+                diagnostic.result,
+                diagnostic.exit_code,
+                diagnostic.output_truncated,
+                diagnostic.failure_category
+            );
             outcome.diagnostics.push(diagnostic);
         }
         self.remove_pending(&event.invocation_id);
@@ -410,11 +437,14 @@ async fn run_command(
             });
         }
     };
-    if stdin_task.await.is_err() {
-        return Err(CommandFailure {
-            category: HookFailureCategory::Stdin,
-            exit_code: status.code(),
-        });
+    match stdin_task.await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) | Err(_) => {
+            return Err(CommandFailure {
+                category: HookFailureCategory::Stdin,
+                exit_code: status.code(),
+            });
+        }
     }
     let stdout = join_output(stdout_task, status.code()).await?;
     let stderr = join_output(stderr_task, status.code()).await?;
@@ -479,18 +509,21 @@ fn hook_environment(payload: &HookPayloadTemplate) -> HashMap<OsString, OsString
 fn spawn_bounded_reader(
     mut reader: impl AsyncRead + Unpin + Send + 'static,
     overflow: mpsc::UnboundedSender<()>,
-) -> JoinHandle<Result<Vec<u8>, ()>> {
+) -> JoinHandle<Result<Vec<u8>, ReaderFailure>> {
     tokio::spawn(async move {
         let mut output = Vec::new();
         let mut buffer = [0_u8; 8192];
         loop {
-            let read = reader.read(&mut buffer).await.map_err(|_| ())?;
+            let read = reader
+                .read(&mut buffer)
+                .await
+                .map_err(|_| ReaderFailure::Io)?;
             if read == 0 {
                 return Ok(output);
             }
             if output.len() + read > MAX_OUTPUT_BYTES {
                 let _ = overflow.send(());
-                return Err(());
+                return Err(ReaderFailure::Overflow);
             }
             output.extend_from_slice(&buffer[..read]);
         }
@@ -498,7 +531,7 @@ fn spawn_bounded_reader(
 }
 
 async fn join_output(
-    task: JoinHandle<Result<Vec<u8>, ()>>,
+    task: JoinHandle<Result<Vec<u8>, ReaderFailure>>,
     exit_code: Option<i32>,
 ) -> Result<String, CommandFailure> {
     let bytes = task
@@ -507,8 +540,11 @@ async fn join_output(
             category: HookFailureCategory::OutputOverflow,
             exit_code,
         })?
-        .map_err(|_| CommandFailure {
-            category: HookFailureCategory::OutputOverflow,
+        .map_err(|failure| CommandFailure {
+            category: match failure {
+                ReaderFailure::Overflow => HookFailureCategory::OutputOverflow,
+                ReaderFailure::Io => HookFailureCategory::OutputRead,
+            },
             exit_code,
         })?;
     String::from_utf8(bytes).map_err(|_| CommandFailure {

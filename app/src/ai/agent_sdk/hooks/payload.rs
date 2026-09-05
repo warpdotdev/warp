@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::redaction::{RedactedText, RedactedValue, TruncationMetadata};
 use super::{HookConfigSource, HookEventName, MAX_PAYLOAD_BYTES, PAYLOAD_SCHEMA_VERSION};
@@ -118,7 +118,7 @@ impl HookEventFields {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SessionStartSource {
     Startup,
@@ -134,7 +134,7 @@ impl SessionStartSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SessionEndReason {
     Completed,
@@ -154,7 +154,7 @@ impl SessionEndReason {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum CompactTrigger {
     Auto,
@@ -170,7 +170,7 @@ impl CompactTrigger {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TurnStatus {
     Idle,

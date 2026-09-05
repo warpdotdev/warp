@@ -1100,6 +1100,52 @@ fn agent_run_rejects_skip_initial_turn_without_task_id() {
 }
 
 #[test]
+fn agent_run_accepts_strict_oz_lifecycle_hooks_context() {
+    let context = r#"{"required":true,"supported_payload_schema_versions":["warp.oz_hook.v1"],"project_trust":[{"git_root":"/workspace/repo","config_path":"/workspace/repo/.warp/hooks.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}"#;
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "abc",
+        "--oz-lifecycle-hooks-context",
+        context,
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    let context = run_args.oz_lifecycle_hooks_context.as_ref().unwrap();
+    assert!(context.required);
+    assert_eq!(context.project_trust.len(), 1);
+}
+
+#[test]
+fn agent_run_rejects_invalid_oz_lifecycle_hooks_context() {
+    for context in [
+        r#"{"required":false,"supported_payload_schema_versions":["warp.oz_hook.v1"],"project_trust":[]}"#,
+        r#"{"required":true,"supported_payload_schema_versions":[],"project_trust":[]}"#,
+        r#"{"required":true,"supported_payload_schema_versions":["future"],"project_trust":[]}"#,
+        r#"{"required":true,"supported_payload_schema_versions":["warp.oz_hook.v1"],"project_trust":[],"unknown":true}"#,
+        r#"{"required":true,"supported_payload_schema_versions":["warp.oz_hook.v1"],"project_trust":[{"git_root":"/workspace/repo","config_path":"/workspace/repo/.warp/hooks.json","sha256":"bad"}]}"#,
+    ] {
+        Args::try_parse_from([
+            "warp",
+            "agent",
+            "run",
+            "--task-id",
+            "abc",
+            "--oz-lifecycle-hooks-context",
+            context,
+        ])
+        .expect_err("invalid hook context must fail parsing");
+    }
+}
+#[test]
 fn agent_run_accepts_snapshot_flags() {
     let args = Args::try_parse_from([
         "warp",

@@ -1,10 +1,12 @@
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 pub(crate) mod config;
 pub(crate) mod payload;
 pub(crate) mod permissions;
+pub(crate) mod protocol;
 pub(crate) mod redaction;
 pub(crate) mod runtime;
 pub(crate) mod trust;
@@ -19,6 +21,12 @@ pub(crate) const MAX_TOOL_INPUT_BYTES: usize = 128 * 1024;
 pub(crate) const MAX_TOOL_RESPONSE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_DENIAL_REASON_BYTES: usize = 4 * 1024;
+
+#[derive(Clone)]
+pub(crate) struct OzHookSession {
+    pub(crate) runtime: Arc<dyn runtime::OzHookRuntime>,
+    pub(crate) protocol_context: warp_multi_agent_api::OzHookContext,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub(crate) enum HookEventName {
@@ -56,6 +64,18 @@ impl HookEventName {
 
     pub(crate) const fn ignores_matcher(self) -> bool {
         matches!(self, Self::UserPromptSubmit | Self::Stop)
+    }
+
+    pub(crate) const fn protocol_value(self) -> warp_multi_agent_api::OzHookEvent {
+        match self {
+            Self::SessionStart => warp_multi_agent_api::OzHookEvent::SessionStart,
+            Self::SessionEnd => warp_multi_agent_api::OzHookEvent::SessionEnd,
+            Self::UserPromptSubmit => warp_multi_agent_api::OzHookEvent::UserPromptSubmit,
+            Self::Stop => warp_multi_agent_api::OzHookEvent::Stop,
+            Self::PreToolUse => warp_multi_agent_api::OzHookEvent::PreToolUse,
+            Self::PostToolUse => warp_multi_agent_api::OzHookEvent::PostToolUse,
+            Self::PreCompact => warp_multi_agent_api::OzHookEvent::PreCompact,
+        }
     }
 }
 

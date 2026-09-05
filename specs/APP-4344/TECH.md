@@ -491,6 +491,33 @@ Required worker changes are limited to:
 - reject a hook-enabled task when a backend cannot preserve the embedded runtime contract
 - add backend tests that prove worker-control-plane credentials are not inherited
 
+The assignment carries an optional, strict `oz_lifecycle_hooks` object:
+
+```json
+{
+  "required": true,
+  "supported_payload_schema_versions": ["warp.oz_hook.v1"],
+  "project_trust": [
+    {
+      "git_root": "/workspace/repository",
+      "config_path": "/workspace/repository/.warp/hooks.json",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}
+```
+
+Unknown fields, `required: false`, empty or unsupported schema versions, more than 64 trust
+records, and serialized objects over 64 KiB are rejected. The object is rejected for non-Oz
+harnesses. The 64 KiB transport bound keeps the single argument below Linux `MAX_ARG_STRLEN`; the
+256 KiB config and hook-stdin limits are separate.
+
+The worker passes this object to embedded Oz as one non-secret
+`--oz-lifecycle-hooks-context <JSON>` argument pair. It is never inherited through the process
+environment. The argument uses a strict `OzLifecycleHooksContext` CLI type and is validated before
+the session starts. Backends that cannot preserve the argument, task cancellation, or sandbox
+placement reject the hook-enabled task.
+
 Direct:
 - The embedded runtime runs under the task process and task workspace.
 - It inherits only task environment into Oz.

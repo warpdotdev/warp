@@ -1518,6 +1518,7 @@ fn complete_mock_stream_successfully(app: &mut App, stream: &warpui::ModelHandle
                     request_id: "test-request".to_string(),
                     conversation_id: "test-server-conversation".to_string(),
                     run_id: String::new(),
+                    supported_oz_hook_payload_schema_versions: vec![],
                 })),
             },
             ctx,

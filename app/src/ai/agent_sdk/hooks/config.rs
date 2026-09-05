@@ -23,6 +23,7 @@ pub(crate) struct ConfiguredHook {
     pub(crate) matcher_text: Option<String>,
     matcher: Option<Regex>,
     pub(crate) command: String,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) command_windows: Option<String>,
     pub(crate) timeout: Duration,
     pub(crate) on_failure: FailureMode,
