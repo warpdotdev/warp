@@ -97,7 +97,7 @@ use crate::workflows::{CloudWorkflow, WorkflowViewMode};
 use crate::workspace::active_terminal_in_window;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::workspaces::workspace::WorkspaceUid;
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 use crate::{ObjectActions, send_telemetry_from_ctx};
 
 const WARP_DRIVE_TITLE: &str = "Warp Drive";
@@ -666,16 +666,11 @@ impl DriveIndex {
             .collect::<Vec<_>>();
 
         if !user_workspaces.as_ref(ctx).has_teams() {
-            if user_workspaces
-                .as_ref(ctx)
-                .total_teammates_in_joinable_teams()
-                > 0
-            {
-                sections.insert(0, DriveIndexSection::JoinTeam);
-                sections.insert(1, DriveIndexSection::CreateATeam);
-            } else {
-                sections.insert(0, DriveIndexSection::CreateATeam);
-            }
+            let teamless_sections = Self::teamless_drive_sections(
+                user_workspaces.as_ref(ctx).current_workspace(),
+                user_workspaces.as_ref(ctx).num_joinable_teams(),
+            );
+            sections.splice(0..0, teamless_sections);
         }
 
         // Item UI state is attached by index, not by id, so this is re-initialized whenever there's any type of change
@@ -730,6 +725,30 @@ impl DriveIndex {
         } else {
             self.compute_ordered_items(cloud_model.as_ref(ctx));
         }
+    }
+
+    /// Determines which teamless CTA sections should appear at the top of the Warp
+    /// Drive sidebar for a user with no team membership in their current workspace.
+    ///
+    /// Native workspaces manage team membership centrally, so the create-team CTA is
+    /// suppressed there; a missing (unresolved) workspace is treated as non-native,
+    /// matching the precedent in `TeamsWidget::page_sections_for`, so the CTA isn't
+    /// hidden while workspace metadata is still loading.
+    fn teamless_drive_sections(
+        current_workspace: Option<&Workspace>,
+        num_joinable_teams: usize,
+    ) -> Vec<DriveIndexSection> {
+        let is_native_workspace =
+            current_workspace.is_some_and(Workspace::is_native_workspaces_enabled);
+
+        let mut sections = Vec::new();
+        if num_joinable_teams > 0 {
+            sections.push(DriveIndexSection::JoinTeam);
+        }
+        if !is_native_workspace {
+            sections.push(DriveIndexSection::CreateATeam);
+        }
+        sections
     }
 
     pub fn has_initialized_sections(&self) -> impl Future<Output = ()> + use<> {
@@ -2204,6 +2223,7 @@ impl DriveIndex {
 
     fn render_join_discoverable_team_section(
         &self,
+        show_or_separator: bool,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -2245,23 +2265,28 @@ impl DriveIndex {
         .with_margin_top(16.)
         .finish();
 
-        let or_text = Container::new(
-            Text::new_inline("Or", appearance.ui_font_family(), ITEM_FONT_SIZE)
-                .with_color(appearance.theme().nonactive_ui_text_color().into())
-                .with_style(Properties::default().weight(Weight::Medium))
-                .finish(),
-        )
-        .with_margin_top(14.)
-        .finish();
-
-        let or_row = Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(or_text)
+        let mut children = vec![join_button];
+        if show_or_separator {
+            let or_text = Container::new(
+                Text::new_inline("Or", appearance.ui_font_family(), ITEM_FONT_SIZE)
+                    .with_color(appearance.theme().nonactive_ui_text_color().into())
+                    .with_style(Properties::default().weight(Weight::Medium))
+                    .finish(),
+            )
+            .with_margin_top(14.)
             .finish();
 
-        Container::new(Flex::column().with_children([join_button, or_row]).finish())
+            children.push(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::Center)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(or_text)
+                    .finish(),
+            );
+        }
+
+        Container::new(Flex::column().with_children(children).finish())
             .with_margin_left(INDEX_CONTENT_MARGIN_LEFT)
             .with_margin_right(INDEX_CONTENT_MARGIN_LEFT)
             .finish()
@@ -2368,8 +2393,13 @@ impl DriveIndex {
                     }
                     DriveIndexSection::JoinTeam => {
                         if self.is_online(app) {
-                            rendered_space
-                                .push(self.render_join_discoverable_team_section(appearance, app));
+                            let show_or_separator =
+                                self.sections.contains(&DriveIndexSection::CreateATeam);
+                            rendered_space.push(self.render_join_discoverable_team_section(
+                                show_or_separator,
+                                appearance,
+                                app,
+                            ));
                         }
                     }
                 }

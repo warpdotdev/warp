@@ -3,7 +3,7 @@ use warp_core::ui::appearance::Appearance;
 use warpui::platform::WindowStyle;
 use warpui::{AddSingletonModel, App, SingletonEntity, TypedActionView, ViewHandle};
 
-use super::{DriveIndex, DriveIndexAction, SharedObjectLimitBannerKind};
+use super::{DriveIndex, DriveIndexAction, DriveIndexSection, SharedObjectLimitBannerKind};
 use crate::ASSETS;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::AuthStateProvider;
@@ -20,7 +20,7 @@ use crate::menu::MenuItem;
 use crate::network::NetworkStatus;
 use crate::notebooks::{CloudNotebook, CloudNotebookModel};
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::{ClientId, ServerIdAndType, SyncId};
+use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::{QueueItem, SyncQueue};
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
@@ -32,6 +32,7 @@ use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::{NativeWorkspacesPolicy, Workspace};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
@@ -317,4 +318,67 @@ fn test_shared_object_limit_banner_dismissal_persists_per_type() {
             ));
         });
     });
+}
+
+fn workspace_with_native_policy(enabled: bool) -> Workspace {
+    let mut workspace = Workspace::from_local_cache(
+        ServerId::from(1).into(),
+        "Test Workspace".to_string(),
+        None,
+        None,
+    );
+    workspace.billing_metadata.tier.native_workspaces_policy =
+        Some(NativeWorkspacesPolicy { enabled });
+    workspace
+}
+
+// Covers the teamless Drive sidebar section matrix from REV-2380: whether a user with
+// no team membership sees the "Create a team" and/or "Join a team" CTAs depends on
+// their current workspace's native-workspace policy and whether they have any
+// joinable/open teams.
+#[test]
+fn teamless_sections_for_native_workspace_with_joinable_teams_shows_only_join() {
+    let workspace = workspace_with_native_policy(true);
+    assert_eq!(
+        DriveIndex::teamless_drive_sections(Some(&workspace), 1),
+        vec![DriveIndexSection::JoinTeam]
+    );
+}
+
+#[test]
+fn teamless_sections_for_native_workspace_with_no_joinable_teams_shows_neither() {
+    let workspace = workspace_with_native_policy(true);
+    assert_eq!(
+        DriveIndex::teamless_drive_sections(Some(&workspace), 0),
+        Vec::<DriveIndexSection>::new()
+    );
+}
+
+#[test]
+fn teamless_sections_for_non_native_workspace_with_joinable_teams_shows_join_and_create() {
+    let workspace = workspace_with_native_policy(false);
+    assert_eq!(
+        DriveIndex::teamless_drive_sections(Some(&workspace), 1),
+        vec![DriveIndexSection::JoinTeam, DriveIndexSection::CreateATeam]
+    );
+}
+
+#[test]
+fn teamless_sections_for_non_native_workspace_with_no_joinable_teams_shows_create_only() {
+    let workspace = workspace_with_native_policy(false);
+    assert_eq!(
+        DriveIndex::teamless_drive_sections(Some(&workspace), 0),
+        vec![DriveIndexSection::CreateATeam]
+    );
+}
+
+#[test]
+fn teamless_sections_for_unresolved_workspace_keeps_create_team_cta() {
+    // A missing (unresolved) workspace is treated as non-native, matching the
+    // `TeamsWidget::page_sections_for` precedent, so the CTA isn't hidden while
+    // workspace metadata is still loading.
+    assert_eq!(
+        DriveIndex::teamless_drive_sections(None, 0),
+        vec![DriveIndexSection::CreateATeam]
+    );
 }
