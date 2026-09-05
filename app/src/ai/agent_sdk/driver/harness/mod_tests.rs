@@ -1,7 +1,10 @@
+use std::ffi::{OsStr, OsString};
+
 use warp_cli::agent::Harness;
 
-use super::{auth_check_command_for, validate_cli_installed};
+use super::{auth_check_command_for, harness_model_env_vars, validate_cli_installed};
 use crate::ai::agent_sdk::driver::AgentDriverError;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 
 fn assert_harness_setup_failed(err: &AgentDriverError) -> (&str, &str) {
     match err {
@@ -81,4 +84,67 @@ fn auth_check_command_for_unknown_is_none() {
     // Harness::Unknown causes harness_kind to return Err; the helper still
     // returns None instead of panicking.
     assert!(auth_check_command_for(Harness::Unknown).is_none());
+}
+
+// --- harness_model_env_vars tests ---
+
+#[test]
+fn claude_model_env_vars_sets_model_and_effort_level() {
+    let config = HarnessModelConfig {
+        model_id: "opus".to_owned(),
+        reasoning_level: Some("xhigh".to_owned()),
+    };
+    let env_vars = harness_model_env_vars(Harness::Claude, Some(&config));
+    assert_eq!(
+        env_vars.get(OsStr::new("ANTHROPIC_MODEL")),
+        Some(&OsString::from("opus"))
+    );
+    assert_eq!(
+        env_vars.get(OsStr::new("CLAUDE_CODE_EFFORT_LEVEL")),
+        Some(&OsString::from("xhigh"))
+    );
+}
+
+#[test]
+fn claude_model_env_vars_omits_effort_level_when_unset() {
+    // No reasoning level chosen: CLAUDE_CODE_EFFORT_LEVEL must be left unset so
+    // Claude Code falls back to its own per-model default effort.
+    let config = HarnessModelConfig {
+        model_id: "haiku".to_owned(),
+        reasoning_level: None,
+    };
+    let env_vars = harness_model_env_vars(Harness::Claude, Some(&config));
+    assert_eq!(
+        env_vars.get(OsStr::new("ANTHROPIC_MODEL")),
+        Some(&OsString::from("haiku"))
+    );
+    assert!(!env_vars.contains_key(OsStr::new("CLAUDE_CODE_EFFORT_LEVEL")));
+}
+
+#[test]
+fn claude_model_env_vars_omits_effort_level_when_empty() {
+    let config = HarnessModelConfig {
+        model_id: "opus".to_owned(),
+        reasoning_level: Some(String::new()),
+    };
+    let env_vars = harness_model_env_vars(Harness::Claude, Some(&config));
+    assert!(!env_vars.contains_key(OsStr::new("CLAUDE_CODE_EFFORT_LEVEL")));
+}
+
+#[test]
+fn non_claude_model_env_vars_never_set_effort_level() {
+    // Codex has its own reasoning-effort mechanism (config.toml); the Claude-
+    // specific env var must not leak into other harnesses.
+    let config = HarnessModelConfig {
+        model_id: "gpt-5.5".to_owned(),
+        reasoning_level: Some("high".to_owned()),
+    };
+    let env_vars = harness_model_env_vars(Harness::Codex, Some(&config));
+    assert!(!env_vars.contains_key(OsStr::new("CLAUDE_CODE_EFFORT_LEVEL")));
+    assert!(!env_vars.contains_key(OsStr::new("ANTHROPIC_MODEL")));
+}
+
+#[test]
+fn model_env_vars_empty_when_no_model_config() {
+    assert!(harness_model_env_vars(Harness::Claude, None).is_empty());
 }
