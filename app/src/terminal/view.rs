@@ -8659,6 +8659,22 @@ impl TerminalView {
             )
     }
 
+    fn should_render_cloud_setup_status_without_input(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+    ) -> bool {
+        FeatureFlag::CloudModeSetupV2.is_enabled()
+            && model.is_shared_ambient_agent_session()
+            && !self.is_input_box_visible(model, app)
+            && ambient_agent::is_cloud_agent_pre_first_exchange(
+                self.ambient_agent_view_model.as_ref(),
+                &self.agent_view_controller,
+                model,
+                app,
+            )
+    }
+
     /// Give the agent control of the active long running command
     /// (which was started outside of a conversation).
     fn tag_agent_in(&mut self, ctx: &mut ViewContext<Self>) {
@@ -28447,6 +28463,10 @@ impl View for TerminalView {
                     let input_box_visible = self.is_input_box_visible(&model, app);
                     if input_box_visible {
                         column.add_child(self.render_input());
+                    } else if self.should_render_cloud_setup_status_without_input(&model, app) {
+                        column.add_child(
+                            ChildView::new(self.input.as_ref(app).agent_status_bar()).finish(),
+                        );
                     } else if self.should_render_legacy_ambient_agent_loading_footer(&model, app) {
                         column.add_child(ambient_agent::render_loading_footer(appearance));
                     } else if self.show_remote_server_loading_footer(&model, app) {
