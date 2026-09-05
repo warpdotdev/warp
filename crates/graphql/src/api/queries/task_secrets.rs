@@ -67,6 +67,8 @@ pub struct ManagedSecretRawValue {
 #[derive(cynic::QueryFragment, Debug)]
 pub struct ManagedSecretAnthropicApiKeyValue {
     pub api_key: String,
+    /// Optional base URL for custom AI gateway endpoints.
+    pub base_url: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

@@ -28,6 +28,7 @@ fn test_debug_representation_no_secrets() {
 fn test_serialize_anthropic_api_key() {
     let secret = ManagedSecretValue::AnthropicApiKey {
         api_key: "sk-ant-test-key".to_string(),
+        base_url: None,
     };
     let serialized = serde_json::to_string(&secret).expect("failed to serialize");
     assert_eq!(serialized, "{\"api_key\":\"sk-ant-test-key\"}");
@@ -38,6 +39,7 @@ fn test_serialize_anthropic_api_key() {
 fn test_debug_representation_no_secrets_anthropic_api_key() {
     let secret = ManagedSecretValue::AnthropicApiKey {
         api_key: "sk-ant-secret-key".to_string(),
+        base_url: None,
     };
     let debug_representation = format!("{:?}", secret);
     assert!(
