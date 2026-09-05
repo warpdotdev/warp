@@ -1,8 +1,9 @@
 use regex::Regex;
 use warp::integration_testing::goto_line::{
-    assert_code_editor_line_numbers, assert_cursor_at_line, assert_cursor_at_line_and_column,
-    assert_goto_line_dialog_is_open, goto_line_confirm, open_goto_line_dialog,
-    set_code_editor_line_number_mode,
+    CodeEditorBufferBoundary, assert_code_editor_line_numbers,
+    assert_code_editor_selection_to_buffer_boundary, assert_cursor_at_line,
+    assert_cursor_at_line_and_column, assert_goto_line_dialog_is_open, focus_file_code_editor,
+    goto_line_confirm, open_goto_line_dialog, set_code_editor_line_number_mode,
 };
 use warp::integration_testing::step::new_step_with_default_assertions;
 use warp::integration_testing::tab::assert_pane_title;
@@ -37,6 +38,15 @@ fn create_multiline_test_file_content() -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(target_os = "macos")]
+const SELECT_TO_BUFFER_START_KEY: &str = "cmd-shift-up";
+#[cfg(not(target_os = "macos"))]
+const SELECT_TO_BUFFER_START_KEY: &str = "ctrl-shift-home";
+#[cfg(target_os = "macos")]
+const SELECT_TO_BUFFER_END_KEY: &str = "cmd-shift-down";
+#[cfg(not(target_os = "macos"))]
+const SELECT_TO_BUFFER_END_KEY: &str = "ctrl-shift-end";
 
 fn file_open_steps(builder: Builder) -> Builder {
     builder
@@ -135,6 +145,44 @@ pub fn test_goto_line_clamps_out_of_range() -> Builder {
             new_step_with_default_assertions("Verify cursor clamped to last line")
                 .add_assertion(assert_goto_line_dialog_is_open(false))
                 .add_assertion(assert_cursor_at_line(20)),
+        )
+}
+
+pub fn test_code_editor_select_to_buffer_boundaries_with_shortcuts() -> Builder {
+    file_open_steps(new_builder())
+        .with_step(
+            new_step_with_default_assertions("Place cursor in the middle of the file")
+                .with_action(|app, window_id, _| {
+                    goto_line_confirm(app, window_id, "10:3");
+                    focus_file_code_editor(app, window_id);
+                })
+                .add_assertion(assert_cursor_at_line_and_column(10, 3)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Select from cursor to start of file")
+                .with_keystrokes(&[SELECT_TO_BUFFER_START_KEY])
+                .add_assertion(assert_code_editor_selection_to_buffer_boundary(
+                    CodeEditorBufferBoundary::Start,
+                    10,
+                    3,
+                )),
+        )
+        .with_step(
+            new_step_with_default_assertions("Reset cursor in the middle of the file")
+                .with_action(|app, window_id, _| {
+                    goto_line_confirm(app, window_id, "10:3");
+                    focus_file_code_editor(app, window_id);
+                })
+                .add_assertion(assert_cursor_at_line_and_column(10, 3)),
+        )
+        .with_step(
+            new_step_with_default_assertions("Select from cursor to end of file")
+                .with_keystrokes(&[SELECT_TO_BUFFER_END_KEY])
+                .add_assertion(assert_code_editor_selection_to_buffer_boundary(
+                    CodeEditorBufferBoundary::End,
+                    10,
+                    3,
+                )),
         )
 }
 

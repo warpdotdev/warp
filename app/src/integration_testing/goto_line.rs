@@ -1,4 +1,5 @@
 use settings::Setting as _;
+use string_offset::CharOffset;
 use warp_editor::content::buffer::ToBufferPoint;
 use warpui::integration::AssertionCallback;
 use warpui::{App, SingletonEntity, ViewHandle, WindowId, async_assert, async_assert_eq};
@@ -41,6 +42,12 @@ pub fn goto_line_confirm(app: &mut App, window_id: WindowId, input: &str) {
         view.goto_line_confirm_for_test(&input_owned, ctx);
     });
 }
+
+pub fn focus_file_code_editor(app: &mut App, window_id: WindowId) {
+    let editor = file_code_editor_view(app, window_id);
+    editor.update(app, |view, ctx| view.focus(ctx));
+}
+
 pub fn set_code_editor_line_number_mode(app: &mut App, mode: CodeEditorLineNumberMode) {
     app.update(|ctx| {
         AppEditorSettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -135,6 +142,44 @@ pub fn assert_cursor_at_line_and_column(
         async_assert!(
             line_match && col_match,
             "Expected cursor at line {expected_line} col {expected_column}, got line {cursor_row} col {cursor_col}",
+        )
+    })
+}
+
+#[derive(Clone, Copy)]
+pub enum CodeEditorBufferBoundary {
+    Start,
+    End,
+}
+
+pub fn assert_code_editor_selection_to_buffer_boundary(
+    boundary: CodeEditorBufferBoundary,
+    expected_anchor_line: usize,
+    expected_anchor_column: usize,
+) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let editor = file_code_editor_view(app, window_id);
+        let (head_matches, anchor_line, anchor_column) = editor.read(app, |editor, ctx| {
+            let selection_model = editor.model.as_ref(ctx).buffer_selection_model();
+            let selection = selection_model.as_ref(ctx).selection_offsets()[0];
+            let buffer = editor.model.as_ref(ctx).buffer().as_ref(ctx);
+            let expected_head = match boundary {
+                CodeEditorBufferBoundary::Start => CharOffset::from(1),
+                CodeEditorBufferBoundary::End => buffer.max_charoffset(),
+            };
+            let anchor = selection.tail.to_buffer_point(buffer);
+            (
+                selection.head == expected_head,
+                anchor.row as usize,
+                anchor.column as usize,
+            )
+        });
+
+        async_assert!(
+            head_matches
+                && anchor_line == expected_anchor_line
+                && anchor_column == expected_anchor_column,
+            "Expected selection head at the buffer boundary with anchor at line {expected_anchor_line} col {expected_anchor_column}, got head_matches={head_matches}, anchor line {anchor_line} col {anchor_column}",
         )
     })
 }
