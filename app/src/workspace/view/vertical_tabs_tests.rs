@@ -211,6 +211,7 @@ fn terminal_primary_line_uses_terminal_title_when_disabled_cli_has_only_prompt()
         "~/warp",
         terminal_title_fallback_font(&agent_text),
         Some("claude".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "Generated Claude Code title");
@@ -264,6 +265,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_has_prompt() {
         "~/warp",
         terminal_title_fallback_font(&agent_text),
         Some("claude".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "Latest CLI prompt");
@@ -290,6 +292,7 @@ fn terminal_primary_line_uses_cli_prompt_when_enabled_cli_is_long_running() {
         "~/warp",
         terminal_title_fallback_font(&agent_text),
         Some("claude".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "Latest CLI prompt");
@@ -705,6 +708,7 @@ fn terminal_primary_line_prefers_cli_agent_display_title() {
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
         Some("cargo nextest run".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "Review the failing tests");
@@ -720,6 +724,7 @@ fn terminal_primary_line_prefers_cli_agent_display_title_over_conversation_title
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
         Some("cargo nextest run".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "Summarize the failures");
@@ -735,6 +740,7 @@ fn terminal_primary_line_falls_through_to_terminal_title_when_cli_agent_has_no_p
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
         Some("cargo nextest run".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "codex - ~/warp");
@@ -750,6 +756,7 @@ fn terminal_primary_line_uses_terminal_title_as_fallback() {
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
         Some("cargo nextest run".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "nvim src/workspace/view/vertical_tabs.rs");
@@ -765,6 +772,7 @@ fn terminal_primary_line_uses_last_completed_command_when_shell_title_matches_wo
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
         Some("cargo nextest run".to_string()),
+        None,
     );
 
     assert_eq!(line.text(), "cargo nextest run");
@@ -779,6 +787,7 @@ fn terminal_primary_line_falls_back_to_new_session() {
         "~/warp",
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
+        None,
         None,
     );
 
@@ -802,6 +811,7 @@ fn terminal_primary_line_uses_monospace_for_last_completed_command() {
         "~/warp",
         TerminalPrimaryLineFont::Monospace,
         Some("cargo nextest run".to_string()),
+        None,
     );
 
     assert!(matches!(
@@ -1241,4 +1251,36 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+#[test]
+fn terminal_primary_line_prefers_agent_display_name_over_launch_command() {
+    let line = terminal_primary_line_data(
+        false,
+        None,
+        None,
+        "~/warp",
+        "~/warp",
+        TerminalPrimaryLineFont::Ui,
+        Some("grok".to_string()),
+        Some(CLIAgent::Grok),
+    );
+
+    assert_eq!(line.text(), "Grok");
+}
+
+#[test]
+fn terminal_primary_line_keeps_launch_command_when_it_is_not_the_agent_command() {
+    let line = terminal_primary_line_data(
+        false,
+        None,
+        None,
+        "~/warp",
+        "~/warp",
+        TerminalPrimaryLineFont::Monospace,
+        Some("cargo nextest run".to_string()),
+        Some(CLIAgent::Grok),
+    );
+
+    assert_eq!(line.text(), "cargo nextest run");
 }

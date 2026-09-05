@@ -259,6 +259,7 @@ fn test_detect_known_agents() {
                 ("claude", CLIAgent::Claude),
                 ("gemini", CLIAgent::Gemini),
                 ("codex", CLIAgent::Codex),
+                ("grok", CLIAgent::Grok),
                 ("amp", CLIAgent::Amp),
                 ("droid", CLIAgent::Droid),
                 ("opencode", CLIAgent::OpenCode),
@@ -659,5 +660,24 @@ fn test_warp_tui_variant_properties() {
     assert_eq!(
         CLIAgent::from_serialized_name(&CLIAgent::WarpTui.to_serialized_name()),
         CLIAgent::WarpTui
+    );
+}
+
+#[test]
+fn test_grok_variant_properties() {
+    assert_eq!(CLIAgent::Grok.command_prefix(), "grok");
+    assert_eq!(CLIAgent::Grok.command_prefixes(), &["grok"]);
+    assert_eq!(CLIAgent::Grok.display_name(), "Grok");
+    assert_eq!(CLIAgent::Grok.icon(), Some(Icon::GrokLogo));
+    assert_eq!(CLIAgent::Grok.brand_color(), Some(ColorU::black()));
+    assert_eq!(CLIAgent::Grok.brand_icon_color(), ColorU::white());
+    assert!(CLIAgent::Grok.supports_cli_agent_footer());
+    assert!(matches!(
+        crate::server::telemetry::CLIAgentType::from(CLIAgent::Grok),
+        crate::server::telemetry::CLIAgentType::Grok
+    ));
+    assert_eq!(
+        CLIAgent::from_serialized_name(&CLIAgent::Grok.to_serialized_name()),
+        CLIAgent::Grok
     );
 }
