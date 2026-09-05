@@ -148,9 +148,6 @@ fn dispatch_command(
     match command {
         CliCommand::Agent(agent_cmd) => run_agent(ctx, global_options, agent_cmd),
         CliCommand::Environment(environment_cmd) => {
-            if !FeatureFlag::CloudEnvironments.is_enabled() {
-                return Err(anyhow::anyhow!("invalid value 'environment'"));
-            }
             environment::run(ctx, global_options, environment_cmd)
         }
         CliCommand::MCP(mcp_cmd) => mcp::run(ctx, global_options, mcp_cmd),
@@ -266,9 +263,6 @@ fn run_agent(
 ) -> anyhow::Result<()> {
     match command {
         AgentCommand::Run(args) => {
-            if args.environment.is_some() && !FeatureFlag::CloudEnvironments.is_enabled() {
-                return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
-            }
             if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
                 return Err(anyhow::anyhow!(
                     "unexpected argument '--conversation' found"
@@ -311,11 +305,6 @@ fn run_agent(
             Ok(())
         }
         AgentCommand::RunCloud(args) => {
-            if args.environment.environment.is_some()
-                && !FeatureFlag::CloudEnvironments.is_enabled()
-            {
-                return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
-            }
             if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
                 return Err(anyhow::anyhow!(
                     "unexpected argument '--conversation' found"
