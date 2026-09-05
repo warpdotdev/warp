@@ -1529,9 +1529,9 @@ impl AgentInputFooter {
             AgentToolbarItemKind::FileExplorer => item
                 .is_available(app)
                 .then(|| ChildView::new(&self.file_explorer_button).finish()),
-            AgentToolbarItemKind::RichInput => FeatureFlag::CLIAgentRichInput
-                .is_enabled()
-                .then(|| ChildView::new(&self.rich_input_button).finish()),
+            AgentToolbarItemKind::RichInput => {
+                Some(ChildView::new(&self.rich_input_button).finish())
+            }
             AgentToolbarItemKind::FileAttach => Some(ChildView::new(&self.file_button).finish()),
             AgentToolbarItemKind::VoiceInput => {
                 #[cfg(feature = "voice_input")]

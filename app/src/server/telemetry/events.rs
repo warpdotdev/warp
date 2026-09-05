@@ -5652,9 +5652,7 @@ impl TelemetryEventDesc for TelemetryEventDiscriminants {
             }
             Self::CLIAgentRichInputOpened { .. }
             | Self::CLIAgentRichInputClosed { .. }
-            | Self::CLIAgentRichInputSubmitted { .. } => {
-                EnablementState::Flag(FeatureFlag::CLIAgentRichInput)
-            }
+            | Self::CLIAgentRichInputSubmitted { .. } => EnablementState::Always,
             Self::ToggleCLIAgentToolbarSetting { .. } => EnablementState::Always,
             Self::ToggleUseAgentToolbarSetting { .. } => EnablementState::Always,
             Self::CodexModalOpened | Self::CodexModalUseCodexClicked => EnablementState::Always,
