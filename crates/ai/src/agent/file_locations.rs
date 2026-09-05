@@ -6,7 +6,7 @@ use warp_terminal::shell::ShellLaunchData;
 
 use crate::agent::action_result::FileContext;
 use crate::index::locations::CodeContextLocation;
-use crate::paths::shell_native_absolute_path;
+use crate::paths::{shell_native_absolute_path, to_shell_native_display_path};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileLocations {
@@ -113,6 +113,10 @@ impl From<&CodeContextLocation> for FileLocations {
 /// Groups a slice of [`FileContext`]s by file name, collecting line ranges from
 /// fragments of the same file. Returns one display string per unique file,
 /// preserving first-occurrence order.
+///
+/// `FileContext.file_name` may be stored in the host's native path encoding (see
+/// `host_native_absolute_path`), so it's normalized back to the shell's native form here before
+/// display.
 pub fn group_file_contexts_for_display(
     file_contexts: &[FileContext],
     shell_launch_data: Option<&ShellLaunchData>,
@@ -122,8 +126,9 @@ pub fn group_file_contexts_for_display(
     let mut groups: HashMap<String, Vec<Range<usize>>> = HashMap::new();
 
     for fc in file_contexts {
-        let entry = groups.entry(fc.file_name.clone()).or_insert_with(|| {
-            order.push(fc.file_name.clone());
+        let file_name = to_shell_native_display_path(&fc.file_name, shell_launch_data).into_owned();
+        let entry = groups.entry(file_name.clone()).or_insert_with(|| {
+            order.push(file_name.clone());
             Vec::new()
         });
         if let Some(range) = &fc.line_range {
@@ -145,3 +150,7 @@ pub fn group_file_contexts_for_display(
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "file_locations_tests.rs"]
+mod tests;
