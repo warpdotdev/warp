@@ -1,3 +1,5 @@
+use warpui::text_layout::TextAlignment;
+
 use super::EditorElement;
 
 const FLOAT_TOLERANCE: f32 = 1e-4;
@@ -34,4 +36,20 @@ fn scroll_position_y_fract_tracks_fractional_offset_after_boundary() {
 
     let fract = EditorElement::scroll_position_y_fract(1.75, line_height, top_section_height_px);
     assert!((fract - 5.0).abs() < FLOAT_TOLERANCE);
+}
+
+#[test]
+fn centered_line_offset_uses_remaining_editor_width() {
+    assert_eq!(
+        EditorElement::aligned_line_x_offset(TextAlignment::Center, 80., 32.),
+        24.
+    );
+    assert_eq!(
+        EditorElement::aligned_line_x_offset(TextAlignment::Center, 80., 100.),
+        0.
+    );
+    assert_eq!(
+        EditorElement::aligned_line_x_offset(TextAlignment::Left, 80., 32.),
+        0.
+    );
 }

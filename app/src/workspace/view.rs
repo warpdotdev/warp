@@ -18804,25 +18804,10 @@ impl Workspace {
 
     fn adjust_zoom(&mut self, increase: bool, ctx: &mut ViewContext<Self>) {
         let current_zoom = *WindowSettings::as_ref(ctx).zoom_level.value();
-        let Some(current_index) = crate::window_settings::ZoomLevel::VALUES
-            .iter()
-            .position(|zoom| *zoom == current_zoom)
-        else {
-            return;
-        };
-
-        let next_index = if increase {
-            (current_index + 1).min(crate::window_settings::ZoomLevel::VALUES.len() - 1)
-        } else {
-            current_index.saturating_sub(1)
-        };
+        let next_zoom = ZoomLevel::next_preset(current_zoom, increase);
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(
-                window_settings
-                    .zoom_level
-                    .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx)
-            );
+            report_if_error!(window_settings.zoom_level.set_value(next_zoom, ctx));
         });
     }
 
