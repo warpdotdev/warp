@@ -130,6 +130,7 @@ pub(crate) use shared_session::cloud_conversation_continuation::{
 use shared_session::{SharedSessionAdapter, Viewer};
 use ssh_file_upload::{FileUpload, FileUploadEvent};
 use sum_tree::SeekBias;
+use typed_path::TypedPath;
 use use_agent_footer::UseAgentToolbar;
 use uuid::Uuid;
 use vec1::vec1;
@@ -7972,15 +7973,26 @@ impl TerminalView {
                 .as_ref()
                 .and_then(BlockMetadata::current_working_directory)
                 .and_then(|cwd| {
-                    self.active_block_session_id()
-                        .and_then(|active_session_id| {
-                            self.sessions.as_ref(ctx).get(active_session_id)
-                        })
-                        .and_then(|active_session| {
-                            active_session
-                                .launch_data()
-                                .and_then(|data| data.maybe_convert_absolute_path(cwd))
-                        })
+                    let active_session =
+                        self.active_block_session_id()
+                            .and_then(|active_session_id| {
+                                self.sessions.as_ref(ctx).get(active_session_id)
+                            });
+                    match active_session
+                        .as_ref()
+                        .and_then(|session| session.launch_data())
+                    {
+                        Some(launch_data) => launch_data.maybe_convert_absolute_path(cwd),
+                        // The session hasn't reported launch data yet (e.g. the shell hasn't
+                        // attached after a restore), so there's no shell-informed conversion to
+                        // apply. Fall back to the session's own native-path conversion (which
+                        // still accounts for WSL) rather than discarding a known metadata CWD.
+                        None => active_session.and_then(|session| {
+                            session
+                                .maybe_convert_to_native_path(&TypedPath::unix(cwd))
+                                .ok()
+                        }),
+                    }
                 })
                 // Checking if the pwd from the active session actually exists
                 // and if not (ie. directory was removed) - return None.
