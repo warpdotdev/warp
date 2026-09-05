@@ -13240,6 +13240,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sum_tree_bench"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "libc",
+ "sum_tree",
+]
+
+[[package]]
 name = "svgtypes"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
