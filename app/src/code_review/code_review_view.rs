@@ -3233,18 +3233,10 @@ impl CodeReviewView {
                 });
             }
             LocalCodeEditorEvent::CommentSaved { comment } => {
-                // Use `file_location()` to preserve host identity for
-                // remote editors. The comment batch is already host-scoped
-                // (keyed by the repo `LocalOrRemotePath` in
-                // `WorkingDirectoriesModel.comment_models`), but encoding
-                // the host on the comment target keeps later helpers
-                // honest.
-                let Some(file_location) = editor.as_ref(ctx).file_location().cloned() else {
-                    report_error!(
-                        "Attempted to attach code review comment to a LocalCodeEditorView without a file path"
-                    );
-                    return;
-                };
+                // Use the passed-in `file_location` directly. For deleted files,
+                // the editor does not have a backing file model/metadata, but the
+                // event handler has access to the correct `LocalOrRemotePath`.
+                let file_location = file_location.clone();
                 let base = self.get_diff_base(ctx).ok();
                 let head = self.get_current_head(ctx);
                 let comment_with_file_context = AttachedReviewComment::from_editor_review_comment(
@@ -3454,10 +3446,10 @@ impl CodeReviewView {
                     local_editor.reset_with_state(state, ctx);
                 }
                 #[cfg(not(target_family = "wasm"))]
-                if !is_deleted_file {
-                    // We only want to recompute diff is the file is loaded. If not, we can rely on the file load event
-                    // for diff computation.
-                    let file_loaded = local_editor.file_loaded(ctx);
+                {
+                    // We only want to recompute diff if the file is loaded (or deleted, since deleted files
+                    // have empty current content and will not trigger a separate file load event).
+                    let file_loaded = is_deleted_file || local_editor.file_loaded(ctx);
 
                     local_editor.editor().update(ctx, |editor, ctx| {
                         editor.set_base(file_content, file_loaded, ctx);
@@ -4316,8 +4308,18 @@ impl CodeReviewView {
                     content,
                 } => {
                     if let Some(line_number) = line.line_number() {
+                        // Empty/deleted files require a 0-length range. Standard file pure
+                        // deletions (which have empty line_ranges) should not collapse to 0,
+                        // so we check that line_number == 0 to restrict this to empty/deleted files.
+                        let is_empty_file = line_number == LineCount::from(0)
+                            && line.line_range().start == line.line_range().end;
+                        let span = if is_empty_file {
+                            content.lines_added
+                        } else {
+                            content.lines_added.max(LineCount::from(1))
+                        };
                         let hunk = DiffSetHunk {
-                            line_range: line_number..line_number + 1,
+                            line_range: line_number..line_number + span,
                             diff_content: content.content.clone(),
                             lines_added: content.lines_added.as_u32(),
                             lines_removed: content.lines_removed.as_u32(),
