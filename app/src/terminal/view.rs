@@ -2985,6 +2985,11 @@ pub struct TerminalView {
     /// State handle for the shimmering text animation in the remote server loading footer.
     /// Persisted across renders so the animation doesn't restart.
     remote_server_shimmer_handle: ShimmeringTextStateHandle,
+
+    /// State handle for the shimmering text animation shown while a shared session viewer
+    /// or conversation transcript is loading. Persisted across renders so the animation
+    /// doesn't restart.
+    viewer_loading_shimmer_handle: ShimmeringTextStateHandle,
 }
 
 /// Parameters stashed when a code review pane open is requested with
@@ -4425,6 +4430,7 @@ impl TerminalView {
             focus_handle: None,
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
+            viewer_loading_shimmer_handle: ShimmeringTextStateHandle::new(),
             active_block_metadata: None,
             canonical_session_pwd_cache: RefCell::new(None),
             block_text_selection_start_position: None,
@@ -24730,29 +24736,15 @@ impl TerminalView {
     }
 
     fn render_viewer_loading(&self, app: &AppContext) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        let color = appearance
-            .theme()
-            .sub_text_color(appearance.theme().background());
+        let shimmer_element = shimmering_warp_loading_text(
+            "Loading session...",
+            14.,
+            self.viewer_loading_shimmer_handle.clone(),
+            app,
+        );
 
         SavePosition::new(
-            Align::new(
-                Flex::column()
-                    .with_child(
-                        ConstrainedBox::new(Icon::new("bundled/svg/refresh.svg", color).finish())
-                            .with_height(16.)
-                            .with_width(16.)
-                            .finish(),
-                    )
-                    .with_child(
-                        Text::new_inline("Loading session...", appearance.ui_font_family(), 14.)
-                            .with_color(color.into())
-                            .finish(),
-                    )
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .finish(),
-            )
-            .finish(),
+            Align::new(shimmer_element).finish(),
             &self.content_element_position_id,
         )
         .finish()
