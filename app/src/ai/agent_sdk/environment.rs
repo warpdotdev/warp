@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use comfy_table::Cell;
 use cynic::QueryBuilder;
+use futures::future;
 use inquire::error::InquireError;
 use inquire::{Confirm, Select};
 use serde::Serialize;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
-use warp_cli::scope::ObjectScope;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::list_warp_dev_images::{
     ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
@@ -63,8 +64,10 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| EnvironmentCommandRunner);
     match command {
-        EnvironmentCommand::List => {
-            runner.update(ctx, |runner, ctx| runner.list(global_options, ctx));
+        EnvironmentCommand::List { team_selection } => {
+            runner.update(ctx, |runner, ctx| {
+                runner.list(global_options, team_selection, ctx)
+            });
             Ok(())
         }
         EnvironmentCommand::Create {
@@ -184,24 +187,36 @@ impl EnvironmentCommandRunner {
         });
     }
 
-    fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
-        let initial_sync = UpdateManager::as_ref(ctx)
-            .initial_load_complete()
-            .with_timeout(WARP_DRIVE_SYNC_TIMEOUT);
+    fn list(
+        &self,
+        global_options: GlobalOptions,
+        team_selection: TeamSelection,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
+        let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
 
-        ctx.spawn(initial_sync, move |_, result, ctx| {
-            if result.is_err() {
-                super::report_fatal_error(
-                    anyhow::anyhow!("Timed out waiting for Warp Drive to sync"),
-                    ctx,
-                );
+        ctx.spawn(setup_future, move |_, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
                 return;
             }
+            let team_scope = match super::common::resolve_team_scope(&team_selection, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             let environments = CloudAmbientAgentEnvironment::get_all(ctx);
 
             let environment_infos: Vec<_> = environments
                 .iter()
+                .filter(|environment| {
+                    super::common::environment_is_visible_to_scope(environment, &team_scope)
+                })
                 .map(|environment| {
                     let name = environment.model().string_model.name.clone();
                     let description = environment.model().string_model.description.clone();

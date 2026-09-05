@@ -101,6 +101,13 @@ impl TeamScope for TeamContext<'_> {
 /// memberships instead of from a window.
 #[cfg(not(target_family = "wasm"))]
 pub struct TeamScopeForCli(Option<ServerId>);
+#[cfg(not(target_family = "wasm"))]
+impl TeamScopeForCli {
+    /// A teamless scope selected explicitly with a personal CLI flag.
+    pub(crate) fn personal() -> Self {
+        Self(None)
+    }
+}
 
 #[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}

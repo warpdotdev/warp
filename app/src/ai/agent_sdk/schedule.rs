@@ -51,6 +51,13 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 super::report_fatal_error(err, ctx);
                 return;
             }
+            let team_scope = match super::common::resolve_environment_team_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
 
             let loaded_file = match args.config_file.file.as_deref() {
                 Some(path) => match super::config_file::load_config_file(path) {
@@ -73,22 +80,22 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 environment_args.environment = Some(environment_id);
             }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
-                Ok(EnvironmentChoice::None) => {
-                    eprintln!("Scheduling agent to run without an environment.");
-                    None
-                }
-                Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
-                Err(ResolveConfigurationError::Canceled) => {
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                    return;
-                }
-                Err(err) => {
-                    super::report_fatal_error(anyhow::anyhow!(err), ctx);
-                    return;
-                }
-            };
+            let environment_id =
+                match EnvironmentChoice::resolve_for_create(environment_args, &team_scope, ctx) {
+                    Ok(EnvironmentChoice::None) => {
+                        eprintln!("Scheduling agent to run without an environment.");
+                        None
+                    }
+                    Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
+                    Err(ResolveConfigurationError::Canceled) => {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                        return;
+                    }
+                    Err(err) => {
+                        super::report_fatal_error(anyhow::anyhow!(err), ctx);
+                        return;
+                    }
+                };
 
             let owner = match super::common::resolve_owner(&args.scope, ctx) {
                 Ok(owner) => owner,

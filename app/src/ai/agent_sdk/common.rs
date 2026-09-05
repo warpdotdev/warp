@@ -29,7 +29,7 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
 };
-use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope as _, UserWorkspaces};
+use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope, UserWorkspaces};
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -147,14 +147,24 @@ fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext)
     }
 }
 
-/// The team a CLI command's policy reads are scoped to.
-fn resolve_team_scope(
+/// The team a CLI command acts within.
+pub(super) fn resolve_team_scope(
     team_selection: &TeamSelection,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {
     UserWorkspaces::as_ref(ctx)
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+pub(super) fn resolve_environment_team_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    if scope.personal {
+        Ok(TeamScopeForCli::personal())
+    } else {
+        resolve_team_scope(&scope.team_selection, ctx)
+    }
 }
 
 /// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
@@ -213,13 +223,14 @@ pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Ow
     }
 }
 
-/// Checks `--team` against the caller's memberships, for commands that leave the owner for the
-/// server to resolve.
-pub fn validate_team_scope(team_selection: &TeamSelection, ctx: &AppContext) -> anyhow::Result<()> {
-    if !team_selection.is_team() {
-        return Ok(());
+pub(super) fn environment_is_visible_to_scope(
+    environment: &CloudAmbientAgentEnvironment,
+    team_scope: &(impl TeamScope + ?Sized),
+) -> bool {
+    match environment.permissions().owner {
+        Owner::User { .. } => true,
+        Owner::Team { team_uid } => team_scope.team_uid() == Some(team_uid),
     }
-    resolve_team_scope(team_selection, ctx).map(|_| ())
 }
 
 /// Refresh workspace metadata before executing an operation.
@@ -324,10 +335,11 @@ pub enum EnvironmentChoice {
 }
 
 impl EnvironmentChoice {
-    /// Resolve the environment to use when creating an agent integration.
+    /// Resolve the environment to use when creating an agent operation.
     /// Warp Drive *must* have been synced first.
     pub fn resolve_for_create(
         args: EnvironmentCreateArgs,
+        team_scope: &(impl TeamScope + ?Sized),
         ctx: &AppContext,
     ) -> Result<Self, ResolveConfigurationError> {
         if args.no_environment {
@@ -339,6 +351,7 @@ impl EnvironmentChoice {
             let mut synced_environments: Vec<(ServerId, &CloudAmbientAgentEnvironment)> =
                 all_environments
                     .iter()
+                    .filter(|env| environment_is_visible_to_scope(env, team_scope))
                     .filter_map(|env| {
                         if let SyncId::ServerId(server_id) = env.sync_id() {
                             Some((server_id, env))

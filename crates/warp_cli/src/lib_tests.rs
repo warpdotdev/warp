@@ -2262,6 +2262,43 @@ fn environment_image_list_parses() {
 
     assert!(matches!(image_cmd, ImageCommand::List));
 }
+fn parse_environment_list(args: &[&str]) -> crate::scope::TeamSelection {
+    let full_args = std::iter::once("warp")
+        .chain(["environment", "list"])
+        .chain(args.iter().copied());
+    let args = Args::try_parse_from(full_args).expect("environment list args should parse");
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment list` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::List { team_selection }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment list` command");
+    };
+
+    team_selection.clone()
+}
+
+#[test]
+fn environment_list_defaults_to_implicit_team_selection() {
+    let team_selection = parse_environment_list(&[]);
+
+    assert_eq!(team_selection.team, None);
+}
+
+#[test]
+fn environment_list_accepts_bare_team_selection() {
+    let team_selection = parse_environment_list(&["--team"]);
+
+    assert_eq!(team_selection.team, Some(None));
+}
+
+#[test]
+fn environment_list_accepts_explicit_team_selection() {
+    let team_selection = parse_environment_list(&["--team=123"]);
+
+    assert_eq!(team_selection.team, Some(Some("123".to_string())));
+}
 
 #[test]
 fn environment_create_accepts_description() {

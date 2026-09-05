@@ -1,11 +1,17 @@
 use std::collections::HashMap;
 
+use warp_cli::environment::EnvironmentCreateArgs;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warpui::App;
 
 use super::{
-    classify_agent_mode_base_model_id, parse_ambient_task_id, validate_agent_mode_base_model_id,
+    EnvironmentChoice, classify_agent_mode_base_model_id, environment_is_visible_to_scope,
+    parse_ambient_task_id, resolve_environment_team_scope, validate_agent_mode_base_model_id,
 };
 use crate::LaunchMode;
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{
     AvailableLLMs, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMProvider, LLMUsageMetadata,
@@ -15,13 +21,181 @@ use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions, Owner};
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
+use crate::settings::PrivacySettings;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::{TeamlessScopeForTest, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamScope, TeamlessScopeForTest, UserWorkspaces,
+};
+
+fn environment_with_owner(
+    sync_id: SyncId,
+    name: &str,
+    owner: Owner,
+) -> CloudAmbientAgentEnvironment {
+    let environment = AmbientAgentEnvironment::new(
+        name.to_string(),
+        None,
+        Vec::new(),
+        "ubuntu:latest".to_string(),
+        Vec::new(),
+    );
+    let mut permissions = CloudObjectPermissions::mock_personal();
+    permissions.owner = owner;
+    CloudAmbientAgentEnvironment::new(
+        sync_id,
+        CloudAmbientAgentEnvironmentModel::new(environment),
+        CloudObjectMetadata::mock(),
+        permissions,
+    )
+}
+
+#[test]
+fn environment_scope_includes_personal_and_matching_team_environments() {
+    let selected_team_uid = ServerId::from(123);
+    let other_team_uid = ServerId::from(456);
+    let selected_scope = TeamContextForOperation::new_for_test(selected_team_uid);
+    let personal_environment = environment_with_owner(
+        SyncId::ServerId(ServerId::from(1)),
+        "Personal",
+        Owner::mock_current_user(),
+    );
+    let selected_team_environment = environment_with_owner(
+        SyncId::ServerId(ServerId::from(2)),
+        "Selected team",
+        Owner::Team {
+            team_uid: selected_team_uid,
+        },
+    );
+    let other_team_environment = environment_with_owner(
+        SyncId::ServerId(ServerId::from(3)),
+        "Other team",
+        Owner::Team {
+            team_uid: other_team_uid,
+        },
+    );
+
+    assert!(environment_is_visible_to_scope(
+        &personal_environment,
+        &selected_scope
+    ));
+    assert!(environment_is_visible_to_scope(
+        &selected_team_environment,
+        &selected_scope
+    ));
+    assert!(!environment_is_visible_to_scope(
+        &other_team_environment,
+        &selected_scope
+    ));
+}
+
+#[test]
+fn multi_team_personal_scope_includes_only_personal_environments() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(PrivacySettings::mock);
+        let user_workspaces = app.add_singleton_model(UserWorkspaces::default_mock);
+        user_workspaces.update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.setup_test_workspace(ctx);
+            user_workspaces.update_current_workspace(
+                |workspace| {
+                    let mut second_team = workspace.teams[0].clone();
+                    second_team.uid = ServerId::from(456);
+                    second_team.name = "Second team".to_string();
+                    workspace.teams.push(second_team);
+                },
+                ctx,
+            );
+        });
+        let implicit_scope = app.read(|ctx| {
+            resolve_environment_team_scope(
+                &ObjectScope {
+                    team_selection: TeamSelection { team: None },
+                    personal: false,
+                },
+                ctx,
+            )
+        });
+        let personal_scope = app
+            .read(|ctx| {
+                resolve_environment_team_scope(
+                    &ObjectScope {
+                        team_selection: TeamSelection { team: None },
+                        personal: true,
+                    },
+                    ctx,
+                )
+            })
+            .expect("explicit personal scope should not require a sole team");
+        let personal_environment = environment_with_owner(
+            SyncId::ServerId(ServerId::from(1)),
+            "Personal",
+            Owner::mock_current_user(),
+        );
+        let team_environment = environment_with_owner(
+            SyncId::ServerId(ServerId::from(2)),
+            "Team",
+            Owner::Team {
+                team_uid: ServerId::from(123),
+            },
+        );
+
+        assert!(implicit_scope.is_err());
+        assert_eq!(personal_scope.team_uid(), None);
+        assert!(environment_is_visible_to_scope(
+            &personal_environment,
+            &personal_scope
+        ));
+        assert!(!environment_is_visible_to_scope(
+            &team_environment,
+            &personal_scope
+        ));
+    });
+}
+
+#[test]
+fn explicit_environment_id_remains_resource_authoritative() {
+    App::test((), |mut app| async move {
+        let cloud_model = app.add_singleton_model(CloudModel::mock);
+        let server_id = ServerId::from(123);
+        let sync_id = SyncId::ServerId(server_id);
+        let team_environment = environment_with_owner(
+            sync_id,
+            "Other team",
+            Owner::Team {
+                team_uid: ServerId::from(456),
+            },
+        );
+        cloud_model.update(&mut app, |model, ctx| {
+            model.create_object(sync_id, team_environment, ctx);
+        });
+
+        let choice = app.update(|ctx| {
+            EnvironmentChoice::resolve_for_create(
+                EnvironmentCreateArgs {
+                    environment: Some(server_id.to_string()),
+                    no_environment: false,
+                },
+                &TeamlessScopeForTest,
+                ctx,
+            )
+        });
+
+        assert_eq!(
+            choice.unwrap(),
+            EnvironmentChoice::Environment {
+                id: server_id.to_string(),
+                name: "Other team".to_string(),
+            }
+        );
+    });
+}
 
 #[test]
 fn parse_ambient_task_id_accepts_valid_ids() {
