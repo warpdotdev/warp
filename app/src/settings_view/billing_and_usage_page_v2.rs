@@ -241,7 +241,12 @@ impl ClassifiedGrants {
             if grant.request_credits_remaining <= 0 {
                 continue;
             }
-            if grant.grant_type == BonusGrantType::AmbientOnly {
+            // Only grants of a known interactive-spendable type are shown as
+            // balance cards here (ambient-only credits are surfaced
+            // separately). A grant type this client doesn't recognize
+            // (`Other`) is excluded rather than assumed spendable, to avoid
+            // overstating the user's available credit.
+            if grant.grant_type != BonusGrantType::Any {
                 continue;
             }
             match grant.scope {
