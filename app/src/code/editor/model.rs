@@ -313,6 +313,14 @@ pub struct CodeEditorModel {
     lazy_layout_initialized: bool,
     /// Whether syntax parsing should be bootstrapped from the latest full buffer content.
     pending_syntax_tree_bootstrap: bool,
+    /// Whether ordinary `ContentChanged` events (`handle_content_model_event`) recompute the
+    /// diff. Editors that can never show diff UI should disable this, since otherwise every
+    /// content change pays the cost of materializing the full buffer text and diffing it
+    /// against the base, regardless of whether anything reads the result. This does NOT gate
+    /// diff base maintenance (`reset_content`/`set_base` always maintain it) or the other
+    /// `compute_diff` call sites (`set_base`'s `recompute_diff` path and the `ContentReplaced`
+    /// hidden-lines path) — no live caller combines either of those with a gated editor today.
+    diff_tracking_enabled: bool,
 }
 
 impl CodeEditorModel {
@@ -470,6 +478,7 @@ impl CodeEditorModel {
             lazy_layout_enabled,
             lazy_layout_initialized,
             pending_syntax_tree_bootstrap: false,
+            diff_tracking_enabled: true,
         }
     }
 
@@ -608,6 +617,10 @@ impl CodeEditorModel {
         context_lines: usize,
         ctx: &mut ModelContext<Self>,
     ) {
+        // The `DelayRenderingTrigger::DiffUpdate` installed below is only ever released by
+        // `compute_diff` emitting `DiffModelEvent::DiffUpdated`; with diff tracking disabled
+        // that never happens, permanently stalling render flushes for this editor.
+        debug_assert!(self.diff_tracking_enabled);
         let buffer_version = self.buffer_version(ctx);
 
         self.hide_lines_outside_of_active_diff = Some(context_lines);
@@ -672,6 +685,13 @@ impl CodeEditorModel {
 
     pub fn diff(&self) -> &ModelHandle<DiffModel> {
         &self.diff
+    }
+
+    /// Enables or disables diff tracking (see the `diff_tracking_enabled` field's doc comment).
+    /// Should be set once, before the editor receives any content changes: editors that can
+    /// never show diff UI should disable it to skip the per-edit cost of maintaining diff state.
+    pub fn set_diff_tracking_enabled(&mut self, enabled: bool) {
+        self.diff_tracking_enabled = enabled;
     }
 
     pub fn hovered_symbol_range(&self) -> Option<&HoverableLink> {
@@ -1586,7 +1606,11 @@ impl CodeEditorModel {
                 selection_model_id,
             } => {
                 let buffer = self.content().as_ref(ctx);
-                let content = buffer.text();
+                // Snapshot the buffer text atomically with `buffer_version`, before any other
+                // model update below runs. Materializing the full buffer text is an O(document
+                // size) copy, so skip it entirely for editors that can never show diff UI
+                // rather than paying that cost on every keystroke.
+                let content = self.diff_tracking_enabled.then(|| buffer.text());
                 if self.should_defer_syntax_tree_parsing() {
                     self.pending_syntax_tree_bootstrap = true;
                 } else {
@@ -1635,9 +1659,11 @@ impl CodeEditorModel {
                     }
                 }
 
-                self.diff.update(ctx, move |diff, ctx| {
-                    diff.compute_diff(content, *buffer_version, ctx)
-                });
+                if let Some(content) = content {
+                    self.diff.update(ctx, move |diff, ctx| {
+                        diff.compute_diff(content, *buffer_version, ctx)
+                    });
+                }
 
                 // If we are delaying rendering, push these updates to the delay rendering state. Otherwise, flush them to diff and rendering model.
                 if let Some(delay_rendering) = &mut self.delay_rendering {
