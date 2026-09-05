@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use crate::context_chips::context_chip::GeneratorContext;
+use crate::context_chips::display_chip::OperatingSystemLogo;
 use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
-use crate::terminal::model::session::{BootstrapSessionType, Session, SessionInfo};
+use crate::terminal::model::session::{BootstrapSessionType, HostInfo, Session, SessionInfo};
 
 #[test]
 fn test_working_directory() {
@@ -95,6 +96,96 @@ fn test_remote_sessions() {
             .and_then(|v| v.as_text()),
         Some("remote-user@remote-host")
     );
+}
+
+#[test]
+fn test_operating_system_prefers_linux_distribution() {
+    let session = Session::new(
+        SessionInfo::new_for_test().with_host_info(HostInfo {
+            os_category: Some("Linux".to_string()),
+            linux_distribution: Some("Fedora Linux".to_string()),
+        }),
+        Arc::new(TestCommandExecutor {}),
+    );
+    let ctx = GeneratorContext {
+        active_block_metadata: &BlockMetadata::new(Some(session.id()), None),
+        active_session: Some(&session),
+        current_environment: &Default::default(),
+    };
+
+    let Some(crate::context_chips::ChipValue::OperatingSystem(info)) =
+        super::operating_system(&ctx)
+    else {
+        panic!("expected operating system chip value");
+    };
+    assert_eq!(info.name(), "Fedora Linux");
+    assert_eq!(info.logo(), OperatingSystemLogo::Fedora);
+}
+
+#[test]
+fn test_operating_system_uses_linux_fallback_for_unsupported_distro() {
+    let session = Session::new(
+        SessionInfo::new_for_test().with_host_info(HostInfo {
+            os_category: Some("Linux".to_string()),
+            linux_distribution: Some("Red Hat Enterprise Linux".to_string()),
+        }),
+        Arc::new(TestCommandExecutor {}),
+    );
+    let ctx = GeneratorContext {
+        active_block_metadata: &BlockMetadata::new(Some(session.id()), None),
+        active_session: Some(&session),
+        current_environment: &Default::default(),
+    };
+
+    let Some(crate::context_chips::ChipValue::OperatingSystem(info)) =
+        super::operating_system(&ctx)
+    else {
+        panic!("expected operating system chip value");
+    };
+    assert_eq!(info.name(), "Red Hat Enterprise Linux");
+    assert_eq!(info.logo(), OperatingSystemLogo::Linux);
+}
+
+#[test]
+fn test_operating_system_uses_os_category_when_distribution_is_absent() {
+    let session = Session::new(
+        SessionInfo::new_for_test().with_host_info(HostInfo {
+            os_category: Some("MacOS".to_string()),
+            linux_distribution: None,
+        }),
+        Arc::new(TestCommandExecutor {}),
+    );
+    let ctx = GeneratorContext {
+        active_block_metadata: &BlockMetadata::new(Some(session.id()), None),
+        active_session: Some(&session),
+        current_environment: &Default::default(),
+    };
+
+    let Some(crate::context_chips::ChipValue::OperatingSystem(info)) =
+        super::operating_system(&ctx)
+    else {
+        panic!("expected operating system chip value");
+    };
+    assert_eq!(info.name(), "macOS");
+    assert_eq!(info.logo(), OperatingSystemLogo::MacOS);
+}
+
+#[test]
+fn test_operating_system_uses_unknown_fallback_when_unidentified() {
+    let session = Session::test();
+    let ctx = GeneratorContext {
+        active_block_metadata: &BlockMetadata::new(Some(session.id()), None),
+        active_session: Some(&session),
+        current_environment: &Default::default(),
+    };
+
+    let Some(crate::context_chips::ChipValue::OperatingSystem(info)) =
+        super::operating_system(&ctx)
+    else {
+        panic!("expected operating system chip value");
+    };
+    assert_eq!(info.name(), "Unknown OS");
+    assert_eq!(info.logo(), super::OperatingSystemLogo::Unknown);
 }
 
 #[test]

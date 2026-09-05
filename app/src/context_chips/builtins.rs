@@ -5,6 +5,8 @@ use warp_util::path::user_friendly_path;
 
 use super::ChipValue;
 use super::context_chip::{GeneratorContext, ShellCommand, ShellCommandGenerator};
+use super::display_chip::{OperatingSystemInfo, OperatingSystemLogo};
+use crate::terminal::model::session::HostInfo;
 use crate::terminal::shell::ShellType;
 
 #[cfg(test)]
@@ -30,6 +32,74 @@ pub fn username(ctx: &GeneratorContext) -> Option<ChipValue> {
 pub fn hostname(ctx: &GeneratorContext) -> Option<ChipValue> {
     ctx.active_session
         .map(|session| ChipValue::Text(session.hostname().to_owned()))
+}
+
+pub fn operating_system(ctx: &GeneratorContext) -> Option<ChipValue> {
+    let session = ctx.active_session?;
+    Some(ChipValue::OperatingSystem(
+        operating_system_info_from_parts(&session.host_info(), session.wsl_distro_name()),
+    ))
+}
+
+fn operating_system_info_from_parts(
+    host_info: &HostInfo,
+    wsl_distro_name: Option<&str>,
+) -> OperatingSystemInfo {
+    let linux_name =
+        non_empty(host_info.linux_distribution.as_deref()).or(non_empty(wsl_distro_name));
+    if let Some(linux_name) = linux_name {
+        return OperatingSystemInfo::new(
+            linux_name.to_string(),
+            linux_distribution_logo(linux_name).unwrap_or(OperatingSystemLogo::Linux),
+        );
+    }
+
+    if let Some(os_category) = non_empty(host_info.os_category.as_deref()) {
+        let normalized = normalized_os_name(os_category);
+        if normalized.contains("windows") {
+            return OperatingSystemInfo::new("Windows", OperatingSystemLogo::Windows);
+        }
+        if normalized.contains("macos")
+            || normalized.contains("mac os")
+            || normalized.contains("darwin")
+        {
+            return OperatingSystemInfo::new("macOS", OperatingSystemLogo::MacOS);
+        }
+        if normalized == "linux" {
+            return OperatingSystemInfo::new("Linux", OperatingSystemLogo::Linux);
+        }
+        return OperatingSystemInfo::new(os_category.to_string(), OperatingSystemLogo::Unknown);
+    }
+
+    OperatingSystemInfo::new("Unknown OS", OperatingSystemLogo::Unknown)
+}
+
+fn linux_distribution_logo(name: &str) -> Option<OperatingSystemLogo> {
+    let normalized = normalized_os_name(name);
+    if normalized.contains("ubuntu") {
+        Some(OperatingSystemLogo::Ubuntu)
+    } else if normalized.contains("debian") {
+        Some(OperatingSystemLogo::Debian)
+    } else if normalized.contains("kali") {
+        Some(OperatingSystemLogo::Kali)
+    } else if normalized.contains("arch") {
+        Some(OperatingSystemLogo::Arch)
+    } else if normalized.contains("fedora") {
+        Some(OperatingSystemLogo::Fedora)
+    } else {
+        None
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.and_then(|value| {
+        let value = value.trim();
+        if value.is_empty() { None } else { Some(value) }
+    })
+}
+
+fn normalized_os_name(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
 }
 
 /// Generator function that shows the current Python virtual environment.
