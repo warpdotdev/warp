@@ -7111,8 +7111,11 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
  "uuid",
  "warpui_core",
+ "windows 0.62.2",
 ]
 
 [[package]]

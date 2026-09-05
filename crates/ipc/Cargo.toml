@@ -25,3 +25,18 @@ parking_lot.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 interprocess = {version = "1.2.1", features = ["tokio_support"]}
+
+# Used on Windows to create the single-instance URI named pipe with an explicit security
+# descriptor (see `native.rs`), since the `interprocess` crate does not expose a way to customize
+# a named pipe's security attributes.
+[target.'cfg(windows)'.dependencies]
+tokio = { workspace = true, features = ["net", "sync"] }
+tokio-util = { workspace = true, features = ["compat"] }
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+  "Win32_System_SystemServices",
+] }
