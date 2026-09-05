@@ -74,6 +74,7 @@ pub struct RunnerConfig {
     pub arch: RunnerArch,
     pub mac: Option<MacOsConfig>,
     pub linux: Option<LinuxConfig>,
+    pub factory_uid: Option<cynic::Id>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

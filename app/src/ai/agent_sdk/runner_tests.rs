@@ -1,7 +1,8 @@
 use super::{
-    RunnerArch, RunnerArchArg, RunnerOsArg, confirm_delete, merge_instance_shape, resolve_arch,
-    resolve_updated_name,
+    RunnerArch, RunnerArchArg, RunnerInfo, RunnerOsArg, confirm_delete, merge_instance_shape,
+    resolve_arch, resolve_updated_name,
 };
+use chrono::Utc;
 
 #[test]
 fn confirm_delete_refuses_non_interactive_without_force() {
@@ -77,4 +78,33 @@ fn resolve_updated_name_renames_only_with_uid() {
     assert_eq!(resolve_updated_name(true, None, "old"), "old");
     // No UID: --name is the selector, so the name is unchanged.
     assert_eq!(resolve_updated_name(false, Some("old"), "old"), "old");
+}
+
+#[test]
+fn runner_info_serializes_nullable_factory_uid() {
+    let mut info = RunnerInfo {
+        uid: "runner-123".to_string(),
+        name: "Factory runner".to_string(),
+        description: None,
+        os: "Linux".to_string(),
+        arch: "x86-64".to_string(),
+        vcpus: None,
+        memory_gb: None,
+        docker_image: None,
+        macos_version: None,
+        factory_uid: Some("factory-123".to_string()),
+        scope: "Team".to_string(),
+        setup_commands: Vec::new(),
+        last_updated_display: "now".to_string(),
+        last_updated_utc: Utc::now(),
+    };
+
+    let json = serde_json::to_value(&info).expect("RunnerInfo should serialize");
+
+    assert_eq!(json["factory_uid"], "factory-123");
+
+    info.factory_uid = None;
+    let json = serde_json::to_value(&info).expect("RunnerInfo should serialize");
+
+    assert!(json["factory_uid"].is_null());
 }
