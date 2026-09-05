@@ -3891,6 +3891,90 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
     });
 }
 
+#[test]
+fn test_background_ssh_remote_server_choice_does_not_steal_pane_focus() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let pane_group = mock_pane_group(
+            &mut app,
+            MockOptions {
+                layout: PanesLayout::Template(PaneTemplateType::PaneBranchTemplate {
+                    split_direction:
+                        crate::launch_configs::launch_config::SplitDirection::Horizontal,
+                    panes: vec![
+                        PaneTemplateType::PaneTemplate {
+                            is_focused: Some(true),
+                            cwd: "/".into(),
+                            commands: vec![],
+                            pane_mode: PaneMode::Terminal,
+                            shell: None,
+                        },
+                        PaneTemplateType::PaneTemplate {
+                            is_focused: None,
+                            cwd: "/".into(),
+                            commands: vec![],
+                            pane_mode: PaneMode::Terminal,
+                            shell: None,
+                        },
+                    ],
+                }),
+                ..Default::default()
+            },
+        );
+
+        let (background_pane_id, foreground_pane_id) = pane_group.read(&app, |panes, _| {
+            (
+                panes.pane_id_from_index(0).expect("background pane"),
+                panes.pane_id_from_index(1).expect("foreground pane"),
+            )
+        });
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.focus_pane(foreground_pane_id, true, ctx);
+        });
+
+        let (background_terminal, foreground_terminal, dispatcher) =
+            pane_group.read(&app, |panes, ctx| {
+                let background_terminal = panes
+                    .terminal_view_from_pane_id(background_pane_id, ctx)
+                    .expect("background terminal");
+                let foreground_terminal = panes
+                    .terminal_view_from_pane_id(foreground_pane_id, ctx)
+                    .expect("foreground terminal");
+                let dispatcher = background_terminal
+                    .read(ctx, |terminal, _| terminal.model_event_dispatcher().clone());
+                (background_terminal, foreground_terminal, dispatcher)
+            });
+
+        foreground_terminal.update(&mut app, |_, ctx| {
+            assert!(ctx.is_self_or_child_focused());
+        });
+        background_terminal.update(&mut app, |_, ctx| {
+            assert!(!ctx.is_self_or_child_focused());
+        });
+
+        dispatcher.update(&mut app, |dispatcher, ctx| {
+            dispatcher.request_remote_server_block(warp_core::SessionId::from(42), ctx);
+        });
+        futures_lite::future::yield_now().await;
+
+        pane_group.read(&app, |panes, ctx| {
+            assert_eq!(panes.focused_pane_id(ctx), foreground_pane_id);
+            assert_eq!(
+                panes.active_session_id(ctx),
+                foreground_pane_id.as_terminal_pane_id()
+            );
+        });
+        foreground_terminal.update(&mut app, |_, ctx| {
+            assert!(ctx.is_self_or_child_focused());
+        });
+        background_terminal.update(&mut app, |_, ctx| {
+            assert!(!ctx.is_self_or_child_focused());
+        });
+    });
+}
+
 /// APP-5243: closing a file pane only hides it while undo-close is available, and the same view is
 /// reattached without reopening its file. Releasing the file on close would therefore leave a
 /// restored pane rendering content that can never update again. The file is released only once the

@@ -10056,11 +10056,17 @@ impl TerminalView {
     fn clear_ssh_blocks(&mut self, ctx: &mut ViewContext<Self>) {
         self.dismiss_warpify_banner(&RememberForWarpification::DoNotRememberSSHHost, ctx);
         if let Some(ssh_block) = self.warpify_state.ssh_block_state() {
+            // Removing a focused rich-content child clears its focus, so remember whether this
+            // terminal owned focus before removing the block. A background terminal must not
+            // reclaim application focus while replacing its SSH status block.
+            let should_redetermine_focus = ctx.is_self_or_child_focused();
             let view_id = ssh_block.get_block_view_id();
 
             self.remove_ssh_block_by_id(view_id);
 
-            self.redetermine_global_focus(ctx);
+            if should_redetermine_focus {
+                self.redetermine_global_focus(ctx);
+            }
 
             self.warpify_state.clear_ssh_block_state();
         }
@@ -13205,7 +13211,7 @@ impl TerminalView {
             ctx,
         );
 
-        self.redetermine_global_focus(ctx);
+        self.redetermine_terminal_focus(ctx);
     }
 
     /// Returns a clone of the `SshRemoteServerChoiceView` handle for the

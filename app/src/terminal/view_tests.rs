@@ -105,6 +105,53 @@ fn add_window_with_cloud_mode_terminal(app: &mut App) -> ViewHandle<TerminalView
     terminal
 }
 
+struct TwoTerminalTestView {
+    background: ViewHandle<TerminalView>,
+    foreground: ViewHandle<TerminalView>,
+}
+
+impl Entity for TwoTerminalTestView {
+    type Event = ();
+}
+
+impl View for TwoTerminalTestView {
+    fn ui_name() -> &'static str {
+        "TwoTerminalTestView"
+    }
+
+    fn render(&self, _app: &AppContext) -> Box<dyn Element> {
+        Flex::row()
+            .with_main_axis_size(warpui::elements::MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(Expanded::new(1., ChildView::new(&self.background).finish()).finish())
+            .with_child(Expanded::new(1., ChildView::new(&self.foreground).finish()).finish())
+            .finish()
+    }
+}
+
+impl TypedActionView for TwoTerminalTestView {
+    type Action = ();
+}
+
+fn add_window_with_two_terminals(
+    app: &mut App,
+) -> (ViewHandle<TerminalView>, ViewHandle<TerminalView>) {
+    let tips_model = app.add_model(|_| Default::default());
+    let (_, root) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+        let background = ctx
+            .add_typed_action_view(|ctx| TerminalView::new_for_test(tips_model.clone(), None, ctx));
+        let foreground = ctx
+            .add_typed_action_view(|ctx| TerminalView::new_for_test(tips_model.clone(), None, ctx));
+        TwoTerminalTestView {
+            background,
+            foreground,
+        }
+    });
+    root.read(app, |root, _| {
+        (root.background.clone(), root.foreground.clone())
+    })
+}
+
 /// Builds a resumable, owned (created by the current test user) Oz cloud task so
 /// `resolve_ai_query_routing` classifies a pane bound to it as a `NewCloudVm` follow-up target.
 fn owned_resumable_oz_task(task_id: AmbientAgentTaskId) -> AmbientAgentTask {
@@ -4093,6 +4140,76 @@ fn focused_terminal_publishes_remote_blocks_while_remote_session_ai_is_still_per
             );
         });
     })
+}
+
+#[test]
+fn focused_terminal_moves_focus_to_ssh_remote_server_choice() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+        let dispatcher = terminal.read(&app, |view, _| view.model_event_dispatcher().clone());
+        dispatcher.update(&mut app, |dispatcher, ctx| {
+            dispatcher.request_remote_server_block(SessionId::from(42), ctx);
+        });
+        futures_lite::future::yield_now().await;
+
+        terminal.update(&mut app, |view, ctx| {
+            let choice = view
+                .active_ssh_remote_server_choice_block()
+                .expect("SSH remote-server choice should be visible");
+            assert!(
+                choice.is_self_or_child_focused(ctx),
+                "the active terminal should move keyboard focus to the SSH choice"
+            );
+        });
+    });
+}
+
+#[test]
+fn background_terminal_replacing_ssh_block_does_not_steal_focus() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let (background_terminal, foreground_terminal) = add_window_with_two_terminals(&mut app);
+
+        let bootstrap_event = |session_id| SessionBootstrappedEvent {
+            session_id: SessionId::from(session_id),
+            spawning_command: "ssh example.com".to_string(),
+            shell: warp_terminal::shell::Shell::new(
+                warp_terminal::shell::ShellType::Zsh,
+                None,
+                None,
+                HashSet::new(),
+                Some("/bin/zsh".to_string()),
+            ),
+            subshell_info: None,
+            session_type: BootstrapSessionType::WarpifiedRemote,
+        };
+
+        background_terminal.update(&mut app, |view, ctx| {
+            view.add_bootstrap_success_block(bootstrap_event(42), ctx);
+        });
+        foreground_terminal.update(&mut app, |_view, ctx| ctx.focus_self());
+        foreground_terminal.update(&mut app, |_view, ctx| {
+            assert!(ctx.is_self_or_child_focused());
+        });
+
+        background_terminal.update(&mut app, |view, ctx| {
+            assert!(!ctx.is_self_or_child_focused());
+            view.add_bootstrap_success_block(bootstrap_event(43), ctx);
+        });
+
+        foreground_terminal.update(&mut app, |_view, ctx| {
+            assert!(
+                ctx.is_self_or_child_focused(),
+                "replacing an SSH status block in a background terminal must preserve focus"
+            );
+        });
+        background_terminal.update(&mut app, |_view, ctx| {
+            assert!(!ctx.is_self_or_child_focused());
+        });
+    });
 }
 
 /// The permission is re-minted on every decision from the focused terminal's handle, so an
