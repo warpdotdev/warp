@@ -194,6 +194,26 @@ fn sorted_tail_multiple_exchanges() {
 
 // ── Edge cases ────────────────────────────────────────────────────────
 
+// ── Retained-window boundary (APP-5257) ────────────────────────────────
+// `AIConversation::to_serialized_blocklist_items` keeps only the most recent
+// `MAX_RESTORED_COMMAND_BLOCKS` command blocks. An exchange whose command fell
+// outside that window no longer has a matching block, but it must still be
+// placed immediately before the oldest *retained* command block rather than
+// vanishing or being reordered.
+
+#[test]
+fn exchange_older_than_the_retained_window_attaches_to_the_oldest_retained_block() {
+    // The retained window starts at t=100; an exchange from t=1 (long before any
+    // retained block, because its own command was evicted by the cap) must attach
+    // to the oldest retained block rather than being dropped.
+    let blocks = vec![(bi(0), ts(100)), (bi(1), ts(200)), (bi(2), ts(300))];
+    let exchanges = vec![ts(1)];
+
+    let result = find_block_indices_for_exchange_timestamps(&blocks, &exchanges);
+
+    assert_eq!(result, vec![Some(bi(0))]);
+}
+
 #[test]
 fn empty_blocks_returns_none_for_all_exchanges() {
     let blocks: Vec<(BlockIndex, chrono::DateTime<Local>)> = vec![];

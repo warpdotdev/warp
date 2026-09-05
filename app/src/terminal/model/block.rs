@@ -108,7 +108,9 @@ impl TranscriptScope {
     }
 }
 
-pub(super) const MAX_SERIALIZED_STYLIZED_OUTPUT_LINES: usize = 5000;
+/// Maximum number of lines retained in a serialized block's `stylized_output`, keeping the
+/// most recent.
+pub(crate) const MAX_SERIALIZED_STYLIZED_OUTPUT_LINES: usize = 5000;
 
 /// Number of max lines to store that aren't stylized. We only store 50 lines as we only need
 /// non-stylized lines for command corrections and notifications whereas we need more lines for the
