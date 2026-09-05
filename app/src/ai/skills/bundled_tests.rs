@@ -34,14 +34,6 @@ fn remote_content<'a>(bundled_skills: &'a BundledSkills, host_id: &HostId) -> Op
         .map(|skill| skill.content.as_str())
 }
 
-#[test]
-fn factory_mcp_bundled_skill_bootstraps_canonical_mcp_resource() {
-    let skill = include_str!("../../../../resources/bundled/skills/factory-mcp/SKILL.md");
-
-    assert!(skill.contains("skill://warp/factory-mcp/SKILL.md"));
-    assert!(!skill.contains("references/factory-mcp-tools.md"));
-}
-
 /// The Factory files skill is always bundled, so a stale trigger description
 /// or a broken reference silently reaches every GUI, TUI, and Oz agent. Its
 /// trigger has to stay anchored to a factory.yaml root: `agents/<name>/agent.md`

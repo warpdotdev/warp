@@ -202,7 +202,23 @@ impl AgentDriver {
             })
             .await??;
         installations.extend(resolved_specs.ephemeral_installations);
-
+        let credentials = foreground
+            .spawn(|_, ctx| {
+                let auth_state = AuthStateProvider::as_ref(ctx).get();
+                (!auth_state.is_anonymous_or_logged_out())
+                    .then(|| auth_state.credentials())
+                    .flatten()
+            })
+            .await?;
+        if FeatureFlag::FactoryMcp.is_enabled()
+            && !installations.iter().any(|installation| {
+                installation.templatable_mcp_server().name == builtin::FACTORY_MCP_SERVER_NAME
+            })
+            && let Some(token) = credentials.as_ref().and_then(builtin::builtin_bearer_token)
+        {
+            log::info!("Attaching the built-in Factory MCP server to this agent run");
+            installations.push(builtin::factory_mcp_installation(&token));
+        }
         Self::mcp_installations_to_json(installations, secrets.as_ref())
     }
 
