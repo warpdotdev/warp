@@ -2296,6 +2296,89 @@ fn test_shared_followup_on_existing_conversation_converts_user_query_input() {
     });
 }
 
+fn shared_session_init_event(request_id: &str, conversation_token: &str) -> api::ResponseEvent {
+    api::ResponseEvent {
+        r#type: Some(api::response_event::Type::Init(
+            api::response_event::StreamInit {
+                request_id: request_id.to_string(),
+                conversation_id: conversation_token.to_string(),
+                run_id: String::new(),
+            },
+        )),
+    }
+}
+
+#[test]
+fn test_shared_session_init_settles_superseded_conversation_instead_of_warping_forever() {
+    // REMOTE-2538: a multi-agent shared session interleaves the orchestrator's and the subagents'
+    // streams. Only `StreamInit` carries a conversation id, so the orchestrator's stream becomes
+    // unreachable the moment a subagent's `StreamInit` replaces it — and without this fix its
+    // conversation stays `InProgress`, shimmering "Warping..." for the rest of the session.
+    App::test((), |mut app| async move {
+        let terminal = cloud_mode_terminal_for_test(&mut app);
+        let terminal_view_id = terminal.id();
+        let orchestrator_token = "orchestrator-conversation-token";
+        let subagent_token = "subagent-conversation-token";
+
+        let (orchestrator_id, subagent_id) =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+                let orchestrator_id =
+                    model.start_new_conversation(terminal_view_id, false, true, false, ctx);
+                model.set_server_conversation_token_for_conversation(
+                    orchestrator_id,
+                    orchestrator_token.to_string(),
+                );
+                let subagent_id =
+                    model.start_new_conversation(terminal_view_id, false, true, false, ctx);
+                model.set_server_conversation_token_for_conversation(
+                    subagent_id,
+                    subagent_token.to_string(),
+                );
+                (orchestrator_id, subagent_id)
+            });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.ai_controller.update(ctx, |controller, ctx| {
+                controller.handle_shared_session_response_event(
+                    shared_session_init_event("orchestrator-request", orchestrator_token),
+                    ctx,
+                );
+            });
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(
+                model.conversation_status(&orchestrator_id),
+                Some(&ConversationStatus::InProgress)
+            );
+        });
+
+        // The subagent's stream supersedes the orchestrator's, which never receives a `Finished`.
+        terminal.update(&mut app, |view, ctx| {
+            view.ai_controller.update(ctx, |controller, ctx| {
+                controller.handle_shared_session_response_event(
+                    shared_session_init_event("subagent-request", subagent_token),
+                    ctx,
+                );
+            });
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(
+                model.conversation_status(&orchestrator_id),
+                Some(&ConversationStatus::Success),
+                "a superseded shared-session stream must settle its conversation, since no later \
+                 event can ever reach it"
+            );
+            assert_eq!(
+                model.conversation_status(&subagent_id),
+                Some(&ConversationStatus::InProgress),
+                "the newly initialized stream stays in progress"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_non_owned_tombstone_is_removed_for_followup_and_reinserted_after_completion() {
     let _handoff_flag = FeatureFlag::HandoffCloudCloud.override_enabled(true);
