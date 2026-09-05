@@ -41,6 +41,7 @@ use crate::ai::agent::{
     AIAgentOutputMessage, ArtifactCreatedData, CancellationReason, MessageId, RenderableAIError,
     UploadArtifactResult,
 };
+use crate::ai::agent_sdk::driver::harness::harness_kind;
 use crate::ai::agent_sdk::task_env_vars;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -54,6 +55,22 @@ use crate::ai::llms::LLMId;
 use crate::ai::skills::SkillManager;
 use crate::test_util::assert_eventually;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+
+#[test]
+fn oz_hooks_runtime_is_not_enabled_for_third_party_harnesses() {
+    for harness in [
+        Harness::Claude,
+        Harness::Codex,
+        Harness::Gemini,
+        Harness::OpenCode,
+    ] {
+        assert!(
+            !harness_kind(harness).unwrap().uses_oz_lifecycle_hooks(),
+            "{harness} must retain its native hook behavior"
+        );
+    }
+    assert!(harness_kind(Harness::Oz).unwrap().uses_oz_lifecycle_hooks());
+}
 
 // ── IdleTimeoutSender tests ──────────────────────────────────────────────────────
 

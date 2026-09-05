@@ -7,12 +7,18 @@ use super::{FailReason, MAX_RECOVERY_ATTEMPTS, RecoveryAction, RecoveryBudget, r
 #[cfg(not(target_family = "wasm"))]
 use super::{ResponseStream, ResponseStreamId};
 #[cfg(not(target_family = "wasm"))]
+use crate::ai::agent::AIIdentifiers;
+#[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::api::RequestParams;
 // `agent_sdk` (and so the driver's recovery deadline) is native-only.
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::AUTO_RESUME_TIMEOUT;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::retry_strategies::backoff_after_attempts;
+#[cfg(not(target_family = "wasm"))]
+use crate::server::team_scope::RequestTeamScope;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
 // Argument order: has_received_client_actions, is_recoverable, recovery, is_online.
 
@@ -223,6 +229,37 @@ fn spending_an_attempt_preserves_resume_eligibility() {
         recovery_action(true, true, normal, true),
         RecoveryAction::Resume
     );
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn deferred_stream() -> ResponseStream {
+    ResponseStream::new_deferred(
+        RequestParams::new_for_test(),
+        AIIdentifiers::default(),
+        RecoveryBudget::fresh(),
+        RequestTeamScope::from_scope(&TeamlessScopeForTest),
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn deferred_request_start_is_single_use() {
+    let mut stream = deferred_stream();
+
+    assert!(stream.current_request_id.is_none());
+    assert!(stream.take_pending_start().is_some());
+    assert!(stream.take_pending_start().is_none());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn cancelled_deferred_request_cannot_start() {
+    let mut stream = deferred_stream();
+    stream.cancellation_tx.take();
+
+    assert!(stream.take_pending_start().is_none());
+    assert!(stream.pending_start.is_none());
+    assert!(stream.current_request_id.is_none());
 }
 
 #[cfg(not(target_family = "wasm"))]

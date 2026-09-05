@@ -456,11 +456,12 @@ impl BlocklistAIActionModel {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_oz_hook_session(
         &mut self,
+        conversation_id: AIConversationId,
         session: Option<OzHookSession>,
         ctx: &mut ModelContext<Self>,
     ) {
         self.executor.update(ctx, |executor, _| {
-            executor.set_oz_hook_session(session);
+            executor.set_oz_hook_session(conversation_id, session);
         });
     }
 

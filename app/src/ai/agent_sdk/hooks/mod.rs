@@ -29,6 +29,7 @@ pub(crate) struct OzHookSession {
     pub(crate) protocol_context: warp_multi_agent_api::OzHookContext,
     pub(crate) payload_context: payload::HookPayloadContext,
     pub(crate) redactor: redaction::HookRedactor,
+    pub(crate) is_driver_owned: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

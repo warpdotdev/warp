@@ -308,7 +308,7 @@ pub struct BlocklistAIActionExecutor {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     team_context_resolver: TeamContextResolver,
     #[cfg(not(target_family = "wasm"))]
-    oz_hook_session: Option<OzHookSession>,
+    oz_hook_sessions: std::collections::HashMap<AIConversationId, OzHookSession>,
     #[cfg(not(target_family = "wasm"))]
     oz_hook_approved_actions: std::collections::HashSet<AIAgentActionId>,
 }
@@ -407,15 +407,23 @@ impl BlocklistAIActionExecutor {
             ask_user_question_executor,
             wait_for_events_executor,
             #[cfg(not(target_family = "wasm"))]
-            oz_hook_session: None,
+            oz_hook_sessions: Default::default(),
             #[cfg(not(target_family = "wasm"))]
             oz_hook_approved_actions: Default::default(),
         }
     }
 
     #[cfg(not(target_family = "wasm"))]
-    pub(crate) fn set_oz_hook_session(&mut self, session: Option<OzHookSession>) {
-        self.oz_hook_session = session;
+    pub(crate) fn set_oz_hook_session(
+        &mut self,
+        conversation_id: AIConversationId,
+        session: Option<OzHookSession>,
+    ) {
+        if let Some(session) = session {
+            self.oz_hook_sessions.insert(conversation_id, session);
+        } else {
+            self.oz_hook_sessions.remove(&conversation_id);
+        }
     }
 
     pub fn async_executing_action(&self, action_id: &AIAgentActionId) -> Option<&AIAgentAction> {
@@ -708,7 +716,9 @@ impl BlocklistAIActionExecutor {
         }
 
         #[cfg(not(target_family = "wasm"))]
-        if !oz_preflight_complete && let Some(session) = self.oz_hook_session.clone() {
+        if !oz_preflight_complete
+            && let Some(session) = self.oz_hook_sessions.get(&conversation_id).cloned()
+        {
             let (tool_name, tool_input) = local_action_payload(&action.action, &session.redactor);
             let tool_use_id = action.id.to_string();
             let mut payload_context = session.payload_context.clone();
@@ -1025,7 +1035,7 @@ impl BlocklistAIActionExecutor {
         ctx: &mut ModelContext<Self>,
     ) {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(session) = self.oz_hook_session.clone() {
+        if let Some(session) = self.oz_hook_sessions.get(&running.conversation_id).cloned() {
             let action_id = running.action.id.clone();
             let tool_use_id = action_id.to_string();
             let (tool_name, tool_input) =
@@ -1114,7 +1124,7 @@ impl BlocklistAIActionExecutor {
         }
         if let Some(running) = self.async_executing_actions.remove(action_id) {
             #[cfg(not(target_family = "wasm"))]
-            if let Some(session) = &self.oz_hook_session {
+            if let Some(session) = self.oz_hook_sessions.get(&running.conversation_id) {
                 session
                     .runtime
                     .cancel(OzHookCancellationScope::Tool(action_id.to_string()));
