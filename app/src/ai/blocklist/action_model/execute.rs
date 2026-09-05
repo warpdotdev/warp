@@ -272,6 +272,23 @@ impl AsyncExecutingAction {
         )
     }
 }
+fn native_permission_for_action(
+    is_user_initiated: bool,
+    can_auto_execute: bool,
+    is_agent_autonomous: bool,
+    is_request_command_output: bool,
+) -> NativePermission {
+    if !is_user_initiated && !can_auto_execute && is_agent_autonomous && is_request_command_output {
+        NativePermission::Deny
+    } else if !(is_user_initiated
+        || can_auto_execute
+        || (is_agent_autonomous && is_request_command_output))
+    {
+        NativePermission::Prompt
+    } else {
+        NativePermission::Allow
+    }
+}
 
 pub struct BlocklistAIActionExecutor {
     shell_command_executor: ModelHandle<ShellCommandExecutor>,
@@ -675,19 +692,13 @@ impl BlocklistAIActionExecutor {
         let can_auto_execute = self.should_autoexecute(input, ctx);
         let is_agent_autonomous = AppExecutionMode::as_ref(ctx).is_autonomous();
 
-        // The agent cannot auto execute and either:
-        // - the agent is interactive, OR
-        // - the agent is autonomous and the action was not requesting command output
-        let needs_confirmation = !(is_user_initiated
-            || can_auto_execute
-            || (is_agent_autonomous && action.action.is_request_command_output()));
-        let native_permission = if !is_user_initiated && !can_auto_execute && is_agent_autonomous {
-            NativePermission::Deny
-        } else if needs_confirmation {
-            NativePermission::Prompt
-        } else {
-            NativePermission::Allow
-        };
+        let native_permission = native_permission_for_action(
+            is_user_initiated,
+            can_auto_execute,
+            is_agent_autonomous,
+            action.action.is_request_command_output(),
+        );
+        let needs_confirmation = native_permission == NativePermission::Prompt;
         if native_permission == NativePermission::Deny {
             // It must be the case that the autonomous agent is requesting a denylisted command.
             if let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action {
