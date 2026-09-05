@@ -588,28 +588,16 @@ fn run_task(
         TaskCommand::List(args) => ambient::list_ambient_agent_tasks(ctx, global_options, args),
         TaskCommand::Get(args) => {
             if args.conversation {
-                if !FeatureFlag::ConversationApi.is_enabled() {
-                    return Err(anyhow::anyhow!(
-                        "The --conversation flag is not available in this build"
-                    ));
-                }
                 ambient::get_run_conversation(ctx, args.task_id)
             } else {
                 ambient::get_ambient_agent_task_status(ctx, global_options, args)
             }
         }
-        TaskCommand::Conversation(conv_cmd) => {
-            if !FeatureFlag::ConversationApi.is_enabled() {
-                return Err(anyhow::anyhow!(
-                    "The 'conversation' subcommand is not available in this build"
-                ));
+        TaskCommand::Conversation(conv_cmd) => match conv_cmd {
+            warp_cli::task::ConversationCommand::Get(args) => {
+                ambient::get_conversation(ctx, args.conversation_id)
             }
-            match conv_cmd {
-                warp_cli::task::ConversationCommand::Get(args) => {
-                    ambient::get_conversation(ctx, args.conversation_id)
-                }
-            }
-        }
+        },
         TaskCommand::Message(message_cmd) => ambient::run_message(ctx, global_options, message_cmd),
     }
 }
