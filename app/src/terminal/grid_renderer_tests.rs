@@ -1,10 +1,11 @@
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
-use warpui::fonts::Cache as FontCache;
+use warpui::fonts::{Cache as FontCache, FamilyId};
 use warpui::units::{IntoLines, Lines, Pixels};
 
-use super::{CachedBackgroundColor, active_or_next_match};
+use super::{AttributedStringBuilder, CachedBackgroundColor, active_or_next_match};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::char_or_str::CharOrStr;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
 use crate::terminal::{SizeInfo, grid_renderer};
@@ -208,6 +209,75 @@ fn test_calculate_background_bounds() {
     assert_multi_row_selection_bounds(50, 140, 59, 20); // 10 lines
 }
 
+/// Verifies that `AttributedStringBuilder::character_index_to_cell_map` is **char-indexed**, not
+/// byte-indexed. `paint_line` looks up cells via `glyph.index`, which BOTH layout backends emit as
+/// a *character* index — CoreText as `char_offset + char_index`, and cosmic-text after
+/// `StrIndexMap::char_index` converts its raw byte offset. A byte-indexed map lines up with ASCII
+/// by coincidence, but for multi-byte scripts (Thai, CJK, emoji, …) a char-index `glyph.index`
+/// would land mid-codepoint and draw the glyph at the wrong column (or read out of bounds).
+#[test]
+fn test_attributed_string_builder_char_indexed_cell_map() {
+    let dummy_family = FamilyId(0);
+    let mut builder = AttributedStringBuilder::new(dummy_family, dummy_family, 10);
+
+    // "สวัสดี" — every codepoint is 3 bytes in UTF-8. The cell layout that the terminal grid
+    // produces for this string is:
+    //   col 0: ส (Char)         col 1: วั (Str — ว + zerowidth ั)
+    //   col 2: ส (Char)         col 3: ดี (Str — ด + zerowidth ี)
+    builder.append_content(CharOrStr::Char('ส'), 0);
+    builder.append_content(CharOrStr::Str("วั"), 1);
+    builder.append_content(CharOrStr::Char('ส'), 2);
+    builder.append_content(CharOrStr::Str("ดี"), 3);
+
+    let data = builder.build();
+
+    assert_eq!(
+        data.line, "สวัสดี",
+        "appended chars must round-trip into the line"
+    );
+    assert_eq!(
+        data.line.len(),
+        18,
+        "six 3-byte Thai codepoints = 18 UTF-8 bytes"
+    );
+    assert_eq!(
+        data.character_index_to_cell_map.len(),
+        6,
+        "the cell map must have one entry per CHARACTER (NOT per byte) — paint_line indexes it with \
+         glyph.index, which both layout backends emit as a character index; a per-byte map would \
+         put every non-ASCII glyph in the wrong cell"
+    );
+
+    // One entry per character, each pointing at its grid column.
+    let expected = [
+        0, // ส @ col 0
+        1, // ว @ col 1
+        1, // ั @ col 1 (combining mark stays in same cell as base)
+        2, // ส @ col 2
+        3, // ด @ col 3
+        3, // ี @ col 3 (combining mark stays in same cell as base)
+    ];
+    assert_eq!(
+        data.character_index_to_cell_map, expected,
+        "each character (base or combining mark) maps to exactly one cell column"
+    );
+}
+
+/// ASCII regression check — a build that wrongly switched back to byte-indexing would still pass
+/// for pure-ASCII input (byte index == char index there), so we assert the char map for ASCII.
+#[test]
+fn test_attributed_string_builder_char_indexed_cell_map_ascii() {
+    let dummy_family = FamilyId(0);
+    let mut builder = AttributedStringBuilder::new(dummy_family, dummy_family, 10);
+
+    builder.append_content(CharOrStr::Char('h'), 0);
+    builder.append_content(CharOrStr::Char('i'), 1);
+
+    let data = builder.build();
+    assert_eq!(data.line, "hi");
+    assert_eq!(data.character_index_to_cell_map, vec![0, 1]);
+}
+
 #[test]
 fn test_calculate_selection_bounds() {
     let origin = vec2f(100., 100.);
@@ -261,4 +331,39 @@ fn test_calculate_selection_bounds() {
     assert_selection_bounds(5.into_lines()); // Without scroll clipping
     assert_selection_bounds(10.into_lines()); // Without scroll clipping (but on the cusp of clipping)
     assert_selection_bounds(80.into_lines()); // With scroll clipping
+}
+
+#[test]
+fn test_decompose_sara_am() {
+    // THAI CHARACTER SARA AM -> NIKHAHIT (dot, drawn over the consonant) + SARA AA (spacing tail).
+    assert_eq!(
+        super::decompose_sara_am('\u{0E33}'),
+        Some(('\u{0E4D}', '\u{0E32}'))
+    );
+    // LAO VOWEL SIGN AM -> NIGGAHITA + LAO SARA AA.
+    assert_eq!(
+        super::decompose_sara_am('\u{0EB3}'),
+        Some(('\u{0ECD}', '\u{0EB2}'))
+    );
+    // Plain Thai consonants and the bare sara-am parts are left untouched.
+    assert_eq!(super::decompose_sara_am('\u{0E04}'), None); // ค
+    assert_eq!(super::decompose_sara_am('\u{0E4D}'), None); // nikhahit
+    assert_eq!(super::decompose_sara_am('\u{0E32}'), None); // sara aa
+    assert_eq!(super::decompose_sara_am('a'), None);
+}
+
+#[test]
+fn test_is_sara_am_base() {
+    // Thai consonants (ก..ฮ) and Lao consonants (ກ..ຮ) are attachable bases.
+    assert!(super::is_sara_am_base('\u{0E01}')); // ก
+    assert!(super::is_sara_am_base('\u{0E19}')); // น
+    assert!(super::is_sara_am_base('\u{0E2E}')); // ฮ
+    assert!(super::is_sara_am_base('\u{0E81}')); // ກ (Lao)
+    // Non-attachable cells a SARA AM must NOT be folded onto.
+    assert!(!super::is_sara_am_base(' '));
+    assert!(!super::is_sara_am_base('a'));
+    assert!(!super::is_sara_am_base('.'));
+    assert!(!super::is_sara_am_base('\u{0E33}')); // sara am itself
+    assert!(!super::is_sara_am_base('\u{0E32}')); // sara aa (a vowel, not a base)
+    assert!(!super::is_sara_am_base('\u{0E4D}')); // nikhahit
 }
