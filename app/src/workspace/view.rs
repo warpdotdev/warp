@@ -197,7 +197,7 @@ use crate::ai::blocklist::handoff::{
     HandoffPresentationSnapshot, HandoffRestoration, HandoffTargetMaterialization,
     MaterializeHandoffTarget, PendingCloudLaunch, execute_handoff, prepare_handoff,
 };
-use crate::ai::blocklist::history_model::{CloudConversationData, load_conversation_from_server};
+use crate::ai::blocklist::history_model::CloudConversationData;
 use crate::ai::blocklist::inline_action::code_diff_view::CodeDiffView;
 use crate::ai::blocklist::suggested_agent_mode_workflow_modal::{
     SuggestedAgentModeWorkflowAndId, SuggestedAgentModeWorkflowModal,
@@ -4474,67 +4474,17 @@ impl Workspace {
             .push(self.tabs[new_tab_index].pane_group.id());
         self.activate_tab_internal(new_tab_index, ctx);
 
-        let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let server_token = conversation_id;
-        let local_conversation_id =
-            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
-                history.get_or_set_canonical_conversation_id_for_server_token(&server_token)
-            });
-
-        ctx.spawn(
-            async move {
-                load_conversation_from_server(local_conversation_id, server_token, ai_client).await
-            },
-            move |me, cloud_conversation, ctx| {
-                let Some(cloud_conversation) = cloud_conversation else {
-                    report_error!("Failed to load conversation from server");
-                    me.toast_stack.update(ctx, |view, ctx| {
-                        let new_toast = DismissibleToast::error(
-                            "Failed to load conversation data.".to_string(),
-                        );
-                        view.add_ephemeral_toast(new_toast, ctx);
-                    });
-                    return;
-                };
-
-                // Update the pane group with the loaded conversation
-                new_pane_group.update(ctx, |pane_group, ctx| {
-                    pane_group.load_data_into_conversation_transcript_viewer(
-                        cloud_conversation,
-                        ambient_agent_task_id,
-                        ctx,
-                    );
-                });
-
-                // Open the transcript details panel by default on WASM (unless on mobile)
-                #[cfg(target_family = "wasm")]
-                {
-                    if !warpui::platform::wasm::is_mobile_device() {
-                        me.current_workspace_state.is_transcript_details_panel_open = true;
-                        me.transcript_info_button.update(ctx, |button, ctx| {
-                            button.set_active(true, ctx);
-                        });
-                    }
-                    me.update_transcript_details_panel_data(ctx);
-                }
-
-                // Refresh the focused conversation state.
-                if me.active_tab_pane_group().id() == new_pane_group.id() {
-                    let focused_terminal_view_id = me
-                        .active_tab_pane_group()
-                        .as_ref(ctx)
-                        .active_session_view(ctx)
-                        .map(|view| view.id());
-                    let ambient_agent_task_id =
-                        me.ambient_agent_task_id_for_focused_terminal_view(ctx);
-                    me.notify_terminal_focus_change(
-                        focused_terminal_view_id,
-                        ambient_agent_task_id,
-                        ctx,
-                    );
-                }
-            },
-        );
+        // Kicks off the async fetch; the resulting `ConversationTranscriptLoadCompleted`
+        // event (handled in `handle_file_tree_event`) surfaces the toast on failure and
+        // runs the WASM/focus follow-up on success, so the same handling also applies to
+        // a later user-triggered retry of this same pane group.
+        new_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.load_conversation_transcript_from_server(
+                conversation_id,
+                ambient_agent_task_id,
+                ctx,
+            );
+        });
     }
 
     fn open_share_session_modal(&mut self, index: usize, ctx: &mut ViewContext<Self>) {
@@ -16149,6 +16099,46 @@ impl Workspace {
             #[cfg(not(target_family = "wasm"))]
             pane_group::Event::OpenPluginInstructionsPane(agent, kind) => {
                 self.open_plugin_instructions_pane(*agent, *kind, ctx);
+            }
+            pane_group::Event::ConversationTranscriptLoadCompleted { succeeded } => {
+                if !*succeeded {
+                    self.toast_stack.update(ctx, |view, ctx| {
+                        let new_toast = DismissibleToast::error(
+                            "Failed to load conversation data.".to_string(),
+                        );
+                        view.add_ephemeral_toast(new_toast, ctx);
+                    });
+                    return;
+                }
+
+                // Open the transcript details panel by default on WASM (unless on mobile)
+                #[cfg(target_family = "wasm")]
+                {
+                    if !warpui::platform::wasm::is_mobile_device() {
+                        self.current_workspace_state
+                            .is_transcript_details_panel_open = true;
+                        self.transcript_info_button.update(ctx, |button, ctx| {
+                            button.set_active(true, ctx);
+                        });
+                    }
+                    self.update_transcript_details_panel_data(ctx);
+                }
+
+                // Refresh the focused conversation state.
+                if self.active_tab_pane_group().id() == pane_group.id() {
+                    let focused_terminal_view_id = self
+                        .active_tab_pane_group()
+                        .as_ref(ctx)
+                        .active_session_view(ctx)
+                        .map(|view| view.id());
+                    let ambient_agent_task_id =
+                        self.ambient_agent_task_id_for_focused_terminal_view(ctx);
+                    self.notify_terminal_focus_change(
+                        focused_terminal_view_id,
+                        ambient_agent_task_id,
+                        ctx,
+                    );
+                }
             }
             pane_group::Event::AskAIAssistant(ask_type) => self.ask_ai_assistant(ask_type, ctx),
             pane_group::Event::SyncInput(input_type) => {

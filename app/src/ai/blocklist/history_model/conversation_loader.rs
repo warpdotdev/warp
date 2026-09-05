@@ -182,7 +182,9 @@ pub async fn load_conversation_from_server(
             }
         }
         Err(e) => {
-            log::warn!("Failed to load conversation {conversation_id} from server: {e:#}");
+            // The transcript viewer only shows a generic failure state to the user, so
+            // this error chain is often the sole diagnostic evidence for what went wrong.
+            log::error!("Failed to load conversation {conversation_id} from server: {e:#}");
             None
         }
     }

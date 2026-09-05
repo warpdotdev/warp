@@ -2095,6 +2095,9 @@ pub enum Event {
     /// [`ambient_agent::wire_ambient_agent_session_events`]) so follow-up runs after the
     /// previous VM ends re-attach the viewer to the new execution session.
     AmbientAgentViewModelCreated,
+    /// Emitted when the user clicks the retry link shown in the persistent
+    /// conversation transcript load-failure state.
+    RetryConversationTranscriptLoad,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2379,6 +2382,7 @@ struct TerminalViewMouseStates {
     jump_to_bottom_of_block_button: MouseStateHandle,
 
     parent_conversation_header_link: MouseStateHandle,
+    retry_conversation_transcript_load_link: MouseStateHandle,
     /// Persistent horizontal scroll state for the orchestration breadcrumb
     /// row. Lives here (rather than as a `MouseStateHandle`) so the user's
     /// scroll position survives across renders — in narrow split-off panes
@@ -24758,6 +24762,62 @@ impl TerminalView {
         .finish()
     }
 
+    /// Renders a persistent error state for a conversation transcript viewer whose
+    /// conversation data failed to load, replacing the loading spinner. Includes a
+    /// retry link that re-attempts the load without recreating the pane; the link
+    /// disappears on click since the viewer immediately transitions to the loading
+    /// state, which prevents double-fires.
+    fn render_viewer_load_failed(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let color = appearance
+            .theme()
+            .sub_text_color(appearance.theme().background());
+
+        let retry_link = appearance
+            .ui_builder()
+            .link(
+                "Retry".to_string(),
+                None,
+                Some(Box::new(|ctx: &mut EventContext| {
+                    ctx.dispatch_typed_action(TerminalAction::RetryConversationTranscriptLoad);
+                })),
+                self.mouse_states
+                    .retry_conversation_transcript_load_link
+                    .clone(),
+            )
+            .build()
+            .finish();
+
+        SavePosition::new(
+            Align::new(
+                Flex::column()
+                    .with_child(
+                        ConstrainedBox::new(
+                            Icon::new("bundled/svg/alert-circle.svg", color).finish(),
+                        )
+                        .with_height(16.)
+                        .with_width(16.)
+                        .finish(),
+                    )
+                    .with_child(
+                        Text::new_inline(
+                            "Couldn't load this session",
+                            appearance.ui_font_family(),
+                            14.,
+                        )
+                        .with_color(color.into())
+                        .finish(),
+                    )
+                    .with_child(Container::new(retry_link).with_margin_top(4.).finish())
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .finish(),
+            )
+            .finish(),
+            &self.content_element_position_id,
+        )
+        .finish()
+    }
+
     /// Returns true when cursor rendering should be suppressed because the
     /// CLI agent rich input is open.
     fn should_hide_cli_agent_cursor_cell(&self, app: &AppContext) -> bool {
@@ -27168,7 +27228,8 @@ impl TypedActionView for TerminalView {
             | CycleNextOrchestrationChildAgent
             | ToggleCLIAgentRichInput
             | ToggleSessionRecording
-            | Osc52AllowBlockedClipboardOperation => Empty,
+            | Osc52AllowBlockedClipboardOperation
+            | RetryConversationTranscriptLoad => Empty,
         }
     }
 
@@ -28339,6 +28400,9 @@ impl TypedActionView for TerminalView {
                     ctx.notify();
                 }
             }
+            RetryConversationTranscriptLoad => {
+                ctx.emit(Event::RetryConversationTranscriptLoad);
+            }
         }
     }
 }
@@ -28413,8 +28477,11 @@ impl View for TerminalView {
                         && !self.is_ambient_agent_session(app);
                     let is_loading_transcript = model.is_loading_conversation_transcript();
                     let should_show_loading = is_view_pending_clause || is_loading_transcript;
+                    let transcript_load_failed = model.is_conversation_transcript_load_failed();
                     let output_area = if self.orchestration_child_live_unavailable {
                         self.render_orchestration_child_live_unavailable(app)
+                    } else if transcript_load_failed {
+                        self.render_viewer_load_failed(app)
                     } else if should_show_loading {
                         self.render_viewer_loading(app)
                     } else if is_alt_screen_active {
