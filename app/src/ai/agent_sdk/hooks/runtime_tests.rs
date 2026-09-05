@@ -47,16 +47,26 @@ fn event(invocation_id: &str, fields: HookEventFields) -> OzHookEvent {
     }
 }
 
-fn pre_tool_event(invocation_id: &str) -> OzPreToolUseEvent {
+fn pre_tool_event_with_input(
+    invocation_id: &str,
+    tool_input: super::super::redaction::RedactedValue,
+) -> OzPreToolUseEvent {
     OzPreToolUseEvent::new(event(
         invocation_id,
         HookEventFields::PreToolUse {
             tool_name: "run_shell_command".into(),
             tool_use_id: "tool".into(),
-            tool_input: super::super::redaction::RedactedValue::object([] as [(&str, _); 0]),
+            tool_input,
         },
     ))
     .unwrap()
+}
+
+fn pre_tool_event(invocation_id: &str) -> OzPreToolUseEvent {
+    pre_tool_event_with_input(
+        invocation_id,
+        super::super::redaction::RedactedValue::object([] as [(&str, _); 0]),
+    )
 }
 
 #[tokio::test]
@@ -102,6 +112,28 @@ async fn oz_hooks_runtime_structured_deny_short_circuits_later_handlers() {
         OzPreToolUseDecision::Deny { ref reason, .. } if reason == "policy"
     ));
     assert_eq!(fs::read_to_string(marker.path()).unwrap(), "");
+}
+
+#[tokio::test]
+async fn oz_hooks_runtime_accepts_output_from_hook_that_closes_stdin() {
+    let deny = r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"policy"}}"#;
+    let runtime = runtime_with_hooks(json!({
+        "PreToolUse": [{"hooks": [{
+            "type": "command",
+            "command": format!("exec 0<&-; sleep 0.1; printf '%s' '{deny}'")
+        }]}]
+    }));
+    let event = pre_tool_event_with_input(
+        "closed-stdin",
+        super::super::redaction::RedactedValue::String("x".repeat(128 * 1024)),
+    );
+
+    let decision = runtime.pre_tool_use(event).await;
+
+    assert!(matches!(
+        decision,
+        OzPreToolUseDecision::Deny { ref reason, .. } if reason == "policy"
+    ));
 }
 
 #[tokio::test]
