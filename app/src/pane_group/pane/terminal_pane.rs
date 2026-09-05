@@ -415,6 +415,12 @@ impl PaneContent for TerminalPane {
             }
         });
 
+        if !matches!(detach_type, DetachType::Moved) {
+            self.terminal_view(ctx).update(ctx, |view, ctx| {
+                view.cancel_dev_container_build(ctx);
+            });
+        }
+
         // Clean up any active CLI agent session so its notification is removed.
         // Skip this for moves — the session is still running and will re-register in the new tab.
         if !matches!(detach_type, DetachType::Moved) {
@@ -444,6 +450,9 @@ impl PaneContent for TerminalPane {
 
     fn snapshot(&self, app: &AppContext) -> LeafContents {
         let view = self.terminal_view(app).as_ref(app);
+        if view.is_dev_container_build_surface() {
+            return LeafContents::DevContainerBuild;
+        }
         let is_active = view.is_active_session(app);
 
         // Capture the current input_config from the AI input model
@@ -1495,6 +1504,40 @@ fn handle_terminal_view_event(
             }
             Event::StopAgentConversation { conversation_id } => {
                 stop_agent_conversation(group, *conversation_id, ctx);
+            }
+            #[cfg(feature = "local_tty")]
+            Event::ReplaceDevContainerBuildPane {
+                workspace_folder,
+                docker_path,
+                container_id,
+                remote_user,
+                remote_workspace_folder,
+                sandbox_id,
+                session_id,
+            } => {
+                group.replace_dev_container_build_pane(
+                    pane_id,
+                    workspace_folder.clone(),
+                    docker_path.clone(),
+                    container_id.clone(),
+                    remote_user.clone(),
+                    remote_workspace_folder.clone(),
+                    sandbox_id.clone(),
+                    *session_id,
+                    ctx,
+                );
+            }
+            #[cfg(feature = "local_tty")]
+            Event::StartDevContainerBuild {
+                workspace_folder,
+                config_file,
+            } => {
+                group.start_dev_container_build(
+                    pane_id,
+                    workspace_folder.clone(),
+                    config_file.clone(),
+                    ctx,
+                );
             }
             Event::KillAgentConversation { conversation_id } => {
                 let source_terminal_view_id = group

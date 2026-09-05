@@ -375,3 +375,204 @@ fn dev_container_rm_args_remove_the_given_container_path() {
         ]
     );
 }
+
+struct StagingCancel {
+    inner: parking_lot::Mutex<(bool, Option<StagingProcessGroupKillOnDrop>)>,
+}
+
+impl StagingCancel {
+    fn new() -> Self {
+        Self {
+            inner: parking_lot::Mutex::new((false, None)),
+        }
+    }
+
+    fn has_armed_kill(&self) -> bool {
+        self.inner.lock().1.is_some()
+    }
+
+    fn cancel_and_terminate(&self) {
+        let mut inner = self.inner.lock();
+        inner.0 = true;
+        if let Some(kill) = inner.1.take() {
+            kill.terminate_now();
+        }
+    }
+}
+
+impl ProcessGroupCancel for StagingCancel {
+    fn register_process_group(&self, kill_group: StagingProcessGroupKillOnDrop) -> bool {
+        let mut inner = self.inner.lock();
+        if inner.0 {
+            return false;
+        }
+        inner.1 = Some(kill_group);
+        true
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.inner.lock().0
+    }
+}
+
+fn pid_is_alive(pid: i32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
+}
+
+fn wait_for_pid_file(path: &Path) -> i32 {
+    use instant::Instant;
+
+    let started = Instant::now();
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(path)
+            && let Ok(pid) = contents.trim().parse::<i32>()
+            && pid > 1
+        {
+            return pid;
+        }
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "descendant pid file was not written"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn staging_reader_error_kills_process_group_descendants() {
+    let pid_file = std::env::temp_dir().join(format!("dc-stage-desc-{}", uuid::Uuid::new_v4()));
+    futures_lite::future::block_on(async {
+        let mut command = AsyncCommand::new_with_process_group("python3");
+        command
+            .arg("-c")
+            .arg(format!(
+                r#"
+import os, time
+pid = os.fork()
+if pid == 0:
+    open({pid_file:?}, "w").write(str(os.getpid()))
+    time.sleep(30)
+    os._exit(0)
+time.sleep(30)
+"#
+            ))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command.spawn().expect("spawn");
+        let process_group_id = child.id();
+        let descendant = wait_for_pid_file(&pid_file);
+        assert!(pid_is_alive(descendant), "descendant must start alive");
+        let result = join_staging_pipes_and_status(
+            StagingProcessGroupKillOnDrop::new(process_group_id),
+            async { Err(io::Error::other("stdout reader failed")) },
+            async { Ok(Vec::new()) },
+            async { child.status().await },
+        )
+        .await;
+        assert!(result.is_err(), "reader failure must surface");
+        let started = instant::Instant::now();
+        while pid_is_alive(descendant) {
+            assert!(
+                started.elapsed().as_secs() < 5,
+                "descendant must not survive a staging reader error"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+    let _ = std::fs::remove_file(pid_file);
+}
+
+#[test]
+fn successful_staging_command_terminates_process_group_once() {
+    let _ = take_staging_process_group_terminations();
+    futures_lite::future::block_on(async {
+        let output = run_dev_container_docker_output(
+            Path::new("python3"),
+            &[OsString::from("-c"), OsString::from("pass")],
+            Some(&StagingCancel::new()),
+        )
+        .await
+        .expect("run");
+        assert!(output.status.success());
+    });
+    assert_eq!(take_staging_process_group_terminations(), 1);
+}
+
+#[test]
+fn close_during_staging_cancels_in_flight_docker_command() {
+    use std::sync::Arc;
+
+    use instant::Instant;
+
+    let _ = take_staging_process_group_terminations();
+    let cancel = Arc::new(StagingCancel::new());
+    let started = Instant::now();
+    futures_lite::future::block_on(async {
+        let cancel_for_cmd = cancel.clone();
+        let args = [
+            OsString::from("-c"),
+            OsString::from("import time; time.sleep(30)"),
+        ];
+        let cmd_fut = run_dev_container_docker_output(
+            Path::new("python3"),
+            &args,
+            Some(cancel_for_cmd.as_ref()),
+        );
+        let kill_fut = async {
+            loop {
+                if cancel.has_armed_kill() {
+                    break;
+                }
+                futures_lite::future::yield_now().await;
+            }
+            cancel.cancel_and_terminate();
+        };
+        let (result, _) = futures::join!(cmd_fut, kill_fut);
+        assert!(
+            started.elapsed().as_secs() < 5,
+            "close during staging must interrupt in-flight command: {:?}",
+            started.elapsed()
+        );
+        assert!(
+            result.is_err() || result.is_ok_and(|output| !output.status.success()),
+            "cancelled staging command must not succeed"
+        );
+    });
+    assert_eq!(take_staging_process_group_terminations(), 1);
+}
+
+struct RejectRegisterCancel;
+
+impl ProcessGroupCancel for RejectRegisterCancel {
+    fn register_process_group(&self, _kill_group: StagingProcessGroupKillOnDrop) -> bool {
+        false
+    }
+
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn rejected_staging_registration_terminates_before_wait() {
+    use instant::Instant;
+
+    let _ = take_staging_process_group_terminations();
+    let started = Instant::now();
+    let result = futures_lite::future::block_on(run_dev_container_docker_output(
+        Path::new("python3"),
+        &[
+            OsString::from("-c"),
+            OsString::from("import time; time.sleep(30)"),
+        ],
+        Some(&RejectRegisterCancel),
+    ));
+    assert!(
+        started.elapsed().as_secs() < 5,
+        "rejected staging registration must not wait on the child: {:?}",
+        started.elapsed()
+    );
+    assert!(result.is_err());
+    assert_eq!(take_staging_process_group_terminations(), 1);
+}

@@ -2126,6 +2126,10 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_| VimRegisters::new());
     ctx.add_singleton_model(UndoCloseStack::new);
     ctx.add_singleton_model(|_| ToastStack);
+    #[cfg(feature = "local_tty")]
+    ctx.add_singleton_model(|_| {
+        crate::terminal::view::dev_container::registry::DevContainerBuildRegistry::new()
+    });
     ctx.add_singleton_model(|_| GlobalCodeReviewModel);
     ctx.add_singleton_model(workspace::OneTimeModalModel::new);
     ctx.add_singleton_model(

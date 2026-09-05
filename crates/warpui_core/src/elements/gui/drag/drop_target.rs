@@ -101,4 +101,9 @@ impl Element for DropTarget {
     ) -> bool {
         self.child.dispatch_event(event, ctx, app)
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        self.child.debug_text_content()
+    }
 }

@@ -385,6 +385,10 @@ impl BlockGrid {
         self.start_time = Some(Instant::now());
     }
 
+    pub fn compact_scrollback_into_flat_storage(&mut self) {
+        self.grid_handler.compact_scrollback_into_flat_storage();
+    }
+
     pub fn grid_storage(&self) -> &GridStorage {
         self.grid_handler.grid_storage()
     }

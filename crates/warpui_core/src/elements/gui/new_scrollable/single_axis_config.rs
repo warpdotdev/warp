@@ -192,6 +192,14 @@ impl SingleAxisConfig {
         }
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub(super) fn debug_text_content(&self) -> Option<String> {
+        match self {
+            Self::Manual { child, .. } => child.debug_text_content(),
+            Self::Clipped { child, .. } => child.debug_text_content(),
+        }
+    }
+
     pub(super) fn scroll_offset(&self, axis: Axis) -> Vector2F {
         match self {
             Self::Manual { .. } => Vector2F::zero(),

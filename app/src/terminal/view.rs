@@ -1797,6 +1797,21 @@ pub enum Event {
     },
     OpenCodeReviewPane(CodeReviewPanelArg),
     ToggleCodeReviewPane(CodeReviewPanelArg),
+    #[cfg(feature = "local_tty")]
+    StartDevContainerBuild {
+        workspace_folder: PathBuf,
+        config_file: PathBuf,
+    },
+    #[cfg(feature = "local_tty")]
+    ReplaceDevContainerBuildPane {
+        workspace_folder: PathBuf,
+        docker_path: PathBuf,
+        container_id: String,
+        remote_user: Option<String>,
+        remote_workspace_folder: String,
+        sandbox_id: String,
+        session_id: warp_core::SessionId,
+    },
     InsertCodeReviewComments {
         repo_path: LocalOrRemotePath,
         comments: Vec<PendingImportedReviewComment>,
@@ -2380,6 +2395,10 @@ struct TerminalViewMouseStates {
     jump_to_bottom_of_block_button: MouseStateHandle,
 
     parent_conversation_header_link: MouseStateHandle,
+    #[cfg(feature = "local_tty")]
+    dev_container_retry: MouseStateHandle,
+    #[cfg(feature = "local_tty")]
+    dev_container_close: MouseStateHandle,
     /// Persistent horizontal scroll state for the orchestration breadcrumb
     /// row. Lives here (rather than as a `MouseStateHandle`) so the user's
     /// scroll position survives across renders — in narrow split-off panes
@@ -2915,6 +2934,13 @@ pub struct TerminalView {
     /// A passive orchestration child whose live execution session could not
     /// be joined. Task refresh may later replace this with a transcript.
     orchestration_child_live_unavailable: bool,
+    #[cfg(feature = "local_tty")]
+    dev_container_build: Option<ModelHandle<dev_container::operation::DevContainerBuildOperation>>,
+    #[cfg(feature = "local_tty")]
+    dev_container_awaiting_layout: bool,
+    #[cfg(all(unix, feature = "local_tty"))]
+    dev_container_pty_resize:
+        Option<Arc<parking_lot::Mutex<Option<dev_container::PtyResizeHandle>>>>,
 
     /// Conversation details panel (side panel showing conversation/task metadata).
     /// Available for cloud Oz runs and for any active local AI conversation.
@@ -4516,6 +4542,12 @@ impl TerminalView {
             conversation_details_panel_auto_open_policy: Default::default(),
             pending_cloud_followup_task_id: None,
             orchestration_child_live_unavailable: false,
+            #[cfg(feature = "local_tty")]
+            dev_container_build: None,
+            #[cfg(feature = "local_tty")]
+            dev_container_awaiting_layout: false,
+            #[cfg(all(unix, feature = "local_tty"))]
+            dev_container_pty_resize: None,
             conversation_details_panel_toggle_mouse_state: Default::default(),
             ambient_agent_cancel_mouse_state: Default::default(),
             active_init_project_model: None,
@@ -8531,6 +8563,9 @@ impl TerminalView {
     }
 
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
+        if self.is_dev_container_build_surface() {
+            return false;
+        }
         if model.is_read_only() {
             return false;
         }
@@ -16576,6 +16611,8 @@ impl TerminalView {
 
         let size_update = SizeUpdateBuilder::after_layout(*self.size_info, size).build(self, ctx);
         self.resize_internal(size_update, ctx);
+        #[cfg(feature = "local_tty")]
+        self.after_dev_container_layout(size, ctx);
 
         // Update the height of the "gap" - the space we would need to clear
         // in the terminal to accommodate a clear or ctrl-L.
@@ -24986,7 +25023,9 @@ impl TerminalView {
             );
         }
 
-        if let Some(hovered_block_index) = self.hovered_block_index {
+        if let Some(hovered_block_index) = self.hovered_block_index
+            && !self.is_dev_container_build_surface()
+        {
             let block_list = model.block_list();
 
             // Is this block the first visible item in the viewport? If so, the tool tips should
@@ -27059,6 +27098,7 @@ impl TypedActionView for TerminalView {
             | CtrlC
             | ClearSelectionsWhenShellMode
             | Close
+            | RetryDevContainerBuild
             | TypedCharacters(_)
             | UserInputSequence(_)
             | ControlSequence(_)
@@ -27423,6 +27463,10 @@ impl TypedActionView for TerminalView {
             ClearSelectionsWhenShellMode => self.clear_selections_when_shell_mode(ctx),
             ContextMenu(context_action) => self.context_menu_action(context_action, ctx),
             Close => ctx.emit(Event::CloseRequested),
+            RetryDevContainerBuild => {
+                #[cfg(feature = "local_tty")]
+                self.retry_dev_container_build(ctx);
+            }
             SplitRight(chosen_shell) => {
                 ctx.emit(Event::Pane(PaneEvent::SplitRight(chosen_shell.to_owned())))
             }

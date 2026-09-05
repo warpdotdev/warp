@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -218,6 +219,13 @@ fn initialize_app_with_history(app: &mut App, conversations: Vec<AgentConversati
     app.add_singleton_model(OneTimeModalModel::new);
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(UndoCloseStack::new);
+    app.add_singleton_model(|_| crate::workspace::ToastStack);
+    #[cfg(feature = "local_tty")]
+    app.add_singleton_model(|_| {
+        crate::terminal::view::dev_container::registry::DevContainerBuildRegistry::new()
+    });
+    #[cfg(feature = "local_tty")]
+    app.add_singleton_model(|_| crate::terminal::local_shell::LocalShellState::NotLoaded);
     app.add_singleton_model(|_| IgnoredSuggestionsModel::new(vec![]));
     app.add_singleton_model(|_| PricingInfoModel::new());
     app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
@@ -3974,6 +3982,697 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 file_view.as_ref(ctx).file_id_for_test().is_none(),
                 "a permanently discarded pane should release its file"
             );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+fn start_mocked_dev_container_build(
+    panes: &mut PaneGroup,
+    ctx: &mut ViewContext<PaneGroup>,
+) -> (PaneId, PaneId) {
+    let originating = get_newly_created_pane_id(panes, &[]);
+    panes.start_dev_container_build(
+        originating,
+        PathBuf::from("/tmp/ws"),
+        PathBuf::from("/tmp/ws/.devcontainer/devcontainer.json"),
+        ctx,
+    );
+    let build_pane = get_newly_created_pane_id(panes, &[originating]);
+    (originating, build_pane)
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn devcontainer_build_opens_focused_right_split() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let originating = get_newly_created_pane_id(panes, &[]);
+            let originating_view_id = panes
+                .terminal_view_from_pane_id(originating, ctx)
+                .expect("originating terminal")
+                .id();
+            panes.start_dev_container_build(
+                originating,
+                PathBuf::from("/tmp/ws"),
+                PathBuf::from("/tmp/ws/.devcontainer/devcontainer.json"),
+                ctx,
+            );
+            assert_eq!(panes.visible_pane_count(), 2);
+            let build_pane = get_newly_created_pane_id(panes, &[originating]);
+            assert_eq!(panes.pane_id_by_index(0), Some(originating));
+            assert_eq!(panes.pane_id_by_index(1), Some(build_pane));
+            assert_eq!(panes.focused_pane_id(ctx), build_pane);
+            let originating_view = panes
+                .terminal_view_from_pane_id(originating, ctx)
+                .expect("originating still present");
+            assert_eq!(originating_view.id(), originating_view_id);
+            assert!(
+                !originating_view
+                    .as_ref(ctx)
+                    .is_dev_container_build_surface()
+            );
+            assert!(
+                panes
+                    .terminal_view_from_pane_id(build_pane, ctx)
+                    .expect("build pane")
+                    .as_ref(ctx)
+                    .is_dev_container_build_surface()
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn devcontainer_build_pane_renders_streamed_output() {
+    use warp_terminal::model::ansi::Processor;
+    use warpui::View;
+    use warpui::units::Lines;
+
+    use crate::terminal::model::block::TranscriptScope;
+    use crate::terminal::view::dev_container::operation::DevContainerBuildPhase;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (_, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+
+            build_view.update(ctx, |view, _ctx| {
+                let event_proxy = view.model.lock().event_proxy.clone();
+                let mut model = view.model.lock();
+                assert!(
+                    !model.is_loading_conversation_transcript(),
+                    "build pane must not stay in conversation Loading status"
+                );
+                let mut processor = Processor::new();
+                processor.parse_bytes(&mut *model, b"step-one\r\n", &mut std::io::sink());
+                event_proxy.send_wakeup_event();
+                let visible_height = model.block_list().block_heights().summary().height;
+                assert!(
+                    visible_height > Lines::zero(),
+                    "build output must have nonzero block-list height after a streamed batch, \
+                     got {visible_height:?}"
+                );
+                assert!(
+                    model
+                        .block_list()
+                        .active_block()
+                        .is_visible(&TranscriptScope::Terminal),
+                    "build output block must be visible after a streamed batch"
+                );
+            });
+
+            let rendered_text = build_view
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(
+                !rendered_text.contains("Loading session..."),
+                "streamed build output must not be masked by the conversation spinner, got \
+                 {rendered_text:?}"
+            );
+            assert!(
+                rendered_text.contains("step-one"),
+                "render path must display streamed log text, got {rendered_text:?}"
+            );
+            assert!(
+                build_view
+                    .as_ref(ctx)
+                    .dev_container_header_title(ctx)
+                    .expect("title")
+                    .contains("Build"),
+                "phase must come from operation state, not log text"
+            );
+
+            build_view.update(ctx, |view, ctx| {
+                view.fail_dev_container_build_for_test(
+                    DevContainerBuildPhase::Build,
+                    "boom".to_owned(),
+                    ctx,
+                );
+            });
+            let failed_text = build_view
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(
+                !failed_text.contains("Loading session..."),
+                "failed build body must keep the log grid visible, got {failed_text:?}"
+            );
+            assert!(
+                failed_text.contains("step-one"),
+                "failed surface must still display already-rendered logs, got {failed_text:?}"
+            );
+            assert!(
+                build_view
+                    .as_ref(ctx)
+                    .dev_container_shows_retry_and_close(ctx)
+            );
+            let failed_title = build_view
+                .as_ref(ctx)
+                .pane_configuration()
+                .as_ref(ctx)
+                .title();
+            assert!(
+                failed_title.contains("failed"),
+                "failed header title must identify the failed phase, got {failed_title:?}"
+            );
+            assert!(
+                !failed_title.contains("boom"),
+                "failed header must stay concise, got {failed_title:?}"
+            );
+            assert_eq!(
+                build_view
+                    .as_ref(ctx)
+                    .pane_configuration()
+                    .as_ref(ctx)
+                    .title_secondary(),
+                ""
+            );
+            assert!(
+                failed_text.contains("boom"),
+                "failed surface must show the detailed error in the body, got {failed_text:?}"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn failed_devcontainer_keeps_concise_header_and_shows_error_in_body() {
+    use warpui::View;
+
+    use crate::terminal::view::dev_container::operation::DevContainerBuildPhase;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (_, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            build_view.update(ctx, |view, _ctx| {
+                let mut model = view.model.lock();
+                let mut processor = warp_terminal::model::ansi::Processor::new();
+                processor.parse_bytes(
+                    &mut *model,
+                    b"[cli] @devcontainers/cli 0.89.0\r\n",
+                    &mut std::io::sink(),
+                );
+            });
+            let message = crate::terminal::view::dev_container::failure_message_for_test(
+                false,
+                br#"{"outcome":"error","message":"Command failed: docker ps -q --filter label=devcontainer.local_folder=/private/tmp/ha-core"}"#,
+                b"[2026-09-02T00:43:15.960Z] @devcontainers/cli 0.89.0.\nCannot connect to the Docker daemon at unix:///var/run/docker.sock.\n",
+            );
+            build_view.update(ctx, |view, ctx| {
+                view.fail_dev_container_build_for_test(DevContainerBuildPhase::Build, message, ctx);
+            });
+            let title = build_view
+                .as_ref(ctx)
+                .pane_configuration()
+                .as_ref(ctx)
+                .title();
+            assert!(
+                title.contains("Build failed"),
+                "header must stay a concise failed phase, got {title:?}"
+            );
+            assert!(
+                !title.contains("docker ps"),
+                "header must not embed the docker command, got {title:?}"
+            );
+            assert_eq!(
+                build_view
+                    .as_ref(ctx)
+                    .pane_configuration()
+                    .as_ref(ctx)
+                    .title_secondary(),
+                ""
+            );
+            let body = build_view
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(
+                body.contains("@devcontainers/cli 0.89.0"),
+                "already-streamed logs must remain, got {body:?}"
+            );
+            assert!(
+                body.contains("Command failed: docker ps"),
+                "body must show the structured CLI error, got {body:?}"
+            );
+            assert!(
+                body.contains("Cannot connect to the Docker daemon"),
+                "body must show the underlying docker error when present, got {body:?}"
+            );
+            build_view.update(ctx, |view, _ctx| {
+                let output = view
+                    .model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .output_grid()
+                    .contents_to_string(false, None);
+                for needle in ["Command failed", "Cannot connect"] {
+                    let line = output
+                        .lines()
+                        .find(|line| line.contains(needle))
+                        .unwrap_or_else(|| panic!("{needle} missing from {output:?}"));
+                    assert_eq!(
+                        line.trim_start(),
+                        line,
+                        "failure details must start at column 0, got {line:?}"
+                    );
+                }
+            });
+            assert!(
+                build_view
+                    .as_ref(ctx)
+                    .dev_container_shows_retry_and_close(ctx)
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn devcontainer_build_replaces_loading_pane_permanently() {
+    use crate::terminal::view::dev_container::operation::DevContainerBuildPhase;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (originating, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            build_view.update(ctx, |view, ctx| {
+                view.set_dev_container_build_phase_for_test(DevContainerBuildPhase::Preflight, ctx);
+                view.set_dev_container_build_phase_for_test(DevContainerBuildPhase::Staging, ctx);
+                view.set_dev_container_build_phase_for_test(DevContainerBuildPhase::Attach, ctx);
+            });
+            assert!(panes.replace_dev_container_build_pane_with_mock(build_pane, ctx));
+            assert_eq!(panes.visible_pane_count(), 2);
+            assert!(!panes.has_pane(build_pane));
+            assert!(panes.has_pane(originating));
+            let replacement = panes.focused_pane_id(ctx);
+            assert_ne!(replacement, originating);
+            assert!(
+                !panes
+                    .terminal_view_from_pane_id(replacement, ctx)
+                    .expect("replacement")
+                    .as_ref(ctx)
+                    .is_dev_container_build_surface()
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn devcontainer_failure_retains_logs_and_retries_in_place() {
+    use crate::terminal::view::dev_container::operation::DevContainerBuildPhase;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (_, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            for phase in [
+                DevContainerBuildPhase::Build,
+                DevContainerBuildPhase::Preflight,
+                DevContainerBuildPhase::Staging,
+                DevContainerBuildPhase::Attach,
+            ] {
+                build_view.update(ctx, |view, ctx| {
+                    view.fail_dev_container_build_for_test(phase, format!("{phase:?} failed"), ctx);
+                });
+                assert!(
+                    build_view
+                        .as_ref(ctx)
+                        .dev_container_shows_retry_and_close(ctx)
+                );
+                assert!(
+                    build_view
+                        .as_ref(ctx)
+                        .dev_container_header_title(ctx)
+                        .expect("title")
+                        .contains("failed")
+                );
+                let prior_attempt = build_view.as_ref(ctx).dev_container_attempt_id(ctx);
+                build_view.update(ctx, |view, ctx| {
+                    view.retry_dev_container_build(ctx);
+                });
+                let next_attempt = build_view.as_ref(ctx).dev_container_attempt_id(ctx);
+                assert_ne!(prior_attempt, next_attempt);
+                assert!(
+                    !build_view
+                        .as_ref(ctx)
+                        .dev_container_shows_retry_and_close(ctx)
+                );
+                assert_eq!(
+                    panes
+                        .terminal_view_from_pane_id(build_pane, ctx)
+                        .expect("same pane")
+                        .id(),
+                    build_view.id()
+                );
+            }
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn closing_devcontainer_build_cancels_process_group() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (originating, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            let attempt_before = build_view.as_ref(ctx).dev_container_attempt_id(ctx);
+            panes.close_pane(build_pane, ctx);
+            assert_eq!(panes.visible_pane_count(), 1);
+            assert_eq!(panes.focused_pane_id(ctx), originating);
+            assert!(!panes.has_pane(build_pane));
+            assert!(attempt_before.is_some());
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn closing_devcontainer_build_drops_registry_and_ignores_late_replace() {
+    use crate::terminal::view::dev_container::registry::DevContainerBuildRegistry;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (originating, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            let key = build_view
+                .as_ref(ctx)
+                .dev_container_build_key(ctx)
+                .expect("registry key");
+            assert!(
+                DevContainerBuildRegistry::handle(ctx)
+                    .read(ctx, |registry, _| registry.get(&key).is_some())
+            );
+            panes.close_pane(build_pane, ctx);
+            assert!(
+                DevContainerBuildRegistry::handle(ctx)
+                    .read(ctx, |registry, _| registry.get(&key).is_none()),
+                "close must drop the registry entry so a late completion cannot revive the surface"
+            );
+            assert!(
+                !panes.replace_dev_container_build_pane_with_mock(build_pane, ctx),
+                "a late replace after close must not create a pane"
+            );
+            assert_eq!(panes.visible_pane_count(), 1);
+            assert_eq!(panes.focused_pane_id(ctx), originating);
+            assert!(!panes.has_pane(build_pane));
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn retry_devcontainer_build_renders_new_streamed_output() {
+    use warp_terminal::model::ansi::Processor;
+    use warpui::View;
+    use warpui::units::Lines;
+
+    use crate::terminal::model::block::TranscriptScope;
+    use crate::terminal::view::dev_container::operation::DevContainerBuildPhase;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (_, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            build_view.update(ctx, |view, _ctx| {
+                let mut model = view.model.lock();
+                let mut processor = Processor::new();
+                processor.parse_bytes(&mut *model, b"step-one\r\n", &mut std::io::sink());
+            });
+            build_view.update(ctx, |view, ctx| {
+                view.fail_dev_container_build_for_test(
+                    DevContainerBuildPhase::Build,
+                    "boom".to_owned(),
+                    ctx,
+                );
+                view.retry_dev_container_build(ctx);
+            });
+            assert!(
+                !build_view
+                    .as_ref(ctx)
+                    .dev_container_shows_retry_and_close(ctx)
+            );
+            build_view.update(ctx, |view, _ctx| {
+                let mut model = view.model.lock();
+                let mut processor = Processor::new();
+                processor.parse_bytes(&mut *model, b"step-two\r\n", &mut std::io::sink());
+                let visible_height = model.block_list().block_heights().summary().height;
+                assert!(
+                    visible_height > Lines::zero(),
+                    "retry must leave a visible commandless block, got {visible_height:?}"
+                );
+                assert!(
+                    model
+                        .block_list()
+                        .active_block()
+                        .is_visible(&TranscriptScope::Terminal)
+                );
+            });
+            let rendered_text = build_view
+                .as_ref(ctx)
+                .render(ctx)
+                .debug_text_content()
+                .unwrap_or_default();
+            assert!(
+                rendered_text.contains("step-two"),
+                "retry must render the new attempt's logs, got {rendered_text:?}"
+            );
+            assert!(
+                !rendered_text.contains("step-one"),
+                "retry must clear the prior attempt's logs, got {rendered_text:?}"
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn duplicate_devcontainer_invocation_across_pane_groups_focuses_original() {
+    use crate::terminal::view::dev_container::registry::DevContainerBuildRegistry;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let group_a = mock_pane_group(&mut app, Default::default());
+        let group_b = mock_pane_group(
+            &mut app,
+            MockOptions {
+                window_bounds: WindowBounds::ExactPosition(RectF::new(
+                    Vector2F::new(100., 100.),
+                    Vector2F::new(1024., 768.),
+                )),
+                ..Default::default()
+            },
+        );
+        let (build_pane, key) = group_a.update(&mut app, |panes, ctx| {
+            let (_, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            let key = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build")
+                .as_ref(ctx)
+                .dev_container_build_key(ctx)
+                .expect("key");
+            (build_pane, key)
+        });
+        group_b.update(&mut app, |panes, ctx| {
+            let originating = get_newly_created_pane_id(panes, &[]);
+            panes.start_dev_container_build(
+                originating,
+                PathBuf::from("/tmp/ws"),
+                PathBuf::from("/tmp/ws/.devcontainer/devcontainer.json"),
+                ctx,
+            );
+            assert_eq!(
+                panes.visible_pane_count(),
+                1,
+                "a live surface in another pane group must not be replaced"
+            );
+        });
+        group_a.update(&mut app, |panes, ctx| {
+            assert_eq!(panes.visible_pane_count(), 2);
+            assert_eq!(panes.focused_pane_id(ctx), build_pane);
+            assert!(
+                panes
+                    .terminal_view_from_pane_id(build_pane, ctx)
+                    .expect("original")
+                    .as_ref(ctx)
+                    .is_dev_container_build_surface()
+            );
+        });
+        app.read(|ctx| {
+            assert!(
+                DevContainerBuildRegistry::handle(ctx)
+                    .read(ctx, |registry, _| registry.get(&key).is_some())
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_tty")]
+#[test]
+fn duplicate_devcontainer_invocation_focuses_existing_surface() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (originating, build_pane) = start_mocked_dev_container_build(panes, ctx);
+            panes.focus_pane_by_id(originating, ctx);
+            panes.start_dev_container_build(
+                originating,
+                PathBuf::from("/tmp/ws"),
+                PathBuf::from("/tmp/ws/.devcontainer/devcontainer.json"),
+                ctx,
+            );
+            assert_eq!(panes.visible_pane_count(), 2);
+            assert_eq!(panes.focused_pane_id(ctx), build_pane);
+
+            let build_view = panes
+                .terminal_view_from_pane_id(build_pane, ctx)
+                .expect("build view");
+            build_view.update(ctx, |view, ctx| {
+                view.fail_dev_container_build_for_test(
+                    crate::terminal::view::dev_container::operation::DevContainerBuildPhase::Build,
+                    "boom".to_owned(),
+                    ctx,
+                );
+            });
+            panes.focus_pane_by_id(originating, ctx);
+            panes.start_dev_container_build(
+                originating,
+                PathBuf::from("/tmp/ws"),
+                PathBuf::from("/tmp/ws/.devcontainer/devcontainer.json"),
+                ctx,
+            );
+            assert_eq!(panes.focused_pane_id(ctx), build_pane);
+            assert!(
+                build_view
+                    .as_ref(ctx)
+                    .dev_container_shows_retry_and_close(ctx)
+            );
+
+            panes.start_dev_container_build(
+                originating,
+                PathBuf::from("/tmp/other"),
+                PathBuf::from("/tmp/other/.devcontainer/devcontainer.json"),
+                ctx,
+            );
+            assert_eq!(panes.visible_pane_count(), 3);
+        });
+    });
+}
+
+#[cfg(all(feature = "local_tty", unix))]
+#[test]
+fn duplicate_devcontainer_invocation_canonicalizes_config_aliases() {
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    let root = std::env::temp_dir().join(format!("dc-alias-{}", Uuid::new_v4()));
+    let real_ws = root.join("ws");
+    let config_dir = real_ws.join(".devcontainer");
+    fs::create_dir_all(&config_dir).expect("create workspace");
+    let real_config = config_dir.join("devcontainer.json");
+    fs::write(&real_config, "{}").expect("write config");
+    let alias_ws = root.join("ws-alias");
+    symlink(&real_ws, &alias_ws).expect("symlink workspace");
+    let alias_config = alias_ws.join(".devcontainer/devcontainer.json");
+
+    App::test((), {
+        let real_ws = real_ws.clone();
+        let real_config = real_config.clone();
+        let alias_ws = alias_ws.clone();
+        let alias_config = alias_config.clone();
+        move |mut app| async move {
+            initialize_app(&mut app);
+            let pane_group = mock_pane_group(&mut app, Default::default());
+            pane_group.update(&mut app, |panes, ctx| {
+                let originating = get_newly_created_pane_id(panes, &[]);
+                panes.start_dev_container_build(originating, real_ws, real_config, ctx);
+                assert_eq!(panes.visible_pane_count(), 2);
+                panes.start_dev_container_build(originating, alias_ws, alias_config, ctx);
+                assert_eq!(
+                    panes.visible_pane_count(),
+                    2,
+                    "symlinked config paths must share one registry key"
+                );
+            });
+        }
+    });
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(all(feature = "local_tty", feature = "local_fs"))]
+#[test]
+fn devcontainer_build_surface_is_not_persisted() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        pane_group.update(&mut app, |panes, ctx| {
+            let (originating, _) = start_mocked_dev_container_build(panes, ctx);
+            let snapshot = panes.snapshot(ctx);
+            let mut saw_build = false;
+            let mut saw_originating = false;
+            fn walk(node: &PaneNodeSnapshot, saw_build: &mut bool, saw_originating: &mut bool) {
+                match node {
+                    PaneNodeSnapshot::Leaf(leaf) => match &leaf.contents {
+                        LeafContents::DevContainerBuild => {
+                            *saw_build = true;
+                            assert!(!leaf.contents.is_persisted());
+                        }
+                        LeafContents::Terminal(_) => *saw_originating = true,
+                        _ => {}
+                    },
+                    PaneNodeSnapshot::Branch(branch) => {
+                        for (_, child) in &branch.children {
+                            walk(child, saw_build, saw_originating);
+                        }
+                    }
+                }
+            }
+            walk(&snapshot, &mut saw_build, &mut saw_originating);
+            assert!(saw_build);
+            assert!(saw_originating);
+            assert!(panes.has_pane(originating));
         });
     });
 }

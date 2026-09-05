@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn interpret_dev_container_up_output_does_not_attach_when_ordinary_tail_follows_outcome() {
+    let stdout = r#"{"outcome":"success","containerId":"abc","remoteWorkspaceFolder":"/w"}
+ordinary-tail"#;
+    let drain = futures_lite::future::block_on(stream::drain_dev_container_pipes(
+        futures_lite::io::Cursor::new(stdout.as_bytes().to_vec()),
+        futures_lite::io::Cursor::new(Vec::<u8>::new()),
+        |_| {},
+    ))
+    .expect("drain");
+    let outcome = interpret_dev_container_up_output(true, &drain.stdout.bytes, &drain.stderr_tail);
+    assert!(
+        matches!(outcome, DevContainerUpOutcome::Error(_)),
+        "stale outcome before ordinary tail must not attach, got {outcome:?}"
+    );
+}
+
+#[test]
 fn interpret_dev_container_up_output_ready_to_attach_on_full_success() {
     let stdout = r#"Some progress line
 {"outcome":"success","containerId":"abc123","remoteUser":"vscode","remoteWorkspaceFolder":"/workspaces/project"}"#;
@@ -54,12 +71,12 @@ fn interpret_dev_container_up_output_errors_on_missing_remote_workspace_folder()
 #[test]
 fn interpret_dev_container_up_output_uses_structured_message_on_failure_exit_status() {
     let stdout = r#"{"outcome":"error","message":"Command failed: docker pull nope:latest"}"#;
-    let outcome = interpret_dev_container_up_output(false, stdout.as_bytes(), b"some stderr noise");
+    let outcome = interpret_dev_container_up_output(false, stdout.as_bytes(), b"");
 
     assert_eq!(
         outcome,
         DevContainerUpOutcome::Error(
-            "Dev container failed to start: Command failed: docker pull nope:latest".to_owned()
+            "Dev container failed to start:\nCommand failed: docker pull nope:latest".to_owned()
         )
     );
 }
@@ -70,7 +87,9 @@ fn interpret_dev_container_up_output_falls_back_to_stderr_tail_when_unparseable(
 
     assert_eq!(
         outcome,
-        DevContainerUpOutcome::Error("Dev container failed to start:\nboom".to_owned())
+        DevContainerUpOutcome::Error(
+            "Dev container failed to start:\nnot json at all\nboom".to_owned()
+        )
     );
 }
 
@@ -84,7 +103,7 @@ fn interpret_dev_container_up_output_errors_when_success_exit_but_outcome_is_err
     assert_eq!(
         outcome,
         DevContainerUpOutcome::Error(
-            "Dev container failed to start: something went wrong".to_owned()
+            "Dev container failed to start:\nsomething went wrong".to_owned()
         )
     );
 }
@@ -92,11 +111,11 @@ fn interpret_dev_container_up_output_errors_when_success_exit_but_outcome_is_err
 #[test]
 fn dev_container_up_failure_message_prefers_structured_description_over_stderr() {
     let stdout = r#"{"outcome":"error","description":"no space left on device"}"#;
-    let message = dev_container_up_failure_message(stdout.as_bytes(), b"irrelevant stderr");
+    let message = dev_container_up_failure_message(stdout.as_bytes(), b"");
 
     assert_eq!(
         message,
-        "Dev container failed to start: no space left on device"
+        "Dev container failed to start:\nno space left on device"
     );
 }
 
@@ -107,7 +126,7 @@ fn dev_container_up_failure_message_falls_back_to_stderr_tail_and_trims_blank_li
 
     assert_eq!(
         message,
-        "Dev container failed to start:\nline one\nline two"
+        "Dev container failed to start:\nnot json\nline one\nline two"
     );
 }
 
@@ -168,6 +187,150 @@ fn parse_dev_container_up_stdout_reads_the_last_line_only() {
 fn parse_dev_container_up_stdout_returns_none_for_empty_or_malformed_input() {
     assert!(parse_dev_container_up_stdout(b"").is_none());
     assert!(parse_dev_container_up_stdout(b"not json").is_none());
+    assert!(parse_dev_container_up_stdout(b"{\"outcome\":").is_none());
+}
+
+#[test]
+fn interpret_dev_container_up_output_errors_on_missing_or_incomplete_stdout() {
+    assert!(matches!(
+        interpret_dev_container_up_output(true, b"", b""),
+        DevContainerUpOutcome::Error(_)
+    ));
+    assert!(matches!(
+        interpret_dev_container_up_output(true, b"{\"outcome\":", b""),
+        DevContainerUpOutcome::Error(_)
+    ));
+}
+
+#[test]
+fn interpret_docker_ps_probe_failure_keeps_command_and_underlying_stderr() {
+    let stdout = r#"{"outcome":"error","message":"Command failed: docker ps -q --filter label=devcontainer.local_folder=/private/tmp/ha-core --filter label=devcontainer.config_file=/private/tmp/ha-core/.devcontainer/devcontainer.json"}"#;
+    let stderr = "[2026-09-02T00:43:15.960Z] @devcontainers/cli 0.89.0. Node.js v24.17.0. darwin 25.6.0 arm64.\nCannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n";
+    let outcome = interpret_dev_container_up_output(false, stdout.as_bytes(), stderr.as_bytes());
+    let DevContainerUpOutcome::Error(message) = outcome else {
+        panic!("expected a failed outcome");
+    };
+    assert!(
+        message.contains("Command failed: docker ps"),
+        "structured CLI wrapper must be kept, got {message:?}"
+    );
+    assert!(
+        !message.contains("@devcontainers/cli"),
+        "CLI version banner is not the failure cause, got {message:?}"
+    );
+    assert!(
+        !message.contains("\u{1b}"),
+        "failure text must not include raw ANSI, got {message:?}"
+    );
+    assert!(
+        message.contains("Cannot connect to the Docker daemon"),
+        "unique useful stderr must accompany structured text, got {message:?}"
+    );
+}
+
+#[test]
+fn failure_message_keeps_novel_stderr_after_repeated_structured_prefix() {
+    let stdout = r#"{"outcome":"error","message":"Command failed: docker pull nope:latest"}"#;
+    let stderr = "Command failed: docker pull nope:latest\n\
+Cannot connect to the Docker daemon\n\
+Cannot connect to the Docker daemon\n\
+Command failed: docker pull nope:latest: manifest unknown\n";
+    let message = dev_container_up_failure_message(stdout.as_bytes(), stderr.as_bytes());
+    assert_eq!(
+        message
+            .matches("Command failed: docker pull nope:latest")
+            .count(),
+        2,
+        "exact prefix line is dropped, enriched cause line is kept, got {message:?}"
+    );
+    assert_eq!(
+        message
+            .matches("Cannot connect to the Docker daemon")
+            .count(),
+        1,
+        "duplicate stderr diagnostic must appear once, got {message:?}"
+    );
+    assert_eq!(
+        message.matches("manifest unknown").count(),
+        1,
+        "novel registry/daemon cause must be kept once, got {message:?}"
+    );
+}
+
+#[test]
+fn interpret_dev_container_up_output_uses_bounded_stderr_tail_fallback() {
+    let stderr = "keep-me\nthis-is-the-tail\n";
+    let outcome = interpret_dev_container_up_output(false, b"", stderr.as_bytes());
+    assert_eq!(
+        outcome,
+        DevContainerUpOutcome::Error(
+            "Dev container failed to start:\nkeep-me\nthis-is-the-tail".to_owned()
+        )
+    );
+}
+
+#[test]
+fn leftover_stdout_strips_ansi_from_failure_text() {
+    let stdout = "\u{1b}[31mContainer started\u{1b}[0m\n\u{1b}]0;title\u{7}not a result\n";
+    let message = dev_container_up_failure_message(stdout.as_bytes(), b"");
+    assert!(
+        message.contains("Container started"),
+        "plain leftover stdout must remain, got {message:?}"
+    );
+    assert!(
+        !message.contains('\u{1b}'),
+        "CSI/OSC must not leak into failure text, got {message:?}"
+    );
+}
+
+#[test]
+fn interpret_dev_container_up_output_strips_tty_redraw_from_stderr_fallback() {
+    let stderr = "\u{1b}[1A\u{1b}[K#15 extracting 1MB\r\u{1b}[1A\u{1b}[KCannot connect to the Docker daemon\n";
+    let outcome = interpret_dev_container_up_output(false, b"", stderr.as_bytes());
+    let DevContainerUpOutcome::Error(message) = outcome else {
+        panic!("expected a failed outcome");
+    };
+    assert!(
+        message.contains("Cannot connect to the Docker daemon"),
+        "sanitized diagnostic must remain, got {message:?}"
+    );
+    assert!(
+        !message.contains('\u{1b}'),
+        "cursor-up/erase must not leak into failure text, got {message:?}"
+    );
+}
+
+#[test]
+fn interpret_dev_container_up_output_extracts_text_from_jsonl_stderr() {
+    let banner = serde_json::json!({
+        "type": "text",
+        "level": 3,
+        "timestamp": 1,
+        "text": "[cli] @devcontainers/cli 0.89.0",
+    });
+    let error = serde_json::json!({
+        "type": "text",
+        "level": 5,
+        "timestamp": 2,
+        "text": "Cannot connect to the Docker daemon",
+    });
+    let stderr = format!("{banner}\n{error}\n");
+    let outcome = interpret_dev_container_up_output(false, b"", stderr.as_bytes());
+    let DevContainerUpOutcome::Error(message) = outcome else {
+        panic!("expected a failed outcome");
+    };
+    assert!(
+        message.contains("Cannot connect to the Docker daemon"),
+        "JSONL text events must surface in the fallback, got {message:?}"
+    );
+    assert!(
+        !message.contains("@devcontainers/cli"),
+        "CLI version banner is not the failure cause, got {message:?}"
+    );
+    assert!(
+        !message.contains("\"type\":"),
+        "raw JSONL envelopes must not appear in the fallback, got {message:?}"
+    );
 }
 
 #[test]

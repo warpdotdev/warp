@@ -5784,6 +5784,7 @@ impl Input {
     ///
     /// Only called when more than one config was discovered; a single match is brought up
     /// directly without this menu.
+    #[cfg(feature = "local_tty")]
     pub(crate) fn open_dev_container_config_selector(
         &mut self,
         workspace_folder: PathBuf,
