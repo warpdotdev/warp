@@ -9,11 +9,17 @@ use crate::{
 
 // Simple transformer to make testing easier.
 fn test_parse_markdown(source: &str) -> Vec<FormattedTextLine> {
-    parse_all(source, |input| parse_markdown_internal(input, false))
+    parse_all(source, |input| {
+        parse_markdown_internal(input, false, SourceMapMode::Build)
+    })
+    .lines
 }
 
 fn test_parse_markdown_with_gfm_tables(source: &str) -> Vec<FormattedTextLine> {
-    parse_all(source, |input| parse_markdown_internal(input, true))
+    parse_all(source, |input| {
+        parse_markdown_internal(input, true, SourceMapMode::Build)
+    })
+    .lines
 }
 
 #[test]
@@ -3000,5 +3006,134 @@ fn test_parse_html_comment_with_trailing_same_line_content_is_not_block() {
         vec![FormattedTextLine::Line(vec![
             FormattedTextFragment::plain_text(" # Heading")
         ])]
+    );
+}
+
+/// Asserts that source line `source_line` (0-based) anchors to `line_index` at `row_in_line`.
+fn assert_anchor(parsed: &ParsedMarkdown, source_line: usize, expected: Option<(usize, usize)>) {
+    let actual = parsed
+        .source_map
+        .anchor_for_source_line(source_line)
+        .map(|anchor| (anchor.line_index, anchor.row_in_line));
+    assert_eq!(actual, expected, "source line {source_line}");
+}
+
+#[test]
+fn source_map_skips_multiline_html_comments() {
+    let parsed = parse_markdown_with_source_map("Intro\n<!--\nhidden\n-->\nOutro\n")
+        .expect("Markdown should parse");
+
+    assert_eq!(parsed.source_map.source_line_count(), 5);
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    assert_anchor(&parsed, 1, None);
+    assert_anchor(&parsed, 2, None);
+    assert_anchor(&parsed, 3, None);
+    assert_anchor(&parsed, 4, Some((1, 0)));
+}
+
+#[test]
+fn source_map_tracks_fenced_code_sublines() {
+    let parsed = parse_markdown_with_source_map("Before\n```text\n=>\n---\n```\nAfter\n")
+        .expect("Markdown should parse");
+
+    assert_eq!(parsed.source_map.source_line_count(), 6);
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    // The fences and the two code lines all live inside the single code-block line.
+    assert_anchor(&parsed, 1, Some((1, 0)));
+    assert_anchor(&parsed, 2, Some((1, 0)));
+    assert_anchor(&parsed, 3, Some((1, 1)));
+    assert_anchor(&parsed, 4, Some((1, 1)));
+    assert_anchor(&parsed, 5, Some((2, 0)));
+}
+
+#[test]
+fn source_map_tracks_gfm_table_rows() {
+    let parsed =
+        parse_markdown_with_gfm_tables_and_source_map("| Header |\n| --- |\n| => |\nAfter\n")
+            .expect("Markdown should parse");
+
+    assert_eq!(parsed.source_map.source_line_count(), 4);
+    // The separator row renders nothing, so it shares the header's row.
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    assert_anchor(&parsed, 1, Some((0, 0)));
+    assert_anchor(&parsed, 2, Some((0, 1)));
+    assert_anchor(&parsed, 3, Some((1, 0)));
+}
+
+#[test]
+fn source_map_tracks_crlf_source_lines() {
+    let parsed = parse_markdown_with_source_map("First\r\n\r\n---\r\nLast\r\n")
+        .expect("Markdown should parse");
+
+    assert_eq!(parsed.source_map.source_line_count(), 4);
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    assert_anchor(&parsed, 1, Some((1, 0)));
+    assert_anchor(&parsed, 2, Some((2, 0)));
+    assert_anchor(&parsed, 3, Some((3, 0)));
+}
+
+#[test]
+fn source_map_anchors_embedded_block_source_to_its_rendered_row() {
+    let parsed =
+        parse_markdown_with_source_map("Before\n```warp-embedded-object\nid: needle\n```\nAfter\n")
+            .expect("Markdown should parse");
+
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    assert_anchor(&parsed, 1, Some((1, 0)));
+    assert_anchor(&parsed, 2, Some((1, 0)));
+    assert_anchor(&parsed, 3, Some((1, 0)));
+    assert_anchor(&parsed, 4, Some((2, 0)));
+}
+
+/// A trailing blank line produces a `LineBreak` that is trimmed off the rendered text, so nothing
+/// may still point at it.
+#[test]
+fn source_map_drops_anchors_for_the_trimmed_trailing_line_break() {
+    let parsed = parse_markdown_with_source_map("Only line\n\n").expect("Markdown should parse");
+
+    assert_eq!(parsed.text.lines.len(), 1);
+    assert_eq!(parsed.source_map.source_line_count(), 2);
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    assert_anchor(&parsed, 1, None);
+}
+
+/// Anchors are line indices, so blocks that a consumer may render as a different number of rows
+/// (thematic breaks, images, embedded objects) cannot shift the lines that follow them.
+#[test]
+fn source_map_anchors_survive_block_level_items() {
+    let parsed = parse_markdown_with_source_map("A\n\n---\n\n![alt](i.png)\n\nB\n")
+        .expect("Markdown should parse");
+
+    assert_eq!(parsed.source_map.source_line_count(), 7);
+    assert_anchor(&parsed, 0, Some((0, 0)));
+    assert_anchor(&parsed, 1, Some((1, 0)));
+    assert_anchor(&parsed, 2, Some((2, 0)));
+    assert_anchor(&parsed, 3, Some((3, 0)));
+    assert_anchor(&parsed, 4, Some((4, 0)));
+    assert_anchor(&parsed, 5, Some((5, 0)));
+    assert_anchor(&parsed, 6, Some((6, 0)));
+    // Each anchor names the line that actually produced it.
+    for (index, line) in parsed.text.lines.iter().enumerate() {
+        let anchor = parsed
+            .source_map
+            .anchor_for_source_line(index)
+            .expect("every source line renders here");
+        assert_eq!(anchor.line_index, index);
+        let _ = line;
+    }
+}
+
+/// Callers that only want rendered text must not pay for a source map.
+#[test]
+fn parse_markdown_without_source_map_matches_the_source_map_variant() {
+    let markdown = "# H\n\n```sh\necho a\n```\n\n- item\n\n---\n\nTail\n";
+
+    let plain = parse_markdown(markdown).expect("Markdown should parse");
+    let with_map = parse_markdown_with_source_map(markdown).expect("Markdown should parse");
+
+    assert_eq!(plain, with_map.text);
+    assert_eq!(
+        with_map.source_map.source_line_count(),
+        markdown.lines().count()
     );
 }

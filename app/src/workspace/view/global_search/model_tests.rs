@@ -119,3 +119,22 @@ fn remote_match_column_counts_characters_not_bytes() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].column_num, Some(2));
 }
+
+#[test]
+fn remote_multiline_match_uses_submatch_source_line() {
+    let success = RipgrepSearchSuccess {
+        matches: vec![proto_match(
+            "/repo/a.md",
+            10,
+            "first\n  needle\n",
+            vec![(8, 14)],
+        )],
+        capped: false,
+    };
+
+    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].line_number, 11);
+    assert_eq!(results[0].column_num, Some(3));
+}

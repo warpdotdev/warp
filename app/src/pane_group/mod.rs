@@ -1811,6 +1811,7 @@ impl PaneGroup {
                         None,
                         #[cfg(feature = "local_fs")]
                         None,
+                        None,
                         ctx,
                     )),
                 };
@@ -5152,7 +5153,7 @@ impl PaneGroup {
         // Construct the pane empty, seed the restored scroll, THEN open the path — so the content
         // load that triggers `set_content` -> scroll apply can never run before the pending
         // fraction is set, even if a load were to deliver synchronously.
-        let file_pane = FilePane::new(None, None, source, ctx);
+        let file_pane = FilePane::new(None, None, source, None, ctx);
         file_pane.file_view(ctx).update(ctx, |view, ctx| {
             view.set_pending_scroll_fraction(scroll_fraction);
             view.open(path, session, ctx);
@@ -7696,6 +7697,19 @@ impl PaneGroup {
         self.pane_contents
             .get(&pane_id.into())
             .and_then(|contents| contents.as_any().downcast_ref::<CodePane>())
+            .map(|pane| pane.file_view(ctx))
+    }
+
+    /// Given a pane ID, retrieve its backing file notebook view, if the pane is
+    /// a file notebook pane.
+    pub fn file_notebook_view_from_pane_id(
+        &self,
+        pane_id: impl Into<PaneId>,
+        ctx: &AppContext,
+    ) -> Option<ViewHandle<FileNotebookView>> {
+        self.pane_contents
+            .get(&pane_id.into())
+            .and_then(|contents| contents.as_any().downcast_ref::<FilePane>())
             .map(|pane| pane.file_view(ctx))
     }
 

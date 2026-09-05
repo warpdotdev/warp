@@ -1249,6 +1249,73 @@ fn test_open_markdown_viewer_target_preserves_requested_line() {
 
 #[cfg(feature = "local_fs")]
 #[test]
+fn test_open_markdown_viewer_with_line_target_reaches_notebook_view() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        // Deliberately never created on disk: the load stays un-completed, so
+        // the pending line target is still observable after each open call
+        // (a completed load consumes it when applying the scroll).
+        let markdown_path = temp_dir.path().join("README.md");
+
+        let open_at_line =
+            |workspace: &mut Workspace, line_num, ctx: &mut ViewContext<Workspace>| {
+                workspace.open_file_with_target(
+                    markdown_path.clone(),
+                    FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                    Some(LineAndColumnArg {
+                        line_num,
+                        column_num: None,
+                    }),
+                    CodeSource::Link {
+                        path: markdown_path.clone(),
+                        range_start: None,
+                        range_end: None,
+                    },
+                    ctx,
+                );
+            };
+
+        // The line target must reach the notebook view (it used to be dropped
+        // on the markdown-viewer path). The file load is async, so the target
+        // is still pending right after the open call.
+        workspace.update(&mut app, |workspace, ctx| {
+            open_at_line(workspace, 5, ctx);
+        });
+        let file_view = workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let panes: Vec<_> = pane_group.file_notebook_panes(ctx).collect();
+            assert_eq!(panes.len(), 1);
+            panes[0].1.clone()
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                file_view.as_ref(ctx).pending_source_target_for_test(),
+                Some(5)
+            );
+        });
+
+        // Re-opening the same file at a different line reuses the existing
+        // pane and must still carry the new line target.
+        workspace.update(&mut app, |workspace, ctx| {
+            open_at_line(workspace, 3, ctx);
+        });
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            assert_eq!(pane_group.file_notebook_panes(ctx).count(), 1);
+        });
+        app.read(|ctx| {
+            assert_eq!(
+                file_view.as_ref(ctx).pending_source_target_for_test(),
+                Some(3)
+            );
+        });
+    });
+}
+
+#[cfg(feature = "local_fs")]
+#[test]
 fn test_worktree_sidecar_search_editor_enter_executes_selection() {
     let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
 

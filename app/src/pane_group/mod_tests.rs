@@ -3916,6 +3916,7 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 Some(LocalOrRemotePath::Local(path.clone())),
                 None,
                 None,
+                None,
                 ctx,
             );
             panes.add_pane_with_direction(Direction::Right, pane, true, ctx);

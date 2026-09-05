@@ -99,9 +99,18 @@ pub struct FileNotebookView {
     code_source: Option<CodeSource>,
     /// Persistent hover state for the header title tooltip.
     header_title_mouse_state: MouseStateHandle,
+    /// Location in the raw source to scroll to, best effort, once the file content loads.
+    pending_source_target: Option<SourceScrollTarget>,
     /// Vertical scroll fraction (`0..=1`) to restore once the file content is first loaded,
     /// captured before a markdown raw->rendered toggle. Consumed on the first `set_content`.
     pending_scroll_fraction: Option<f32>,
+}
+
+/// A location in a Markdown file's raw source to scroll to once it renders.
+#[derive(Debug, Clone)]
+pub struct SourceScrollTarget {
+    /// 1-based line in the raw source file.
+    pub source_line: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -297,8 +306,51 @@ impl FileNotebookView {
             #[cfg(feature = "local_fs")]
             code_source: None,
             header_title_mouse_state: Default::default(),
+            pending_source_target: None,
             pending_scroll_fraction: None,
         }
+    }
+
+    /// Sets a scroll target to apply, best effort, once the file content loads.
+    pub fn set_pending_source_target(&mut self, target: Option<SourceScrollTarget>) {
+        self.pending_source_target = target;
+    }
+
+    /// Test-only accessor for the pending scroll target.
+    #[cfg(test)]
+    pub fn pending_source_target_for_test(&self) -> Option<usize> {
+        self.pending_source_target
+            .as_ref()
+            .map(|target| target.source_line)
+    }
+
+    /// Scrolls, best effort, to a location in the raw source file.
+    ///
+    /// Content that is still loading defers the scroll until its raw source arrives.
+    pub fn scroll_to_source_target(
+        &mut self,
+        target: SourceScrollTarget,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !self.supports_source_scrolling() {
+            return;
+        }
+        if matches!(self.file_state, FileState::Loaded(_)) {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.model().update(ctx, |model, ctx| {
+                    model.scroll_to_source_target(&target, ctx);
+                });
+            });
+        } else {
+            self.pending_source_target = Some(target);
+        }
+    }
+
+    /// Whether a raw-source location can be mapped onto what this view shows. Jupyter notebooks
+    /// also render here, but their file is JSON, so a source line refers to a line of that JSON
+    /// rather than to anything on screen.
+    fn supports_source_scrolling(&self) -> bool {
+        !self.is_jupyter_notebook_file()
     }
 
     #[cfg(feature = "local_fs")]
@@ -379,6 +431,18 @@ impl FileNotebookView {
                 }
             });
         });
+
+        // Taken rather than read, so that content refreshes from file watching keep the user's
+        // scroll position instead of yanking it back to the target.
+        if let Some(target) = self.pending_source_target.take()
+            && self.supports_source_scrolling()
+        {
+            self.editor.update(ctx, |editor, ctx| {
+                editor.model().update(ctx, |model, ctx| {
+                    model.scroll_to_source_target(&target, ctx);
+                });
+            });
+        }
     }
 
     #[cfg(feature = "local_fs")]
