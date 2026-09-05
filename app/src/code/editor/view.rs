@@ -353,8 +353,8 @@ impl CodeEditorView {
             }
         });
 
-        // If feature flag is enabled, enable vim mode.
-        let supports_vim_mode = FeatureFlag::VimCodeEditor.is_enabled();
+        // Vim mode is always supported.
+        let supports_vim_mode = true;
 
         let vim_model = ctx.add_model(|_| VimModel::new());
         ctx.subscribe_to_model(&vim_model, Self::handle_vim_event);

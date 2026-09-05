@@ -571,7 +571,6 @@ default = [
     "create_project_flow",
     "get_started_tab",
     "file_tree",
-    "vim_code_editor",
     "code_launch_modal",
     "allow_ignoring_input_suggestions",
     "mcp_oauth",
@@ -928,7 +927,6 @@ conversations_as_context = []
 conversation_api = []
 sync_ambient_plans = []
 projects = []
-vim_code_editor = []
 allow_opening_file_links_using_editor_env = []
 undo_closed_panes = []
 revert_diff_hunk = []
