@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use rustc_hash::FxHashMap;
-use warp_errors::report_error;
+use warp_errors::{ReportErrorLogMode, report_error};
 
 use super::{
     ActionCallback, BlurContext, FocusContext, GlobalActionCallback, GlobalShortcut,
@@ -3456,6 +3456,24 @@ impl AppContext {
                 autotracking::remove_view(current_window_id, view_id);
             }
         }
+    }
+
+    const UNUSUALLY_LARGE_PENDING_EFFECTS: usize = 10_000;
+
+    pub(super) fn enqueue_effect(&mut self, effect: Effect) {
+        self.pending_effects.push_back(effect);
+        self.report_if_pending_effects_unusually_large();
+    }
+
+    fn report_if_pending_effects_unusually_large(&self) {
+        if self.is_unit_test || self.pending_effects.len() < Self::UNUSUALLY_LARGE_PENDING_EFFECTS {
+            return;
+        }
+        report_error!(
+            "pending_effects queue is unusually large",
+            extra: { "len" => %self.pending_effects.len() },
+            ReportErrorLogMode::OncePerRun
+        );
     }
 
     fn flush_effects(&mut self) {
