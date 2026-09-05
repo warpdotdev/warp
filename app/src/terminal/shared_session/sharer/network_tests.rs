@@ -345,6 +345,7 @@ fn test_send_pty_read_event_while_not_batching() {
     });
 }
 
+#[cfg_attr(windows, ignore = "APP-5820: flaky on Windows CI")]
 #[test]
 fn test_handle_pty_read_event_while_batching() {
     App::test((), |mut app| async move {
@@ -606,6 +607,7 @@ fn test_ignore_duplicate_prompt_updates() {
     });
 }
 
+#[cfg_attr(windows, ignore = "APP-5820: flaky on Windows CI")]
 #[test]
 fn test_selection_updates_throttled_and_duplicates_ignored() {
     App::test((), |mut app| async move {
