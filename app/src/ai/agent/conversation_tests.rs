@@ -7,9 +7,11 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     AIConversation, AIConversationAutoexecuteMode, AIConversationId, ConversationStatus,
-    ConversationUsageTotals, RecordingSpanStatus, RestoreConversationError,
+    ConversationUsageTotals, MAX_RESTORED_COMMAND_BLOCKS, MAX_SERIALIZED_STYLIZED_OUTPUT_LINES,
+    RecordingSpanStatus, RestoreConversationError, SerializedBlockListItem,
     artifact_from_fork_proto, footer_model_token_usage,
 };
+use crate::ai::agent::task::helper::MessageExt;
 use crate::ai::artifacts::Artifact;
 use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
@@ -223,19 +225,90 @@ fn stop_recording_error_result(message: &str) -> api::message::tool_call_result:
     })
 }
 fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
-    AIConversation::new_restored(
-        AIConversationId::new(),
-        vec![api::Task {
-            id: "root-task".to_string(),
-            messages,
-            dependencies: None,
-            description: String::new(),
-            summary: String::new(),
-            server_data: String::new(),
-        }],
-        None,
+    restored_conversation_with_tasks(vec![api::Task {
+        id: "root-task".to_string(),
+        messages,
+        dependencies: None,
+        description: String::new(),
+        summary: String::new(),
+        server_data: String::new(),
+    }])
+}
+
+fn restored_conversation_with_tasks(tasks: Vec<api::Task>) -> AIConversation {
+    AIConversation::new_restored(AIConversationId::new(), tasks, None).unwrap()
+}
+
+fn run_shell_command_tool_call(command: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::RunShellCommand(api::message::tool_call::RunShellCommand {
+        command: command.to_string(),
+        is_read_only: false,
+        uses_pager: false,
+        citations: vec![],
+        is_risky: false,
+        wait_until_complete_value: None,
+        risk_category: 0,
+    })
+}
+
+#[allow(deprecated)]
+fn run_shell_command_finished_result(
+    command_id: &str,
+    output: &str,
+) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::RunShellCommand(api::RunShellCommandResult {
+        command: String::new(),
+        output: String::new(),
+        exit_code: 0,
+        result: Some(api::run_shell_command_result::Result::CommandFinished(
+            api::ShellCommandFinished {
+                command_id: command_id.to_string(),
+                output: output.to_string(),
+                exit_code: 0,
+                start_ts: None,
+                finish_ts: None,
+            },
+        )),
+    })
+}
+
+/// A pair of messages recording a completed shell command: the tool call and its result.
+fn run_shell_command_messages(index: usize, output: &str) -> Vec<api::Message> {
+    let tool_call_id = format!("call-{index}");
+    vec![
+        tool_call_message(
+            &format!("call-msg-{index}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_tool_call(&format!("cmd-{index}")),
+        ),
+        tool_call_result_message(
+            &format!("result-msg-{index}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_finished_result(&format!("command-{index}"), output),
+        ),
+    ]
+}
+
+fn summarization_subagent_tool_call(task_id: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::Subagent(api::message::tool_call::Subagent {
+        task_id: task_id.to_string(),
+        payload: String::new(),
+        metadata: Some(api::message::tool_call::subagent::Metadata::Summarization(
+            (),
+        )),
+    })
+}
+
+/// Returns the command block's stylized command and output, decoded as UTF-8, from a
+/// [`SerializedBlockListItem`] produced by [`AIConversation::to_serialized_blocklist_items`].
+fn command_and_output(item: &SerializedBlockListItem) -> (String, String) {
+    let SerializedBlockListItem::Command { block } = item;
+    (
+        String::from_utf8(block.stylized_command.clone()).unwrap(),
+        String::from_utf8(block.stylized_output.clone()).unwrap(),
     )
-    .unwrap()
 }
 
 fn agent_output_message(id: &str, request_id: &str) -> api::Message {
@@ -1539,4 +1612,139 @@ fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
             fetched_memory("m1", "same memory id different store", "store-2", None),
         ]
     );
+}
+
+#[test]
+fn to_serialized_blocklist_items_truncates_long_output_to_most_recent_lines() {
+    let line_count = MAX_SERIALIZED_STYLIZED_OUTPUT_LINES + 10;
+    let output = (0..line_count)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let conversation = restored_conversation_with_messages(run_shell_command_messages(0, &output));
+
+    let items = conversation.to_serialized_blocklist_items();
+
+    assert_eq!(items.len(), 1);
+    let (_, restored_output) = command_and_output(&items[0]);
+    let restored_lines: Vec<&str> = restored_output.split("\r\n").collect();
+    assert_eq!(restored_lines.len(), MAX_SERIALIZED_STYLIZED_OUTPUT_LINES);
+    assert_eq!(restored_lines[0], "line-10");
+    assert_eq!(
+        restored_lines[restored_lines.len() - 1],
+        format!("line-{}", line_count - 1)
+    );
+}
+
+#[test]
+fn to_serialized_blocklist_items_does_not_mutate_persisted_task_messages() {
+    let long_output = (0..MAX_SERIALIZED_STYLIZED_OUTPUT_LINES + 10)
+        .map(|i| format!("line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let conversation =
+        restored_conversation_with_messages(run_shell_command_messages(0, &long_output));
+
+    // This only produces a derived, display-time view; it must not touch the persisted task
+    // messages that `write_updated_conversation_state` reads from.
+    let _ = conversation.to_serialized_blocklist_items();
+
+    let persisted_output = conversation
+        .get_root_task()
+        .and_then(|task| task.source())
+        .and_then(|source| {
+            source.messages.iter().find_map(|message| {
+                let result = message.tool_call_result()?;
+                match &result.result {
+                    Some(api::message::tool_call_result::Result::RunShellCommand(cmd_result)) => {
+                        match &cmd_result.result {
+                            Some(api::run_shell_command_result::Result::CommandFinished(
+                                finished,
+                            )) => Some(finished.output.clone()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            })
+        })
+        .unwrap();
+    assert_eq!(persisted_output, long_output);
+}
+
+#[test]
+fn to_serialized_blocklist_items_caps_total_blocks_to_most_recent() {
+    let total_commands = MAX_RESTORED_COMMAND_BLOCKS + 5;
+    let messages = (0..total_commands)
+        .flat_map(|i| run_shell_command_messages(i, "output"))
+        .collect();
+    let conversation = restored_conversation_with_messages(messages);
+
+    let items = conversation.to_serialized_blocklist_items();
+
+    assert_eq!(items.len(), MAX_RESTORED_COMMAND_BLOCKS);
+    let (first_command, _) = command_and_output(&items[0]);
+    let (last_command, _) = command_and_output(&items[items.len() - 1]);
+    assert_eq!(
+        first_command,
+        format!("cmd-{}", total_commands - MAX_RESTORED_COMMAND_BLOCKS)
+    );
+    assert_eq!(last_command, format!("cmd-{}", total_commands - 1));
+}
+
+#[test]
+fn to_serialized_blocklist_items_bounds_output_resurrected_from_summarized_history() {
+    let old_output = (0..MAX_SERIALIZED_STYLIZED_OUTPUT_LINES + 10)
+        .map(|i| format!("old-line-{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut old_command_messages = run_shell_command_messages(0, &old_output);
+    for message in &mut old_command_messages {
+        message.task_id = "summary-task".to_string();
+    }
+    let subtask = api::Task {
+        id: "summary-task".to_string(),
+        messages: old_command_messages,
+        dependencies: Some(api::task::Dependencies {
+            parent_task_id: "root-task".to_string(),
+        }),
+        description: String::new(),
+        summary: String::new(),
+        server_data: String::new(),
+    };
+    let mut root_messages = vec![tool_call_message(
+        "summarize-call",
+        "req",
+        "summarize",
+        summarization_subagent_tool_call("summary-task"),
+    )];
+    root_messages.extend(run_shell_command_messages(1, "new-output"));
+    let root_task = api::Task {
+        id: "root-task".to_string(),
+        messages: root_messages,
+        dependencies: None,
+        description: String::new(),
+        summary: String::new(),
+        server_data: String::new(),
+    };
+    let conversation = restored_conversation_with_tasks(vec![root_task, subtask]);
+
+    let items = conversation.to_serialized_blocklist_items();
+
+    // Both the resurrected pre-summarization command and the new one are still restored...
+    assert_eq!(items.len(), 2);
+    let (old_command, old_restored_output) = command_and_output(&items[0]);
+    let (new_command, new_restored_output) = command_and_output(&items[1]);
+    assert_eq!(old_command, "cmd-0");
+    assert_eq!(new_command, "cmd-1");
+    assert_eq!(new_restored_output, "new-output");
+
+    // ...but the resurrected command's output is bounded the same as any other block, since
+    // restore reads it straight from the task messages summarization left untouched.
+    let old_restored_lines: Vec<&str> = old_restored_output.split("\r\n").collect();
+    assert_eq!(
+        old_restored_lines.len(),
+        MAX_SERIALIZED_STYLIZED_OUTPUT_LINES
+    );
+    assert_eq!(old_restored_lines[0], "old-line-10");
 }

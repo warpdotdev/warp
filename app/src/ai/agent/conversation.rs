@@ -69,7 +69,8 @@ use crate::persistence::model::{
 use crate::server::ids::ServerId;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::block::{
-    AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
+    AgentInteractionMetadata, AgentViewVisibility, BlockId, MAX_SERIALIZED_STYLIZED_OUTPUT_LINES,
+    SerializedAIMetadata, SerializedBlock,
 };
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
@@ -447,6 +448,13 @@ pub struct AIConversation {
     /// conversation resumes ordinary synchronization.
     task_sync_mode: TaskSyncMode,
 }
+
+/// Maximum number of command blocks materialized per conversation on restore, keeping the
+/// most recent. Restoring reads full command output straight from the persisted task
+/// messages, which still hold everything summarization has since dropped from the AI's own
+/// context, so a long-running or repeatedly summarized conversation would otherwise
+/// materialize its entire history at once.
+const MAX_RESTORED_COMMAND_BLOCKS: usize = 100;
 
 pub(crate) fn artifact_from_fork_proto(
     proto_artifact: &api::message::artifact_event::ConversationArtifact,
@@ -3914,9 +3922,17 @@ impl AIConversation {
     }
 
     /// Normalize all newlines to CRLF so restored blocks render lines starting at column 0,
-    /// which is consistent with how we serialize real terminal blocks.
-    fn to_stylized_bytes(s: &str) -> Vec<u8> {
+    /// which is consistent with how we serialize real terminal blocks. When `max_lines` is
+    /// set, keeps only the most recent lines.
+    fn to_stylized_bytes(s: &str, max_lines: Option<usize>) -> Vec<u8> {
         let s = s.replace("\r\n", "\n");
+        let s = match max_lines {
+            Some(max_lines) => {
+                let lines: Vec<&str> = s.split('\n').collect();
+                lines[lines.len().saturating_sub(max_lines)..].join("\n")
+            }
+            None => s,
+        };
         s.replace('\n', "\r\n").into_bytes()
     }
 
@@ -4220,11 +4236,15 @@ impl AIConversation {
     pub fn to_serialized_blocklist_items(&self) -> Vec<SerializedBlockListItem> {
         let mut serialized_blocks = Vec::new();
 
-        // Extract all command blocks from the task messages
-        let command_blocks = self.extract_command_blocks();
+        // Extract all command blocks from the task messages, keeping only the most recent
+        // MAX_RESTORED_COMMAND_BLOCKS.
+        let mut command_blocks = self.extract_command_blocks();
+        let total_command_blocks = command_blocks.len();
+        command_blocks.drain(0..total_command_blocks.saturating_sub(MAX_RESTORED_COMMAND_BLOCKS));
         log::info!(
-            "Extracted {} command blocks for conversation {}",
+            "Extracted {} of {} command blocks for conversation {}",
             command_blocks.len(),
+            total_command_blocks,
             self.id()
         );
 
@@ -4257,8 +4277,11 @@ impl AIConversation {
 
             let serialized_block = SerializedBlock {
                 id: BlockId::new(),
-                stylized_command: Self::to_stylized_bytes(&command_block.command),
-                stylized_output: Self::to_stylized_bytes(&command_block.output),
+                stylized_command: Self::to_stylized_bytes(&command_block.command, None),
+                stylized_output: Self::to_stylized_bytes(
+                    &command_block.output,
+                    Some(MAX_SERIALIZED_STYLIZED_OUTPUT_LINES),
+                ),
                 pwd,
                 git_head: None,
                 git_branch_name: None,
