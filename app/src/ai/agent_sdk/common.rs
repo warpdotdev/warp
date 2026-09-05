@@ -323,6 +323,61 @@ pub enum EnvironmentChoice {
     Environment { id: String, name: String },
 }
 
+/// How `run-cloud` should obtain an environment before constructing the spawn request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RunCloudEnvironmentPlan {
+    /// Omit `environment_id` so the server applies the named agent's configured default.
+    NamedAgentDefault,
+    NoEnvironment {
+        named_agent_may_apply: bool,
+    },
+    Specified(String),
+    Interactive,
+}
+
+const NONINTERACTIVE_ENVIRONMENT_REQUIRED: &str = "Cannot select an environment interactively because stdin is not a TTY. Pass `--environment <ID>` or `--no-environment`.";
+
+impl RunCloudEnvironmentPlan {
+    /// Decide how `run-cloud` should resolve the environment, without prompting.
+    pub fn from_args(
+        args: &EnvironmentCreateArgs,
+        has_named_agent: bool,
+        stdin_is_tty: bool,
+    ) -> Result<Self, ResolveConfigurationError> {
+        if let Some(id) = args.environment.as_ref() {
+            return Ok(Self::Specified(id.clone()));
+        }
+        if args.no_environment {
+            return Ok(Self::NoEnvironment {
+                named_agent_may_apply: has_named_agent,
+            });
+        }
+        if has_named_agent {
+            return Ok(Self::NamedAgentDefault);
+        }
+        if stdin_is_tty {
+            return Ok(Self::Interactive);
+        }
+        Err(ResolveConfigurationError::Other(anyhow::anyhow!(
+            "{NONINTERACTIVE_ENVIRONMENT_REQUIRED}"
+        )))
+    }
+
+    /// One-line notice printed before spawn for plans that skip the selector.
+    pub fn notice(&self) -> Option<&'static str> {
+        match self {
+            Self::NamedAgentDefault => Some("Using the agent's configured environment."),
+            Self::NoEnvironment {
+                named_agent_may_apply: true,
+            } => Some("The agent's configured environment may apply."),
+            Self::NoEnvironment {
+                named_agent_may_apply: false,
+            } => Some("Agent will run without an environment."),
+            Self::Specified(_) | Self::Interactive => None,
+        }
+    }
+}
+
 impl EnvironmentChoice {
     /// Resolve the environment to use when creating an agent integration.
     /// Warp Drive *must* have been synced first.

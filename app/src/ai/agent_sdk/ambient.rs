@@ -1,5 +1,5 @@
 //! Commands to interact with ambient agents on Warp's platform.
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use comfy_table::Cell;
 use futures::{StreamExt, future};
 use serde::{Deserialize, Serialize};
 use warp_cli::agent::{Harness, OutputFormat, Prompt, RunCloudArgs};
+use warp_cli::environment::EnvironmentCreateArgs;
 use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, MessageCommand, MessageDeliveredArgs,
@@ -23,7 +24,9 @@ use warpui::r#async::{Spawnable, Timer};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
-use super::common::{EnvironmentChoice, ResolveConfigurationError, parse_ambient_task_id};
+use super::common::{
+    EnvironmentChoice, ResolveConfigurationError, RunCloudEnvironmentPlan, parse_ambient_task_id,
+};
 use crate::ServerApiProvider;
 use crate::ai::agent::{UserQueryMode, extract_user_query_mode};
 use crate::ai::agent_sdk::driver::attachments::{
@@ -192,6 +195,49 @@ fn sort_order_from_arg(arg: SortOrderArg) -> RunSortOrder {
     match arg {
         SortOrderArg::Asc => RunSortOrder::Asc,
         SortOrderArg::Desc => RunSortOrder::Desc,
+    }
+}
+
+fn run_cloud_spawn_config(
+    mut config: AgentConfigSnapshot,
+    model_id: Option<String>,
+    no_environment: bool,
+) -> Option<AgentConfigSnapshot> {
+    config.model_id = model_id;
+    if no_environment {
+        config.environment_id = None;
+    }
+    if config.is_empty() {
+        None
+    } else {
+        Some(config)
+    }
+}
+
+fn resolve_run_cloud_environment(
+    environment_args: EnvironmentCreateArgs,
+    has_named_agent: bool,
+    stdin_is_tty: bool,
+    ctx: &AppContext,
+) -> Result<Option<String>, ResolveConfigurationError> {
+    match RunCloudEnvironmentPlan::from_args(&environment_args, has_named_agent, stdin_is_tty)? {
+        plan @ (RunCloudEnvironmentPlan::NamedAgentDefault
+        | RunCloudEnvironmentPlan::NoEnvironment { .. }) => {
+            if let Some(notice) = plan.notice() {
+                eprintln!("{notice}");
+            }
+            Ok(None)
+        }
+        RunCloudEnvironmentPlan::Specified(_) | RunCloudEnvironmentPlan::Interactive => {
+            match EnvironmentChoice::resolve_for_create(environment_args, ctx) {
+                Ok(EnvironmentChoice::None) => {
+                    eprintln!("Agent will run without an environment.");
+                    Ok(None)
+                }
+                Ok(EnvironmentChoice::Environment { id, .. }) => Ok(Some(id)),
+                Err(err) => Err(err),
+            }
+        }
     }
 }
 
@@ -393,8 +439,9 @@ impl AmbientAgentRunner {
                 return;
             }
 
-            let mut environment_args = args.environment;
-            if environment_args.environment.is_none() && !environment_args.no_environment
+            let mut environment_args = args.environment_create_args();
+            let no_environment = environment_args.no_environment;
+            if environment_args.environment.is_none() && !no_environment
                 && let Some(environment_id) = loaded_file
                     .as_ref()
                     .and_then(|f| f.file.environment_id.clone())
@@ -402,13 +449,13 @@ impl AmbientAgentRunner {
                     environment_args.environment = Some(environment_id);
                 }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
-                Ok(EnvironmentChoice::None) => {
-                    eprintln!("Agent will run without an environment.");
-                    None
-                },
-                Ok(EnvironmentChoice::Environment { id, .. }) => Some(id),
+            let environment_id = match resolve_run_cloud_environment(
+                environment_args,
+                args.agent_uid.is_some(),
+                std::io::stdin().is_terminal(),
+                ctx,
+            ) {
+                Ok(environment_id) => environment_id,
                 Err(ResolveConfigurationError::Canceled) => {
                     ctx.terminate_app(TerminationMode::ForceTerminate, None);
                     return;
@@ -504,15 +551,7 @@ impl AmbientAgentRunner {
                 }
             };
 
-            let config = {
-                let mut config = merged_config;
-                config.model_id = model_id;
-                if config.is_empty() {
-                    None
-                } else {
-                    Some(config)
-                }
-            };
+            let config = run_cloud_spawn_config(merged_config, model_id, no_environment);
 
             // For ambient runs, skill is passed to the server and resolved in the remote environment
             let skill = if skill_enabled {

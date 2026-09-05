@@ -1206,6 +1206,77 @@ fn agent_run_cloud_accepts_agent_flag() {
     };
 
     assert_eq!(run_args.agent_uid.as_deref(), Some("agent_123"));
+    assert!(run_args.environment.is_none());
+    assert!(!run_args.no_environment);
+}
+
+#[test]
+fn agent_run_cloud_named_agent_accepts_no_environment() {
+    let args = parse_run_cloud(&[
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hello",
+        "--agent",
+        "agent_123",
+        "--no-environment",
+    ]);
+    assert_eq!(args.agent_uid.as_deref(), Some("agent_123"));
+    assert!(args.environment.is_none());
+    assert!(args.no_environment);
+}
+
+#[test]
+fn agent_run_cloud_named_agent_accepts_explicit_environment() {
+    let args = parse_run_cloud(&[
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hello",
+        "--agent",
+        "agent_123",
+        "--environment",
+        "env-123",
+    ]);
+    assert_eq!(args.agent_uid.as_deref(), Some("agent_123"));
+    assert_eq!(args.environment.as_deref(), Some("env-123"));
+    assert!(!args.no_environment);
+}
+
+#[test]
+fn agent_run_cloud_rejects_environment_and_no_environment() {
+    let result = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run-cloud",
+        "--prompt",
+        "hello",
+        "--environment",
+        "env-123",
+        "--no-environment",
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn agent_run_cloud_help_documents_agent_environment_interaction() {
+    use clap::CommandFactory;
+    let mut cmd = <Args as CommandFactory>::command();
+    let sub = cmd
+        .find_subcommand_mut("agent")
+        .expect("agent subcommand exists")
+        .find_subcommand_mut("run-cloud")
+        .expect("run-cloud subcommand exists");
+    let help = sub.render_long_help().to_string();
+
+    assert!(
+        help.contains("overrides the named agent's configured environment"),
+        "--environment help should document --agent override:\n{help}"
+    );
+    assert!(
+        help.contains("the named agent's configured environment may still apply"),
+        "--no-environment help should document --agent interaction:\n{help}"
+    );
 }
 
 #[test]

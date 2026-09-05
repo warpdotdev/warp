@@ -689,9 +689,20 @@ pub struct RunCloudArgs {
     #[arg(long = "mcp", value_name = "SPEC")]
     pub mcp_specs: Vec<MCPSpec>,
 
-    /// The environment to run this ambient agent in.
-    #[command(flatten)]
-    pub environment: EnvironmentCreateArgs,
+    /// Cloud environment to run the agent in, identified by ID.
+    ///
+    /// When `--agent` is set, this overrides the named agent's configured environment. If
+    /// `--agent` is set and neither `--environment` nor `--no-environment` is passed, the
+    /// agent's configured environment is used.
+    #[arg(long = "environment", value_name = "ENVIRONMENT_ID", short = 'e')]
+    pub environment: Option<String>,
+
+    /// Do not send an environment ID with this run.
+    ///
+    /// Without `--agent`, the agent runs with no environment. With `--agent`, the named
+    /// agent's configured environment may still apply.
+    #[arg(long = "no-environment", conflicts_with = "environment")]
+    pub no_environment: bool,
 
     /// Runner to use for this agent's compute (docker image, instance size,
     /// setup commands), identified by ID. Overrides the environment's default runner.
@@ -774,6 +785,13 @@ pub struct RunCloudArgs {
 }
 
 impl RunCloudArgs {
+    pub fn environment_create_args(&self) -> EnvironmentCreateArgs {
+        EnvironmentCreateArgs {
+            environment: self.environment.clone(),
+            no_environment: self.no_environment,
+        }
+    }
+
     /// Validates that the harness auth-secret flags are only supplied alongside
     /// their matching `--harness`. Returns a user-facing error message when a
     /// secret is provided for the wrong harness. Checked on run so a mismatched

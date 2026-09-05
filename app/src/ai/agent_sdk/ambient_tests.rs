@@ -2,12 +2,14 @@
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use warp_cli::SortOrderArg;
+use warp_cli::environment::EnvironmentCreateArgs;
 use warp_cli::json_filter::JsonOutput;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSourceArg, RunStateArg,
 };
 use warp_server_client::HttpStatusError;
 
+use super::super::config_file::{AgentConfigSnapshotFile, LoadedAgentConfigSnapshotFile};
 use super::*;
 use crate::server::server_api::ai::{
     ArtifactType, ExecutionLocation, MockAIClient, RunSortBy, RunSortOrder,
@@ -523,4 +525,120 @@ async fn load_public_conversation_reports_missing_raw_transcript() {
         err.to_string(),
         "Raw transcript not found for conversation conv-third-party. It may not have been uploaded yet."
     );
+}
+
+fn run_cloud_env_args(environment: Option<&str>, no_environment: bool) -> EnvironmentCreateArgs {
+    EnvironmentCreateArgs {
+        environment: environment.map(str::to_string),
+        no_environment,
+    }
+}
+
+#[test]
+fn named_agent_without_env_flags_omits_environment_id() {
+    let plan = RunCloudEnvironmentPlan::from_args(&run_cloud_env_args(None, false), true, false)
+        .expect("named agent without env flags should skip the selector");
+
+    assert_eq!(plan, RunCloudEnvironmentPlan::NamedAgentDefault);
+    assert_eq!(
+        plan.notice(),
+        Some("Using the agent's configured environment.")
+    );
+}
+
+#[test]
+fn named_agent_no_environment_omits_id_and_notes_configured_env_may_apply() {
+    let plan = RunCloudEnvironmentPlan::from_args(&run_cloud_env_args(None, true), true, true)
+        .expect("--no-environment should not prompt");
+
+    assert_eq!(
+        plan,
+        RunCloudEnvironmentPlan::NoEnvironment {
+            named_agent_may_apply: true,
+        }
+    );
+    assert_eq!(
+        plan.notice(),
+        Some("The agent's configured environment may apply.")
+    );
+}
+
+#[test]
+fn named_agent_explicit_environment_overrides_agent_default() {
+    let plan = RunCloudEnvironmentPlan::from_args(
+        &run_cloud_env_args(Some("env-123"), false),
+        true,
+        false,
+    )
+    .expect("explicit --environment should win");
+
+    assert_eq!(plan, RunCloudEnvironmentPlan::Specified("env-123".into()));
+    assert_eq!(plan.notice(), None);
+}
+
+#[test]
+fn non_tty_unnamed_without_env_flags_requires_explicit_choice() {
+    let err = RunCloudEnvironmentPlan::from_args(&run_cloud_env_args(None, false), false, false)
+        .expect_err("non-TTY unnamed runs must not prompt");
+    let msg = err.to_string();
+
+    assert!(
+        msg.contains("--environment <ID>"),
+        "error should require --environment <ID>: {msg}"
+    );
+    assert!(
+        msg.contains("--no-environment"),
+        "error should require --no-environment: {msg}"
+    );
+}
+
+#[test]
+fn no_environment_omits_file_environment_from_spawn_request() {
+    let plan = RunCloudEnvironmentPlan::from_args(&run_cloud_env_args(None, true), true, false)
+        .expect("--no-environment should skip the selector");
+    assert_eq!(
+        plan,
+        RunCloudEnvironmentPlan::NoEnvironment {
+            named_agent_may_apply: true,
+        }
+    );
+
+    let loaded = LoadedAgentConfigSnapshotFile {
+        file: AgentConfigSnapshotFile {
+            name: Some("from-file".to_string()),
+            environment_id: Some("env-from-file".to_string()),
+            ..Default::default()
+        },
+    };
+    let merged = super::super::config_file::merge_with_precedence(
+        Some(&loaded),
+        AgentConfigSnapshot {
+            environment_id: None,
+            ..Default::default()
+        },
+    );
+    assert_eq!(merged.environment_id.as_deref(), Some("env-from-file"));
+
+    let request = SpawnAgentRequest {
+        prompt: Some("hello".to_string()),
+        mode: UserQueryMode::Normal,
+        config: run_cloud_spawn_config(merged, None, true),
+        title: None,
+        team: None,
+        agent_identity_uid: Some("agent_123".to_string()),
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+    let json = serde_json::to_value(&request).unwrap();
+
+    assert_eq!(json["config"]["name"], "from-file");
+    assert!(json["config"].get("environment_id").is_none());
 }

@@ -311,9 +311,7 @@ fn run_agent(
             Ok(())
         }
         AgentCommand::RunCloud(args) => {
-            if args.environment.environment.is_some()
-                && !FeatureFlag::CloudEnvironments.is_enabled()
-            {
+            if args.environment.is_some() && !FeatureFlag::CloudEnvironments.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
             }
             if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
