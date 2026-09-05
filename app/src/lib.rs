@@ -1123,9 +1123,14 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             Err(app_services::windows::StartupArgsForwardingError::IgnoredAfterAutoUpdate) => {}
             // If we were unable to perform the forwarding for an unknown reason,
             // it's better to run a second instance than potentially end up in a
-            // state where Warp refuses to run even a first instance.
+            // state where Warp refuses to run even a first instance. Name that
+            // outcome in the error, so a duplicate instance leaves a trace that
+            // says why instead of appearing out of nowhere.
             Err(err) => {
-                let err = anyhow::Error::from(err).context("Failed to forward startup args");
+                let err = anyhow::Error::from(err).context(
+                    "Could not hand startup args to the running instance of Warp; starting a \
+                     second instance",
+                );
                 report_error!(&err);
                 pre_sentry_errors.push(err);
             }

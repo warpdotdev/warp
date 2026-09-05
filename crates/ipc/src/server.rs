@@ -22,7 +22,7 @@ use crate::service::ServiceImpl;
 /// implementation.
 #[async_trait]
 pub(super) trait AnyServiceImpl: Send + Sync {
-    async fn handle_request(&self, request: &[u8]) -> Vec<u8>;
+    async fn handle_request(&self, request: &[u8]) -> std::result::Result<Vec<u8>, String>;
 
     fn clone_service(&self) -> Box<dyn AnyServiceImpl>;
 }
@@ -33,11 +33,12 @@ where
     S: Service,
     I: ServiceImpl<Service = S> + Clone + Sized,
 {
-    async fn handle_request(&self, request_bytes: &[u8]) -> Vec<u8> {
+    async fn handle_request(&self, request_bytes: &[u8]) -> std::result::Result<Vec<u8>, String> {
         let request: S::Request =
             bincode::deserialize(request_bytes).expect("Failed to deserialize request bytes.");
-        bincode::serialize::<S::Response>(&I::handle_request(self, request).await)
-            .expect("Should be able to serialize response.")
+        let response = I::handle_request(self, request).await?;
+        Ok(bincode::serialize::<S::Response>(&response)
+            .expect("Should be able to serialize response."))
     }
 
     fn clone_service(&self) -> Box<dyn AnyServiceImpl> {
@@ -155,7 +156,9 @@ impl ServerBuilder {
 /// Two background tasks are spawned for each client connection -- one for processing incoming
 /// requests and one for sending outgoing responses.
 pub struct Server {
-    _tasks: Vec<BackgroundTask>,
+    // Only read by `shutdown`, which the wasm executor cannot support.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
+    tasks: Vec<BackgroundTask>,
 }
 
 impl Server {
@@ -189,7 +192,26 @@ impl Server {
                 background_executor.clone(),
             )),
         ];
-        Ok(Self { _tasks: tasks })
+        Ok(Self { tasks })
+    }
+
+    /// Stops serving and waits until the server's tasks have finished, so the underlying transport
+    /// is released by the time this returns.
+    ///
+    /// Dropping a [`Server`] only detaches those tasks, which leaves the transport bound for an
+    /// unspecified period afterwards. Callers that hand ownership of the transport to something
+    /// else - or that publish "this address is free" - have to wait for the release, not just for
+    /// the handles to go out of scope.
+    ///
+    /// Native-only: the wasm executor's task handle can neither be aborted nor awaited.
+    #[cfg(not(target_family = "wasm"))]
+    pub async fn shutdown(self) {
+        for task in &self.tasks {
+            task.abort();
+        }
+        for task in self.tasks {
+            let _ = task.await;
+        }
     }
 
     /// Listens for new connections on `listener`, relaying them through the given sender.
@@ -266,10 +288,10 @@ impl Server {
                     bytes,
                 }) => {
                     let response_message = match services.get(&service_id) {
-                        Some(service) => {
-                            let response_bytes = service.handle_request(&bytes[..]).await;
-                            Response::success(id, service_id, response_bytes)
-                        }
+                        Some(service) => match service.handle_request(&bytes[..]).await {
+                            Ok(response_bytes) => Response::success(id, service_id, response_bytes),
+                            Err(refusal) => Response::failure(id, refusal),
+                        },
                         None => {
                             Response::failure(id, format!("No such service (ID: {service_id})"))
                         }
@@ -324,3 +346,8 @@ impl Server {
         }
     }
 }
+
+// Native-only: these exercise the real transport, which is unimplemented on wasm.
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "server_tests.rs"]
+mod tests;

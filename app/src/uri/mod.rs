@@ -586,7 +586,10 @@ impl UriHost {
     }
 
     /// When handling this URI action, determine which window(s) should be focused.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "freebsd", windows)),
+        allow(dead_code)
+    )]
     fn window_behavior_hint(&self) -> WindowBehaviorHint {
         use WindowBehaviorHint as W;
         match self {
@@ -619,6 +622,11 @@ impl UriHost {
 enum WindowBehaviorHint {
     /// Determined by the [`get_primary_window`] function.
     ShowPrimaryWindow(WindowActivationFallbackBehavior),
+    /// Bring the app forward by activating the primary window, if there is one and the windowing
+    /// system permits it, and do nothing otherwise. For URIs whose handler opens its own window:
+    /// the activation exists only to make this process the foreground one, so there is nothing to
+    /// fall back to when it cannot happen.
+    ActivateAppIfPossible,
     Nothing,
 }
 
@@ -633,7 +641,10 @@ impl Default for WindowBehaviorHint {
 impl WindowBehaviorHint {
     /// Perform the desired window focus behavior for the URI being handled. This may change the
     /// "primary window" if a new one has to be created. Return the new primary WindowId.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "freebsd", windows)),
+        allow(dead_code)
+    )]
     fn resolve(
         self,
         primary_window_id: Option<WindowId>,
@@ -652,6 +663,16 @@ impl WindowBehaviorHint {
                             return fallback_behavior.resolve(window_id, ctx);
                         }
                     }
+                }
+            }
+            Self::ActivateAppIfPossible => {
+                if let Some(window_id) = primary_window_id
+                    && ctx
+                        .windows()
+                        .windowing_system()
+                        .is_some_and(|system| system.allows_programmatic_window_activation())
+                {
+                    ctx.windows().show_window_and_focus_app(window_id);
                 }
             }
             Self::Nothing => {}
@@ -681,7 +702,10 @@ enum WindowActivationFallbackBehavior {
 impl WindowActivationFallbackBehavior {
     /// Perform the desired window fallback behavior for the URI being handled. This may change the
     /// "primary window" if a new one has to be created. Return the new primary WindowId.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "freebsd", windows)),
+        allow(dead_code)
+    )]
     fn resolve(self, primary_window_id: WindowId, ctx: &mut AppContext) -> Option<WindowId> {
         match self {
             WindowActivationFallbackBehavior::Notify { title, description } => {
@@ -980,7 +1004,7 @@ impl Action {
     }
 
     fn handle(&self, primary_window_id: Option<WindowId>, url: &Url, ctx: &mut AppContext) {
-        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        #[cfg(any(target_os = "linux", target_os = "freebsd", windows))]
         let primary_window_id = self.window_behavior_hint().resolve(primary_window_id, ctx);
         match self {
             Self::NewTab | Self::NewWindow => {
@@ -1206,7 +1230,10 @@ impl Action {
     }
 
     /// When handling this URI action, determine which window(s) should be focused.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "freebsd", windows)),
+        allow(dead_code)
+    )]
     fn window_behavior_hint(&self) -> WindowBehaviorHint {
         use WindowBehaviorHint as W;
         match self {
@@ -1223,7 +1250,18 @@ impl Action {
                 title: "New tab created".to_owned(),
                 description: "Go to Warp to see your new tab.".to_owned(),
             }),
-            Self::NewWindow => W::Nothing,
+            // On Windows this URI is usually a launch that the single-instance guard redirected
+            // here, and the guard's caller has already exited, so if nothing surfaces the user
+            // sees a launch that did nothing and launches again. Activating an existing window
+            // makes this the foreground process, which is what lets the window the handler opens
+            // next take the foreground itself. Elsewhere the new window surfaces on its own.
+            Self::NewWindow => {
+                if cfg!(windows) {
+                    W::ActivateAppIfPossible
+                } else {
+                    W::Nothing
+                }
+            }
         }
     }
 }

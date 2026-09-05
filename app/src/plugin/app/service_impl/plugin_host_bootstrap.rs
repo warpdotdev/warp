@@ -35,14 +35,16 @@ impl ipc::ServiceImpl for PluginHostBootstrapServiceImpl {
     async fn handle_request(
         &self,
         request: PluginHostBootstrapRequest,
-    ) -> PluginHostBootstrapResponse {
-        match self
-            .connection_address_tx
-            .send(request.connection_address)
-            .await
-        {
-            Ok(_) => PluginHostBootstrapResponse { success: true },
-            Err(_) => PluginHostBootstrapResponse { success: false },
-        }
+    ) -> Result<PluginHostBootstrapResponse, String> {
+        Ok(
+            match self
+                .connection_address_tx
+                .send(request.connection_address)
+                .await
+            {
+                Ok(_) => PluginHostBootstrapResponse { success: true },
+                Err(_) => PluginHostBootstrapResponse { success: false },
+            },
+        )
     }
 }

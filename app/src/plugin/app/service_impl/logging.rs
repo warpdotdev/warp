@@ -16,7 +16,10 @@ impl LogServiceImpl {
 impl ipc::ServiceImpl for LogServiceImpl {
     type Service = LogService;
 
-    async fn handle_request(&self, request: LogServiceRequest) -> LogServiceResponse {
+    async fn handle_request(
+        &self,
+        request: LogServiceRequest,
+    ) -> Result<LogServiceResponse, String> {
         let LogServiceRequest {
             level,
             target,
@@ -36,6 +39,6 @@ impl ipc::ServiceImpl for LogServiceImpl {
                 log_fn();
             }
         }
-        LogServiceResponse { success: true }
+        Ok(LogServiceResponse { success: true })
     }
 }

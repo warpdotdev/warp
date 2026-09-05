@@ -36,10 +36,10 @@ impl ipc::ServiceImpl for RegisterCommandSignatureServiceImpl {
     async fn handle_request(
         &self,
         request: RegisterCommandSignatureRequest,
-    ) -> RegisterCommandSignatureResponse {
+    ) -> Result<RegisterCommandSignatureResponse, String> {
         for serialized_signature in request.signatures {
             self.registry.register_signature(serialized_signature)
         }
-        RegisterCommandSignatureResponse { success: true }
+        Ok(RegisterCommandSignatureResponse { success: true })
     }
 }
