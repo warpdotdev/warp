@@ -4264,8 +4264,82 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
             workspace.show_tab_right_click_menu =
                 Some((0, TabContextMenuAnchor::Pointer(Vector2F::zero())));
 
-            assert_eq!(workspace.tab_bar_mode(ctx), ShowTabBar::Stacked);
+            assert_eq!(workspace.tab_bar_mode(ctx), ShowTabBar::Overlay);
         });
+    });
+}
+
+/// A tab bar that is revealed on hover has to cover the strip that reveals it.
+/// If the strip pokes out above the revealed bar, the pointer that opened the
+/// bar ends up outside of it, the bar hides itself, the strip is put back under
+/// the pointer, and the bar flickers open and closed without the mouse moving.
+#[test]
+fn test_hover_revealed_tab_bar_covers_its_hover_strip() {
+    let _full_screen_zen_mode_guard = FeatureFlag::FullScreenZenMode.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |workspace, ctx| {
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
+            });
+            workspace.should_show_ai_assistant_warm_welcome = false;
+            workspace.window_id
+        });
+
+        // Unhovered: the bar is hidden and only the reveal strip is rendered.
+        // Positions come from the previously rendered frame, so each state has to
+        // be set up in its own update and measured in the next one.
+        let hover_strip = workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(workspace.tab_bar_mode(ctx), ShowTabBar::Hidden);
+            ctx.element_position_by_id_at_last_frame(window_id, TAB_BAR_HOVER_AREA_POSITION_ID)
+                .expect("the hover strip should be rendered while the tab bar is hidden")
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.tab_bar_pinned_by_popup = true;
+            ctx.notify();
+        });
+
+        // Revealed: the bar is rendered where the strip used to be.
+        let (revealed_bar, overlay) = workspace.update(&mut app, |workspace, ctx| {
+            assert_eq!(workspace.tab_bar_mode(ctx), ShowTabBar::Overlay);
+            (
+                ctx.element_position_by_id_at_last_frame(window_id, TAB_BAR_POSITION_ID)
+                    .expect("the tab bar should be rendered once revealed"),
+                ctx.element_position_by_id_at_last_frame(window_id, TAB_BAR_OVERLAY_POSITION_ID)
+                    .expect("the overlay container should be rendered once revealed"),
+            )
+        });
+
+        assert!(
+            revealed_bar.min_y() <= hover_strip.min_y()
+                && revealed_bar.max_y() >= hover_strip.max_y(),
+            "the revealed tab bar {revealed_bar:?} must cover the hover strip {hover_strip:?} \
+             vertically, otherwise revealing it moves the bar out from under the pointer"
+        );
+        assert!(
+            revealed_bar.min_x() <= hover_strip.min_x()
+                && revealed_bar.max_x() >= hover_strip.max_x(),
+            "the revealed tab bar {revealed_bar:?} must cover the hover strip {hover_strip:?} \
+             horizontally, otherwise revealing it moves the bar out from under the pointer"
+        );
+        // Covering the strip must not come from the overlay growing to fill the
+        // window. The overlay container, unlike the fixed-height bar inside it,
+        // is laid out against the whole window, so anything in it that sizes to
+        // the maximum constraint would blanket the terminal rather than sit in a
+        // strip at the top.
+        assert!(
+            overlay.height() <= TOTAL_TAB_BAR_HEIGHT,
+            "the revealed tab bar overlay {overlay:?} should be no taller than the tab bar itself \
+             ({TOTAL_TAB_BAR_HEIGHT}); a taller overlay covers the terminal"
+        );
     });
 }
 
