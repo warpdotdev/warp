@@ -213,6 +213,20 @@ impl FileState {
     }
 }
 
+/// Keymap context identifier present only while this pane can toggle between rendered and raw
+/// Markdown, so the toggle binding is inert on panes that have no such mode.
+pub const MARKDOWN_TOGGLEABLE_CONTEXT: &str = "FileNotebookView_MarkdownToggleable";
+
+/// Name and description shared by both halves of the Markdown rendered/raw toggle.
+///
+/// The two halves dispatch different actions from different views, so they have to be registered
+/// separately. They share a name because custom triggers are stored and applied by name, so a
+/// rebind in Settings has to reach both directions; they share a description because the settings
+/// page collapses duplicates on the name/description pair and would otherwise list two rows
+/// fighting over the same shortcut.
+pub const MARKDOWN_TOGGLE_BINDING_NAME: &str = "markdown:toggle_display_mode";
+pub const MARKDOWN_TOGGLE_BINDING_DESCRIPTION: &str = "Toggle rendered Markdown";
+
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
 
@@ -230,6 +244,13 @@ pub fn init(app: &mut AppContext) {
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
+        EditableBinding::new(
+            MARKDOWN_TOGGLE_BINDING_NAME,
+            MARKDOWN_TOGGLE_BINDING_DESCRIPTION,
+            FileNotebookAction::ToggleMarkdownDisplayMode(MarkdownDisplayMode::Raw),
+        )
+        .with_context_predicate(id!(MARKDOWN_TOGGLEABLE_CONTEXT))
+        .with_key_binding("cmdorctrl-e"),
     ])
 }
 
@@ -1012,6 +1033,14 @@ impl Entity for FileNotebookView {
 impl View for FileNotebookView {
     fn ui_name() -> &'static str {
         "FileNotebookView"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.shows_markdown_toggle() {
+            context.set.insert(MARKDOWN_TOGGLEABLE_CONTEXT);
+        }
+        context
     }
 
     fn accessibility_contents(&self, _ctx: &AppContext) -> Option<AccessibilityContent> {

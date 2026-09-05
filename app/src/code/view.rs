@@ -45,7 +45,10 @@ use crate::code::{EditorTabBarDropTargetData, ImmediateSaveError, SaveOutcome, S
 use crate::editor::InteractionState;
 use crate::input::Vector2F;
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::notebooks::file::{MarkdownDisplayMode, renders_in_warp_notebook_viewer};
+use crate::notebooks::file::{
+    MARKDOWN_TOGGLE_BINDING_DESCRIPTION, MARKDOWN_TOGGLE_BINDING_NAME, MarkdownDisplayMode,
+    renders_in_warp_notebook_viewer,
+};
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::view::header::components::{
     CenteredHeaderEdgeWidth, render_pane_header_buttons, render_pane_header_title_text,
@@ -85,6 +88,10 @@ const TAB_HORIZONTAL_MARGIN: f32 = 8.;
 const TAB_PADDING: f32 = 2.;
 
 // Keybinding constants - exported so AI document view can reuse
+/// Keymap context identifier present only while the active tab holds a file that Warp can render
+/// in the notebook viewer, so the toggle binding is inert on ordinary code tabs.
+pub const MARKDOWN_TOGGLEABLE_CONTEXT: &str = "CodeView_MarkdownToggleable";
+
 pub const SAVE_FILE_BINDING_NAME: &str = "code_view:save";
 pub const SAVE_FILE_BINDING_DESCRIPTION: &str = "Save file";
 
@@ -122,6 +129,18 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r u"),
+        // Guarded to match the action it dispatches, like the rest of this file's
+        // filesystem-backed actions. The guard is always true in practice: this module is
+        // path-swapped to `wasm.rs` for wasm targets (see `code/mod.rs`), and every non-wasm
+        // target sets `local_fs`.
+        #[cfg(feature = "local_fs")]
+        EditableBinding::new(
+            MARKDOWN_TOGGLE_BINDING_NAME,
+            MARKDOWN_TOGGLE_BINDING_DESCRIPTION,
+            CodeViewAction::RenderMarkdown,
+        )
+        .with_context_predicate(id!(MARKDOWN_TOGGLEABLE_CONTEXT))
+        .with_key_binding("cmdorctrl-e"),
     ]);
 }
 
@@ -624,6 +643,18 @@ impl CodeView {
 
     fn clear_drag_position(&mut self) {
         self.drag_position = None;
+    }
+
+    /// Whether the active tab holds a file Warp can render in the notebook viewer.
+    ///
+    /// Detection reads the standardized path component rather than an OS path, so it stays correct
+    /// for files opened over a remote session.
+    fn active_tab_renders_in_notebook_viewer(&self) -> bool {
+        self.tab_at(self.active_tab_index)
+            .and_then(|tab| tab.location.as_ref())
+            .is_some_and(|location| {
+                renders_in_warp_notebook_viewer(location.path_component().as_str())
+            })
     }
 
     pub fn tab_at(&self, index: usize) -> Option<&TabData> {
@@ -2240,6 +2271,14 @@ impl Entity for CodeView {
 impl View for CodeView {
     fn ui_name() -> &'static str {
         "CodeView"
+    }
+
+    fn keymap_context(&self, _app: &AppContext) -> warpui::keymap::Context {
+        let mut context = Self::default_keymap_context();
+        if self.active_tab_renders_in_notebook_viewer() {
+            context.set.insert(MARKDOWN_TOGGLEABLE_CONTEXT);
+        }
+        context
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {

@@ -1201,6 +1201,85 @@ fn test_open_file_with_target_event_preserves_requested_line() {
     });
 }
 
+/// The Markdown toggle binding is scoped by keymap context rather than filtered inside the action
+/// handler, so a raw code pane must advertise the context only while its active tab holds a file
+/// the notebook viewer can render.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_code_pane_markdown_toggle_keymap_context_tracks_active_tab() {
+    use warpui::View;
+
+    use crate::code::buffer_location::LocalOrRemotePath;
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::code::view::MARKDOWN_TOGGLEABLE_CONTEXT;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+        let code_path = temp_dir.path().join("main.rs");
+        std::fs::write(&code_path, "fn main() {}\n").expect("failed to write code file");
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: markdown_path.clone(),
+                    target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                    line_col: None,
+                },
+                ctx,
+            );
+        });
+
+        let code_view = app.read(|ctx| {
+            let pane_group = workspace.as_ref(ctx).active_tab_pane_group().as_ref(ctx);
+            let code_panes = pane_group.code_panes(ctx).collect_vec();
+            assert_eq!(code_panes.len(), 1);
+            code_panes[0].1.clone()
+        });
+
+        app.read(|ctx| {
+            assert!(
+                code_view
+                    .as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(MARKDOWN_TOGGLEABLE_CONTEXT),
+                "a raw Markdown tab should expose the toggle context"
+            );
+        });
+
+        code_view.update(&mut app, |code_view, ctx| {
+            code_view.open_or_focus_existing(
+                Some(LocalOrRemotePath::Local(code_path.clone())),
+                None,
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            assert!(
+                !code_view
+                    .as_ref(ctx)
+                    .keymap_context(ctx)
+                    .set
+                    .contains(MARKDOWN_TOGGLEABLE_CONTEXT),
+                "a non-Markdown tab should not expose the toggle context"
+            );
+        });
+    });
+}
+
 /// Regression test for the raw-code toggle: the notebook-viewer target used to
 /// drop the `CodeSource` outright, so the raw view always started at line 1.
 #[cfg(feature = "local_fs")]
