@@ -698,6 +698,69 @@ fn failed_lazy_loaded_path_registration_is_retried() {
     });
 }
 
+// ── Project Explorer drop routing (APP-4360) ────────────────────────
+//
+// These tests assert the core routing invariant without needing a live
+// `Input` or `TerminalView`: local roots must use the Finder-equivalent path
+// and remote roots must use safe text-insertion with Posix shell escaping.
+//
+// They exercise `drop_behavior_for_path`, which the production action handler
+// (`ItemDroppedOnInput` / `ItemDroppedOnTerminal`) calls via
+// `drop_behavior_for_item`. Any regression to the pre-fix routing (where all
+// roots used the same text-insertion path with no shell escaping) will make
+// `drag_drop_local_root_uses_finder_equivalent_route` fail.
+
+#[test]
+fn drag_drop_local_root_uses_finder_equivalent_route() {
+    // Local root → FinderEquivalent (routes through DragAndDropFiles, not text-insertion).
+    let path = "/home/user/project/image.png".to_string();
+    let behavior = super::drop_behavior_for_path(/*is_remote=*/ false, path.clone());
+    assert!(
+        matches!(
+            behavior,
+            super::FileTreeDropBehavior::FinderEquivalent { path: ref p } if p == &path
+        ),
+        "local root should produce FinderEquivalent with the unescaped absolute path (got {behavior:?})"
+    );
+}
+
+#[test]
+fn drag_drop_remote_root_uses_text_insertion() {
+    // Remote root → InsertText, never FinderEquivalent. This prevents:
+    // (a) local filesystem reads for image detection (wrong file), and
+    // (b) SFTP upload of a path already on the server.
+    let path = "/remote/path/file.json".to_string();
+    let behavior = super::drop_behavior_for_path(/*is_remote=*/ true, path);
+    assert!(
+        matches!(behavior, super::FileTreeDropBehavior::InsertText { .. }),
+        "remote root must produce InsertText, not FinderEquivalent (got {behavior:?})"
+    );
+}
+
+#[test]
+fn drag_drop_remote_path_with_spaces_is_shell_escaped() {
+    // Remote root → path with spaces is Posix-escaped so the inserted text
+    // is a valid shell token (spaces backslash-escaped or path quoted).
+    let path = "/remote/my project/file name.txt".to_string();
+    let behavior = super::drop_behavior_for_path(/*is_remote=*/ true, path.clone());
+    match behavior {
+        super::FileTreeDropBehavior::InsertText { ref text } => {
+            // Must not be the raw unescaped path: some form of escaping must apply.
+            assert_ne!(
+                text.trim_end(),
+                path.as_str(),
+                "remote path with spaces must be shell-escaped (got {text:?})"
+            );
+            // The path content must still be present (escaping is not lossy).
+            assert!(
+                text.contains("my") && text.contains("project"),
+                "shell-escaped text must preserve path content (got {text:?})"
+            );
+        }
+        other => panic!("expected InsertText for remote root, got {other:?}"),
+    }
+}
+
 // ── Ancestor grouping (APP-4106) ────────────────────────────────────
 #[test]
 fn sibling_roots_are_preserved() {
