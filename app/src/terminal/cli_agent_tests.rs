@@ -268,6 +268,7 @@ fn test_detect_known_agents() {
                 ("vibe", CLIAgent::Vibe),
                 ("agy", CLIAgent::Antigravity),
                 ("omp", CLIAgent::OhMyPi),
+                ("grok", CLIAgent::Grok),
                 ("warp", CLIAgent::WarpTui),
                 ("warp-dev", CLIAgent::WarpTui),
                 ("./script/run-tui", CLIAgent::WarpTui),
@@ -296,6 +297,15 @@ fn test_detect_with_arguments() {
             );
         });
     });
+}
+
+#[test]
+fn test_grok_public_configuration() {
+    assert_eq!(CLIAgent::Grok.command_prefix(), "grok");
+    assert_eq!(CLIAgent::Grok.display_name(), "Grok Build");
+    assert!(CLIAgent::Grok.supports_bash_mode());
+    assert_eq!(CLIAgent::Grok.skill_command_prefix(), "/");
+    assert_eq!(CLIAgent::Grok.icon(), Some(Icon::GrokLogo));
 }
 
 #[test]
