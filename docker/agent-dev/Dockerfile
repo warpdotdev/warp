@@ -40,9 +40,29 @@ RUN set -eux; \
     xvfb
 
 # Install rustup. The pinned Rust toolchain is installed below from rust-toolchain.toml.
+#
+# The non-root runtime `agent` user (WARP_AGENT_NONROOT=1 above, created at
+# container start -- see warp-agent-docker's entrypoint.bash
+# `create_or_validate_agent_user`) needs write access to everything rustup
+# and cargo produce, without any `sudo`. Rather than a recursive chgrp/chmod
+# pass after the fact (expensive: it copies up every file into a new overlay
+# layer), pre-create the two root directories group-owned by a group named
+# `agent` with the setgid bit, and set `umask 002` for the rest of this RUN
+# and every later RUN that writes into them. setgid makes directories created
+# underneath inherit both the group and the setgid bit (so this propagates to
+# arbitrarily deep subdirectories), and umask 002 makes newly created files
+# and directories group-writable. This is also why the entrypoint can grant
+# access without a specific UID baked in here: its `ensure_agent_group`
+# helper reuses a pre-existing group named `agent` by name instead of
+# creating a new one, so the runtime user (created later, with an unknown
+# UID) lands in this group automatically.
 RUN set -eux; \
+  groupadd agent; \
+  mkdir -p "$RUSTUP_HOME" "$CARGO_HOME"; \
+  chgrp agent "$RUSTUP_HOME" "$CARGO_HOME"; \
+  chmod 2775 "$RUSTUP_HOME" "$CARGO_HOME"; \
+  umask 002; \
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal; \
-  chmod -R a+w $RUSTUP_HOME $CARGO_HOME; \
   rustup --version; \
   cargo --version; \
   rustc --version
@@ -109,13 +129,21 @@ RUN set -eux; \
 # Ensure the correct Rust toolchain is installed
 COPY ./rust-toolchain.toml ./setup/rust-toolchain.toml
 RUN set -eux; \
+  umask 002; \
   cd ./setup; \
   rustup toolchain install; \
   rustup default "$(rustup show active-toolchain | cut -d' ' -f1)"
 
 # Install all dependencies needed to build, run, and test Warp
 COPY ./script ./setup/script
-RUN cd ./setup && ./script/linux/install_test_deps
+# cargo-binstall writes $CARGO_HOME/binstall.toml with an explicit 0600 mode
+# that ignores umask, unlike everything else install_test_deps creates. Fix
+# just that one file in the same layer that creates it rather than adding a
+# separate recursive pass over the whole tree.
+RUN set -eux; \
+  umask 002; \
+  cd ./setup && ./script/linux/install_test_deps; \
+  if [ -f "$CARGO_HOME/binstall.toml" ]; then chmod g+rw "$CARGO_HOME/binstall.toml"; fi
 
 # Add the Google Cloud SDK repository and install:
 # - The gcloud CLI
@@ -164,3 +192,36 @@ RUN if [ "$INSTALL_CODING_AGENTS" = "true" ]; then \
       gh --version && \
       echo "All CLIs verified" ; \
     fi
+
+# Guard against a regression in the permission scheme set up above (setgid
+# `agent`-group parent directories + `umask 002` in every RUN that writes
+# into $RUSTUP_HOME/$CARGO_HOME, REMOTE-2641): fail the build if a non-root
+# member of the `agent` group can't actually write the paths that were
+# broken before that fix. This uses a throwaway user rather than the real
+# `agent` user, which doesn't exist until the entrypoint creates it at
+# container start.
+#
+# This MUST remain the last instruction in this Dockerfile that could
+# possibly write into $RUSTUP_HOME/$CARGO_HOME's tree: it's the only thing
+# that would catch a future layer that writes into them without going
+# through the setgid+umask scheme above. Add any new writer *above* this
+# line, never below it.
+RUN set -eux; \
+  useradd -m -g agent -s /bin/bash toolchain-write-check; \
+  pinned_toolchain="$(rustup show active-toolchain | cut -d' ' -f1)"; \
+  toolchain_dir="$RUSTUP_HOME/toolchains/$pinned_toolchain"; \
+  test -d "$toolchain_dir"; \
+  su -s /bin/bash toolchain-write-check -c " \
+    set -eux; \
+    test -w '$RUSTUP_HOME'; \
+    test -w '$toolchain_dir'; \
+    test -w '$CARGO_HOME'; \
+    test -w '$CARGO_HOME/.crates.toml'; \
+    test -w '$CARGO_HOME/.package-cache'; \
+    test -w '$CARGO_HOME/registry'; \
+    test -w '$CARGO_HOME/git'; \
+    test -w '$CARGO_HOME/binstall'; \
+    test -w '$CARGO_HOME/binstall.toml'; \
+    flock -w 2 '$CARGO_HOME/.package-cache' true \
+  "; \
+  userdel -r toolchain-write-check
