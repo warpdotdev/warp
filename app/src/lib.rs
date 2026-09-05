@@ -327,6 +327,7 @@ use crate::vim_registers::VimRegisters;
 use crate::warp_managed_paths_watcher::{WarpManagedPathsWatcher, ensure_warp_watch_roots_exist};
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workflows::local_workflows::LocalWorkflows;
+use crate::workspace::cross_window_tab_drag::CrossWindowTabDrag;
 use crate::workspace::{
     ActiveSession, OneTimeModalModel, PaneViewLocator, ToastStack, Workspace, WorkspaceAction,
 };
@@ -2919,9 +2920,27 @@ pub(crate) fn app_callbacks(
             }
 
             if let Some(window_data) = closed_window_data {
-                UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
-                    stack.handle_window_closed(window_data, ctx);
-                });
+                // A window closed as part of a cross-window tab-drag content transfer still holds a
+                // `TabData` referencing the `PaneGroup` it handed off to another, still-open
+                // window. Pushing it onto the undo-close stack like an ordinary close would let
+                // Cmd+Shift+T resurrect a window that duplicates ownership of that live pane group.
+                // Nothing was lost in such a close, so never recording it -- rather than recording
+                // and filtering it at pop time -- leaves the top of the stack at the user's last
+                // real close, which is what Cmd+Shift+T then restores.
+                let is_content_transferred = CrossWindowTabDrag::handle(ctx)
+                    .update(ctx, |drag, _| {
+                        drag.take_content_transferred_window_close(window_data.window_id)
+                    });
+                if is_content_transferred {
+                    log::info!(
+                        "tab_drag: skipping undo-close registration for content-transferred window {:?}",
+                        window_data.window_id
+                    );
+                } else {
+                    UndoCloseStack::handle(ctx).update(ctx, |stack, ctx| {
+                        stack.handle_window_closed(window_data, ctx);
+                    });
+                }
             }
             ctx.dispatch_global_action("workspace:save_app", &());
         })),

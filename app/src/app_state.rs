@@ -1,9 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use pathfinder_geometry::rect::RectF;
 use serde::{Deserialize, Serialize};
+use warp_errors::{ReportErrorLogMode, report_error};
 use warpui::platform::FullscreenState;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -351,6 +352,33 @@ pub enum SplitDirection {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaneFlex(pub f32);
 
+/// Invariant check: no two workspaces may hold a `TabData` referencing the same `PaneGroup`. That
+/// dual ownership is what lets `save_app_state` trip a `terminal_panes.uuid` UNIQUE-constraint
+/// storm, so this catches it here, at the moment of formation, instead. Release builds must not
+/// crash a user's session over a bookkeeping bug, so they only report once per run -- the same
+/// throttling `is_terminal_panes_unique_violation` in `persistence::sqlite` applies to the DB-level
+/// symptom this replaces.
+fn assert_no_duplicate_pane_group_ownership(app: &AppContext) {
+    let mut seen_pane_group_ids = HashSet::new();
+    for (_, workspace) in WorkspaceRegistry::as_ref(app).all_workspaces(app) {
+        for tab in &workspace.as_ref(app).tabs {
+            let pane_group_id = tab.pane_group.id();
+            if !seen_pane_group_ids.insert(pane_group_id) {
+                debug_assert!(
+                    false,
+                    "pane group {pane_group_id:?} is referenced by tabs in more than one \
+                     window -- dual ownership"
+                );
+                report_error!(
+                    "Duplicate pane group ownership detected across workspaces",
+                    extra: { "pane_group_id" => ?pane_group_id },
+                    ReportErrorLogMode::OncePerRun
+                );
+            }
+        }
+    }
+}
+
 pub fn get_app_state(app: &AppContext) -> AppState {
     let active_window_id = app.windows().active_window();
     let quake_mode_id = quake_mode_window_id();
@@ -358,6 +386,8 @@ pub fn get_app_state(app: &AppContext) -> AppState {
     let mut active_window_index = None;
 
     let mut windows = vec![];
+
+    assert_no_duplicate_pane_group_ownership(app);
 
     for (index, window_id) in app.window_ids().enumerate() {
         // Determine index of active window

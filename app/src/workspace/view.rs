@@ -27995,8 +27995,12 @@ impl Workspace {
     /// been transferred elsewhere.
     pub(crate) fn close_window_for_content_transfer(&mut self, ctx: &mut ViewContext<Self>) {
         self.set_suppress_detach_panes_on_window_close(true);
+        let window_id = ctx.window_id();
+        CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+            drag.mark_content_transferred_window_close(window_id);
+        });
         ctx.windows()
-            .close_window(ctx.window_id(), TerminationMode::ContentTransferred);
+            .close_window(window_id, TerminationMode::ContentTransferred);
     }
 
     pub(crate) fn insert_transferred_tab_at_index(
@@ -28839,6 +28843,9 @@ impl Workspace {
                 if transferred_tab_index < self.tabs.len() {
                     self.remove_tab_without_undo(transferred_tab_index, ctx);
                 }
+                CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                    drag.mark_content_transferred_window_close(preview_window_id);
+                });
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
             }
@@ -28849,6 +28856,9 @@ impl Workspace {
                 // asynchronously; `finalize` has already registered the
                 // pending close so `is_active()` keeps persistence paused
                 // until `on_window_closed` fires.
+                CrossWindowTabDrag::handle(ctx).update(ctx, |drag, _| {
+                    drag.mark_content_transferred_window_close(preview_window_id);
+                });
                 ctx.windows()
                     .close_window(preview_window_id, TerminationMode::ContentTransferred);
             }
