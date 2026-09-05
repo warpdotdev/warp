@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use typed_path::TypedPathBuf;
-use warp_completer::completer::{EngineDirEntry, EngineFileType};
+use warp_completer::completer::{EngineDirEntry, EngineFileType, PathCompletionContext};
 use warp_util::file_type::is_binary_file;
 use warpui::r#async::SpawnedFutureHandle;
 use warpui::{AppContext, Entity, ModelContext};
@@ -86,8 +86,11 @@ impl DirectoryFetcher {
         session_context: &SessionContext,
         dir_path: &str,
     ) -> Vec<DirectoryItem> {
-        // Convert the directory path to TypedPathBuf, expanding ~ if needed
-        let expanded_path = shellexpand::tilde(dir_path).into_owned();
+        // Convert the directory path to TypedPathBuf, expanding ~ if needed. We expand against the
+        // session's own home directory (which, for a remote SSH session, is the remote host's home
+        // directory) rather than `shellexpand::tilde`, which resolves against the local Warp
+        // process's home directory and would produce a nonsensical path on a remote host.
+        let expanded_path = expand_tilde(dir_path, session_context.home_directory());
         let typed_path = if expanded_path != dir_path {
             TypedPathBuf::from(expanded_path)
         } else {
@@ -196,6 +199,23 @@ impl GenericMenuItem for DirectoryItem {
 
     fn action_data(&self) -> String {
         self.name.clone()
+    }
+}
+
+/// Expands a leading `~` in `dir_path` against `home_directory`, mirroring `shellexpand::tilde`'s
+/// handling of `~` and `~/...`, but using the session's own home directory (which may be a
+/// remote host's home directory) instead of the local Warp process's home directory.
+fn expand_tilde(dir_path: &str, home_directory: Option<&str>) -> String {
+    let Some(home_directory) = home_directory else {
+        return dir_path.to_owned();
+    };
+
+    if dir_path == "~" {
+        home_directory.to_owned()
+    } else if let Some(rest) = dir_path.strip_prefix("~/") {
+        format!("{home_directory}/{rest}")
+    } else {
+        dir_path.to_owned()
     }
 }
 
