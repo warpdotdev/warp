@@ -165,6 +165,7 @@ fn render_prompt_udi(snapshot: &PromptSnapshot, appearance: &Appearance) -> Box<
                     parsed
                 }
                 ChipValue::GitBranchStatus(_) => continue,
+                ChipValue::OperatingSystem(_) => continue,
             };
             let font_size = udi_font_size(appearance);
             let content = render_git_diff_stats_content(
@@ -182,8 +183,16 @@ fn render_prompt_udi(snapshot: &PromptSnapshot, appearance: &Appearance) -> Box<
             .kind()
             .default_styles(appearance, false)
             .value_color;
-        let value_text = value.to_string();
-        let config = if let Some(icon) = chip_result.kind().udi_icon() {
+        let value_text = if matches!(chip_result.kind(), ContextChipKind::OperatingSystemLogo) {
+            String::new()
+        } else {
+            value.to_string()
+        };
+        let icon = value
+            .as_operating_system_info()
+            .map(|info| info.logo().icon())
+            .or_else(|| chip_result.kind().udi_icon());
+        let config = if let Some(icon) = icon {
             UdiChipConfig::new_with_icon(icon, color, value_text)
         } else {
             UdiChipConfig::new(color, value_text)
