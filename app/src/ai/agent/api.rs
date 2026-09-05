@@ -137,6 +137,7 @@ pub struct RequestParams {
     pub warp_drive_context_enabled: bool,
     pub context_window_limit: Option<u32>,
     pub mcp_context: Option<MCPContext>,
+    pub oz_hook_context: Option<warp_multi_agent_api::OzHookContext>,
     pub planning_enabled: bool,
     should_redact_secrets: bool,
 
@@ -210,6 +211,7 @@ impl RequestParams {
             warp_drive_context_enabled: false,
             context_window_limit: None,
             mcp_context: None,
+            oz_hook_context: None,
             planning_enabled: false,
             should_redact_secrets: false,
             member_byo_credentials_allowed: false,
@@ -430,6 +432,7 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
+            oz_hook_context: None,
         }
     }
 }

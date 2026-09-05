@@ -111,6 +111,7 @@ pub async fn generate_multi_agent_output(
             supports_stored_screenshots: FeatureFlag::StoredScreenshots.is_enabled(),
             custom_model_providers: params.custom_model_providers,
             custom_model_routers: params.custom_model_routers,
+            supports_oz_lifecycle_hooks: params.oz_hook_context.is_some(),
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
@@ -140,6 +141,7 @@ pub async fn generate_multi_agent_output(
             .existing_suggestions
             .map(|suggestions| suggestions.into()),
         mcp_context: params.mcp_context.map(Into::into),
+        oz_hook_context: params.oz_hook_context,
     };
 
     let response_stream = warp_multi_agent_client::generate_multi_agent_output(

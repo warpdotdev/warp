@@ -1,3 +1,23 @@
+mod native_permissions {
+    use super::super::native_permission_for_action;
+    use crate::ai::agent_sdk::hooks::permissions::NativePermission;
+
+    #[test]
+    fn autonomous_non_command_action_that_cannot_autoexecute_prompts() {
+        assert_eq!(
+            native_permission_for_action(false, false, true, false),
+            NativePermission::Prompt
+        );
+    }
+
+    #[test]
+    fn autonomous_denylisted_command_is_denied() {
+        assert_eq!(
+            native_permission_for_action(false, false, true, true),
+            NativePermission::Deny
+        );
+    }
+}
 mod binary_detection {
     use std::io::Write as _;
 

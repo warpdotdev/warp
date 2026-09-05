@@ -129,6 +129,93 @@ impl FromStr for RepositoryHeadOverride {
     }
 }
 
+const OZ_LIFECYCLE_HOOKS_CONTEXT_MAX_BYTES: usize = 64 * 1024;
+const OZ_LIFECYCLE_HOOKS_MAX_TRUST_RECORDS: usize = 64;
+const OZ_HOOK_PAYLOAD_SCHEMA_VERSION: &str = "warp.oz_hook.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OzLifecycleHooksContext {
+    pub required: bool,
+    pub supported_payload_schema_versions: Vec<String>,
+    pub project_trust: Vec<OzProjectHookTrust>,
+}
+
+impl OzLifecycleHooksContext {
+    fn validate(&self) -> Result<(), String> {
+        if !self.required {
+            return Err("required must be true".into());
+        }
+        if self.supported_payload_schema_versions.is_empty() {
+            return Err("supported_payload_schema_versions must not be empty".into());
+        }
+        if self
+            .supported_payload_schema_versions
+            .iter()
+            .any(|version| version != OZ_HOOK_PAYLOAD_SCHEMA_VERSION)
+        {
+            return Err(format!(
+                "unsupported Oz hook payload schema version; expected {OZ_HOOK_PAYLOAD_SCHEMA_VERSION}"
+            ));
+        }
+        if self.project_trust.len() > OZ_LIFECYCLE_HOOKS_MAX_TRUST_RECORDS {
+            return Err(format!(
+                "project_trust exceeds {OZ_LIFECYCLE_HOOKS_MAX_TRUST_RECORDS} records"
+            ));
+        }
+        for trust in &self.project_trust {
+            trust.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for OzLifecycleHooksContext {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() > OZ_LIFECYCLE_HOOKS_CONTEXT_MAX_BYTES {
+            return Err(format!(
+                "Oz lifecycle hooks context exceeds {OZ_LIFECYCLE_HOOKS_CONTEXT_MAX_BYTES} bytes"
+            ));
+        }
+        let context = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid Oz lifecycle hooks context JSON: {error}"))?;
+        context.validate()?;
+        Ok(context)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OzProjectHookTrust {
+    pub git_root: PathBuf,
+    pub config_path: PathBuf,
+    pub sha256: String,
+}
+
+impl OzProjectHookTrust {
+    fn validate(&self) -> Result<(), String> {
+        if self.git_root.as_os_str().is_empty() {
+            return Err("project_trust git_root must not be empty".into());
+        }
+        if self.config_path.as_os_str().is_empty() {
+            return Err("project_trust config_path must not be empty".into());
+        }
+        if self.sha256.len() != 64
+            || !self
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        {
+            return Err(
+                "project_trust sha256 must be an exact 64-character lowercase hexadecimal hash"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Prompt {
     PlainText(String),
@@ -596,6 +683,15 @@ pub struct RunAgentArgs {
     /// Remove the origin remote from environment repositories after setup.
     #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
     pub remove_repository_origins: bool,
+
+    /// Server-authenticated lifecycle hook capability and project trust for embedded Oz.
+    #[arg(
+        long = "oz-lifecycle-hooks-context",
+        value_name = "JSON",
+        requires = "task_id",
+        hide = true
+    )]
+    pub oz_lifecycle_hooks_context: Option<OzLifecycleHooksContext>,
 }
 
 impl RunAgentArgs {

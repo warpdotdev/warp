@@ -26,7 +26,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat, RepositoryHeadOverride};
+use warp_cli::agent::{Harness, OutputFormat, OzLifecycleHooksContext, RepositoryHeadOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -55,6 +55,18 @@ use crate::ai::agent_sdk::driver::harness::{
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter,
 };
+use crate::ai::agent_sdk::hooks::config::discover_hook_config;
+use crate::ai::agent_sdk::hooks::payload::{
+    HookEventFields, HookPayloadContext, HookPayloadTemplate, SessionEndReason, SessionStartSource,
+    TurnStatus,
+};
+use crate::ai::agent_sdk::hooks::redaction::HookRedactor;
+use crate::ai::agent_sdk::hooks::runtime::{OzHookEvent, OzHookRuntime, OzHookRuntimeService};
+use crate::ai::agent_sdk::hooks::trust::{
+    DenyProjectHookTrust, ExactHookTrustStore, HookTrustKey, HookTrustStore,
+    PersistentHookTrustStore,
+};
+use crate::ai::agent_sdk::hooks::{OzHookSession, PAYLOAD_SCHEMA_VERSION};
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::{
@@ -162,6 +174,16 @@ where
         result = run_future => result,
         _ = git_refresh => unreachable!("git credentials refresh loop resolved unexpectedly"),
         _ = bedrock_refresh => unreachable!("Bedrock credentials refresh loop resolved unexpectedly"),
+    }
+}
+
+fn secret_values(secret: &ManagedSecretValue) -> Vec<String> {
+    match secret {
+        ManagedSecretValue::RawValue { value } => vec![value.clone()],
+        secret => typed_secret_entries(secret)
+            .into_iter()
+            .map(|(_, value)| value.to_owned())
+            .collect(),
     }
 }
 
@@ -617,6 +639,8 @@ pub struct AgentDriverOptions {
     pub strict_mcp_startup: bool,
     /// MCP server startup timeout override.
     pub mcp_startup_timeout: Option<Duration>,
+    /// Server-authenticated lifecycle hook capability and project trust.
+    pub oz_lifecycle_hooks_context: Option<OzLifecycleHooksContext>,
 }
 
 /// `AgentDriver` is a model for driving an ambient Warp agent to completion.
@@ -722,6 +746,8 @@ pub struct AgentDriver {
     /// How long to wait for MCP servers to start before degrading (or failing,
     /// in strict mode).
     mcp_startup_timeout: Duration,
+    /// Server-authenticated lifecycle hook capability and project trust.
+    oz_lifecycle_hooks_context: Option<OzLifecycleHooksContext>,
 }
 
 #[derive(Clone)]
@@ -993,6 +1019,235 @@ impl From<PrepareEnvironmentError> for AgentDriverError {
 }
 
 impl AgentDriver {
+    async fn prepare_oz_hook_conversation(
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<(), AgentDriverError> {
+        foreground
+            .spawn(|me, ctx| {
+                if !FeatureFlag::OzLifecycleHooks.is_enabled() || me.run_conversation_id.is_some() {
+                    return;
+                }
+                let mut conversation_id = None;
+                me.terminal_driver.update(ctx, |driver, ctx| {
+                    driver.with_terminal_view(ctx, |terminal, ctx| {
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            conversation_id = Some(controller.start_oz_hook_conversation(ctx));
+                        });
+                    });
+                });
+                if let Some(conversation_id) = conversation_id {
+                    me.run_conversation_id = Some(conversation_id);
+                    stamp_parent_agent_id_if_some(
+                        conversation_id,
+                        me.parent_run_id.as_deref(),
+                        ctx,
+                    );
+                    register_agent_event_consumer(conversation_id, ctx.model_id(), ctx);
+                }
+            })
+            .await?;
+        Ok(())
+    }
+    async fn initialize_oz_hook_runtime(
+        model: String,
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<Option<Arc<dyn OzHookRuntime>>, AgentDriverError> {
+        let (context, cwd, task_id, conversation_id, is_resume, secrets, hooks_enabled) =
+            foreground
+                .spawn(|me, _| {
+                    (
+                        me.oz_lifecycle_hooks_context.clone(),
+                        me.harness_working_dir.clone(),
+                        me.task_id,
+                        me.run_conversation_id,
+                        me.restored_conversation_id.is_some(),
+                        Arc::clone(&me.secrets),
+                        FeatureFlag::OzLifecycleHooks.is_enabled(),
+                    )
+                })
+                .await?;
+        if !hooks_enabled {
+            return Ok(None);
+        }
+        let conversation_id = conversation_id.ok_or(AgentDriverError::InvalidRuntimeState)?;
+
+        let trust_store: Arc<dyn HookTrustStore> = if let Some(context) = context {
+            let trust_store = ExactHookTrustStore::default();
+            for trust in context.project_trust {
+                let (Ok(git_root), Ok(config_path)) = (
+                    std::fs::canonicalize(trust.git_root),
+                    std::fs::canonicalize(trust.config_path),
+                ) else {
+                    continue;
+                };
+                trust_store.trust(HookTrustKey {
+                    git_root,
+                    config_path,
+                    definition_hash: trust.sha256,
+                });
+            }
+            Arc::new(trust_store)
+        } else {
+            match PersistentHookTrustStore::load_default() {
+                Ok(trust_store) => Arc::new(trust_store),
+                Err(error) => {
+                    log::warn!("Failed to load Oz hook trust store: {error}");
+                    Arc::new(DenyProjectHookTrust)
+                }
+            }
+        };
+        let config = discover_hook_config(&cwd, trust_store.as_ref());
+        for diagnostic in config.diagnostics.iter() {
+            log::warn!(
+                "Oz hook configuration diagnostic: kind={:?} path={} hash_present={}",
+                diagnostic.kind,
+                diagnostic.path.display(),
+                diagnostic.definition_hash.is_some()
+            );
+        }
+        let enabled_events = config
+            .enabled_events()
+            .map(|event| event.protocol_value().into())
+            .collect();
+        let run_id = task_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let session_id = Uuid::new_v4().to_string();
+        let payload_context = HookPayloadContext {
+            session_id,
+            run_id,
+            conversation_id: conversation_id.to_string(),
+            cwd: cwd.to_string_lossy().into_owned(),
+            model,
+            permission_mode: "supervised".into(),
+        };
+        let runtime: Arc<dyn OzHookRuntime> = Arc::new(OzHookRuntimeService::new(config));
+        let session = OzHookSession::new(
+            Arc::clone(&runtime),
+            warp_multi_agent_api::OzHookContext {
+                enabled_events,
+                supported_payload_schema_versions: vec![PAYLOAD_SCHEMA_VERSION.into()],
+            },
+            payload_context.clone(),
+            HookRedactor::new(secrets.values().flat_map(secret_values)),
+            true,
+        );
+        foreground
+            .spawn(move |me, ctx| {
+                me.terminal_driver.update(ctx, |driver, ctx| {
+                    driver.with_terminal_view(ctx, |terminal, ctx| {
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            controller.set_oz_hook_session(conversation_id, Some(session), ctx);
+                        });
+                    });
+                });
+            })
+            .await?;
+
+        runtime
+            .observe(OzHookEvent {
+                invocation_id: Uuid::new_v4().to_string(),
+                tool_use_id: None,
+                payload: HookPayloadTemplate {
+                    context: payload_context,
+                    event: HookEventFields::SessionStart {
+                        source: if is_resume {
+                            SessionStartSource::Resume
+                        } else {
+                            SessionStartSource::Startup
+                        },
+                    },
+                },
+            })
+            .await;
+        Ok(Some(runtime))
+    }
+
+    async fn current_oz_hook_session(
+        foreground: &ModelSpawner<Self>,
+    ) -> Result<Option<OzHookSession>, warpui::ModelDropped> {
+        foreground
+            .spawn(|me, ctx| {
+                let mut session = None;
+                let conversation_id = me.run_conversation_id;
+                me.terminal_driver.update(ctx, |driver, ctx| {
+                    driver.with_terminal_view(ctx, |terminal, ctx| {
+                        session = conversation_id.and_then(|conversation_id| {
+                            terminal
+                                .ai_controller()
+                                .as_ref(ctx)
+                                .oz_hook_session(conversation_id)
+                        });
+                    });
+                });
+                session
+            })
+            .await
+    }
+
+    async fn finish_oz_hook_runtime(
+        runtime: Option<Arc<dyn OzHookRuntime>>,
+        status: &SDKConversationOutputStatus,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        let Some(runtime) = runtime else {
+            return;
+        };
+        let Ok(Some(session)) = Self::current_oz_hook_session(foreground).await else {
+            return;
+        };
+        let reason = match status {
+            SDKConversationOutputStatus::Success => SessionEndReason::Completed,
+            SDKConversationOutputStatus::Error { .. }
+            | SDKConversationOutputStatus::Blocked { .. } => SessionEndReason::Failed,
+            SDKConversationOutputStatus::Cancelled { .. } => SessionEndReason::Cancelled,
+        };
+        let _ = runtime
+            .observe(OzHookEvent {
+                invocation_id: Uuid::new_v4().to_string(),
+                tool_use_id: None,
+                payload: HookPayloadTemplate {
+                    context: session.payload_context,
+                    event: HookEventFields::SessionEnd { reason },
+                },
+            })
+            .with_timeout(Duration::from_secs(3))
+            .await;
+        runtime.cancel(crate::ai::agent_sdk::hooks::runtime::OzHookCancellationScope::Session);
+    }
+
+    async fn observe_oz_stop(
+        runtime: Option<&Arc<dyn OzHookRuntime>>,
+        status: &SDKConversationOutputStatus,
+        foreground: &ModelSpawner<Self>,
+    ) {
+        let Some(runtime) = runtime else {
+            return;
+        };
+        let Ok(Some(session)) = Self::current_oz_hook_session(foreground).await else {
+            return;
+        };
+        if !session.claim_stop() {
+            return;
+        }
+        let turn_status = match status {
+            SDKConversationOutputStatus::Success => TurnStatus::Completed,
+            SDKConversationOutputStatus::Error { .. } => TurnStatus::Failed,
+            SDKConversationOutputStatus::Cancelled { .. } => TurnStatus::Idle,
+            SDKConversationOutputStatus::Blocked { .. } => TurnStatus::Blocked,
+        };
+        runtime
+            .observe(OzHookEvent {
+                invocation_id: Uuid::new_v4().to_string(),
+                tool_use_id: None,
+                payload: HookPayloadTemplate {
+                    context: session.payload_context,
+                    event: HookEventFields::Stop { turn_status },
+                },
+            })
+            .await;
+    }
+
     #[tracing::instrument(name = "AgentDriver::new", skip_all, err, fields(
         tags.cloud_agent = true,
         task_id = ?options.task_id,
@@ -1026,6 +1281,7 @@ impl AgentDriver {
             skip_initial_turn,
             strict_mcp_startup,
             mcp_startup_timeout,
+            oz_lifecycle_hooks_context,
         } = options;
 
         // Split the unified resume option into the two internal slots that the rest of
@@ -1194,6 +1450,7 @@ impl AgentDriver {
             skip_initial_turn,
             strict_mcp_startup,
             mcp_startup_timeout: mcp_startup_timeout.unwrap_or(MCP_SERVER_STARTUP_TIMEOUT),
+            oz_lifecycle_hooks_context,
         })
     }
 
@@ -1244,6 +1501,7 @@ impl AgentDriver {
             skip_initial_turn: false,
             strict_mcp_startup: false,
             mcp_startup_timeout: MCP_SERVER_STARTUP_TIMEOUT,
+            oz_lifecycle_hooks_context: None,
         }
     }
 
@@ -2093,7 +2351,7 @@ impl AgentDriver {
                     .await?;
 
                 // For the Oz harness only: set up MCP servers, model overrides, and profile information.
-                if matches!(&task.harness, HarnessKind::Oz) {
+                if task.harness.uses_oz_lifecycle_hooks() {
                     let mcp_specs = task.mcp_specs.clone();
                     let managed_mcp_client = foreground
                         .spawn(|_, ctx| ServerApiProvider::as_ref(ctx).get_managed_mcp_client())
@@ -2383,6 +2641,13 @@ impl AgentDriver {
                     &foreground,
                 )
                 .await?;
+                Self::prepare_oz_hook_conversation(&foreground).await?;
+                let model = task
+                    .model
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "default".into());
+                let oz_hook_runtime = Self::initialize_oz_hook_runtime(model, &foreground).await?;
 
                 let status_rx = foreground
                     .spawn(move |me, ctx| me.execute_run(task.prompt, ctx))
@@ -2401,6 +2666,14 @@ impl AgentDriver {
                     &foreground,
                 )
                 .await?;
+                if !matches!(conversation_status, SDKConversationOutputStatus::Success) {
+                    Self::observe_oz_stop(
+                        oz_hook_runtime.as_ref(),
+                        &conversation_status,
+                        &foreground,
+                    )
+                    .await;
+                }
 
                 log::info!(
                     "Ambient agent Oz lifecycle: event=run_exit_received idle_on_complete_elapsed_or_not_configured=true next=terminal_teardown_after_flush"
@@ -2413,6 +2686,8 @@ impl AgentDriver {
                 // to send a message when the streams are finished, flushed, and the websocket is disconnected. For now, we'll just sleep for a second, as this seems
                 // to be enough time for the streams to be finished and the events to be flushed.
                 warpui::r#async::Timer::after(Duration::from_secs(1)).await;
+                Self::finish_oz_hook_runtime(oz_hook_runtime, &conversation_status, &foreground)
+                    .await;
 
                 conversation_status.into_result()
             }
@@ -3512,7 +3787,7 @@ impl AgentDriver {
                 run_exit = run_exit.with_wait(wait);
             }
         }
-        let restored_conversation_id = self.restored_conversation_id;
+        let restored_conversation_id = self.run_conversation_id;
 
         // ServerSide prompts enter the agent view and emit
         // `CloudModeSetupPhaseEnded` to tear down the Cloud Mode Setup V2 chip.

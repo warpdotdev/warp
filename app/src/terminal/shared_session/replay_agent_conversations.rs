@@ -89,6 +89,7 @@ pub fn reconstruct_response_events_from_conversations(
                     // Shared session replays don't need a run_id; the empty
                     // string is filtered to None by initialize_output_for_response_stream.
                     run_id: String::new(),
+                    supported_oz_hook_payload_schema_versions: vec![],
                 },
             )),
         });

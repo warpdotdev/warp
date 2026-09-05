@@ -14,6 +14,7 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::hooks::trust::is_hook_trust_store_path;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, AskUserQuestionPermission, ExecutionProfileId,
@@ -1231,12 +1232,13 @@ fn command_for_execution_predicates(command: &str, escape_char: EscapeChar) -> S
 /// and must never be auto-written regardless of user autonomy settings.
 /// Returns `None` if no paths are protected.
 fn check_protected_write_paths(paths: &[PathBuf]) -> Option<FileWritePermission> {
-    // MCP config files are always protected from auto-write to prevent security risks
-    // from injecting arbitrary context into the agent.
-    if paths
-        .iter()
-        .any(|p| mcp_provider_from_file_path(p).is_some())
-    {
+    // Executable agent configuration is always protected from auto-write because it can inject
+    // arbitrary context or launch commands in a later request.
+    if paths.iter().any(|p| {
+        mcp_provider_from_file_path(p).is_some()
+            || p.ends_with(std::path::Path::new(".warp/hooks.json"))
+            || is_hook_trust_store_path(p)
+    }) {
         Some(FileWritePermission::Denied(
             FileWritePermissionDeniedReason::ProtectedPath,
         ))

@@ -10,7 +10,7 @@ pub(super) mod shared_session;
 mod slash_command;
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
 use warp_multi_agent_api::{Task, ToolType, message};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
+use warpui::r#async::{FutureExt as _, SpawnedFutureHandle, Timer};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle,
 };
@@ -57,6 +57,32 @@ use crate::ai::agent::{
 use crate::ai::agent_events::AgentMessageEventMetadata;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::ClaudeHarness;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::config::discover_hook_config;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::payload::{HookEventFields, HookPayloadTemplate};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::payload::{
+    HookPayloadContext, SessionEndReason, SessionStartSource, TurnStatus,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::protocol::{
+    event_from_protocol, failed_result, result_for_observation, result_for_pre_tool,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::redaction::HookRedactor;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::runtime::{
+    OzHookCancellationScope, OzHookEvent, OzHookRuntime, OzHookRuntimeService, OzPreToolUseEvent,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::trust::{
+    DenyProjectHookTrust, HookTrustStore, PersistentHookTrustStore,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::{
+    HookEventName, MAX_PROMPT_BYTES, OzHookSession, PAYLOAD_SCHEMA_VERSION,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::document::ai_document_model::{
     AIDocumentId, AIDocumentModel, AIDocumentUserEditStatus,
@@ -367,6 +393,21 @@ pub struct BlocklistAIController {
             Option<PassiveSuggestionTrigger>,
         )>,
     >,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_sessions: HashMap<AIConversationId, OzHookSession>,
+    #[cfg(not(target_family = "wasm"))]
+    pending_oz_hook_results: HashMap<AIConversationId, Vec<warp_multi_agent_api::OzHookResult>>,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_compatible_streams: HashSet<ResponseStreamId>,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_action_streams: HashSet<ResponseStreamId>,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_invocations: HashSet<(AIConversationId, String)>,
+    #[cfg(not(target_family = "wasm"))]
+    oz_hook_results_by_invocation:
+        HashMap<(AIConversationId, String), warp_multi_agent_api::OzHookResult>,
+    #[cfg(not(target_family = "wasm"))]
+    cancelled_oz_hook_invocations: HashSet<(AIConversationId, String)>,
 }
 
 enum InputQueryType {
@@ -418,6 +459,25 @@ struct InputQuery {
     queued_query_id: Option<QueuedQueryId>,
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn local_oz_session_start_source<'a>(
+    inputs: impl Iterator<Item = &'a AIAgentInput>,
+    has_existing_exchanges: bool,
+) -> Option<SessionStartSource> {
+    let mut has_user_query = false;
+    for input in inputs {
+        match input {
+            AIAgentInput::ResumeConversation { .. } => return Some(SessionStartSource::Resume),
+            AIAgentInput::UserQuery { .. } => has_user_query = true,
+            _ => {}
+        }
+    }
+    has_user_query.then_some(if has_existing_exchanges {
+        SessionStartSource::Resume
+    } else {
+        SessionStartSource::Startup
+    })
+}
 impl InputQuery {
     fn query(&self) -> String {
         match &self.input_query {
@@ -430,6 +490,251 @@ impl InputQuery {
 }
 
 impl BlocklistAIController {
+    #[cfg(not(target_family = "wasm"))]
+    fn end_local_oz_hook_session(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(session) = self.oz_hook_sessions.get(&conversation_id) else {
+            return;
+        };
+        if session.is_driver_owned {
+            return;
+        }
+        let session = self
+            .oz_hook_sessions
+            .remove(&conversation_id)
+            .expect("hook session was checked above");
+        self.action_model.update(ctx, |model, ctx| {
+            model.set_oz_hook_session(conversation_id, None, ctx);
+        });
+        let runtime = Arc::clone(&session.runtime);
+        let event = OzHookEvent {
+            invocation_id: uuid::Uuid::new_v4().to_string(),
+            tool_use_id: None,
+            payload: HookPayloadTemplate {
+                context: session.payload_context,
+                event: HookEventFields::SessionEnd {
+                    reason: SessionEndReason::Shutdown,
+                },
+            },
+        };
+        ctx.spawn(
+            async move {
+                let _ = runtime
+                    .observe(event)
+                    .with_timeout(Duration::from_secs(3))
+                    .await;
+                runtime.cancel(OzHookCancellationScope::Session);
+            },
+            |_, _, _| {},
+        );
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_oz_stop_if_needed(
+        &mut self,
+        stream_id: ResponseStreamId,
+        finished_event: warp_multi_agent_api::response_event::StreamFinished,
+        conversation_id: AIConversationId,
+        did_input_contain_user_query: bool,
+        response_stream: ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if !response_stream.as_ref(ctx).is_completion_deferred() {
+            return false;
+        }
+        let turn_status = match &finished_event.reason {
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
+                TurnStatus::Completed
+            }
+            Some(
+                warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::ContextWindowExceeded(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::QuotaLimit(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::LlmUnavailable(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::InvalidApiKey(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::InternalError(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::MaxTokenLimit(_),
+            ) => TurnStatus::Failed,
+        };
+        let has_actions = self.oz_hook_action_streams.contains(&stream_id)
+            || BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| {
+                    conversation
+                        .new_exchange_ids_for_response(&stream_id)
+                        .filter_map(|exchange_id| conversation.exchange_with_id(exchange_id))
+                        .filter_map(|exchange| exchange.output_status.output())
+                        .any(|output| output.get().actions().next().is_some())
+                });
+        let Some(session) = self.oz_hook_sessions.get(&conversation_id) else {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        };
+        if has_actions && matches!(turn_status, TurnStatus::Completed) {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        }
+        if !session.claim_stop() {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        }
+        let runtime = Arc::clone(&session.runtime);
+        let event = OzHookEvent {
+            invocation_id: uuid::Uuid::new_v4().to_string(),
+            tool_use_id: None,
+            payload: HookPayloadTemplate {
+                context: session.payload_context.clone(),
+                event: HookEventFields::Stop { turn_status },
+            },
+        };
+        ctx.spawn(
+            async move {
+                runtime.observe(event).await;
+            },
+            move |me, _, ctx| {
+                me.handle_response_stream_finished(
+                    &stream_id,
+                    finished_event,
+                    conversation_id,
+                    did_input_contain_user_query,
+                    ctx,
+                );
+                response_stream.update(ctx, |stream, ctx| {
+                    stream.finish_deferred_completion(ctx);
+                });
+            },
+        );
+        true
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_failed_oz_stop_if_needed(
+        &mut self,
+        stream_id: ResponseStreamId,
+        error: Arc<AIApiError>,
+        conversation_id: AIConversationId,
+        response_stream: ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if !response_stream.as_ref(ctx).is_completion_deferred() {
+            return false;
+        }
+        let Some(session) = self.oz_hook_sessions.get(&conversation_id) else {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        };
+        if !session.claim_stop() {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        }
+        let runtime = Arc::clone(&session.runtime);
+        let event = OzHookEvent {
+            invocation_id: uuid::Uuid::new_v4().to_string(),
+            tool_use_id: None,
+            payload: HookPayloadTemplate {
+                context: session.payload_context.clone(),
+                event: HookEventFields::Stop {
+                    turn_status: TurnStatus::Failed,
+                },
+            },
+        };
+        ctx.spawn(
+            async move {
+                runtime.observe(event).await;
+            },
+            move |me, _, ctx| {
+                me.handle_response_stream_error(
+                    &stream_id,
+                    error,
+                    conversation_id,
+                    &response_stream,
+                    ctx,
+                );
+                response_stream.update(ctx, |stream, ctx| {
+                    stream.finish_deferred_completion(ctx);
+                });
+            },
+        );
+        true
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn initialize_local_oz_hook_session(
+        &mut self,
+        conversation_id: AIConversationId,
+        model: String,
+        source: SessionStartSource,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<OzHookEvent> {
+        if !FeatureFlag::OzLifecycleHooks.is_enabled()
+            || self.oz_hook_sessions.contains_key(&conversation_id)
+        {
+            return None;
+        }
+        let cwd = self
+            .active_session
+            .as_ref(ctx)
+            .current_working_directory()?
+            .clone();
+        let trust_store: Box<dyn HookTrustStore> = match PersistentHookTrustStore::load_default() {
+            Ok(store) => Box::new(store),
+            Err(error) => {
+                log::warn!("Failed to load Oz hook trust store: {error}");
+                Box::new(DenyProjectHookTrust)
+            }
+        };
+        let config = discover_hook_config(Path::new(&cwd), trust_store.as_ref());
+        for diagnostic in config.diagnostics.iter() {
+            log::warn!(
+                "Oz hook configuration diagnostic: kind={:?} path={} hash_present={}",
+                diagnostic.kind,
+                diagnostic.path.display(),
+                diagnostic.definition_hash.is_some()
+            );
+        }
+        let enabled_events = config
+            .enabled_events()
+            .map(|event| event.protocol_value().into())
+            .collect();
+        let runtime: Arc<dyn OzHookRuntime> = Arc::new(OzHookRuntimeService::new(config));
+        let payload_context = HookPayloadContext {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            run_id: uuid::Uuid::new_v4().to_string(),
+            conversation_id: conversation_id.to_string(),
+            cwd,
+            model,
+            permission_mode: "supervised".into(),
+        };
+        let session = OzHookSession::new(
+            Arc::clone(&runtime),
+            warp_multi_agent_api::OzHookContext {
+                enabled_events,
+                supported_payload_schema_versions: vec![PAYLOAD_SCHEMA_VERSION.into()],
+            },
+            payload_context.clone(),
+            HookRedactor::new([]),
+            false,
+        );
+        self.set_oz_hook_session(conversation_id, Some(session), ctx);
+        Some(OzHookEvent {
+            invocation_id: uuid::Uuid::new_v4().to_string(),
+            tool_use_id: None,
+            payload: HookPayloadTemplate {
+                context: payload_context,
+                event: HookEventFields::SessionStart { source },
+            },
+        })
+    }
     /// Returns the bundled-skill catalog origin for this controller's active session.
     pub fn skill_path_origin(&self, ctx: &AppContext) -> SkillPathOrigin {
         SessionContext::from_session(self.active_session.as_ref(ctx), ctx).skill_path_origin()
@@ -616,6 +921,8 @@ impl BlocklistAIController {
                     ctx,
                 );
             }
+            #[cfg(not(target_family = "wasm"))]
+            me.end_local_oz_hook_session(*conversation_id, ctx);
         });
         // Subscribe to the orchestration event service to inject events
         // (e.g. MessagesReceivedFromAgents) into conversations that receive inter-agent messages.
@@ -654,6 +961,20 @@ impl BlocklistAIController {
             pending_local_claude_wakes: HashMap::new(),
             pending_passive_follow_ups: HashSet::new(),
             pending_passive_suggestion_results: HashMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_sessions: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            pending_oz_hook_results: HashMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_compatible_streams: HashSet::new(),
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_action_streams: HashSet::new(),
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_invocations: HashSet::new(),
+            #[cfg(not(target_family = "wasm"))]
+            oz_hook_results_by_invocation: HashMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            cancelled_oz_hook_invocations: HashSet::new(),
         }
     }
 
@@ -2384,6 +2705,148 @@ impl BlocklistAIController {
         });
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn oz_hook_session(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<OzHookSession> {
+        self.oz_hook_sessions.get(&conversation_id).cloned()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_oz_hook_session(
+        &mut self,
+        conversation_id: AIConversationId,
+        session: Option<OzHookSession>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(session) = session.clone() {
+            self.oz_hook_sessions.insert(conversation_id, session);
+        } else {
+            self.oz_hook_sessions.remove(&conversation_id);
+        }
+        self.action_model.update(ctx, |model, ctx| {
+            model.set_oz_hook_session(conversation_id, session, ctx);
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn execute_protocol_oz_hook(
+        &mut self,
+        conversation_id: AIConversationId,
+        action: warp_multi_agent_api::RunOzHook,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let invocation_key = (conversation_id, action.invocation_id.clone());
+        if !self.oz_hook_invocations.insert(invocation_key.clone()) {
+            if let Some(result) = self
+                .oz_hook_results_by_invocation
+                .get(&invocation_key)
+                .cloned()
+            {
+                self.pending_oz_hook_results
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(result);
+                self.send_pending_oz_hook_results(conversation_id, ctx);
+            }
+            return;
+        }
+        let Some(session) = self.oz_hook_sessions.get(&conversation_id) else {
+            return;
+        };
+        let event = match event_from_protocol(&action) {
+            Ok(event) => event,
+            Err(error) => {
+                let result = failed_result(&action, error);
+                self.oz_hook_results_by_invocation
+                    .insert(invocation_key, result.clone());
+                self.pending_oz_hook_results
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(result);
+                return;
+            }
+        };
+        let runtime = Arc::clone(&session.runtime);
+        let event_name = event.payload.event_name();
+        ctx.spawn(
+            async move {
+                if event_name == HookEventName::PreToolUse {
+                    let event = OzPreToolUseEvent::new(event)
+                        .expect("event name was validated before constructing pre-tool event");
+                    result_for_pre_tool(&action, runtime.pre_tool_use(event).await)
+                } else {
+                    let observation = runtime.observe(event).await;
+                    result_for_observation(&action, &observation.diagnostics)
+                }
+            },
+            move |me, result, ctx| {
+                if me.cancelled_oz_hook_invocations.contains(&invocation_key) {
+                    return;
+                }
+                me.oz_hook_results_by_invocation
+                    .insert(invocation_key, result.clone());
+                me.pending_oz_hook_results
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(result);
+                me.send_pending_oz_hook_results(conversation_id, ctx);
+            },
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn send_pending_oz_hook_results(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .in_flight_response_streams
+            .has_active_stream_for_conversation(conversation_id, ctx)
+        {
+            return;
+        }
+        let Some(results) = self.pending_oz_hook_results.remove(&conversation_id) else {
+            return;
+        };
+        let Some(task_id) = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .map(|conversation| conversation.get_root_task_id().clone())
+        else {
+            return;
+        };
+        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        let inputs = results
+            .iter()
+            .cloned()
+            .map(AIAgentInput::OzHookResult)
+            .collect();
+        if let Err(error) = self.send_request_input(
+            RequestInput::for_task(
+                inputs,
+                task_id,
+                &self.active_session,
+                self.get_current_response_initiator(),
+                conversation_id,
+                self.terminal_surface_id,
+                &scope,
+                ctx,
+            ),
+            None,
+            RecoveryBudget::fresh(),
+            false,
+            ctx,
+        ) {
+            report_error!(error.context("Failed to submit Oz hook results"));
+            self.pending_oz_hook_results
+                .entry(conversation_id)
+                .or_default()
+                .extend(results);
+        }
+    }
+
     #[cfg(test)]
     pub fn get_ambient_agent_task_id(&self) -> Option<AmbientAgentTaskId> {
         self.ambient_agent_task_id
@@ -2418,6 +2881,13 @@ impl BlocklistAIController {
             .as_ref(ctx)
             .conversation(&id)
             .expect("Conversation exists- was just created.")
+    }
+
+    pub(crate) fn start_oz_hook_conversation(
+        &self,
+        ctx: &mut ModelContext<Self>,
+    ) -> AIConversationId {
+        self.start_new_conversation_for_request(ctx).id()
     }
 
     /// Attempts to send a request to the AI model API. Adds context to the input if it
@@ -2564,6 +3034,63 @@ impl BlocklistAIController {
         );
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
+        #[cfg(not(target_family = "wasm"))]
+        let has_existing_exchanges = history_model
+            .as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.exchange_count() > 0);
+        #[cfg(not(target_family = "wasm"))]
+        let session_start_source =
+            local_oz_session_start_source(request_input.all_inputs(), has_existing_exchanges);
+        #[cfg(not(target_family = "wasm"))]
+        let session_start_hook = session_start_source.and_then(|source| {
+            self.initialize_local_oz_hook_session(
+                conversation_id,
+                request_params.model.to_string(),
+                source,
+                ctx,
+            )
+        });
+        #[cfg(not(target_family = "wasm"))]
+        if session_start_hook.is_none()
+            && request_input.all_inputs().any(AIAgentInput::is_user_query)
+            && let Some(session) = self.oz_hook_sessions.get(&conversation_id)
+        {
+            session.begin_turn();
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(session) = self.oz_hook_sessions.get(&conversation_id) {
+            request_params.oz_hook_context = Some(session.protocol_context.clone());
+        }
+        #[cfg(not(target_family = "wasm"))]
+        let pre_request_hooks = self
+            .oz_hook_sessions
+            .get(&conversation_id)
+            .and_then(|session| {
+                let mut events = session_start_hook.clone().into_iter().collect::<Vec<_>>();
+                if let Some(query) = request_input.all_inputs().find_map(|input| {
+                    let AIAgentInput::UserQuery { query, .. } = input else {
+                        return None;
+                    };
+                    Some(query)
+                }) {
+                    events.push(OzHookEvent {
+                        invocation_id: uuid::Uuid::new_v4().to_string(),
+                        tool_use_id: None,
+                        payload: HookPayloadTemplate {
+                            context: session.payload_context.clone(),
+                            event: HookEventFields::user_prompt(
+                                session.redactor.redact_text(query, MAX_PROMPT_BYTES),
+                            ),
+                        },
+                    });
+                }
+                (!events.is_empty()).then(|| (Arc::clone(&session.runtime), events))
+            });
+        #[cfg(not(target_family = "wasm"))]
+        let should_defer_for_pre_request_hooks = pre_request_hooks.is_some();
+        #[cfg(target_family = "wasm")]
+        let should_defer_for_pre_request_hooks = false;
 
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();
@@ -2577,13 +3104,22 @@ impl BlocklistAIController {
                 client_exchange_id: None,
                 model_id: Some(request_params.model.clone()),
             };
-            ResponseStream::new(
-                request_params.clone(),
-                ai_identifiers,
-                recovery,
-                team_scope,
-                ctx,
-            )
+            if should_defer_for_pre_request_hooks {
+                ResponseStream::new_deferred(
+                    request_params.clone(),
+                    ai_identifiers,
+                    recovery,
+                    team_scope,
+                )
+            } else {
+                ResponseStream::new(
+                    request_params.clone(),
+                    ai_identifiers,
+                    recovery,
+                    team_scope,
+                    ctx,
+                )
+            }
         });
         let response_stream_id = response_stream.as_ref(ctx).id().clone();
         let response_stream_clone = response_stream.clone();
@@ -2598,6 +3134,20 @@ impl BlocklistAIController {
                 ctx,
             );
         });
+        #[cfg(not(target_family = "wasm"))]
+        if let Some((runtime, events)) = pre_request_hooks {
+            let response_stream = response_stream.clone();
+            ctx.spawn(
+                async move {
+                    for event in events {
+                        runtime.observe(event).await;
+                    }
+                },
+                move |_, _, ctx| {
+                    response_stream.update(ctx, |stream, ctx| stream.start_deferred(ctx));
+                },
+            );
+        }
 
         for input in request_input.all_inputs() {
             if let AIAgentInput::UserQuery {
@@ -2913,6 +3463,55 @@ impl BlocklistAIController {
         self.in_flight_response_streams
             .try_cancel_stream(response_stream_id, reason, ctx)
     }
+    fn handle_response_stream_error(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        error: Arc<AIApiError>,
+        conversation_id: AIConversationId,
+        response_stream: &ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(error.as_ref(), AIApiError::QuotaLimit { .. }) {
+            TeamUpdateManager::handle(ctx).update(ctx, |team_update_manager, ctx| {
+                std::mem::drop(team_update_manager.refresh_workspace_metadata(ctx));
+            });
+            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                model.enable_buy_credits_banner(ctx);
+            });
+        }
+
+        let recovery_pending = response_stream
+            .as_ref(ctx)
+            .should_resume_conversation_after_stream_finished();
+        let mut renderable_error: RenderableAIError = (&error).into();
+        if let RenderableAIError::Other {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        }
+        | RenderableAIError::TransientNetworkError {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        } = &mut renderable_error
+        {
+            *will_attempt_resume |= recovery_pending;
+            if recovery_pending {
+                *waiting_for_network = !NetworkStatus::as_ref(ctx).is_online();
+            }
+        }
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.mark_response_stream_completed_with_error(
+                renderable_error,
+                recovery_pending,
+                stream_id,
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
+        });
+    }
 
     fn handle_response_stream_event(
         &mut self,
@@ -2977,6 +3576,27 @@ impl BlocklistAIController {
                         };
                         match event {
                             warp_multi_agent_api::response_event::Type::Init(init_event) => {
+                                #[cfg(not(target_family = "wasm"))]
+                                if self.oz_hook_sessions.contains_key(&conversation_id) {
+                                    if init_event
+                                        .supported_oz_hook_payload_schema_versions
+                                        .iter()
+                                        .any(|version| version == PAYLOAD_SCHEMA_VERSION)
+                                    {
+                                        self.oz_hook_compatible_streams.insert(stream_id.clone());
+                                    } else {
+                                        report_error!(
+                                            "Oz lifecycle hook schema negotiation failed",
+                                            extra: { "stream_id" => ?stream_id }
+                                        );
+                                        self.cancel_request(
+                                            &stream_id,
+                                            CancellationReason::ManuallyCancelled,
+                                            ctx,
+                                        );
+                                        return;
+                                    }
+                                }
                                 history_model.update(ctx, |history_model, ctx| {
                                     history_model.initialize_output_for_response_stream(
                                         &stream_id,
@@ -3000,6 +3620,17 @@ impl BlocklistAIController {
                             warp_multi_agent_api::response_event::Type::Finished(
                                 finished_event,
                             ) => {
+                                #[cfg(not(target_family = "wasm"))]
+                                if self.defer_oz_stop_if_needed(
+                                    stream_id.clone(),
+                                    finished_event.clone(),
+                                    conversation_id,
+                                    did_input_contain_user_query,
+                                    response_stream.clone(),
+                                    ctx,
+                                ) {
+                                    return;
+                                }
                                 self.handle_response_stream_finished(
                                     &stream_id,
                                     finished_event,
@@ -3009,7 +3640,35 @@ impl BlocklistAIController {
                                 );
                             }
                             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
-                                let client_actions = actions.actions;
+                                let mut client_actions = Vec::new();
+                                for mut client_action in actions.actions {
+                                    #[cfg(not(target_family = "wasm"))]
+                                    if let Some(
+                                        warp_multi_agent_api::client_action::Action::RunOzHook(
+                                            action,
+                                        ),
+                                    ) = client_action.action.take()
+                                    {
+                                        self.oz_hook_action_streams.insert(stream_id.clone());
+                                        if !self.oz_hook_compatible_streams.contains(&stream_id) {
+                                            report_error!(
+                                                "Received Oz hook action before successful schema negotiation",
+                                                extra: { "stream_id" => ?stream_id }
+                                            );
+                                            self.cancel_request(
+                                                &stream_id,
+                                                CancellationReason::ManuallyCancelled,
+                                                ctx,
+                                            );
+                                            return;
+                                        }
+                                        self.execute_protocol_oz_hook(conversation_id, action, ctx);
+                                        continue;
+                                    }
+                                    if client_action.action.is_some() {
+                                        client_actions.push(client_action);
+                                    }
+                                }
                                 let skill_path_origin = SessionContext::from_session(
                                     self.active_session.as_ref(ctx),
                                     ctx,
@@ -3037,58 +3696,23 @@ impl BlocklistAIController {
                         }
                     }
                     Err(e) => {
-                        if matches!(e.as_ref(), AIApiError::QuotaLimit { .. }) {
-                            // If the error is a quota limit, we want to refresh workspace metadata
-                            // So the current state of AI overages is immediately up to date.
-                            TeamUpdateManager::handle(ctx).update(
-                                ctx,
-                                |team_update_manager, ctx| {
-                                    std::mem::drop(
-                                        team_update_manager.refresh_workspace_metadata(ctx),
-                                    );
-                                },
-                            );
-                            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
-                                model.enable_buy_credits_banner(ctx);
-                            });
+                        #[cfg(not(target_family = "wasm"))]
+                        if self.defer_failed_oz_stop_if_needed(
+                            stream_id.clone(),
+                            Arc::clone(&e),
+                            conversation_id,
+                            response_stream.clone(),
+                            ctx,
+                        ) {
+                            return;
                         }
-
-                        // A resume scheduled for this failure keeps the conversation in
-                        // the non-terminal TransientError status instead of Error.
-                        let recovery_pending = response_stream
-                            .as_ref(ctx)
-                            .should_resume_conversation_after_stream_finished();
-                        let mut renderable_error: RenderableAIError = (&e).into();
-                        if let RenderableAIError::Other {
-                            will_attempt_resume,
-                            waiting_for_network,
-                            ..
-                        }
-                        | RenderableAIError::TransientNetworkError {
-                            will_attempt_resume,
-                            waiting_for_network,
-                            ..
-                        } = &mut renderable_error
-                        {
-                            // Rendering-only hints; state machine consumers key off the
-                            // TransientError conversation status instead.
-                            *will_attempt_resume |= recovery_pending;
-                            if recovery_pending {
-                                let network_status = NetworkStatus::as_ref(ctx);
-                                *waiting_for_network = !network_status.is_online();
-                            }
-                        }
-
-                        history_model.update(ctx, |history_model, ctx| {
-                            history_model.mark_response_stream_completed_with_error(
-                                renderable_error,
-                                recovery_pending,
-                                &stream_id,
-                                conversation_id,
-                                self.terminal_surface_id,
-                                ctx,
-                            );
-                        });
+                        self.handle_response_stream_error(
+                            &stream_id,
+                            e,
+                            conversation_id,
+                            response_stream,
+                            ctx,
+                        );
                     }
                 }
             }
@@ -3136,6 +3760,25 @@ impl BlocklistAIController {
                 };
 
                 let history_model = BlocklistAIHistoryModel::handle(ctx);
+                #[cfg(not(target_family = "wasm"))]
+                if cancellation.is_some() {
+                    if let Some(session) = self.oz_hook_sessions.get(&conversation_id) {
+                        for invocation_key in self
+                            .oz_hook_invocations
+                            .iter()
+                            .filter(|(id, _)| *id == conversation_id)
+                        {
+                            session.runtime.cancel(OzHookCancellationScope::Invocation(
+                                invocation_key.1.clone(),
+                            ));
+                            self.cancelled_oz_hook_invocations
+                                .insert(invocation_key.clone());
+                        }
+                    }
+                    self.pending_oz_hook_results.remove(&conversation_id);
+                    self.oz_hook_compatible_streams.remove(&stream_id);
+                    self.oz_hook_action_streams.remove(&stream_id);
+                }
                 let Some(conversation) = history_model.as_ref(ctx).conversation(&conversation_id)
                 else {
                     log::warn!("Conversation not found.");
@@ -3226,6 +3869,12 @@ impl BlocklistAIController {
                 // Cancelled streams will handle pending_response_stream updates synchronously.
                 if cancellation.is_none() {
                     self.in_flight_response_streams.cleanup_stream(&stream_id);
+                    #[cfg(not(target_family = "wasm"))]
+                    {
+                        self.oz_hook_compatible_streams.remove(&stream_id);
+                        self.oz_hook_action_streams.remove(&stream_id);
+                        self.send_pending_oz_hook_results(conversation_id, ctx);
+                    }
 
                     // Now that the stream is cleaned up, re-check for pending
                     // orchestration events that couldn't be drained earlier.
