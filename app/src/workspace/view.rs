@@ -2032,12 +2032,14 @@ impl Workspace {
                     .with_drop_shadow()
                     .with_safe_triangle()
                     .with_ignore_hover_when_covered()
+                    .with_hover_tracks_drag()
                     .prevent_interaction_with_other_elements()
             } else {
                 Menu::new()
                     .with_menu_variant(MenuVariant::scrollable())
                     .with_safe_triangle()
                     .with_ignore_hover_when_covered()
+                    .with_hover_tracks_drag()
                     .prevent_interaction_with_other_elements()
             }
         });
