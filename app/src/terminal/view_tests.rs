@@ -10063,6 +10063,127 @@ fn active_cli_agent_ignores_non_tui_long_running_command() {
     });
 }
 
+/// Regression test for GH-13480: pressing Ctrl+C on a whole-block selection with
+/// no foreground process running (idle path) must clear the selection and return
+/// focus to the prompt, even when `FeatureFlag::AgentView` is enabled.
+///
+/// Before the fix, `clear_selections_when_shell_mode_without_focusing_input` skipped
+/// clearing `selected_blocks` when AgentView was enabled (blocks are preserved as
+/// AI context attachments). This left the block highlighted after Ctrl+C and kept
+/// focus on the terminal grid instead of the input box.
+#[test]
+#[cfg(not(windows))]
+fn ctrl_c_with_selected_block_clears_selection_on_idle_path() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        // Set up a completed (non-long-running) block and select it via the
+        // normal selection path (not direct field mutation) so the AI-context
+        // side effects run and the precondition faithfully mirrors production.
+        terminal.update(&mut app, |view, _| {
+            view.model.lock().simulate_block("ls", "output");
+        });
+        terminal.update(&mut app, |view, ctx| {
+            // Select the first (completed) block via the real selection entry
+            // point — this is the "whole-block highlight" the bug report describes.
+            view.reset_selection_to_single_block(BlockIndex::zero(), ctx);
+            assert!(
+                !view.selected_blocks.is_empty(),
+                "block must be selected before Ctrl+C"
+            );
+
+            view.handle_action(&TerminalAction::CtrlC, ctx);
+
+            // Selection must be cleared after Ctrl+C on the idle path.
+            assert!(
+                view.selected_blocks.is_empty(),
+                "Ctrl+C on idle path must clear block selection"
+            );
+        });
+
+        // Focus must return to the input editor — this is the literal bug
+        // reported in GH-13480 ("ctrl+c does not set focus on prompt").
+        terminal.read(&app, |view, ctx| {
+            assert!(
+                view.input.as_ref(ctx).editor().is_focused(ctx),
+                "input editor must be focused after Ctrl+C on idle path"
+            );
+        });
+
+        // On the idle path (no foreground process) Ctrl+C must NOT send SIGINT.
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "Ctrl+C on idle path with a block selection must not send ETX to PTY"
+        );
+    })
+}
+
+/// Regression test for GH-13480 (running-process path): pressing Ctrl+C when a
+/// foreground process is running AND a block is selected must clear the selection
+/// AND send SIGINT to the PTY. This path must remain correct after the fix.
+#[test]
+#[cfg(not(windows))]
+fn ctrl_c_with_selected_block_and_running_process_clears_selection_and_sends_sigint() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        // Simulate a long-running command (foreground process) so Ctrl+C acts as SIGINT.
+        terminal.update(&mut app, |view, _| {
+            view.model
+                .lock()
+                .simulate_long_running_block("sleep 60", "running");
+        });
+        terminal.update(&mut app, |view, ctx| {
+            // Select a block while the long-running command is active via the
+            // real selection entry point so AI-context side effects run.
+            view.reset_selection_to_single_block(BlockIndex::zero(), ctx);
+            assert!(
+                !view.selected_blocks.is_empty(),
+                "block must be selected before Ctrl+C"
+            );
+
+            view.handle_action(&TerminalAction::CtrlC, ctx);
+
+            // Selection must still be cleared even on the running-process path.
+            assert!(
+                view.selected_blocks.is_empty(),
+                "Ctrl+C with a running process must still clear block selection"
+            );
+        });
+
+        // On the running-process path Ctrl+C must send SIGINT (ETX) to the PTY.
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![vec![C0::ETX]],
+            "Ctrl+C with a running process must send ETX to PTY regardless of block selection"
+        );
+    })
+}
+
 /// Sending review comments while the Warp TUI is running writes the built prompt
 /// directly to the TUI's PTY rather than the outer rich input.
 #[test]

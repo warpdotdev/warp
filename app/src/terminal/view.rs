@@ -9082,7 +9082,17 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         if has_block_list_selection || has_copiable_block_selection {
-            self.clear_selections_when_shell_mode_without_focusing_input(ctx);
+            // Clear selections when not in AI-input mode — this overrides the
+            // AgentView block-preservation so that Ctrl+C acts as a consistent
+            // "dismiss and return to prompt" gesture in shell mode, even when
+            // AgentView is enabled. The AI-input-mode guard is kept: blocks
+            // staged as AI context (in AI input mode) are intentionally left
+            // intact. The subsequent `redetermine_global_focus` in `ctrl_c`
+            // will focus the input box since no blocks remain selected.
+            if !self.ai_input_model.as_ref(ctx).is_ai_input_enabled() {
+                self.clear_selected_blocks(ctx);
+                self.clear_selected_text(ctx);
+            }
         } else if has_alt_screen_selection {
             self.model.lock().alt_screen_mut().clear_selection();
         }
