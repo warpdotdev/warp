@@ -533,6 +533,7 @@ pub struct TeamsPageView {
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
+    open_team_states: Vec<DiscoverableTeamState>,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
@@ -838,6 +839,8 @@ impl TeamsPageView {
         let team_name = current_user_team
             .map_or_else(|| "", |team| &team.name)
             .to_string();
+        let open_team_states =
+            Self::open_team_states_for_workspace(user_workspaces.as_ref(ctx).current_workspace());
         let rename_team_editor = ctx.add_typed_action_view(|ctx| {
             let mut input = ClickableTextInput::new(team_name, ctx);
             input.set_placeholder_text("Your new team name", ctx);
@@ -925,6 +928,7 @@ impl TeamsPageView {
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
             discoverable_teams_states: Vec::new(),
+            open_team_states,
             rename_team_editor,
             checkbox_value: true,
             member_actions_menu,
@@ -992,6 +996,7 @@ impl TeamsPageView {
             UserWorkspacesEvent::TeamsChanged => {
                 self.update_team_members_state(ctx);
                 self.update_approved_domains_state(ctx);
+                self.update_open_team_states(ctx);
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
@@ -1741,6 +1746,31 @@ impl TeamsPageView {
             });
     }
 
+    fn open_team_states_for_workspace(workspace: Option<&Workspace>) -> Vec<DiscoverableTeamState> {
+        let Some(workspace) =
+            workspace.filter(|workspace| workspace.is_native_workspaces_enabled())
+        else {
+            return Vec::new();
+        };
+
+        workspace
+            .open_teams
+            .iter()
+            .filter(|open_team| {
+                let open_team_uid = ServerId::from_string_lossy(&open_team.team_uid);
+                workspace.teams.iter().all(|team| team.uid != open_team_uid)
+            })
+            .cloned()
+            .map(DiscoverableTeamState::new)
+            .collect()
+    }
+
+    fn update_open_team_states(&mut self, ctx: &AppContext) {
+        self.open_team_states = Self::open_team_states_for_workspace(
+            self.user_workspaces.as_ref(ctx).current_workspace(),
+        );
+    }
+
     fn delete_team_invite(
         &mut self,
         team_uid: ServerId,
@@ -1983,7 +2013,12 @@ impl SettingsPageMeta for TeamsPageView {
         );
         self.update_team_members_state(ctx);
         self.update_approved_domains_state(ctx);
-        if NetworkStatus::as_ref(ctx).is_online() {
+        let is_teamless = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .is_none();
+        if NetworkStatus::as_ref(ctx).is_online() && is_teamless {
             self.user_workspaces
                 .update(ctx, move |user_workspaces, ctx| {
                     user_workspaces.fetch_discoverable_teams(ctx);
@@ -2499,6 +2534,20 @@ impl TeamsWidget {
             }
         }
         main_content.add_child(button_row.finish());
+
+        if workspace.is_native_workspaces_enabled() && !view.open_team_states.is_empty() {
+            main_content.add_child(
+                Container::new(render_separator(appearance))
+                    .with_padding_top(32.)
+                    .with_padding_bottom(32.)
+                    .finish(),
+            );
+            main_content.add_child(self.render_join_teams_section(
+                &view.open_team_states,
+                appearance,
+                JOIN_TEAM_HEADER,
+            ));
+        }
         main_content.finish()
     }
 
@@ -4293,7 +4342,11 @@ impl TeamsWidget {
                     );
                 }
                 TeamsPageSection::JoinTeams { header } => {
-                    page.add_child(self.render_join_teams_section(view, appearance, header));
+                    page.add_child(self.render_join_teams_section(
+                        &view.discoverable_teams_states,
+                        appearance,
+                        header,
+                    ));
                 }
                 TeamsPageSection::NoTeamsToJoin => {
                     let theme = appearance.theme();
@@ -4326,13 +4379,13 @@ impl TeamsWidget {
 
     fn render_join_teams_section(
         &self,
-        view: &TeamsPageView,
+        team_states: &[DiscoverableTeamState],
         appearance: &Appearance,
         header: &str,
     ) -> Box<dyn Element> {
         Flex::column()
             .with_child(self.render_sub_header_with_subtext_color(appearance, header.to_string()))
-            .with_child(self.render_team_discovery_section(view, appearance))
+            .with_child(self.render_team_discovery_section(team_states, appearance))
             .finish()
     }
 
@@ -4432,12 +4485,12 @@ impl TeamsWidget {
 
     fn render_team_discovery_section(
         &self,
-        view: &TeamsPageView,
+        team_states: &[DiscoverableTeamState],
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut team_discovery = Flex::column();
         // Sort teams so teams accepting invites with most teammates appear on top
-        let mut sorted_teams = view.discoverable_teams_states.clone();
+        let mut sorted_teams = team_states.to_vec();
         sorted_teams.sort_by_key(|team_state| {
             (
                 !team_state.team.team_accepting_invites,

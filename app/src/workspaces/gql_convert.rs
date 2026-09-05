@@ -1404,6 +1404,12 @@ impl From<GqlWorkspace> for Workspace {
                 .into_iter()
                 .map(|gql_team| Team::from_gql(gql_workspace.clone(), gql_team))
                 .collect(),
+            open_teams: gql_workspace
+                .open_teams
+                .clone()
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             billing_metadata: gql_workspace.billing_metadata.clone().into(),
             bonus_grants_purchased_this_month: gql_workspace
                 .bonus_grants_info

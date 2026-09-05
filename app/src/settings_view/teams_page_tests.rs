@@ -80,6 +80,14 @@ fn workspace_with_member(
 fn admin_workspace(email: &str) -> Workspace {
     workspace_with_member(email, MembershipRole::Admin, true)
 }
+fn open_team(uid: &str, name: &str) -> DiscoverableTeam {
+    DiscoverableTeam {
+        team_uid: uid.to_string(),
+        num_members: 2,
+        name: name.to_string(),
+        team_accepting_invites: true,
+    }
+}
 
 /// Returns the action labels rendered for the item with the given `text` (a
 /// member email or pending-invite email), in the order they were pushed.
@@ -306,6 +314,60 @@ fn native_workspace_member_gets_join_or_empty_state() {
     assert_eq!(
         TeamsWidget::page_sections_for(Some(&workspace), Some(MEMBER_EMAIL), false),
         vec![TeamsPageSection::NoTeamsToJoin]
+    );
+}
+#[test]
+fn native_workspace_member_on_a_team_can_see_additional_open_teams() {
+    let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+    workspace.teams.push(team_with_members(
+        vec![member(MEMBER_EMAIL, MembershipRole::User)],
+        false,
+    ));
+    workspace.open_teams = vec![open_team("0000000000000000000002", "Second Team")];
+
+    let states = TeamsPageView::open_team_states_for_workspace(Some(&workspace));
+
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0].team.name, "Second Team");
+}
+
+#[test]
+fn non_native_workspace_does_not_show_open_teams() {
+    let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, false);
+    workspace.open_teams = vec![open_team("0000000000000000000002", "Second Team")];
+
+    let states = TeamsPageView::open_team_states_for_workspace(Some(&workspace));
+
+    assert!(states.is_empty());
+}
+
+#[test]
+fn native_workspace_with_no_open_teams_does_not_show_join_section() {
+    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+
+    let states = TeamsPageView::open_team_states_for_workspace(Some(&workspace));
+
+    assert!(states.is_empty());
+}
+
+#[test]
+fn joined_team_disappears_from_open_teams_after_membership_refresh() {
+    let joined_team_uid = "0000000000000000000002";
+    let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+    workspace.open_teams = vec![open_team(joined_team_uid, "Second Team")];
+    assert_eq!(
+        TeamsPageView::open_team_states_for_workspace(Some(&workspace)).len(),
+        1
+    );
+
+    let mut joined_team =
+        team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], false);
+    joined_team.uid = ServerId::from_string_lossy(joined_team_uid);
+    workspace.teams.push(joined_team);
+
+    assert!(
+        TeamsPageView::open_team_states_for_workspace(Some(&workspace)).is_empty(),
+        "a refreshed membership must hide the joined team even if openTeams is stale"
     );
 }
 
