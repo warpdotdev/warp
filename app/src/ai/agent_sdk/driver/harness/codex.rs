@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Context, Result};
@@ -27,7 +28,8 @@ use super::codex_transcript::{
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
+    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
+    ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
@@ -36,6 +38,7 @@ use crate::ai::agent_sdk::setup_observability::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
+use crate::ai::mcp::builtin::FACTORY_MCP_SERVER_NAME;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
 use crate::terminal::CLIAgent;
@@ -131,16 +134,21 @@ impl ThirdPartyHarness for CodexHarness {
         resolved_env_vars: &HashMap<OsString, OsString>,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        builtin_factory_mcp_attached: bool,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_codex_environment_config(
+        let mcp_config = CodexMcpConfig {
+            servers: resolved_mcp_servers,
+            builtin_factory_attached: builtin_factory_mcp_attached,
+        };
+        let factory_mcp_config_guard = prepare_codex_environment_config(
             workspace_root,
             harness_working_dir,
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
-            resolved_mcp_servers,
+            mcp_config,
             third_party_harness_model_config,
         )
         .map_err(|error| AgentDriverError::HarnessConfigSetupFailed {
@@ -176,6 +184,7 @@ impl ThirdPartyHarness for CodexHarness {
             client,
             terminal_driver,
             codex_resume,
+            factory_mcp_config_guard,
         )?))
     }
 }
@@ -228,6 +237,7 @@ struct CodexHarnessRunner {
     transcript_path: OnceLock<PathBuf>,
     /// Optionally supply an existing conversation ID.
     preexisting_conversation_id: Option<AIConversationId>,
+    factory_mcp_config_guard: Option<CodexFactoryMcpConfigGuard>,
 }
 
 impl CodexHarnessRunner {
@@ -240,6 +250,7 @@ impl CodexHarnessRunner {
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
+        factory_mcp_config_guard: Option<CodexFactoryMcpConfigGuard>,
     ) -> Result<Self, AgentDriverError> {
         let temp_file = write_temp_file("oz_prompt_", prompt, ".txt")?;
         let prompt_path = temp_file.path().display().to_string();
@@ -282,6 +293,7 @@ impl CodexHarnessRunner {
             session_id: session_id_cell,
             transcript_path: transcript_path_cell,
             preexisting_conversation_id,
+            factory_mcp_config_guard,
         })
     }
 
@@ -463,6 +475,17 @@ impl HarnessRunner for CodexHarnessRunner {
         )?;
         Ok(())
     }
+
+    async fn cleanup(
+        &self,
+        _cleanup_disposition: HarnessCleanupDisposition,
+        _foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        if let Some(guard) = &self.factory_mcp_config_guard {
+            guard.cleanup()?;
+        }
+        Ok(())
+    }
 }
 
 /// Upload the codex session transcript to the server. No-ops if the session UUID hasn't
@@ -537,16 +560,173 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// TODO: Ideally, we would make this server-driven so we don't depend on a client
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
+
+struct CodexFactoryMcpConfigGuard {
+    id: Uuid,
+    config_path: PathBuf,
+    active: AtomicBool,
+}
+
+struct CodexFactoryMcpConfigState {
+    original_entry: Option<toml_edit::Item>,
+    active_guards: HashSet<Uuid>,
+}
+type CodexFactoryMcpConfigRegistry = Mutex<HashMap<PathBuf, CodexFactoryMcpConfigState>>;
+
+struct CodexMcpConfig<'a> {
+    servers: &'a HashMap<String, JSONMCPServer>,
+    builtin_factory_attached: bool,
+}
+
+fn codex_factory_mcp_config_registry() -> &'static CodexFactoryMcpConfigRegistry {
+    static REGISTRY: OnceLock<CodexFactoryMcpConfigRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+impl CodexFactoryMcpConfigGuard {
+    fn new(config_path: PathBuf) -> Result<Self> {
+        let id = Uuid::new_v4();
+        let mut registry = codex_factory_mcp_config_registry().lock();
+        if !registry.contains_key(&config_path) {
+            registry.insert(
+                config_path.clone(),
+                CodexFactoryMcpConfigState {
+                    original_entry: read_codex_factory_mcp_entry(&config_path)?,
+                    active_guards: HashSet::new(),
+                },
+            );
+        }
+        registry
+            .get_mut(&config_path)
+            .expect("Codex Factory MCP config state inserted above")
+            .active_guards
+            .insert(id);
+        Ok(Self {
+            id,
+            config_path,
+            active: AtomicBool::new(true),
+        })
+    }
+    fn prepare_config(&self, prepare: impl FnOnce() -> Result<()>) -> Result<()> {
+        let _registry = codex_factory_mcp_config_registry().lock();
+        prepare()
+    }
+
+    fn cleanup(&self) -> Result<()> {
+        if !self.active.swap(false, Ordering::AcqRel) {
+            return Ok(());
+        }
+
+        let mut registry = codex_factory_mcp_config_registry().lock();
+        let Some(state) = registry.get_mut(&self.config_path) else {
+            return Ok(());
+        };
+        state.active_guards.remove(&self.id);
+        if !state.active_guards.is_empty() {
+            return Ok(());
+        }
+        if let Err(error) =
+            restore_codex_factory_mcp_entry(&self.config_path, state.original_entry.as_ref())
+        {
+            state.active_guards.insert(self.id);
+            self.active.store(true, Ordering::Release);
+            return Err(error);
+        }
+        registry.remove(&self.config_path);
+        Ok(())
+    }
+}
+
+impl Drop for CodexFactoryMcpConfigGuard {
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            report_error!(
+                error.context("Failed to remove run-scoped Factory MCP from Codex config")
+            );
+        }
+    }
+}
+
+fn read_codex_factory_mcp_entry(config_path: &Path) -> Result<Option<toml_edit::Item>> {
+    match fs::read_to_string(config_path) {
+        Ok(existing) => {
+            let doc: toml_edit::DocumentMut = existing.parse().with_context(|| {
+                format!(
+                    "Failed to parse Codex config.toml at {}",
+                    config_path.display()
+                )
+            })?;
+            Ok(doc
+                .get("mcp_servers")
+                .and_then(toml_edit::Item::as_table)
+                .and_then(|servers| servers.get(FACTORY_MCP_SERVER_NAME))
+                .cloned())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(anyhow::Error::from(error).context(format!(
+            "Failed to read Codex config.toml at {}",
+            config_path.display()
+        ))),
+    }
+}
+fn restore_codex_factory_mcp_entry(
+    config_path: &Path,
+    original_entry: Option<&toml_edit::Item>,
+) -> Result<()> {
+    let existing = match fs::read_to_string(config_path) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(anyhow::Error::from(error).context(format!(
+                "Failed to read Codex config.toml at {}",
+                config_path.display()
+            )));
+        }
+    };
+    let mut doc: toml_edit::DocumentMut = existing.parse().with_context(|| {
+        format!(
+            "Failed to parse Codex config.toml at {}",
+            config_path.display()
+        )
+    })?;
+
+    if let Some(original_entry) = original_entry {
+        if !doc.contains_table("mcp_servers") {
+            let mut table = toml_edit::Table::new();
+            table.set_implicit(true);
+            doc.insert("mcp_servers", toml_edit::Item::Table(table));
+        }
+        doc["mcp_servers"]
+            .as_table_mut()
+            .expect("mcp_servers table inserted above")
+            .insert(FACTORY_MCP_SERVER_NAME, original_entry.clone());
+    } else if let Some(servers) = doc
+        .get_mut("mcp_servers")
+        .and_then(toml_edit::Item::as_table_mut)
+    {
+        servers.remove(FACTORY_MCP_SERVER_NAME);
+        if servers.is_empty() {
+            doc.remove("mcp_servers");
+        }
+    }
+
+    write_codex_config_toml(config_path, &doc.to_string())
+}
 fn prepare_codex_environment_config(
     workspace_root: &Path,
     harness_working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
-    resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+    mcp_config: CodexMcpConfig<'_>,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
-) -> Result<()> {
+) -> Result<Option<CodexFactoryMcpConfigGuard>> {
     let codex_dir = codex_config_dir()?;
+    let config_toml_path = codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME);
+    let factory_mcp_config_guard = mcp_config
+        .builtin_factory_attached
+        .then(|| CodexFactoryMcpConfigGuard::new(config_toml_path.clone()))
+        .transpose()?;
 
     if let Some(prompt) = system_prompt {
         write_codex_agents_override(&codex_dir, prompt)?;
@@ -562,15 +742,22 @@ fn prepare_codex_environment_config(
     // apply it when the typed secret is the active API key source.
     let openai_base_url = resolve_openai_base_url_from_secret(resolved_secrets, resolved_env_vars);
 
-    prepare_codex_config_toml(
-        &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
-        harness_working_dir,
-        resolved_mcp_servers,
-        third_party_harness_model_config,
-        openai_base_url.as_deref(),
-    )?;
+    let prepare_config = || {
+        prepare_codex_config_toml(
+            &config_toml_path,
+            harness_working_dir,
+            mcp_config.servers,
+            third_party_harness_model_config,
+            openai_base_url.as_deref(),
+        )
+    };
+    if let Some(guard) = &factory_mcp_config_guard {
+        guard.prepare_config(prepare_config)?;
+    } else {
+        prepare_config()?;
+    }
     publish_skills_for_codex(workspace_root, harness_working_dir);
-    Ok(())
+    Ok(factory_mcp_config_guard)
 }
 
 /// Publish `WARP_SKILL_DIRS` and eligible bundled skills under
@@ -817,12 +1004,30 @@ fn prepare_codex_config_toml(
             format!("Failed to create Codex config dir at {}", parent.display())
         })?;
     }
-    fs::write(config_toml_path, doc.to_string()).with_context(|| {
-        format!(
-            "Failed to write Codex config.toml at {}",
-            config_toml_path.display()
-        )
-    })
+    write_codex_config_toml(config_toml_path, &doc.to_string())
+}
+
+fn write_codex_config_toml(path: &Path, contents: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .with_context(|| format!("Failed to open {} for writing", path.display()))?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    fs::write(path, contents).with_context(|| format!("Failed to write {}", path.display()))?;
+
+    Ok(())
 }
 
 /// Set the top-level `openai_base_url` key, overwriting any existing value.

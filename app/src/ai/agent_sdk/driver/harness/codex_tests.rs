@@ -24,6 +24,189 @@ fn prepare_codex_auth_writes_fresh_file_with_api_key_mode() {
     assert_eq!(auth["auth_mode"], "apikey");
 }
 
+fn factory_mcp_server(token: &str) -> JSONMCPServer {
+    JSONMCPServer {
+        transport_type: JSONTransportType::SSEServer {
+            url: "https://app.warp.dev/api/v1/mcp/factory".to_string(),
+            headers: HashMap::from([("Authorization".to_string(), format!("Bearer {token}"))]),
+        },
+    }
+}
+
+#[test]
+fn factory_mcp_config_guard_restores_preexisting_entry() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    fs::write(
+        &config_path,
+        r#"
+[mcp_servers.user-server]
+command = "user-command"
+
+[mcp_servers.warp-factory]
+url = "https://user.example.com/factory"
+http_headers = { Authorization = "Bearer user-token" }
+"#,
+    )
+    .unwrap();
+    let guard = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
+
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::from([(
+            FACTORY_MCP_SERVER_NAME.to_string(),
+            factory_mcp_server("parent-token"),
+        )]),
+        None,
+        None,
+    )
+    .unwrap();
+    guard.cleanup().unwrap();
+
+    let cfg = read_codex_config(&config_path);
+    assert_eq!(
+        cfg["mcp_servers"][FACTORY_MCP_SERVER_NAME]["url"].as_str(),
+        Some("https://user.example.com/factory")
+    );
+    assert_eq!(
+        cfg["mcp_servers"][FACTORY_MCP_SERVER_NAME]["http_headers"]["Authorization"].as_str(),
+        Some("Bearer user-token")
+    );
+    assert_eq!(
+        cfg["mcp_servers"]["user-server"]["command"].as_str(),
+        Some("user-command")
+    );
+}
+
+#[test]
+fn dropping_factory_mcp_config_guard_prevents_stale_credential_reuse() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    fs::write(
+        &config_path,
+        "[mcp_servers.user-server]\ncommand = \"user-command\"\n",
+    )
+    .unwrap();
+
+    {
+        let _guard = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
+        prepare_codex_config_toml(
+            &config_path,
+            &working_dir,
+            &HashMap::from([(
+                FACTORY_MCP_SERVER_NAME.to_string(),
+                factory_mcp_server("parent-token"),
+            )]),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read_codex_config(&config_path)["mcp_servers"][FACTORY_MCP_SERVER_NAME]["http_headers"]
+                ["Authorization"]
+                .as_str(),
+            Some("Bearer parent-token")
+        );
+    }
+
+    prepare_codex_config_toml(&config_path, &working_dir, &HashMap::new(), None, None).unwrap();
+    let cfg = read_codex_config(&config_path);
+    assert!(cfg["mcp_servers"].get(FACTORY_MCP_SERVER_NAME).is_none());
+    assert_eq!(
+        cfg["mcp_servers"]["user-server"]["command"].as_str(),
+        Some("user-command")
+    );
+}
+
+#[test]
+fn overlapping_factory_mcp_config_guards_restore_original_entry_after_last_cleanup() {
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    fs::write(
+        &config_path,
+        "[mcp_servers.warp-factory]\nurl = \"https://user.example.com/factory\"\n",
+    )
+    .unwrap();
+
+    let first = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
+    first
+        .prepare_config(|| {
+            prepare_codex_config_toml(
+                &config_path,
+                &working_dir,
+                &HashMap::from([(
+                    FACTORY_MCP_SERVER_NAME.to_string(),
+                    factory_mcp_server("first-parent-token"),
+                )]),
+                None,
+                None,
+            )
+        })
+        .unwrap();
+    let second = CodexFactoryMcpConfigGuard::new(config_path.clone()).unwrap();
+    second
+        .prepare_config(|| {
+            prepare_codex_config_toml(
+                &config_path,
+                &working_dir,
+                &HashMap::from([(
+                    FACTORY_MCP_SERVER_NAME.to_string(),
+                    factory_mcp_server("second-parent-token"),
+                )]),
+                None,
+                None,
+            )
+        })
+        .unwrap();
+
+    first.cleanup().unwrap();
+    assert_eq!(
+        read_codex_config(&config_path)["mcp_servers"][FACTORY_MCP_SERVER_NAME]["http_headers"]
+            ["Authorization"]
+            .as_str(),
+        Some("Bearer second-parent-token")
+    );
+    second.cleanup().unwrap();
+    assert_eq!(
+        read_codex_config(&config_path)["mcp_servers"][FACTORY_MCP_SERVER_NAME]["url"].as_str(),
+        Some("https://user.example.com/factory")
+    );
+}
+#[cfg(unix)]
+#[test]
+fn factory_mcp_config_is_written_with_0600_permissions() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let tmp = TempDir::new().unwrap();
+    let config_path = tmp.path().join("config.toml");
+    let working_dir = tmp.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    fs::write(&config_path, "").unwrap();
+    fs::set_permissions(&config_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+    prepare_codex_config_toml(
+        &config_path,
+        &working_dir,
+        &HashMap::from([(
+            FACTORY_MCP_SERVER_NAME.to_string(),
+            factory_mcp_server("parent-token"),
+        )]),
+        None,
+        None,
+    )
+    .unwrap();
+
+    let mode = fs::metadata(&config_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
 #[test]
 fn prepare_codex_auth_preserves_unrelated_fields() {
     let tmp = TempDir::new().unwrap();
@@ -202,7 +385,10 @@ fn prepare_codex_environment_config_honors_codex_home() {
         Some("system prompt"),
         &resolved,
         &HashMap::new(),
-        &HashMap::new(),
+        CodexMcpConfig {
+            servers: &HashMap::new(),
+            builtin_factory_attached: false,
+        },
         Some(&model_config),
     );
 

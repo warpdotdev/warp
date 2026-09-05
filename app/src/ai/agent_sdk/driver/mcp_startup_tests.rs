@@ -34,6 +34,7 @@ use crate::ai::mcp::{
     MCPServerState, ParsedTemplatableMCPServerResult, TemplatableMCPServerInstallation,
     TemplatableMCPServerManager,
 };
+use crate::auth::AuthStateProvider;
 use crate::auth::credentials::Credentials;
 use crate::server::graphql::GraphQLError;
 use crate::server::server_api::ServerApiProvider;
@@ -128,6 +129,174 @@ fn test_normalize_sse_server_with_headers() {
         server["headers"]["Authorization"].as_str().unwrap(),
         "Bearer token"
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn resolve_mcp_specs_to_json_attaches_factory_and_preserves_explicit_specs() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(api_key_credentials()));
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+        let explicit_json =
+            r#"{"explicit":{"url":"https://example.com/mcp","headers":{"X-Test":"value"}}}"#;
+        let specs = vec![MCPSpec::Json(explicit_json.to_string())];
+
+        let resolved = AgentDriver::resolve_mcp_specs_to_json(
+            &specs,
+            Arc::new(HashMap::new()),
+            Arc::new(MockManagedMcpClient::new()),
+            &foreground,
+        )
+        .await
+        .unwrap();
+
+        assert!(resolved.builtin_factory_mcp_attached);
+        assert_eq!(resolved.servers.len(), 2);
+        assert_eq!(
+            resolved.servers["explicit"].transport_type,
+            JSONTransportType::SSEServer {
+                url: "https://example.com/mcp".to_string(),
+                headers: HashMap::from([("X-Test".to_string(), "value".to_string())]),
+            }
+        );
+        let JSONTransportType::SSEServer { url, headers } =
+            &resolved.servers[FACTORY_MCP_SERVER_NAME].transport_type
+        else {
+            panic!("built-in Factory MCP must use HTTP transport");
+        };
+        assert_eq!(
+            url,
+            &format!(
+                "{}/api/v1/mcp/factory",
+                ChannelState::server_root_url().trim_end_matches('/')
+            )
+        );
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("Bearer wk-test-key")
+        );
+        let MCPSpec::Json(input_after_resolution) = &specs[0] else {
+            panic!("the explicit JSON spec must remain JSON");
+        };
+        assert_eq!(input_after_resolution, explicit_json);
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn resolve_mcp_specs_to_json_skips_factory_when_flag_disabled() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(api_key_credentials()));
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+        let specs = vec![MCPSpec::Json(
+            r#"{"explicit":{"url":"https://example.com/mcp"}}"#.to_string(),
+        )];
+
+        let resolved = AgentDriver::resolve_mcp_specs_to_json(
+            &specs,
+            Arc::new(HashMap::new()),
+            Arc::new(MockManagedMcpClient::new()),
+            &foreground,
+        )
+        .await
+        .unwrap();
+
+        assert!(!resolved.builtin_factory_mcp_attached);
+        assert_eq!(
+            resolved.servers,
+            HashMap::from([(
+                "explicit".to_string(),
+                explicit_http_server("https://example.com/mcp")
+            )])
+        );
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn resolve_mcp_specs_to_json_skips_factory_without_credentials() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx).get().set_credentials(None);
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+        let missing_credentials_specs = vec![MCPSpec::Json(
+            r#"{"explicit":{"url":"https://example.com/mcp"}}"#.to_string(),
+        )];
+
+        let resolved = AgentDriver::resolve_mcp_specs_to_json(
+            &missing_credentials_specs,
+            Arc::new(HashMap::new()),
+            Arc::new(MockManagedMcpClient::new()),
+            &foreground,
+        )
+        .await
+        .unwrap();
+
+        assert!(!resolved.builtin_factory_mcp_attached);
+        assert_eq!(
+            resolved.servers,
+            HashMap::from([(
+                "explicit".to_string(),
+                explicit_http_server("https://example.com/mcp")
+            )])
+        );
+    });
+}
+
+#[test]
+#[serial_test::serial]
+fn resolve_mcp_specs_to_json_preserves_exact_name_collision() {
+    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .set_credentials(Some(api_key_credentials()));
+        });
+        let driver_handle = setup_agent_driver(&mut app);
+        let foreground = driver_handle.update(&mut app, |_, ctx| ctx.spawner());
+        let user_factory_json = r#"{"warp-factory":{"url":"https://user.example.com/factory"}}"#;
+        let specs = vec![MCPSpec::Json(user_factory_json.to_string())];
+
+        let resolved = AgentDriver::resolve_mcp_specs_to_json(
+            &specs,
+            Arc::new(HashMap::new()),
+            Arc::new(MockManagedMcpClient::new()),
+            &foreground,
+        )
+        .await
+        .unwrap();
+
+        assert!(!resolved.builtin_factory_mcp_attached);
+        assert_eq!(resolved.servers.len(), 1);
+        assert_eq!(
+            resolved.servers[FACTORY_MCP_SERVER_NAME].transport_type,
+            explicit_http_server("https://user.example.com/factory").transport_type
+        );
+    });
 }
 
 fn managed_client_config_output(mcp_config_json: &str) -> CreateManagedMcpClientConfigOutput {

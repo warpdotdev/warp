@@ -220,6 +220,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
         resolved_env_vars: &HashMap<OsString, OsString>,
         resolved_secrets: &HashMap<String, ManagedSecretValue>,
         resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
+        builtin_factory_mcp_attached: bool,
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError>;
 }
