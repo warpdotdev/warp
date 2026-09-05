@@ -5,7 +5,10 @@ use clap::Parser;
 use super::*;
 use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef};
 use crate::artifact::ArtifactCommand;
-use crate::environment::{EnvironmentCommand, ImageCommand};
+use crate::environment::{
+    EnvironmentCommand, ImageCommand, apply_setup_command_operations,
+    format_setup_commands_listing, parse_indexed_setup_commands, validate_setup_command,
+};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
@@ -2399,6 +2402,438 @@ fn environment_update_accepts_remove_description() {
     assert_eq!(id, "env-id");
     assert!(description.is_none());
     assert!(remove_description);
+}
+
+#[test]
+fn environment_update_accepts_insert_setup_command() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--insert-setup-command",
+        "1",
+        "make build",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        insert_setup_command,
+        edit_setup_command,
+        clear_setup_commands,
+        setup_command,
+        remove_setup_command,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert_eq!(
+        insert_setup_command,
+        &vec!["1".to_string(), "make build".to_string()]
+    );
+    assert!(edit_setup_command.is_empty());
+    assert!(!clear_setup_commands);
+    assert!(setup_command.is_empty());
+    assert!(remove_setup_command.is_empty());
+}
+
+#[test]
+fn environment_update_accepts_edit_setup_command() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--edit-setup-command",
+        "1",
+        "make build",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        insert_setup_command,
+        edit_setup_command,
+        clear_setup_commands,
+        setup_command,
+        remove_setup_command,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert_eq!(
+        edit_setup_command,
+        &vec!["1".to_string(), "make build".to_string()]
+    );
+    assert!(insert_setup_command.is_empty());
+    assert!(!clear_setup_commands);
+    assert!(setup_command.is_empty());
+    assert!(remove_setup_command.is_empty());
+}
+
+#[test]
+fn environment_update_accepts_clear_setup_commands() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--clear-setup-commands",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        clear_setup_commands,
+        insert_setup_command,
+        edit_setup_command,
+        setup_command,
+        remove_setup_command,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert!(clear_setup_commands);
+    assert!(insert_setup_command.is_empty());
+    assert!(edit_setup_command.is_empty());
+    assert!(setup_command.is_empty());
+    assert!(remove_setup_command.is_empty());
+}
+
+#[test]
+fn environment_update_clear_plus_setup_command_rebuild_parses() {
+    let args = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--clear-setup-commands",
+        "--setup-command",
+        "a",
+        "--setup-command",
+        "b",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment update` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::Update {
+        clear_setup_commands,
+        setup_command,
+        insert_setup_command,
+        edit_setup_command,
+        remove_setup_command,
+        ..
+    }) = boxed_cmd.as_ref()
+    else {
+        panic!("Expected `warp environment update` command");
+    };
+
+    assert!(clear_setup_commands);
+    assert_eq!(setup_command, &vec!["a".to_string(), "b".to_string()]);
+    assert!(insert_setup_command.is_empty());
+    assert!(edit_setup_command.is_empty());
+    assert!(remove_setup_command.is_empty());
+}
+
+#[test]
+fn environment_update_rejects_insert_with_setup_command() {
+    let result = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--insert-setup-command",
+        "0",
+        "x",
+        "--setup-command",
+        "y",
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn environment_update_rejects_insert_with_edit_setup_command() {
+    let result = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--insert-setup-command",
+        "0",
+        "x",
+        "--edit-setup-command",
+        "1",
+        "y",
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn environment_update_rejects_clear_with_remove_setup_command() {
+    let result = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--clear-setup-commands",
+        "--remove-setup-command",
+        "x",
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn environment_update_rejects_edit_with_setup_command() {
+    let result = Args::try_parse_from([
+        "warp",
+        "environment",
+        "update",
+        "env-id",
+        "--edit-setup-command",
+        "0",
+        "x",
+        "--setup-command",
+        "y",
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn parse_indexed_setup_commands_rejects_negative_index() {
+    let err = parse_indexed_setup_commands(&["-1".to_string(), "x".to_string()])
+        .expect_err("negative index should be rejected");
+    assert!(err.contains("'-1'"), "got: {err}");
+}
+
+#[test]
+fn parse_indexed_setup_commands_rejects_non_integer_index() {
+    let err = parse_indexed_setup_commands(&["abc".to_string(), "x".to_string()])
+        .expect_err("non-integer index should be rejected");
+    assert!(err.contains("'abc'"), "got: {err}");
+}
+
+#[test]
+fn parse_indexed_setup_commands_rejects_odd_length() {
+    let err = parse_indexed_setup_commands(&["1".to_string()])
+        .expect_err("odd number of values should be rejected");
+    assert!(err.contains("even number"), "got: {err}");
+}
+
+#[test]
+fn parse_indexed_setup_commands_accepts_zero_index() {
+    let parsed = parse_indexed_setup_commands(&["0".to_string(), "first".to_string()])
+        .expect("zero is a valid index");
+    assert_eq!(parsed, [(0_usize, "first".to_string())]);
+}
+
+#[test]
+fn validate_setup_command_rejects_empty_and_whitespace() {
+    assert!(validate_setup_command("").is_err());
+    assert!(validate_setup_command("   ").is_err());
+    assert!(validate_setup_command("\t\n").is_err());
+    assert!(validate_setup_command("make build").is_ok());
+}
+
+#[test]
+fn validate_setup_command_rejects_too_many_runes() {
+    let exactly_limit = "a".repeat(4096);
+    assert!(validate_setup_command(&exactly_limit).is_ok());
+    // Use a distinctive sentinel so we can prove the command text is not leaked
+    // into the user-facing / logged error. Setup commands may contain secrets,
+    // and this error is surfaced via `report_fatal_error` (logged at error
+    // level), so only the limit and observed length are safe to report
+    // (REMOTE-1063). 4091 'a's + 6-char sentinel = 4097 runes total.
+    let over_limit = format!("{}SECRET", "a".repeat(4091));
+    let err = validate_setup_command(&over_limit).expect_err(">4096 runes should be rejected");
+    assert!(err.contains("4096"), "got: {err}");
+    assert!(
+        err.contains("4097"),
+        "error should report the observed length, got: {err}"
+    );
+    assert!(
+        !err.contains("SECRET"),
+        "error must not leak command text, got: {err}"
+    );
+}
+
+#[test]
+fn apply_insert_at_index_preserves_order() {
+    let mut cmds = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    apply_setup_command_operations(&mut cmds, false, &[], &[(1, "x".to_string())], &[], &[])
+        .expect("insert in range");
+    assert_eq!(cmds, ["a", "x", "b", "c"]);
+}
+
+#[test]
+fn apply_insert_at_len_appends_and_insert_at_zero_prepends() {
+    let mut cmds = vec!["a".to_string(), "b".to_string()];
+    apply_setup_command_operations(&mut cmds, false, &[], &[(2, "c".to_string())], &[], &[])
+        .expect("insert at len appends");
+    assert_eq!(cmds, ["a", "b", "c"]);
+
+    let mut cmds = vec!["a".to_string(), "b".to_string()];
+    apply_setup_command_operations(&mut cmds, false, &[], &[(0, "z".to_string())], &[], &[])
+        .expect("insert at zero prepends");
+    assert_eq!(cmds, ["z", "a", "b"]);
+}
+
+#[test]
+fn apply_insert_out_of_range_errors() {
+    let mut cmds = vec!["a".to_string(), "b".to_string()];
+    let err =
+        apply_setup_command_operations(&mut cmds, false, &[], &[(5, "z".to_string())], &[], &[])
+            .expect_err("out-of-range insert should error");
+    assert!(err.contains("2 setup command"), "got: {err}");
+    assert!(err.contains("valid insert indexes are 0-2"), "got: {err}");
+}
+
+#[test]
+fn apply_edit_in_range_and_out_of_range() {
+    let mut cmds = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    apply_setup_command_operations(&mut cmds, false, &[], &[], &[(1, "B".to_string())], &[])
+        .expect("edit in range");
+    assert_eq!(cmds, ["a", "B", "c"]);
+
+    let mut cmds = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let err =
+        apply_setup_command_operations(&mut cmds, false, &[], &[], &[(3, "z".to_string())], &[])
+            .expect_err("out-of-range edit should error");
+    assert!(err.contains("valid edit indexes are 0-2"), "got: {err}");
+}
+
+#[test]
+fn apply_clear_plus_append_rebuild() {
+    let mut cmds = vec!["old1".to_string(), "old2".to_string()];
+    apply_setup_command_operations(
+        &mut cmds,
+        true,
+        &["a".to_string(), "b".to_string()],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("clear plus append rebuilds");
+    assert_eq!(cmds, ["a", "b"]);
+}
+
+#[test]
+fn apply_legacy_append_plus_remove() {
+    let mut cmds = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    apply_setup_command_operations(
+        &mut cmds,
+        false,
+        &["d".to_string()],
+        &[],
+        &[],
+        &["b".to_string()],
+    )
+    .expect("legacy append plus remove");
+    assert_eq!(cmds, ["a", "c", "d"]);
+
+    // Removing an absent command does not panic and removes nothing.
+    let mut cmds = vec!["a".to_string()];
+    apply_setup_command_operations(&mut cmds, false, &[], &[], &[], &["z".to_string()])
+        .expect("absent removal is not fatal");
+    assert_eq!(cmds, ["a"]);
+}
+
+#[test]
+fn apply_duplicate_text_edit_by_index() {
+    let mut cmds = vec!["x".to_string(), "x".to_string(), "y".to_string()];
+    apply_setup_command_operations(&mut cmds, false, &[], &[], &[(1, "z".to_string())], &[])
+        .expect("edit by index targets the slot, not the first text match");
+    assert_eq!(cmds, ["x", "z", "y"]);
+}
+
+#[test]
+fn apply_multiple_inserts_in_order() {
+    let mut cmds = vec!["a".to_string(), "b".to_string()];
+    // First insert at 1 (between a and b), then insert at 0 (prepend). Indexes
+    // are validated against the list length at the point each insert runs.
+    apply_setup_command_operations(
+        &mut cmds,
+        false,
+        &[],
+        &[(1, "x".to_string()), (0, "z".to_string())],
+        &[],
+        &[],
+    )
+    .expect("multiple inserts apply in order");
+    // a b -> a x b -> z a x b
+    assert_eq!(cmds, ["z", "a", "x", "b"]);
+}
+
+#[test]
+fn apply_rejects_result_exceeding_100_total() {
+    let mut cmds = vec!["cmd".to_string(); 100];
+    let err =
+        apply_setup_command_operations(&mut cmds, false, &["extra".to_string()], &[], &[], &[])
+            .expect_err(">100 total should be rejected");
+    assert!(err.contains("exceeds the maximum of 100"), "got: {err}");
+}
+
+#[test]
+fn apply_rejects_too_many_runes_command() {
+    // Use a distinctive sentinel so we can prove the command text is not leaked
+    // into the user-facing / logged error (REMOTE-1063).
+    let over_limit = format!("{}SECRET", "a".repeat(4091));
+    let mut cmds = vec!["a".to_string()];
+    let err =
+        apply_setup_command_operations(&mut cmds, false, &[], &[(0, over_limit.clone())], &[], &[])
+            .expect_err(">4096-rune command should be rejected");
+    assert!(err.contains("4096"), "got: {err}");
+    assert!(
+        !err.contains("SECRET"),
+        "error must not leak command text, got: {err}"
+    );
+}
+
+#[test]
+fn format_setup_commands_listing_numbers_zero_based() {
+    // The `oz environment get`/update display numbers setup commands zero-based
+    // so the index a user types for --insert-setup-command / --edit-setup-command
+    // matches the number they see (REMOTE-1063). This is the user-facing display
+    // change; `print_environment_details` delegates here for the setup-commands
+    // block, so this test is the deterministic CI proof of the changed display.
+    let rendered = format_setup_commands_listing(&[
+        "make build".to_string(),
+        "pip install -e .".to_string(),
+        "make test".to_string(),
+    ]);
+    assert_eq!(
+        rendered, "Setup commands:\n  0. make build\n  1. pip install -e .\n  2. make test\n",
+        "got: {rendered}"
+    );
+    // The legacy 1-based first line must NOT appear.
+    assert!(
+        !rendered.contains("  1. make build\n"),
+        "must not be 1-based: {rendered}"
+    );
+}
+
+#[test]
+fn format_setup_commands_listing_empty_renders_none() {
+    let rendered = format_setup_commands_listing(&[]);
+    assert_eq!(rendered, "Setup commands: None\n", "got: {rendered}");
+    assert!(
+        !rendered.contains("  0."),
+        "no numbering when empty: {rendered}"
+    );
 }
 
 #[test]
