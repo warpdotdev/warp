@@ -9,7 +9,6 @@ use ai::skills::{
 pub use file_watchers::{
     SkillWatcher, SkillWatcherEvent, extract_skill_parent_directory, read_skills_from_directories,
 };
-use warp_core::features::FeatureFlag;
 use warp_util::host_id::HostId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity};
@@ -71,11 +70,9 @@ impl SkillManager {
         // Create skill watcher
         let skill_watcher = ctx.add_model(|ctx| SkillWatcher::new(ctx, skill_watcher_tx));
 
-        if FeatureFlag::BundledSkills.is_enabled() {
-            ctx.spawn(BundledSkill::detect(), |me, result, _| {
-                me.bundled_skills.set_local(result);
-            });
-        }
+        ctx.spawn(BundledSkill::detect(), |me, result, _| {
+            me.bundled_skills.set_local(result);
+        });
 
         Self {
             directory_skills: HashMap::new(),
@@ -195,9 +192,7 @@ impl SkillManager {
         // never the local client's. Remote catalog descriptors are referenced
         // by their remote paths so invocation resolves back to the same host's
         // catalog, while direct `BundledSkillId` lookups use `path_origin`.
-        if FeatureFlag::BundledSkills.is_enabled() {
-            skills.extend(self.bundled_skills.active_descriptors(path_origin, ctx));
-        }
+        skills.extend(self.bundled_skills.active_descriptors(path_origin, ctx));
 
         skills
     }
