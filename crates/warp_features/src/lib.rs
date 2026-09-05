@@ -611,9 +611,6 @@ pub enum FeatureFlag {
     /// Enables configuring header toolbar item order, side placement, and visibility.
     ConfigurableToolbar,
 
-    /// Enables real-time communication updates for ambient agent tasks.
-    AmbientAgentsRTC,
-
     // Enables a side panel conversation list view for AgentView mode.
     AgentViewConversationListView,
 

@@ -240,8 +240,8 @@ impl TuiConversationMenuModel {
             self.state = TuiConversationMenuState::Closed;
             let window_id = self.window_id;
             let model_id = ctx.model_id();
-            AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.register_view_closed(window_id, model_id, ctx);
+            AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+                model.register_view_closed(window_id, model_id);
             });
             ctx.emit(TuiConversationMenuEvent::Updated);
         }
