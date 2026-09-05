@@ -38,6 +38,7 @@ mod passive_suggestions;
 mod pending_user_query;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_instructions_block;
+mod review_changes_target;
 pub mod rich_content;
 mod shared_session;
 mod shell_terminated_banner;
@@ -483,6 +484,7 @@ use crate::terminal::view::inline_banner::{
     PromptSuggestionBannerState, VimModeBannerState, render_agent_mode_setup_banner,
 };
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
+use crate::terminal::view::review_changes_target::{ReviewChangesTarget, review_changes_target};
 pub use crate::terminal::view::rich_content::{
     AIBlockMetadata, AgentViewEntryMetadata, RichContent, RichContentInsertionPosition,
     RichContentMetadata,
@@ -746,6 +748,11 @@ pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY: &str 
 
 /// We only auto open the code review pane if the pane it's getting opened from has a certain width
 const MINIMUM_WIDTH_TO_AUTO_OPEN_PANE: f32 = 600.0;
+
+/// Shown instead of an empty Code Review pane when the agent footer's "Review
+/// changes" control is activated with a clean working tree and no pull request
+/// to fall back on.
+const NOTHING_TO_REVIEW_TOAST: &str = "No changes to review — the working tree is clean and no pull request was found for this branch.";
 
 lazy_static! {
     static ref CTRL_SHIFT_A_KEYSTROKE: Keystroke = Keystroke {
@@ -7246,6 +7253,60 @@ impl TerminalView {
             Event::OpenCodeReviewPane,
             ctx,
         )
+    }
+
+    /// Whether the repo's working tree has uncommitted changes, or `None` while
+    /// the per-repo git status metadata is still loading.
+    fn working_tree_is_dirty(&self, ctx: &AppContext) -> Option<bool> {
+        self.git_status_metadata(ctx)
+            .map(|metadata| !metadata.stats_against_head.has_no_changes())
+    }
+
+    /// The URL of the pull request `gh` resolved for the current branch, when
+    /// one is known. Stays `None` when `gh` is missing or unauthenticated,
+    /// matching the suppression behavior of the PR prompt chip.
+    fn current_branch_pr_url(&self, ctx: &AppContext) -> Option<String> {
+        self.github_repo_model
+            .as_ref()?
+            .as_ref(ctx)
+            .pr_info(ctx)
+            .map(|pr_info| pr_info.url.clone())
+    }
+
+    /// Routes the agent block footer's "Review changes" control. The control
+    /// used to always open the local Code Review pane, which is empty once the
+    /// agent's accepted edits have been committed and pushed, so it now follows
+    /// the changes to the branch's pull request instead.
+    fn review_agent_changes(
+        &mut self,
+        entrypoint: CodeReviewPaneEntrypoint,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let working_tree_is_dirty = self.working_tree_is_dirty(ctx);
+        let pr_url = self.current_branch_pr_url(ctx);
+        match review_changes_target(working_tree_is_dirty, pr_url.as_deref()) {
+            ReviewChangesTarget::LocalCodeReview => self.toggle_code_review_pane(
+                GitDeltaPreference::Always,
+                entrypoint,
+                None, // cli_agent
+                true, /* focus_new_pane */
+                ctx,
+            ),
+            ReviewChangesTarget::RemotePullRequest { url } => ctx.open_url(&url),
+            ReviewChangesTarget::NothingToReview => {
+                // The cached PR info is only re-fetched on branch change, after
+                // a `gh`/`gt` command, and on a minute-long timer, so a PR
+                // opened outside Warp can still be missing here. Kick a refresh
+                // so a retry resolves it.
+                if let Some(handle) = self.github_repo_model.clone() {
+                    handle.update(ctx, |model, ctx| model.refresh_pr_info(ctx));
+                }
+                ctx.emit(Event::ShowToast {
+                    message: NOTHING_TO_REVIEW_TOAST.to_string(),
+                    flavor: ToastFlavor::Default,
+                });
+            }
+        }
     }
 
     #[cfg(feature = "local_fs")]
@@ -21036,6 +21097,9 @@ impl TerminalView {
                     true, /* focus_new_pane */
                     ctx,
                 );
+            }
+            AIBlockEvent::ReviewAgentChanges { entrypoint } => {
+                self.review_agent_changes(*entrypoint, ctx);
             }
             AIBlockEvent::OpenImportedCommentInCodeReview {
                 repo_path,
