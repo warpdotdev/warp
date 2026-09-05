@@ -4901,6 +4901,14 @@ impl ConversationStatus {
         matches!(self, ConversationStatus::Cancelled)
     }
 
+    /// Returns whether a user-triggered resume may start a new request.
+    pub fn is_manually_resumable(&self) -> bool {
+        matches!(
+            self,
+            ConversationStatus::Error | ConversationStatus::Cancelled
+        )
+    }
+
     /// True iff the run is finished and cannot resume on its own.
     pub fn is_done(&self) -> bool {
         matches!(

@@ -7274,6 +7274,110 @@ fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
     })
 }
 
+fn create_cancelled_conversation(
+    view: &mut TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) -> AIConversationId {
+    let (conversation_id, _, _, response_stream_id) =
+        append_exchange_and_handle_event(view, agent_view_user_query_input("test resume"), ctx);
+    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+        history
+            .conversation_mut(&conversation_id)
+            .expect("conversation should exist")
+            .mark_request_cancelled(
+                &response_stream_id,
+                view.view_id,
+                CancellationReason::ManuallyCancelled,
+                ctx,
+            )
+            .expect("request should be cancelled");
+        history.mark_active_conversation_id(conversation_id, view.view_id, ctx);
+    });
+    conversation_id
+}
+
+#[test]
+fn manual_resume_is_disabled_while_conversation_is_in_progress() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _resume_button = FeatureFlag::AIResumeButton.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id = create_cancelled_conversation(view, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.update_conversation_status(
+                    view.view_id,
+                    conversation_id,
+                    ConversationStatus::InProgress,
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            assert!(conversation.status().is_in_progress());
+            assert!(
+                conversation
+                    .latest_exchange()
+                    .and_then(|exchange| exchange.output_status.cancel_reason())
+                    .is_some_and(|reason| reason.is_manually_cancelled())
+            );
+            assert!(
+                !view
+                    .keymap_context(ctx)
+                    .set
+                    .contains(init::CAN_RESUME_CONVERSATION_KEY)
+            );
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_action(&TerminalAction::ResumeConversation, ctx);
+            assert!(
+                !view
+                    .ai_controller
+                    .as_ref(ctx)
+                    .has_active_stream_for_conversation(conversation_id, ctx)
+            );
+        });
+    })
+}
+
+#[test]
+fn manual_resume_starts_stream_for_cancelled_conversation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(false);
+        let _resume_button = FeatureFlag::AIResumeButton.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            create_cancelled_conversation(view, ctx)
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            assert!(
+                view.keymap_context(ctx)
+                    .set
+                    .contains(init::CAN_RESUME_CONVERSATION_KEY)
+            );
+            view.handle_action(&TerminalAction::ResumeConversation, ctx);
+            assert!(
+                view.ai_controller
+                    .as_ref(ctx)
+                    .has_active_stream_for_conversation(conversation_id, ctx)
+            );
+        });
+    })
+}
+
 #[test]
 fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_running_command() {
     App::test((), |mut app| async move {

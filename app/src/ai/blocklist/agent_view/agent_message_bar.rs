@@ -588,8 +588,7 @@ impl MessageProvider<AgentMessageArgs<'_>> for ZeroStateMessageProducer {
         let mut items = Vec::new();
 
         let show_resume = !active_conversation.is_entirely_passive()
-            && (active_conversation.status().is_cancelled()
-                || active_conversation.status().is_error());
+            && active_conversation.status().is_manually_resumable();
         if show_resume {
             let resume_keystroke = if OperatingSystem::get().is_mac() {
                 Keystroke::parse("cmd-shift-R").expect("keystroke should parse")
