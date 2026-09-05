@@ -69,8 +69,12 @@ impl RenderableBlock for RenderableBulletList {
             ctx,
             app,
         );
-        self.placeholder
-            .layout(&self.viewport_item, model, app, |block| {
+        self.placeholder.layout(
+            &self.viewport_item,
+            model,
+            ctx.text_layout_cache,
+            app,
+            |block| {
                 let indent_level = match block {
                     BlockItem::UnorderedList { indent_level, .. } => *indent_level,
                     _ => ListIndentLevel::One,
@@ -79,7 +83,8 @@ impl RenderableBlock for RenderableBulletList {
                     text: "List",
                     block_style: BufferBlockStyle::UnorderedList { indent_level },
                 }
-            })
+            },
+        )
     }
 
     fn paint(

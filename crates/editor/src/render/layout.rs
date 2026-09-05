@@ -11,7 +11,7 @@ use warpui_core::fonts::TextLayoutSystem;
 #[cfg(test)]
 use warpui_core::fonts::{Style, Weight};
 use warpui_core::text_layout::{
-    ClipConfig, Line, StyleAndFont, TextAlignment, TextBorder, TextFrame, TextStyle,
+    ClipConfig, LayoutCache, Line, StyleAndFont, TextAlignment, TextBorder, TextFrame, TextStyle,
 };
 use warpui_core::units::{IntoPixels, Pixels};
 
@@ -168,6 +168,7 @@ impl<'a> TextLayout<'a> {
     /// Lays out placeholder text for empty blocks.
     pub fn layout_placeholder(
         &self,
+        layout_cache: &LayoutCache,
         text: &str,
         block_type: &BufferBlockStyle,
         spacing: &BlockSpacing,
@@ -179,13 +180,14 @@ impl<'a> TextLayout<'a> {
         );
         let text = truncate_text_for_layout(text);
         let style_runs = &[(0..text.chars().count(), style_and_font)];
-        Arc::new(self.font_cache.layout_line_uncached(
+        layout_cache.layout_line(
             text,
             paragraph_styles.line_style(),
             style_runs,
             self.content_width(spacing),
             ClipConfig::end(),
-        ))
+            &self.font_cache,
+        )
     }
 
     /// Returns the maximum width for text content laid out with the given spacing.

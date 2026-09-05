@@ -40,7 +40,7 @@ impl RenderableBlock for RenderableOrderedListItem {
     fn layout(
         &mut self,
         model: &RenderState,
-        _ctx: &mut warpui_core::LayoutContext,
+        ctx: &mut warpui_core::LayoutContext,
         app: &warpui_core::AppContext,
     ) {
         let text_layout = TextLayout::for_render_state(app, model);
@@ -62,11 +62,16 @@ impl RenderableBlock for RenderableOrderedListItem {
             style_runs,
         ));
 
-        self.placeholder
-            .layout(&self.viewport_item, model, app, |_| placeholder::Options {
+        self.placeholder.layout(
+            &self.viewport_item,
+            model,
+            ctx.text_layout_cache,
+            app,
+            |_| placeholder::Options {
                 block_style,
                 text: "List",
-            });
+            },
+        );
     }
 
     fn paint(

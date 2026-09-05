@@ -114,26 +114,29 @@ impl RenderableBlock for RenderableTaskList {
             ctx,
             app,
         );
-        self.placeholder
-            .layout(&self.viewport_item, model, app, |block| {
-                placeholder::Options {
-                    text: "To-do list",
-                    block_style: match block {
-                        BlockItem::TaskList {
-                            indent_level,
-                            complete,
-                            ..
-                        } => BufferBlockStyle::TaskList {
-                            indent_level: *indent_level,
-                            complete: *complete,
-                        },
-                        _ => BufferBlockStyle::TaskList {
-                            indent_level: ListIndentLevel::One,
-                            complete: false,
-                        },
+        self.placeholder.layout(
+            &self.viewport_item,
+            model,
+            ctx.text_layout_cache,
+            app,
+            |block| placeholder::Options {
+                text: "To-do list",
+                block_style: match block {
+                    BlockItem::TaskList {
+                        indent_level,
+                        complete,
+                        ..
+                    } => BufferBlockStyle::TaskList {
+                        indent_level: *indent_level,
+                        complete: *complete,
                     },
-                }
-            })
+                    _ => BufferBlockStyle::TaskList {
+                        indent_level: ListIndentLevel::One,
+                        complete: false,
+                    },
+                },
+            },
+        )
     }
 
     fn paint(

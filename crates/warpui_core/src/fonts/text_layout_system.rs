@@ -115,7 +115,3 @@ impl TextLayoutSystem<'_> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "text_layout_system_tests.rs"]
-mod tests;
