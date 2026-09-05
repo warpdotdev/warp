@@ -15,11 +15,22 @@ warp_sudo apt update -y
 "$PWD"/script/linux/install_linuxdeploy
 
 # Make sure we're authenticated with the gcloud CLI, otherwise SSH integration
-# tests won't work.
-if [[ "${WARP_SKIP_GCLOUD_AUTH:-0}" != "1" ]] && [[ -z "$(gcloud auth print-identity-token)" ]]; then
-    echo "gcloud CLI authentication missing.  Press enter to continue..."
-    read var
-    gcloud auth login
+# tests won't work. Both the prompt and `gcloud auth login` need a human, so a
+# non-interactive run (CI, a container build, an agent sandbox) reports the
+# missing credential and moves on instead of blocking forever on `read`.
+if [[ "${WARP_SKIP_GCLOUD_AUTH:-0}" == "1" ]]; then
+    echo "Skipping the gcloud authentication check (WARP_SKIP_GCLOUD_AUTH=1)."
+elif ! command -v gcloud >/dev/null 2>&1; then
+    echo "gcloud CLI is not installed; skipping the authentication check."
+elif [[ -z "$(gcloud auth print-identity-token 2>/dev/null)" ]]; then
+    if [[ -t 0 ]]; then
+        echo "gcloud CLI authentication missing.  Press enter to continue..."
+        read -r var
+        gcloud auth login
+    else
+        echo "gcloud CLI authentication missing; skipping login in a non-interactive shell."
+        echo "Run 'gcloud auth login' before the SSH integration tests, or set WARP_SKIP_GCLOUD_AUTH=1 to silence this."
+    fi
 fi
 
 echo "✅ Your machine is bootstrapped and ready to go. :)"

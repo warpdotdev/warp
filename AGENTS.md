@@ -39,6 +39,7 @@ Environment variables:
 
 ### Platform Setup
 - `./script/bootstrap` - Platform-specific setup plus common agent skill installation from `skills-lock.json`; prompts for project/global when an install or update is needed unless a target flag or environment override is provided.
+- `./script/bootstrap -y` / `--yes` (or `WARP_SKIP_SUDO_PROMPT=1`) - Don't prompt before each privileged (sudo) step; the prompt is also skipped automatically when stdin is not an interactive terminal.
 - `./script/bootstrap --skip-common-skills` - Platform setup without installing or updating common agent skills.
 - `./script/bootstrap --install-common-skills` - Explicitly install common agent skills from `skills-lock.json`; this is the default behavior.
 - `./script/bootstrap --install-common-skills-in-repo` - Platform setup plus common agent skill installation in this checkout's `.agents/skills`.
