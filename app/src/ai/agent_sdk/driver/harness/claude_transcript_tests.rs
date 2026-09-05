@@ -41,7 +41,7 @@ fn read_envelope_main_only() {
         "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n",
     );
 
-    let envelope = read_envelope(uuid, cwd, tmp.path()).unwrap();
+    let envelope = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
     assert_eq!(
         envelope.entries,
         vec![
@@ -74,7 +74,7 @@ fn read_envelope_with_subagents() {
         "{\"type\":\"user\"}\n",
     );
 
-    let envelope = read_envelope(uuid, cwd, tmp.path()).unwrap();
+    let envelope = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
     assert_eq!(
         envelope.subagents["agent-abc123def456"],
         vec![serde_json::json!({"type": "user"})]
@@ -88,7 +88,7 @@ fn read_envelope_missing_session_file() {
     let uuid = Uuid::new_v4();
 
     // No files created - should return Ok with empty entries rather than an error.
-    let envelope = read_envelope(uuid, cwd, tmp.path()).unwrap();
+    let envelope = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
     assert!(envelope.entries.is_empty());
     assert!(envelope.subagents.is_empty());
     assert!(envelope.todos.is_empty());
@@ -162,7 +162,7 @@ fn write_envelope_round_trip() {
 
     write_envelope(&original, tmp.path()).unwrap();
 
-    let decoded = read_envelope(uuid, cwd, tmp.path()).unwrap();
+    let decoded = read_envelope(uuid, cwd, tmp.path(), false).unwrap();
     assert_eq!(decoded, original);
 }
 

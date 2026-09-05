@@ -203,6 +203,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_alias_guards_on_ps1_set);
     register_test!(test_ps1_value_not_null_or_exit);
     register_test!(test_custom_ps1_expansion_bash);
+    register_test!(test_bash_honor_ps1_expands_dynamic_prompt_once);
     register_test!(test_completions_with_autocd);
     register_test!(test_auto_title);
     register_test!(test_warp_auto_title_disabled);

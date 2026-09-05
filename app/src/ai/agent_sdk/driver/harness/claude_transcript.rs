@@ -114,18 +114,25 @@ pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
 /// - `<config_root>/projects/<encoded_cwd>/<session_uuid>/subagents/*.jsonl` - subagents
 /// - `<config_root>/todos/<session_uuid>-agent-*.json` - per-agent todo lists
 ///
-/// If the main JSONL does not exist yet (e.g. during an early periodic save)
-/// the envelope is returned with an empty `entries` list rather than an error.
+/// If the main JSONL does not exist, `require_main_transcript` controls whether
+/// this returns an error or an envelope with an empty `entries` list.
 pub(crate) fn read_envelope(
     session_uuid: Uuid,
     cwd: &Path,
     config_root: &Path,
+    require_main_transcript: bool,
 ) -> Result<ClaudeTranscriptEnvelope> {
     let encoded = encode_cwd(cwd);
     let projects_dir = config_root.join("projects").join(&encoded);
 
     // Main session transcript.
     let session_file = projects_dir.join(format!("{session_uuid}.jsonl"));
+    if require_main_transcript && !session_file.exists() {
+        anyhow::bail!(
+            "Claude Code transcript does not exist after harness termination: {}",
+            session_file.display()
+        );
+    }
     let entries = read_jsonl(&session_file)?;
 
     // Subagents are stored in a directory named after the session UUID.

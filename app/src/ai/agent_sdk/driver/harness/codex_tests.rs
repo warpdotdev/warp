@@ -198,6 +198,7 @@ fn prepare_codex_environment_config_honors_codex_home() {
     let model_config = harness_model_config("gpt-5.5", None);
     let result = prepare_codex_environment_config(
         &working_dir,
+        &working_dir,
         Some("system prompt"),
         &resolved,
         &HashMap::new(),

@@ -13,6 +13,8 @@ Before invoking a Factory MCP tool:
 1. Confirm the `warp-factory` server and its tools are available. If they are
    unavailable, stop and tell the user that Factory MCP must be connected and
    authenticated.
-2. Read `skill://warp/factory-mcp/SKILL.md` using the MCP resource reader.
-3. Follow the returned skill and its referenced resources. Treat live tool
-   descriptions and input schemas as authoritative.
+2. Read `skill://warp/factory-mcp/SKILL.md`, then follow the returned skill and
+   its referenced resources. If the skill cannot be read, use the server
+   instructions and live tool descriptions.
+
+Treat live tool descriptions and input schemas as authoritative.

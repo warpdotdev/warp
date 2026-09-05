@@ -17,9 +17,13 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 use settings::Setting;
+#[cfg(not(target_family = "wasm"))]
+use warp_cli::scope::TeamSelection;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
+#[cfg(not(target_family = "wasm"))]
+use super::SoleTeamError;
 use super::UserWorkspaces;
 #[cfg(any(test, feature = "test-util"))]
 use crate::ai::llms::LLMInfo;
@@ -93,10 +97,10 @@ impl TeamScope for TeamContext<'_> {
     }
 }
 
-/// The team a headless CLI invocation acts as, named on the command line instead of resolved
-/// from a window.
+/// The team a headless CLI invocation acts as, resolved from its command-line selection and
+/// memberships instead of from a window.
 #[cfg(not(target_family = "wasm"))]
-pub struct TeamScopeForCli(ServerId);
+pub struct TeamScopeForCli(Option<ServerId>);
 
 #[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}
@@ -104,7 +108,7 @@ impl sealed::Sealed for TeamScopeForCli {}
 #[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
-        Some(self.0)
+        self.0
     }
 }
 
@@ -153,6 +157,16 @@ pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<
 pub struct NotATeamMemberError {
     pub team_uid: ServerId,
 }
+#[cfg(not(target_family = "wasm"))]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TeamScopeForCliError {
+    #[error("Invalid --team '{team_uid}': {message}")]
+    InvalidTeamUid { team_uid: String, message: String },
+    #[error(transparent)]
+    NoSoleTeam(#[from] SoleTeamError),
+    #[error(transparent)]
+    NotAMember(#[from] NotATeamMemberError),
+}
 
 /// What windowless Gemini Enterprise credential minting should mint from. See
 /// [`UserWorkspaces::gemini_enterprise_host_for_any_enabling_team`].
@@ -191,20 +205,34 @@ impl UserWorkspaces {
         TeamContext { team_uid }
     }
 
-    /// The scope a headless CLI invocation reads team policy through, for a team the caller has
-    /// already resolved.
-    ///
-    /// The sole exception to scopes being window-derived. *Which* team a CLI invocation acts as is
-    /// the caller's to settle; all this enforces is that the answer is a team the user is on, so a
-    /// scope can never name one whose policy [`Self::team_byo_for_scope`] would fail to find.
+    /// The scope a headless CLI invocation reads team policy through.
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn team_scope_for_cli(
         &self,
-        team_uid: ServerId,
-    ) -> Result<TeamScopeForCli, NotATeamMemberError> {
-        self.is_member_of_team(team_uid)
-            .then_some(TeamScopeForCli(team_uid))
-            .ok_or(NotATeamMemberError { team_uid })
+        team_selection: &TeamSelection,
+    ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
+        let team_uid = match &team_selection.team {
+            None => match self.sole_team_uid() {
+                Ok(team_uid) => Some(team_uid),
+                Err(SoleTeamError::NoTeam) => None,
+                Err(error @ SoleTeamError::MoreThanOneTeam { .. }) => {
+                    return Err(error.into());
+                }
+            },
+            Some(None) => Some(self.sole_team_uid()?),
+            Some(Some(team_uid)) => Some(ServerId::try_from(team_uid.as_str()).map_err(|err| {
+                TeamScopeForCliError::InvalidTeamUid {
+                    team_uid: team_uid.to_string(),
+                    message: err.to_string(),
+                }
+            })?),
+        };
+        if let Some(team_uid) = team_uid
+            && !self.is_member_of_team(team_uid)
+        {
+            return Err(NotATeamMemberError { team_uid }.into());
+        }
+        Ok(TeamScopeForCli(team_uid))
     }
 
     pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {

@@ -526,6 +526,24 @@ fn clone_requests_use_each_repository_host() {
 }
 
 #[test]
+fn clone_requests_accept_azure_devops_repositories() {
+    let repos = vec![SourceRepo::new(
+        CodeForge::AzureDevOps,
+        "warpdotdev/test-project".to_string(),
+        "test-project".to_string(),
+    )];
+
+    let prepared = repository_clone_requests(&repos, &[]).unwrap();
+    let command = build_parallel_clone_command(&prepared, ShellType::Bash);
+
+    assert_eq!(
+        prepared[0].repo.https_clone_url(),
+        "https://dev.azure.com/warpdotdev/test-project/_git/test-project"
+    );
+    assert!(command.contains("https://dev.azure.com/warpdotdev/test-project/_git/test-project"));
+}
+
+#[test]
 fn clone_requests_reject_a_mixed_repository_missing_forge() {
     let repos = AmbientAgentEnvironment {
         name: "mixed-omitted".into(),

@@ -136,7 +136,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 .map(|model_id| {
                     super::common::validate_agent_mode_base_model_id_for_scope(
                         model_id,
-                        &args.scope,
+                        &args.scope.team_selection,
                         ctx,
                     )
                 })

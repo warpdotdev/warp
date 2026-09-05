@@ -60,7 +60,8 @@ impl ThirdPartyHarness for GeminiHarness {
         system_prompt: Option<&str>,
         _resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        _workspace_root: &Path,
+        harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -71,7 +72,7 @@ impl ThirdPartyHarness for GeminiHarness {
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_gemini_environment_config(working_dir, system_prompt).map_err(|error| {
+        prepare_gemini_environment_config(harness_working_dir, system_prompt).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {
                 harness: self.cli_agent().command_prefix().to_owned(),
                 error,
@@ -91,7 +92,6 @@ impl ThirdPartyHarness for GeminiHarness {
             self.cli_agent().command_prefix(),
             &effective_prompt,
             system_prompt,
-            working_dir,
             client,
             terminal_driver,
         )?))
@@ -130,7 +130,6 @@ impl GeminiHarnessRunner {
         cli_command: &str,
         prompt: &str,
         _system_prompt: Option<&str>,
-        _working_dir: &Path,
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
     ) -> Result<Self, AgentDriverError> {
@@ -253,7 +252,7 @@ impl HarnessRunner for GeminiHarnessRunner {
 }
 
 fn prepare_gemini_environment_config(
-    working_dir: &Path,
+    harness_working_dir: &Path,
     system_prompt: Option<&str>,
 ) -> Result<()> {
     let home_dir =
@@ -265,7 +264,7 @@ fn prepare_gemini_environment_config(
     )?;
     prepare_gemini_trusted_folders(
         &gemini_dir.join(GEMINI_TRUSTED_FOLDERS_FILE_NAME),
-        working_dir,
+        harness_working_dir,
     )?;
     if let Some(prompt) = system_prompt {
         let prompt_path = gemini_dir.join(GEMINI_SYSTEM_PROMPT_FILE_NAME);
