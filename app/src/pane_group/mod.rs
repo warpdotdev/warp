@@ -1399,6 +1399,7 @@ impl PaneGroup {
                 is_focused,
                 pane_mode,
                 shell,
+                title,
             } => {
                 let uuid = Uuid::new_v4();
 
@@ -1477,6 +1478,18 @@ impl PaneGroup {
                 let terminal_pane_id = pane_data.terminal_pane_id();
                 let pane_id = terminal_pane_id.into();
                 pane_contents.insert(pane_id, Box::new(pane_data));
+
+                // Restore the pane's custom vertical-tabs name, mirroring what
+                // session restoration does in `pane_from_leaf_snapshot`.
+                if let Some(title) = title.as_deref()
+                    && let Some(pane) = pane_contents.get(&pane_id)
+                {
+                    pane.as_pane()
+                        .pane_configuration()
+                        .update(ctx, |configuration, ctx| {
+                            configuration.set_custom_vertical_tabs_title(title, ctx);
+                        });
+                }
 
                 let is_focused = is_focused.unwrap_or_default();
                 let focus = InitialFocus {

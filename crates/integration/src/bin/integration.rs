@@ -261,6 +261,7 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_with_launch_config_with_active_tab_index);
     register_test!(test_with_launch_config_with_active_pane);
     register_test!(test_with_launch_config_with_no_active_pane);
+    register_test!(test_launch_config_restores_pane_names);
     register_test!(test_find_query_not_evaluated_on_terminal_mode_change);
     register_test!(test_bash_bootstraps_with_prompt_command_array);
     register_test!(test_bash_bootstraps_with_prompt_command_array_that_sets_ps1);
