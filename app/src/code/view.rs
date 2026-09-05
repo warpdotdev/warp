@@ -1616,9 +1616,27 @@ impl CodeView {
             .map(|loc| display_name_with_host(loc, app))
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Untitled".to_string());
-        let language_icon =
-            icon_from_file_path(&file_name, appearance, ItemHighlightState::Default);
-        row.add_child(
+
+        // On hover, show the close button in place of the file-type icon rather than only
+        // appending it after the (possibly truncated) file name. This keeps the close affordance
+        // reachable even when the tab is too narrow to show both the icon and a trailing close
+        // button.
+        let icon_slot = if is_hovered {
+            Container::new(
+                ConstrainedBox::new(Self::render_close_button(
+                    appearance,
+                    tab_data.mouse_state_handles.close_handle.clone(),
+                    index,
+                ))
+                .with_width(CLOSE_BUTTON_WIDTH)
+                .with_height(CLOSE_BUTTON_WIDTH)
+                .finish(),
+            )
+            .with_margin_right(TAB_INTERNAL_MARGIN)
+            .finish()
+        } else {
+            let language_icon =
+                icon_from_file_path(&file_name, appearance, ItemHighlightState::Default);
             Container::new(
                 ConstrainedBox::new(language_icon)
                     .with_width(LANGUAGE_ICON_WIDTH)
@@ -1626,8 +1644,9 @@ impl CodeView {
                     .finish(),
             )
             .with_margin_right(TAB_INTERNAL_MARGIN)
-            .finish(),
-        );
+            .finish()
+        };
+        row.add_child(icon_slot);
 
         if has_unsaved_changes {
             row.add_child(
@@ -1661,7 +1680,9 @@ impl CodeView {
             .finish(),
         );
 
-        let show_close = is_active || is_hovered;
+        // While hovering, the close button is already shown in place of the file icon above, so
+        // avoid rendering a second close button in the trailing slot.
+        let show_close = is_active && !is_hovered;
         row.add_child(
             Shrinkable::new(
                 1.,
