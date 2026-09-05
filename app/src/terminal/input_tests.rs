@@ -3093,6 +3093,47 @@ fn slash_compact_still_queues_while_in_progress() {
 }
 
 #[test]
+fn custom_history_action_does_not_reenter_inline_history_menu_update() {
+    App::test((), |mut app| async move {
+        let _inline_history_menu = FeatureFlag::InlineHistoryMenu.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.open_inline_history_menu(ctx);
+        });
+
+        let inline_history_menu =
+            input.read(&app, |input, _| input.inline_history_menu_view.clone());
+        inline_history_menu.update(&mut app, |_, ctx| {
+            let window_id = ctx.window_id();
+            ctx.dispatch_custom_action(CustomAction::History, window_id);
+        });
+    });
+}
+
+#[test]
+fn editor_down_does_not_reenter_inline_history_menu_update() {
+    App::test((), |mut app| async move {
+        let _inline_history_menu = FeatureFlag::InlineHistoryMenu.override_enabled(true);
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        input.update(&mut app, |input, ctx| {
+            input.open_inline_history_menu(ctx);
+        });
+
+        let inline_history_menu =
+            input.read(&app, |input, _| input.inline_history_menu_view.clone());
+        inline_history_menu.update(&mut app, |_, ctx| {
+            input.update(ctx, |input, ctx| input.editor_down(ctx));
+        });
+    });
+}
+
+#[test]
 fn test_history_up_multiline() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
