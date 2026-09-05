@@ -202,7 +202,6 @@ impl AgentDriver {
             })
             .await??;
         installations.extend(resolved_specs.ephemeral_installations);
-        let mut resolved = Self::mcp_installations_to_json(installations, secrets.as_ref())?;
         let credentials = foreground
             .spawn(|_, ctx| {
                 let auth_state = AuthStateProvider::as_ref(ctx).get();
@@ -211,23 +210,16 @@ impl AgentDriver {
                     .flatten()
             })
             .await?;
-        Self::add_builtin_factory_mcp_to_json(&mut resolved, credentials.as_ref())?;
-        Ok(resolved)
-    }
-
-    fn add_builtin_factory_mcp_to_json(
-        resolved: &mut HashMap<String, JSONMCPServer>,
-        credentials: Option<&Credentials>,
-    ) -> Result<(), AgentDriverError> {
-        let taken_server_names = resolved.keys().cloned().collect();
-        let Some(installation) =
-            Self::builtin_factory_mcp_for_run(credentials, &taken_server_names)
-        else {
-            return Ok(());
-        };
-        let builtin = Self::mcp_installations_to_json(vec![installation], &HashMap::new())?;
-        resolved.extend(builtin);
-        Ok(())
+        if FeatureFlag::FactoryMcp.is_enabled()
+            && !installations.iter().any(|installation| {
+                installation.templatable_mcp_server().name == builtin::FACTORY_MCP_SERVER_NAME
+            })
+            && let Some(token) = credentials.as_ref().and_then(builtin::builtin_bearer_token)
+        {
+            log::info!("Attaching the built-in Factory MCP server to this agent run");
+            installations.push(builtin::factory_mcp_installation(&token));
+        }
+        Self::mcp_installations_to_json(installations, secrets.as_ref())
     }
 
     fn mcp_installations_to_json(

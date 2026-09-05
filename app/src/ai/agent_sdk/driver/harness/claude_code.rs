@@ -682,7 +682,7 @@ pub(crate) fn prepare_claude_environment_config(
 fn publish_skills_for_claude(workspace_root: &Path, harness_working_dir: &Path) {
     let skill_root = harness_working_dir.join(".claude").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
-    let published = super::skill_dirs_publish::publish_third_party_skills(
+    let published = super::skill_dirs_publish::publish_skills_for_harness(
         &skill_root,
         workspace_root,
         is_sandbox,

@@ -187,47 +187,6 @@ fn write_envelope_round_trip_preserves_entries() {
 }
 
 #[test]
-fn rehydrate_codex_transcript_uses_run_sessions_root() {
-    let tmp = TempDir::new().unwrap();
-    let sessions_root = tmp.path().join("run-home/sessions");
-    let local_cwd = tmp.path().join("workspace");
-    let uuid = Uuid::new_v4();
-    let mut envelope = CodexTranscriptEnvelope {
-        cwd: "/remote/work".into(),
-        session_id: uuid,
-        codex_version: Some("0.55.0".to_string()),
-        session_start_timestamp: Some(
-            chrono::DateTime::parse_from_rfc3339("2026-04-30T01:54:20.000Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-        ),
-        entries: vec![
-            serde_json::from_str::<serde_json::Value>(&session_meta_line(
-                uuid,
-                "/remote/work",
-                "2026-04-30T01:54:20.000Z",
-                "0.55.0",
-            ))
-            .unwrap(),
-        ],
-    };
-
-    let continuation =
-        rehydrate_codex_transcript(&mut envelope, &local_cwd, &sessions_root).unwrap();
-
-    assert!(continuation.transcript_path.starts_with(&sessions_root));
-    assert_eq!(envelope.cwd, local_cwd);
-    assert_eq!(
-        envelope.entries[0]["payload"]["cwd"].as_str(),
-        Some(local_cwd.to_string_lossy().as_ref())
-    );
-    assert_eq!(
-        find_session_file(&sessions_root, uuid),
-        Some(continuation.transcript_path)
-    );
-}
-
-#[test]
 fn write_envelope_falls_back_to_today_when_timestamp_missing() {
     let tmp = TempDir::new().unwrap();
     let uuid = Uuid::new_v4();

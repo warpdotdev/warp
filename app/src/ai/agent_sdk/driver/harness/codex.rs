@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
@@ -22,13 +22,12 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    CodexResumeInfo, CodexTranscriptEnvelope, find_session_file, parse_session_meta,
-    rehydrate_codex_transcript,
+    CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
+    parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
-    ThirdPartyHarness, write_temp_file,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
@@ -37,8 +36,6 @@ use crate::ai::agent_sdk::setup_observability::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
-#[cfg(test)]
-use crate::ai::mcp::builtin::FACTORY_MCP_SERVER_NAME;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
 use crate::terminal::CLIAgent;
@@ -137,7 +134,7 @@ impl ThirdPartyHarness for CodexHarness {
         third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        let codex_home = prepare_codex_environment_config(
+        prepare_codex_environment_config(
             workspace_root,
             harness_working_dir,
             system_prompt,
@@ -179,7 +176,6 @@ impl ThirdPartyHarness for CodexHarness {
             client,
             terminal_driver,
             codex_resume,
-            codex_home,
         )?))
     }
 }
@@ -193,14 +189,8 @@ impl ThirdPartyHarness for CodexHarness {
 /// verifies the Codex platform plugin before launching commands with this flag.
 /// `Some(session_id)` indicates that we want to resume that prior session. Unlike claude,
 /// codex does not support assigning a session_id to a new conversation.
-fn codex_command(
-    cli_name: &str,
-    session_id: Option<&Uuid>,
-    prompt_path: &str,
-    codex_home: &Path,
-) -> String {
-    let codex_home = codex_home.display();
-    let command = match session_id {
+fn codex_command(cli_name: &str, session_id: Option<&Uuid>, prompt_path: &str) -> String {
+    match session_id {
         Some(session_id) => format!(
             "{cli_name} resume --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} {session_id} \
              \"$(cat '{prompt_path}')\""
@@ -210,8 +200,7 @@ fn codex_command(
                 "{cli_name} --dangerously-bypass-approvals-and-sandbox {CODEX_BYPASS_HOOK_TRUST_FLAG} \"$(cat '{prompt_path}')\""
             )
         }
-    };
-    format!("CODEX_HOME='{codex_home}' {command}")
+    }
 }
 
 enum CodexRunnerState {
@@ -239,8 +228,6 @@ struct CodexHarnessRunner {
     transcript_path: OnceLock<PathBuf>,
     /// Optionally supply an existing conversation ID.
     preexisting_conversation_id: Option<AIConversationId>,
-    codex_sessions_root: PathBuf,
-    codex_home: Mutex<Option<TempDir>>,
 }
 
 impl CodexHarnessRunner {
@@ -253,11 +240,9 @@ impl CodexHarnessRunner {
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
-        codex_home: TempDir,
     ) -> Result<Self, AgentDriverError> {
         let temp_file = write_temp_file("oz_prompt_", prompt, ".txt")?;
         let prompt_path = temp_file.path().display().to_string();
-        let codex_sessions_root = codex_home.path().join(CODEX_SESSIONS_SUBDIR);
 
         let (session_id, preexisting_conversation_id, transcript_path) = match resume {
             Some(CodexResumeInfo {
@@ -265,12 +250,8 @@ impl CodexHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                let continuation = rehydrate_codex_transcript(
-                    &mut envelope,
-                    harness_working_dir,
-                    &codex_sessions_root,
-                )
-                .map_err(AgentDriverError::ConfigBuildFailed)?;
+                let continuation = rehydrate_codex_transcript(&mut envelope, harness_working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (
                     Some(session_id),
                     Some(conversation_id),
@@ -280,12 +261,7 @@ impl CodexHarnessRunner {
             None => (None, None, None),
         };
 
-        let command = codex_command(
-            cli_command,
-            session_id.as_ref(),
-            &prompt_path,
-            codex_home.path(),
-        );
+        let command = codex_command(cli_command, session_id.as_ref(), &prompt_path);
 
         let session_id_cell: OnceLock<Uuid> = OnceLock::new();
         if let Some(id) = session_id {
@@ -306,8 +282,6 @@ impl CodexHarnessRunner {
             session_id: session_id_cell,
             transcript_path: transcript_path_cell,
             preexisting_conversation_id,
-            codex_sessions_root,
-            codex_home: Mutex::new(Some(codex_home)),
         })
     }
 
@@ -318,9 +292,9 @@ impl CodexHarnessRunner {
             return Some(cached.clone());
         }
         let session_id = self.session_id.get().copied()?;
-        let sessions_root = self.codex_sessions_root.clone();
         let resolved = tokio::task::spawn_blocking(move || -> Option<PathBuf> {
-            find_session_file(&sessions_root, session_id)
+            let root = codex_sessions_root().ok()?;
+            find_session_file(&root, session_id)
         })
         .await
         .ok()
@@ -489,19 +463,6 @@ impl HarnessRunner for CodexHarnessRunner {
         )?;
         Ok(())
     }
-
-    async fn cleanup(
-        &self,
-        _cleanup_disposition: HarnessCleanupDisposition,
-        _foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()> {
-        if let Some(codex_home) = self.codex_home.lock().take() {
-            codex_home
-                .close()
-                .context("Failed to remove run-scoped Codex home")?;
-        }
-        Ok(())
-    }
 }
 
 /// Upload the codex session transcript to the server. No-ops if the session UUID hasn't
@@ -557,8 +518,6 @@ const CODEX_HOME_ENV: &str = "CODEX_HOME";
 const CODEX_AGENTS_OVERRIDE_FILE_NAME: &str = "AGENTS.override.md";
 const CODEX_AUTH_FILE_NAME: &str = "auth.json";
 const CODEX_CONFIG_TOML_FILE_NAME: &str = "config.toml";
-const CODEX_PLUGINS_DIR_NAME: &str = "plugins";
-const CODEX_SESSIONS_SUBDIR: &str = "sessions";
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const CODEX_AUTH_MODE_API_KEY: &str = "apikey";
 /// Lowercase string Codex's `TrustLevel` enum serializes to (codex
@@ -578,7 +537,6 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// TODO: Ideally, we would make this server-driven so we don't depend on a client
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
-
 fn prepare_codex_environment_config(
     workspace_root: &Path,
     harness_working_dir: &Path,
@@ -587,19 +545,11 @@ fn prepare_codex_environment_config(
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
     resolved_mcp_servers: &HashMap<String, JSONMCPServer>,
     third_party_harness_model_config: Option<&HarnessModelConfig>,
-) -> Result<TempDir> {
-    let persistent_codex_dir = codex_config_dir()?;
-    let codex_home = tempfile::Builder::new()
-        .prefix("warp-codex-home-")
-        .tempdir()
-        .context("Failed to create run-scoped Codex home")?;
-    set_codex_home_permissions(codex_home.path())?;
-    seed_codex_run_home(&persistent_codex_dir, codex_home.path())?;
-    let codex_dir = codex_home.path();
-    let config_toml_path = codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME);
+) -> Result<()> {
+    let codex_dir = codex_config_dir()?;
 
     if let Some(prompt) = system_prompt {
-        write_codex_agents_override(codex_dir, prompt)?;
+        write_codex_agents_override(&codex_dir, prompt)?;
     }
 
     match resolve_openai_api_key(resolved_env_vars) {
@@ -613,102 +563,19 @@ fn prepare_codex_environment_config(
     let openai_base_url = resolve_openai_base_url_from_secret(resolved_secrets, resolved_env_vars);
 
     prepare_codex_config_toml(
-        &config_toml_path,
+        &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
         harness_working_dir,
         resolved_mcp_servers,
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
     publish_skills_for_codex(workspace_root, harness_working_dir);
-    Ok(codex_home)
-}
-
-fn seed_codex_run_home(persistent_codex_dir: &Path, run_codex_home: &Path) -> Result<()> {
-    for file_name in [CODEX_CONFIG_TOML_FILE_NAME, CODEX_AUTH_FILE_NAME] {
-        let source = persistent_codex_dir.join(file_name);
-        if source.is_file() {
-            let destination = run_codex_home.join(file_name);
-            fs::copy(&source, &destination).with_context(|| {
-                format!(
-                    "Failed to seed run-scoped Codex file from {}",
-                    source.display()
-                )
-            })?;
-            set_owner_only_permissions(&destination)?;
-        }
-    }
-
-    let persistent_plugins = persistent_codex_dir.join(CODEX_PLUGINS_DIR_NAME);
-    if persistent_plugins.is_dir() {
-        mirror_codex_plugins(
-            &persistent_plugins,
-            &run_codex_home.join(CODEX_PLUGINS_DIR_NAME),
-        )?;
-    }
     Ok(())
 }
 
-#[cfg(unix)]
-fn set_codex_home_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("Failed to set permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_codex_home_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_owner_only_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .with_context(|| format!("Failed to set permissions on {}", path.display()))
-}
-
-#[cfg(not(unix))]
-fn set_owner_only_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn mirror_codex_plugins(source: &Path, destination: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, destination)
-        .with_context(|| format!("Failed to expose Codex plugins from {}", source.display()))
-}
-
-#[cfg(windows)]
-fn mirror_codex_plugins(source: &Path, destination: &Path) -> Result<()> {
-    std::os::windows::fs::symlink_dir(source, destination)
-        .or_else(|_| copy_dir_recursive(source, destination))
-        .with_context(|| format!("Failed to expose Codex plugins from {}", source.display()))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn mirror_codex_plugins(source: &Path, destination: &Path) -> Result<()> {
-    copy_dir_recursive(source, destination)
-}
-
-#[cfg(not(unix))]
-fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let destination = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&entry.path(), &destination)?;
-        } else {
-            fs::copy(entry.path(), destination)?;
-        }
-    }
-    Ok(())
-}
-
-/// Publish `WARP_SKILL_DIRS` and eligible bundled skills under
-/// `<harness_working_dir>/.agents/skills`.
+/// Publish configured and eligible bundled skills under
+/// `<harness_working_dir>/.agents/skills`, so Codex sees the same skills
+/// available to the Warp driver.
 ///
 /// Relative source directories are resolved from the workspace root, matching
 /// Oz. The links are published into the harness working directory because
@@ -723,7 +590,7 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> std::io::Result<()> 
 fn publish_skills_for_codex(workspace_root: &Path, harness_working_dir: &Path) {
     let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
-    let published = super::skill_dirs_publish::publish_third_party_skills(
+    let published = super::skill_dirs_publish::publish_skills_for_harness(
         &skill_root,
         workspace_root,
         is_sandbox,
@@ -763,6 +630,8 @@ fn write_codex_agents_override(codex_dir: &Path, system_prompt: &str) -> Result<
         )
     })?;
 
+    // Note: this currently works because we are only doing this for cloud agents; if we enable
+    // this for local runs we'll want to make sure we don't clobber any existing file overrides.
     let prompt_path = codex_dir.join(CODEX_AGENTS_OVERRIDE_FILE_NAME);
     fs::write(&prompt_path, system_prompt).with_context(|| {
         format!(
@@ -882,7 +751,7 @@ fn resolve_openai_base_url_from_secret(
     })
 }
 
-/// Edit a run-scoped Codex `config.toml` via `toml_edit` to seed the harness defaults
+/// Edit `~/.codex/config.toml` via `toml_edit` to seed the harness defaults
 /// while preserving anything that might already exist there. We handle:
 /// - project trust: for a working dir and all of its git repo subdirectories,
 ///   set the projects to `trusted`.
@@ -949,30 +818,12 @@ fn prepare_codex_config_toml(
             format!("Failed to create Codex config dir at {}", parent.display())
         })?;
     }
-    write_codex_config_toml(config_toml_path, &doc.to_string())
-}
-
-fn write_codex_config_toml(path: &Path, contents: &str) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write as _;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("Failed to open {} for writing", path.display()))?;
-        file.set_permissions(fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
-        file.write_all(contents.as_bytes())
-            .with_context(|| format!("Failed to write {}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    fs::write(path, contents).with_context(|| format!("Failed to write {}", path.display()))?;
-
-    Ok(())
+    fs::write(config_toml_path, doc.to_string()).with_context(|| {
+        format!(
+            "Failed to write Codex config.toml at {}",
+            config_toml_path.display()
+        )
+    })
 }
 
 /// Set the top-level `openai_base_url` key, overwriting any existing value.
@@ -1101,7 +952,11 @@ fn write_codex_mcp_servers(
         .expect("mcp_servers table inserted above");
 
     for (name, server) in servers {
-        let mut entry = toml_edit::Table::new();
+        let entry = mcp_tbl
+            .entry(name)
+            .or_insert_with(toml_edit::table)
+            .as_table_mut()
+            .expect("mcp_servers entry is a table");
         entry.set_implicit(false);
 
         match &server.transport_type {
@@ -1141,7 +996,6 @@ fn write_codex_mcp_servers(
                 }
             }
         }
-        mcp_tbl.insert(name, toml_edit::Item::Table(entry));
     }
 }
 

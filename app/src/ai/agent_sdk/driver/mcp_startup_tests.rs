@@ -25,7 +25,7 @@ use super::{AgentDriver, AgentDriverError, MANAGED_MCP_RESOLVE_MAX_ATTEMPTS};
 use crate::ai::agent_sdk::driver::terminal::TerminalDriver;
 use crate::ai::agent_sdk::setup_observability::{SetupClientEventReporter, SetupStep};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::mcp::builtin::{FACTORY_MCP_INSTALLATION_UUID, FACTORY_MCP_SERVER_NAME};
+use crate::ai::mcp::builtin::FACTORY_MCP_SERVER_NAME;
 use crate::ai::mcp::file_based_manager::{FileBasedMCPManager, FileBasedMCPManagerEvent};
 use crate::ai::mcp::file_mcp_watcher::PendingScan;
 use crate::ai::mcp::parsing::normalize_mcp_json;
@@ -745,57 +745,11 @@ fn ephemeral_installation_id_is_random_without_task_id() {
     );
 }
 
-// ── Built-in Factory MCP injection tests ────────────────────────────────────
-
 fn api_key_credentials() -> Credentials {
     Credentials::ApiKey {
         key: "wk-test-key".to_string(),
         owner_type: None,
     }
-}
-
-#[test]
-fn builtin_factory_mcp_attaches_with_api_key_credentials() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-
-    let installation =
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
-            .expect("built-in Factory MCP should attach when eligible");
-
-    assert_eq!(installation.uuid(), FACTORY_MCP_INSTALLATION_UUID);
-    assert_eq!(
-        installation.templatable_mcp_server().name,
-        FACTORY_MCP_SERVER_NAME
-    );
-}
-
-#[test]
-fn builtin_factory_mcp_skipped_when_flag_disabled() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(false);
-
-    assert!(
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &HashSet::new())
-            .is_none()
-    );
-}
-
-#[test]
-fn builtin_factory_mcp_skipped_without_credentials() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-
-    assert!(AgentDriver::builtin_factory_mcp_for_run(None, &HashSet::new()).is_none());
-}
-
-#[test]
-fn builtin_factory_mcp_skipped_on_name_collision() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-    // A user-configured server named `warp-factory` wins over the built-in.
-    let taken_server_names = HashSet::from([FACTORY_MCP_SERVER_NAME.to_string()]);
-
-    assert!(
-        AgentDriver::builtin_factory_mcp_for_run(Some(&api_key_credentials()), &taken_server_names)
-            .is_none()
-    );
 }
 
 fn explicit_http_server(url: &str) -> JSONMCPServer {
@@ -805,77 +759,6 @@ fn explicit_http_server(url: &str) -> JSONMCPServer {
             headers: HashMap::new(),
         },
     }
-}
-
-#[test]
-fn resolved_mcp_json_includes_authenticated_factory_mcp_and_preserves_explicit_servers() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-    let mut resolved = HashMap::from([(
-        "explicit".to_string(),
-        explicit_http_server("https://example.com/mcp"),
-    )]);
-
-    AgentDriver::add_builtin_factory_mcp_to_json(&mut resolved, Some(&api_key_credentials()))
-        .unwrap();
-
-    assert_eq!(resolved.len(), 2);
-    assert_eq!(
-        resolved["explicit"].transport_type,
-        explicit_http_server("https://example.com/mcp").transport_type
-    );
-    let JSONTransportType::SSEServer { url, headers } =
-        &resolved[FACTORY_MCP_SERVER_NAME].transport_type
-    else {
-        panic!("built-in Factory MCP must use HTTP transport");
-    };
-    assert_eq!(
-        url,
-        &format!(
-            "{}/api/v1/mcp/factory",
-            ChannelState::server_root_url().trim_end_matches('/')
-        )
-    );
-    assert_eq!(
-        headers.get("Authorization").map(String::as_str),
-        Some("Bearer wk-test-key")
-    );
-}
-
-#[test]
-fn resolved_mcp_json_skips_factory_mcp_without_flag_or_credentials() {
-    let explicit = explicit_http_server("https://example.com/mcp");
-    let mut flag_disabled = HashMap::from([("explicit".to_string(), explicit.clone())]);
-    let flag = FeatureFlag::FactoryMcp.override_enabled(false);
-    AgentDriver::add_builtin_factory_mcp_to_json(&mut flag_disabled, Some(&api_key_credentials()))
-        .unwrap();
-    assert_eq!(
-        flag_disabled,
-        HashMap::from([("explicit".to_string(), explicit.clone())])
-    );
-    drop(flag);
-
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-    let mut missing_credentials = HashMap::from([("explicit".to_string(), explicit.clone())]);
-    AgentDriver::add_builtin_factory_mcp_to_json(&mut missing_credentials, None).unwrap();
-    assert_eq!(
-        missing_credentials,
-        HashMap::from([("explicit".to_string(), explicit)])
-    );
-}
-
-#[test]
-fn resolved_mcp_json_preserves_explicit_factory_mcp() {
-    let _flag = FeatureFlag::FactoryMcp.override_enabled(true);
-    let explicit = explicit_http_server("https://user.example.com/factory");
-    let mut resolved = HashMap::from([(FACTORY_MCP_SERVER_NAME.to_string(), explicit.clone())]);
-
-    AgentDriver::add_builtin_factory_mcp_to_json(&mut resolved, Some(&api_key_credentials()))
-        .unwrap();
-
-    assert_eq!(
-        resolved,
-        HashMap::from([(FACTORY_MCP_SERVER_NAME.to_string(), explicit)])
-    );
 }
 
 #[test]
