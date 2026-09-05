@@ -41,6 +41,20 @@ pub enum ClientError {
     PendingRequestInfoChannelClosed,
 }
 
+impl ClientError {
+    /// Returns `true` if this error indicates the OS refused the connection due to a
+    /// permission/access-control mismatch (e.g. `ERROR_ACCESS_DENIED` on a Windows named pipe
+    /// created by a differently-elevated process; see REV-1546), as opposed to e.g. there simply
+    /// being no server listening at all.
+    pub fn is_permission_denied(&self) -> bool {
+        matches!(
+            self,
+            ClientError::Initialization(InitializationError::Io(io_err))
+                if io_err.kind() == std::io::ErrorKind::PermissionDenied
+        )
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ClientError>;
 
 #[derive(Debug)]
@@ -290,3 +304,7 @@ impl Client {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

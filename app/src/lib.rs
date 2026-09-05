@@ -1125,7 +1125,21 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             // it's better to run a second instance than potentially end up in a
             // state where Warp refuses to run even a first instance.
             Err(err) => {
-                let err = anyhow::Error::from(err).context("Failed to forward startup args");
+                // Named-pipe permission errors here (see REV-1546) mean this process is about to
+                // continue on as a fresh, unauthenticated instance despite Warp already running
+                // elsewhere, which downstream shows up as a confusing "redirect URL did not
+                // originate from this app" auth failure with no obvious link back to this line.
+                // Calling that out explicitly here keeps that link visible in Sentry/logs.
+                let context = if err.is_named_pipe_permission_denied() {
+                    "Failed to forward startup args: the existing Warp instance's named pipe \
+                     denied this connection, most likely because this process and the existing \
+                     instance are running at different Windows elevation levels. Continuing to \
+                     start a new instance, which will not share sign-in state with the existing \
+                     one and may surface as an auth 'invalid state parameter' failure"
+                } else {
+                    "Failed to forward startup args"
+                };
+                let err = anyhow::Error::from(err).context(context);
                 report_error!(&err);
                 pre_sentry_errors.push(err);
             }

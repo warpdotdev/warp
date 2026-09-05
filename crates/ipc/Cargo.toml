@@ -23,5 +23,27 @@ warpui_core.workspace = true
 [dev-dependencies]
 parking_lot.workspace = true
 
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
+[target.'cfg(windows)'.dev-dependencies]
+# Extra windows-crate features needed only by `windows_pipe_security_tests.rs`, which creates a
+# raw named pipe directly to inspect its actual, applied DACL.
+windows = { workspace = true, features = [
+  "Win32_Storage_FileSystem",
+  "Win32_System_Pipes",
+] }
+
+# Windows no longer uses `interprocess` (see `crates/ipc/src/native.rs`): it needs the ability to
+# set a security descriptor at named-pipe creation time, which `interprocess` 1.2.1 does not
+# expose, so the Windows transport is built directly on `tokio`'s native named-pipe support
+# instead.
+[target.'cfg(not(any(target_family = "wasm", windows)))'.dependencies]
 interprocess = {version = "1.2.1", features = ["tokio_support"]}
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+] }
+tokio = { workspace = true, features = ["net", "io-util"] }
