@@ -1498,6 +1498,25 @@ impl Line {
             0.
         };
 
+        // For the common case -- clipping/fading the *end* of the text, the default --
+        // a glyph's visibility is a pure geometric test against its own laid-out
+        // position: does it overlap `[0, available_width)`? A sequential width
+        // *budget*, walked in glyph *storage* order, is only equivalent to that test
+        // when storage order tracks increasing x, which holds for left-to-right text
+        // but not for right-to-left text (whose first character sits at the highest
+        // x). A budget-based walk over right-to-left glyphs can exhaust itself on
+        // glyphs that are already off-screen and never reach the ones that are
+        // actually within view -- which is how an overflowing right-to-left name (e.g.
+        // a long Arabic filename) can render as entirely blank instead of clipped.
+        // `is_start_clipping` and ellipsis mode both intentionally use the budget for
+        // more than a visibility decision (repositioning glyphs, or sequencing where
+        // the ellipsis itself lands), so they keep the original sequential logic.
+        let use_position_based_visibility = !is_start_clipping && clip_style != ClipStyle::Ellipsis;
+        let is_glyph_visible = |glyph: &Glyph| {
+            let glyph_x = glyph.position_along_baseline.x();
+            glyph_x + glyph.width > 0. && glyph_x < available_width
+        };
+
         'runs: for run in run_iter {
             let mut glyph_color = default_color;
             // We define foreground_color to overwrite syntax_color since the
@@ -1524,30 +1543,41 @@ impl Line {
                 // `remaining_width` or drawing anything; keep the two in sync.
                 let mut visible_left = f32::INFINITY;
                 let mut visible_right = f32::NEG_INFINITY;
-                let mut sim_remaining_width = remaining_width;
-                let sim_glyph_iter = if is_start_clipping {
-                    itertools::Either::Left(run.glyphs.iter().rev())
+                if use_position_based_visibility {
+                    for glyph in &run.glyphs {
+                        if !is_glyph_visible(glyph) {
+                            continue;
+                        }
+                        let glyph_x = line_origin.x() + glyph.position_along_baseline.x();
+                        visible_left = visible_left.min(glyph_x);
+                        visible_right = visible_right.max(glyph_x + glyph.width);
+                    }
                 } else {
-                    itertools::Either::Right(run.glyphs.iter())
-                };
-                for glyph in sim_glyph_iter {
-                    if clip_style == ClipStyle::Ellipsis
-                        && ellipsis_width > 0.
-                        && sim_remaining_width < glyph.width
-                    {
-                        break;
-                    }
-                    if sim_remaining_width <= 0. {
-                        break;
-                    }
-                    sim_remaining_width -= glyph.width;
-                    let glyph_x = if is_start_clipping {
-                        line_origin.x() + sim_remaining_width + start_ellipsis_offset
+                    let mut sim_remaining_width = remaining_width;
+                    let sim_glyph_iter = if is_start_clipping {
+                        itertools::Either::Left(run.glyphs.iter().rev())
                     } else {
-                        line_origin.x() + glyph.position_along_baseline.x()
+                        itertools::Either::Right(run.glyphs.iter())
                     };
-                    visible_left = visible_left.min(glyph_x);
-                    visible_right = visible_right.max(glyph_x + glyph.width);
+                    for glyph in sim_glyph_iter {
+                        if clip_style == ClipStyle::Ellipsis
+                            && ellipsis_width > 0.
+                            && sim_remaining_width < glyph.width
+                        {
+                            break;
+                        }
+                        if sim_remaining_width <= 0. {
+                            break;
+                        }
+                        sim_remaining_width -= glyph.width;
+                        let glyph_x = if is_start_clipping {
+                            line_origin.x() + sim_remaining_width + start_ellipsis_offset
+                        } else {
+                            line_origin.x() + glyph.position_along_baseline.x()
+                        };
+                        visible_left = visible_left.min(glyph_x);
+                        visible_right = visible_right.max(glyph_x + glyph.width);
+                    }
                 }
 
                 // Skip the background entirely when no glyphs are visible so a fully
@@ -1601,14 +1631,20 @@ impl Line {
                     break 'runs;
                 }
 
-                // If there is not enough space to paint even part of the glyph,
-                // stop painting glyphs but still paint run decorations
-                // (so that the decorations are still visible even if the glyphs are partially hidden).
-                if remaining_width <= 0. {
-                    should_stop_after_run = true;
-                    break;
+                if use_position_based_visibility {
+                    if !is_glyph_visible(glyph) {
+                        continue;
+                    }
+                } else {
+                    // If there is not enough space to paint even part of the glyph,
+                    // stop painting glyphs but still paint run decorations
+                    // (so that the decorations are still visible even if the glyphs are partially hidden).
+                    if remaining_width <= 0. {
+                        should_stop_after_run = true;
+                        break;
+                    }
+                    remaining_width -= glyph.width;
                 }
-                remaining_width -= glyph.width;
 
                 let glyph_origin = if is_start_clipping {
                     line_origin
