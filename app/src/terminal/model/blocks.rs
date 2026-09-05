@@ -3703,6 +3703,7 @@ impl BlockList {
             match block.bootstrap_stage() {
                 BootstrapStage::WarpInput | BootstrapStage::ScriptExecution => {
                     contents.push_str(&block.command_to_string());
+                    contents.push_str(&block.output_grid().contents_to_string(false, None));
                     contents.push('\n');
                 }
                 // We stop at the first block that is after the bootstrapping stage.
