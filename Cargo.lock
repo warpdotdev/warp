@@ -15998,6 +15998,7 @@ dependencies = [
  "schemars 1.0.4",
  "serde",
  "serde_json",
+ "serial_test",
  "session-sharing-protocol",
  "settings_value",
  "tempfile",

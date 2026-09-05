@@ -1425,7 +1425,7 @@ fn authenticate_user_after_iap_access(
                     authentication.start(ctx);
                 }
             }
-            IapManagerEvent::AccessUnavailable | IapManagerEvent::RefreshFailed { .. } => {}
+            IapManagerEvent::AccessUnavailable { .. } | IapManagerEvent::RefreshFailed { .. } => {}
         });
         iap_manager.update(ctx, |manager, ctx| manager.ensure_access(ctx));
         return;
@@ -1441,8 +1441,11 @@ fn authenticate_user_after_iap_access(
                 authentication.start(ctx);
             }
         }
-        IapManagerEvent::AccessUnavailable => {
-            report_error!("Staging IAP access unavailable before startup user authentication");
+        IapManagerEvent::AccessUnavailable { message } => {
+            report_error!(
+                "Staging IAP access unavailable before startup user authentication",
+                extra: { "cause" => message }
+            );
         }
         IapManagerEvent::RefreshFailed {
             message: _,
