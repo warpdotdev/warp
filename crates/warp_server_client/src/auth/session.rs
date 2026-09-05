@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, bail};
 use firebase::FetchAccessTokenResponse;
 use instant::Duration;
-use oauth2::TokenResponse as _;
+use oauth2::{RequestTokenError, TokenResponse as _};
 use url::Url;
 use warp_core::channel::ChannelState;
 use warp_server_auth::auth_state::AuthState;
@@ -166,8 +166,25 @@ impl AuthSession {
             .exchange_device_code()
             .request_async(self.client.as_ref())
             .await
-            .context("Failed to generate device code")
-            .map_err(UserAuthenticationError::Unexpected)
+            .map_err(|err| {
+                // For parse errors, include the response body to aid diagnostics.
+                // An empty body ("expected value at line 1 column 1") most often indicates
+                // the server returned a non-JSON error (e.g. a timeout or panic response).
+                let context = match &err {
+                    RequestTokenError::Parse(_, body) if body.is_empty() => {
+                        "Failed to generate device code: server returned an empty response body"
+                            .to_string()
+                    }
+                    RequestTokenError::Parse(_, body) => {
+                        format!(
+                            "Failed to generate device code: server returned non-JSON response: {:.200}",
+                            String::from_utf8_lossy(body)
+                        )
+                    }
+                    _ => "Failed to generate device code".to_string(),
+                };
+                UserAuthenticationError::Unexpected(anyhow::Error::from(err).context(context))
+            })
     }
 
     pub async fn exchange_device_access_token(
