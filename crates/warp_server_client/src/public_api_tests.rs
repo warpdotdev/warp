@@ -173,6 +173,43 @@ fn iap_challenge_failure_emits_no_event_when_observation_is_disabled() {
 }
 
 #[test]
+fn read_body_bounded_rejects_response_larger_than_limit() {
+    let _request = {
+        let mut server = ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/test/oversized")
+            .with_status(200)
+            .with_body("x".repeat(200))
+            .create()
+    };
+    let (base_client, _) = base_client(false);
+
+    let response = block_on(base_client.get_public_api_response("test/oversized")).unwrap();
+    let error = block_on(super::read_body_bounded(response, 10)).unwrap_err();
+
+    assert!(error.to_string().contains("exceeds maximum"));
+}
+
+#[test]
+fn read_body_bounded_reads_response_within_limit() {
+    let _request = {
+        let mut server = ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/test/within-limit")
+            .with_status(200)
+            .with_body(r#"{"value":"ok"}"#)
+            .create()
+    };
+    let (base_client, _) = base_client(false);
+
+    let response = block_on(base_client.get_public_api_response("test/within-limit")).unwrap();
+    let body =
+        block_on(super::read_body_bounded(response, super::MAX_PUBLIC_API_RESPONSE_BYTES)).unwrap();
+
+    assert_eq!(body, br#"{"value":"ok"}"#);
+}
+
+#[test]
 fn shared_status_error_actionability_ignores_retryable_client_failures() {
     let error = anyhow::Error::new(HttpStatusError {
         status: 429,
