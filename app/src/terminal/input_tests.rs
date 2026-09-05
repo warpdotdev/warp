@@ -8234,6 +8234,93 @@ fn enter_fullscreen_agent_view_for_test(terminal: &ViewHandle<TerminalView>, app
     });
 }
 
+/// Selecting `/rename-conversation` from the GUI slash-command menu with no argument
+/// pre-fills the rename input with the active conversation's current title and selects
+/// exactly the title (not the `/rename-conversation ` prefix), so typing replaces the
+/// whole title while the command prefix is preserved for the existing validation/API
+/// flow on Enter. Drives `Input::select_slash_command` end-to-end (including
+/// `active_conversation_title` and `select_ranges_by_byte_offset`).
+#[test]
+fn select_rename_conversation_prefills_active_title_and_selects_only_the_title() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let terminal_view_id = terminal.read(&app, |view, _| view.id());
+        // Seed an active conversation and give it a known title so the prefill has
+        // something to populate.
+        let conversation_id = seed_active_conversation(&mut app, terminal_view_id);
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, _ctx| {
+            history
+                .conversation_mut(&conversation_id)
+                .expect("seeded conversation should exist")
+                .set_fallback_display_title("acme plan".to_owned());
+        });
+        // Selecting the conversation enters agent view for it so `selected_conversation_id`
+        // resolves to the titled conversation.
+        select_conversation(&mut app, &terminal, conversation_id);
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+
+        input.update(&mut app, |input, ctx| {
+            input.select_slash_command(
+                &commands::RENAME_CONVERSATION,
+                super::slash_commands::SlashCommandTrigger::input(),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.buffer_text(ctx),
+                "/rename-conversation acme plan",
+                "selecting /rename-conversation should pre-fill the current title"
+            );
+            assert_eq!(
+                input.editor.as_ref(ctx).selected_text(ctx),
+                "acme plan",
+                "only the title (not the command prefix) should be selected"
+            );
+        });
+    });
+}
+
+/// When the active conversation has no title (e.g. a brand-new conversation), selecting
+/// `/rename-conversation` falls back to the default `/<command> ` insertion with no
+/// prefill and no selection, preserving the existing empty-argument path.
+#[test]
+fn select_rename_conversation_falls_back_to_default_insertion_when_no_active_title() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        initialize_app(&mut app);
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        // Enter agent view with a brand-new (untitled) conversation so there is no
+        // title to pre-fill.
+        enter_fullscreen_agent_view_for_test(&terminal, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.select_slash_command(
+                &commands::RENAME_CONVERSATION,
+                super::slash_commands::SlashCommandTrigger::input(),
+                ctx,
+            );
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(
+                input.buffer_text(ctx),
+                "/rename-conversation ",
+                "no title -> default /<command> insertion with a trailing space"
+            );
+            assert_eq!(
+                input.editor.as_ref(ctx).selected_text(ctx),
+                "",
+                "no title -> no text selected (cursor at end for argument entry)"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_cloud_handoff_prefix_remains_text_when_handoff_flag_disabled() {
     App::test((), |mut app| async move {
