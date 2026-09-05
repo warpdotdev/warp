@@ -585,6 +585,10 @@ impl<V: EditorView> EditorWrapper<V> {
         line_number_config.active_cursor_is_visible
     }
 
+    fn should_render_gutter_action_icons() -> bool {
+        !FeatureFlag::EmbeddedCodeReviewComments.is_enabled()
+    }
+
     /// Returning **no** gutter means the gutter shouldn't be rendered at all.
     /// Returning an **empty** gutter means the gutter should be rendered with no contents.
     fn gutter_elements(&self, app: &AppContext) -> Option<Vec<GutterElement>> {
@@ -1188,16 +1192,24 @@ impl<V: EditorView> EditorWrapper<V> {
             .with_width(GUTTER_WIDTH)
             .finish();
 
-        let show_add_as_context_button = self.add_hunk_as_context_button.is_some();
-        let show_revert_diff_hunk =
-            FeatureFlag::RevertDiffHunk.is_enabled() && self.revert_hunk_button.is_some();
+        let render_icons = Self::should_render_gutter_action_icons();
+
+        let show_add_as_context_button = render_icons && self.add_hunk_as_context_button.is_some();
+        let show_revert_diff_hunk = render_icons
+            && FeatureFlag::RevertDiffHunk.is_enabled()
+            && self.revert_hunk_button.is_some();
 
         // Show comment button independently of diff hunk state when requested
-        let show_comment_button = FeatureFlag::InlineCodeReview.is_enabled()
+        let show_comment_button = render_icons
+            && FeatureFlag::InlineCodeReview.is_enabled()
             && self.comment_button.is_some()
             && (should_show_comment_button || is_active_comment_on_current_line);
 
-        if should_show_diff_hunk_icons || is_active_comment_on_current_line || show_comment_button {
+        // When embedded comments are on, suppress the diff-hunk icons as well
+        let effective_show_diff_hunk_icons = render_icons && should_show_diff_hunk_icons;
+        let effective_active_comment = render_icons && is_active_comment_on_current_line;
+
+        if effective_show_diff_hunk_icons || effective_active_comment || show_comment_button {
             let mut buttons = Flex::row().with_main_axis_size(MainAxisSize::Min);
             if let Some(comment_button) =
                 self.comment_button.as_ref().filter(|_| show_comment_button)
@@ -1211,7 +1223,7 @@ impl<V: EditorView> EditorWrapper<V> {
                 ));
             }
 
-            if should_show_diff_hunk_icons {
+            if effective_show_diff_hunk_icons {
                 if let Some(revert_hunk_button) = self
                     .revert_hunk_button
                     .as_ref()
