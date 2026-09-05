@@ -3,12 +3,13 @@ use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use super::{
-    api_keys_with_warp_credit_fallback_setting, get_supported_cli_agent_tools, get_supported_tools,
-    supports_orchestration_v2,
+    api_keys_with_warp_credit_fallback_setting, convert_multi_agent_client_error,
+    get_supported_cli_agent_tools, get_supported_tools, supports_orchestration_v2,
 };
 use crate::ai::agent::api::RequestParams;
 use crate::ai::blocklist::SessionContext;
 use crate::ai::llms::LLMId;
+use crate::server::server_api::AIApiError;
 use crate::terminal::model::session::SessionType;
 
 fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool) -> RequestParams {
@@ -194,4 +195,25 @@ fn remote_supported_tools_omit_search_codebase_when_remote_is_not_connected() {
 
     assert!(!supported_tools.contains(&api::ToolType::SearchCodebase));
     assert!(!supported_cli_agent_tools.contains(&api::ToolType::SearchCodebase));
+}
+
+#[test]
+fn converts_request_too_large_to_typed_non_retryable_api_error() {
+    let error = futures::executor::block_on(convert_multi_agent_client_error(
+        warp_multi_agent_client::Error::RequestTooLarge {
+            encoded_len: 50_000_001,
+        },
+    ));
+
+    assert!(matches!(
+        error.as_ref(),
+        AIApiError::RequestTooLarge {
+            encoded_len: 50_000_001
+        }
+    ));
+    assert!(!error.is_recoverable());
+    assert_eq!(
+        error.to_string(),
+        warp_multi_agent_client::REQUEST_TOO_LARGE_USER_MESSAGE
+    );
 }

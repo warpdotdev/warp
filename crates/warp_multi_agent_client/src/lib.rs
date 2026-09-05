@@ -6,6 +6,14 @@ use tracing_futures::Instrument as _;
 use warp_core::channel::ChannelState;
 use warp_server_client::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 
+mod request_limits;
+
+pub use request_limits::{
+    FORBIDDEN_FALLBACK_USER_MESSAGE, ForbiddenBody, MULTI_AGENT_REQUEST_SIZE_LIMIT_BYTES,
+    REQUEST_TOO_LARGE_USER_MESSAGE, classify_forbidden_body,
+    encoded_len_exceeds_request_size_limit, user_message_for_forbidden_body,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Failed to authenticate multi-agent request")]
@@ -22,6 +30,9 @@ pub enum Error {
 
     #[error("Multi-agent eventsource stream failed: {0:?}")]
     EventSource(Box<reqwest_eventsource::Error>),
+
+    #[error("{REQUEST_TOO_LARGE_USER_MESSAGE}")]
+    RequestTooLarge { encoded_len: usize },
 }
 
 cfg_if::cfg_if! {
@@ -55,6 +66,7 @@ pub async fn generate_multi_agent_output(
         .await
         .map_err(Error::Authentication)?;
     let is_passive = is_passive_suggestion_request(request);
+    reject_oversized_multi_agent_request(request)?;
     let url = endpoint_url(is_passive);
 
     let mut request_builder = client
@@ -121,6 +133,21 @@ pub async fn generate_multi_agent_output(
             Ok(output_stream.boxed())
         }
     }
+}
+
+fn reject_oversized_multi_agent_request(
+    request: &warp_multi_agent_api::Request,
+) -> Result<(), Error> {
+    let encoded_len = request.encoded_len();
+    if encoded_len_exceeds_request_size_limit(encoded_len) {
+        tracing::warn!(
+            encoded_len,
+            limit = MULTI_AGENT_REQUEST_SIZE_LIMIT_BYTES,
+            "Skipping multi-agent request that exceeds the size limit"
+        );
+        return Err(Error::RequestTooLarge { encoded_len });
+    }
+    Ok(())
 }
 
 fn is_passive_suggestion_request(request: &warp_multi_agent_api::Request) -> bool {

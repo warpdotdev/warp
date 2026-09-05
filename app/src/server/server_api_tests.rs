@@ -1,5 +1,6 @@
 use futures::executor::block_on;
 use mockito::Server;
+use warp_errors::ErrorExt as _;
 
 use super::*;
 use crate::server::retry_strategies::is_transient_http_error;
@@ -106,5 +107,67 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
         AIApiError::QuotaLimit {
             user_display_message: Some(message)
         } if message == "You're out of credits"
+    ));
+}
+
+#[test]
+fn request_too_large_is_terminal_and_uses_exact_copy() {
+    let error = AIApiError::RequestTooLarge {
+        encoded_len: 50_000_001,
+    };
+
+    assert!(!error.is_recoverable());
+    assert!(!error.is_actionable());
+    assert_eq!(
+        error.to_string(),
+        warp_multi_agent_client::REQUEST_TOO_LARGE_USER_MESSAGE
+    );
+}
+
+#[test]
+fn forbidden_stream_status_preserves_structured_json_error() {
+    let error = AIApiError::error_for_non_429_stream_status(
+        http::StatusCode::FORBIDDEN,
+        r#"{"error": "model not allowed on this plan"}"#.to_owned(),
+    );
+
+    assert!(matches!(
+        error,
+        AIApiError::Forbidden { ref message }
+            if message == "model not allowed on this plan"
+    ));
+    assert!(!error.is_recoverable());
+    assert!(!error.is_actionable());
+    assert_eq!(error.to_string(), "model not allowed on this plan");
+}
+
+#[test]
+fn forbidden_stream_status_suppresses_html_body() {
+    let html = "<html><head><title>403 Forbidden</title></head><body>Access denied</body></html>";
+    let error =
+        AIApiError::error_for_non_429_stream_status(http::StatusCode::FORBIDDEN, html.to_owned());
+
+    let AIApiError::Forbidden { message } = error else {
+        panic!("expected Forbidden, got {error:?}");
+    };
+    assert_eq!(
+        message,
+        warp_multi_agent_client::FORBIDDEN_FALLBACK_USER_MESSAGE
+    );
+    assert!(!message.contains('<'));
+    assert!(!message.to_ascii_lowercase().contains("html"));
+    assert!(!message.contains("50MB"));
+}
+
+#[test]
+fn non_forbidden_stream_status_still_carries_raw_body() {
+    let error = AIApiError::error_for_non_429_stream_status(
+        http::StatusCode::BAD_REQUEST,
+        "nope".to_owned(),
+    );
+
+    assert!(matches!(
+        error,
+        AIApiError::ErrorStatus(http::StatusCode::BAD_REQUEST, ref body) if body == "nope"
     ));
 }
