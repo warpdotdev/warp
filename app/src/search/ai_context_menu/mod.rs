@@ -2,6 +2,7 @@ mod blocks;
 mod code;
 mod commands;
 mod conversations;
+mod core;
 mod diffset;
 mod files;
 pub mod mixer;
@@ -13,6 +14,12 @@ mod skills;
 mod styles;
 pub mod view;
 mod workflows;
+
+pub use core::{
+    AIContextMenuCategory, AtContextMenuCoreState, AtContextMenuGates,
+    AtContextMenuQueryTransition, NavigationState, is_at_menu_trigger, shared_inserted_text,
+    should_close_at_menu,
+};
 
 /// Safely truncate a string at the given byte index, ensuring we don't split UTF-8 characters
 pub fn safe_truncate(s: &mut String, new_len: usize) {
