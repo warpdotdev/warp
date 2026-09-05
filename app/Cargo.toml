@@ -585,7 +585,6 @@ default = [
     "diff_set_as_context",
     "summarize_conversation_command",
     "inline_code_review",
-    "web_search_ui",
     "agent_shared_sessions",
     "integration_command",
     "artifact_command",
@@ -952,7 +951,6 @@ cloud_agent_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
-web_search_ui = []
 web_fetch_ui = []
 fork_from_command = []
 context_window_usage_v2 = []
