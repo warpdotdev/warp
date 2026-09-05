@@ -106,6 +106,13 @@ pub fn resolve_asset_source_relative_to_directory(
     }
 }
 
+#[derive(Clone, Copy)]
+enum LayoutConcurrency {
+    Parallel,
+    #[cfg(any(target_os = "macos", test))]
+    Sequential,
+}
+
 /// Resolve an image source when its Markdown block is laid out.
 ///
 /// Local-file metadata is read here so refreshes get a new cache key, while
@@ -579,6 +586,44 @@ impl EditDelta {
         hidden_ranges: Option<RangeSet<CharOffset>>,
         app: &AppContext,
     ) -> LaidOutRenderDelta {
+        self.layout_delta_with_concurrency(
+            layout,
+            document_path,
+            layout_options,
+            hidden_ranges,
+            app,
+            LayoutConcurrency::Parallel,
+        )
+    }
+
+    #[cfg(any(target_os = "macos", test))]
+    pub(crate) fn layout_delta_sequential(
+        &self,
+        layout: &TextLayout,
+        document_path: Option<&Path>,
+        layout_options: &RenderLayoutOptions,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        app: &AppContext,
+    ) -> LaidOutRenderDelta {
+        self.layout_delta_with_concurrency(
+            layout,
+            document_path,
+            layout_options,
+            hidden_ranges,
+            app,
+            LayoutConcurrency::Sequential,
+        )
+    }
+
+    fn layout_delta_with_concurrency(
+        &self,
+        layout: &TextLayout,
+        document_path: Option<&Path>,
+        layout_options: &RenderLayoutOptions,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        app: &AppContext,
+        concurrency: LayoutConcurrency,
+    ) -> LaidOutRenderDelta {
         let hidden_ranges = hidden_ranges.unwrap_or_default();
 
         // old_offset is in the same 1-indexed coordinate system as hidden ranges.
@@ -623,34 +668,53 @@ impl EditDelta {
 
         for chunk in chunk_layout_tasks(layout_tasks) {
             let chunk_len = chunk.len();
-            let (chunk_items, chunk_trailing_newline): (Vec<_>, Last<_>) = chunk
-                .into_par_iter()
-                .enumerate()
-                .filter_map(|(local_idx, (task, is_hidden))| {
-                    let idx = chunk_start + local_idx;
-                    let location = if idx == 0 {
-                        BlockLocation::Start
-                    } else if idx >= last_task {
-                        BlockLocation::End
-                    } else {
-                        BlockLocation::Middle
-                    };
+            let layout_task = |(local_idx, (task, is_hidden)): (usize, (LayoutTask<'_>, bool))| {
+                let idx = chunk_start + local_idx;
+                let location = if idx == 0 {
+                    BlockLocation::Start
+                } else if idx >= last_task {
+                    BlockLocation::End
+                } else {
+                    BlockLocation::Middle
+                };
 
-                    match task.run(layout, location, is_hidden) {
-                        Ok(result) => Some(result),
-                        Err(e) => {
-                            report_error!(
-                                e.context("Failed to lay out BlockItem"),
-                                extra: { "offset" => ?self.old_offset }
-                            );
-                            None
-                        }
+                match task.run(layout, location, is_hidden) {
+                    Ok(result) => Some(result),
+                    Err(e) => {
+                        report_error!(
+                            e.context("Failed to lay out BlockItem"),
+                            extra: { "offset" => ?self.old_offset }
+                        );
+                        None
                     }
-                })
-                .unzip();
+                }
+            };
+            let (chunk_items, chunk_trailing_newline) = match concurrency {
+                LayoutConcurrency::Parallel => {
+                    let (items, trailing_newline): (Vec<_>, Last<_>) = chunk
+                        .into_par_iter()
+                        .enumerate()
+                        .filter_map(layout_task)
+                        .unzip();
+                    (items, trailing_newline.into_inner())
+                }
+                #[cfg(any(target_os = "macos", test))]
+                LayoutConcurrency::Sequential => {
+                    let results: Vec<_> = chunk
+                        .into_iter()
+                        .enumerate()
+                        .filter_map(layout_task)
+                        .collect();
+                    let trailing_newline = results
+                        .last()
+                        .map(|(_, trailing_newline)| *trailing_newline);
+                    let items = results.into_iter().map(|(item, _)| item).collect();
+                    (items, trailing_newline)
+                }
+            };
 
             block_items.extend(chunk_items);
-            if let Some(trailing_newline) = chunk_trailing_newline.into_inner() {
+            if let Some(trailing_newline) = chunk_trailing_newline {
                 has_trailing_newline = Some(trailing_newline);
             }
             chunk_start += chunk_len;

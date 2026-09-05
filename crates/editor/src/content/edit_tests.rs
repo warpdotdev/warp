@@ -1251,6 +1251,66 @@ fn identifiable_text_block(content_len: usize) -> StyledBufferBlock {
     })
 }
 
+fn text_block(content: &str, style: BufferBlockStyle) -> StyledBufferBlock {
+    StyledBufferBlock::Text(StyledTextBlock {
+        block: vec![StyledBufferRun {
+            run: content.to_string(),
+            text_styles: TextStylesWithMetadata::default(),
+            block_style: style.clone(),
+        }],
+        style,
+        content_length: CharOffset::from(content.chars().count()),
+    })
+}
+
+fn assert_same_rendered_block(parallel: &BlockItem, sequential: &BlockItem) {
+    assert_eq!(sequential.content_length(), parallel.content_length());
+    assert_eq!(sequential.lines(), parallel.lines());
+    assert_eq!(sequential.content_width(), parallel.content_width());
+    assert_eq!(sequential.content_height(), parallel.content_height());
+    assert_eq!(sequential.width(), parallel.width());
+    assert_eq!(sequential.height(), parallel.height());
+    assert_eq!(sequential.first_line_height(), parallel.first_line_height());
+    assert_eq!(sequential.spacing(), parallel.spacing());
+
+    match (parallel, sequential) {
+        (BlockItem::Paragraph(parallel), BlockItem::Paragraph(sequential)) => {
+            assert_eq!(sequential.width(), parallel.width());
+            assert_eq!(sequential.height(), parallel.height());
+            assert_eq!(sequential.first_line_height(), parallel.first_line_height());
+        }
+        (
+            BlockItem::RunnableCodeBlock {
+                paragraph_block: parallel,
+                code_block_type: parallel_type,
+                ..
+            },
+            BlockItem::RunnableCodeBlock {
+                paragraph_block: sequential,
+                code_block_type: sequential_type,
+                ..
+            },
+        ) => {
+            assert_eq!(sequential_type, parallel_type);
+            assert_eq!(sequential.paragraphs().len(), parallel.paragraphs().len());
+            for (parallel, sequential) in parallel.paragraphs().iter().zip(sequential.paragraphs())
+            {
+                assert_eq!(sequential.width(), parallel.width());
+                assert_eq!(sequential.height(), parallel.height());
+                assert_eq!(sequential.first_line_height(), parallel.first_line_height());
+            }
+        }
+        (BlockItem::Hidden(parallel), BlockItem::Hidden(sequential)) => {
+            assert_eq!(sequential.content_length(), parallel.content_length());
+            assert_eq!(sequential.line_count(), parallel.line_count());
+            assert_eq!(sequential.height(), parallel.height());
+        }
+        (parallel, sequential) => {
+            panic!("rendered block types differ: parallel={parallel:?}, sequential={sequential:?}")
+        }
+    }
+}
+
 #[test]
 fn test_layout_delta_chunk_boundary_preserves_order_hidden_collapsing_and_trailing_newline() {
     // Regression test for APP-5392: bounding EditDelta::layout_delta's parallel fan-out into
@@ -1404,6 +1464,105 @@ fn test_layout_delta_single_chunk_matches_direct_layout() {
     })
 }
 
+#[test]
+fn test_sequential_layout_preserves_parallel_layout_results() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let parallel_cache = LayoutCache::new();
+            let parallel_layout = TextLayout::new(
+                &parallel_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                160.,
+            );
+            let sequential_cache = LayoutCache::new();
+            let sequential_layout = TextLayout::new(
+                &sequential_cache,
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                160.,
+            );
+            let code_style = BufferBlockStyle::CodeBlock {
+                code_block_type: CodeBlockType::Shell,
+            };
+            let new_lines = vec![
+                text_block(
+                    "A paragraph long enough to wrap across multiple rendered lines at this width.\n",
+                    BufferBlockStyle::PlainText,
+                ),
+                text_block(
+                    "printf 'first line'\nprintf 'second line'\n",
+                    code_style.clone(),
+                ),
+                text_block("hidden command\n", code_style),
+                text_block(
+                    "Visible tail without a newline",
+                    BufferBlockStyle::PlainText,
+                ),
+            ];
+            let mut offset = CharOffset::from(1);
+            let block_starts: Vec<_> = new_lines
+                .iter()
+                .map(|block| {
+                    let start = offset;
+                    offset += block.content_length();
+                    start
+                })
+                .collect();
+            let mut hidden_ranges = RangeSet::new();
+            hidden_ranges.insert(
+                block_starts[2]..block_starts[2] + new_lines[2].content_length(),
+            );
+            let delta = EditDelta {
+                old_offset: CharOffset::from(1)..offset,
+                new_lines: Arc::new(new_lines),
+                ..Default::default()
+            };
+
+            let parallel = delta.layout_delta(
+                &parallel_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                Some(hidden_ranges.clone()),
+                ctx,
+            );
+            let sequential = delta.layout_delta_sequential(
+                &sequential_layout,
+                None,
+                &RenderLayoutOptions::default(),
+                Some(hidden_ranges),
+                ctx,
+            );
+
+            assert_eq!(sequential.old_offset, parallel.old_offset);
+            assert_eq!(sequential.laid_out_line.len(), 4);
+            assert!(matches!(
+                parallel.laid_out_line.as_slice(),
+                [
+                    BlockItem::Paragraph(_),
+                    BlockItem::RunnableCodeBlock {
+                        code_block_type: CodeBlockType::Shell,
+                        ..
+                    },
+                    BlockItem::Hidden(_),
+                    BlockItem::Paragraph(_)
+                ]
+            ));
+            for (parallel, sequential) in parallel
+                .laid_out_line
+                .iter()
+                .zip(&sequential.laid_out_line)
+            {
+                assert_same_rendered_block(parallel, sequential);
+            }
+            assert!(parallel.trailing_newline.is_none());
+            assert_eq!(
+                sequential.trailing_newline.is_some(),
+                parallel.trailing_newline.is_some()
+            );
+        });
+    })
+}
 /// Builds a hidden, isolated `CodeBlock`-styled block whose gutter-button count (and thus its
 /// laid-out `line_count`) directly observes the `BlockLocation` it was laid out with: Start/End
 /// always get one button, but a genuine Middle location with `run_count >=
