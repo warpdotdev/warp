@@ -321,9 +321,15 @@ fn render_requested_action_row_for_element(
     // in Align, because Align always reports the full constraint width, which would
     // inflate the text row and force the button to a new line unconditionally.
     if has_action_button {
-        text_row.add_child(Shrinkable::new(1., element).finish());
+        text_row.add_child(Shrinkable::new(1., Clipped::new(element).finish()).finish());
     } else {
-        text_row.add_child(Shrinkable::new(1., Align::new(element).left().finish()).finish());
+        text_row.add_child(
+            Shrinkable::new(
+                1.,
+                Clipped::new(Align::new(element).left().finish()).finish(),
+            )
+            .finish(),
+        );
     }
 
     let content = if let Some(action_button) = action_button {
