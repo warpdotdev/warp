@@ -1189,8 +1189,7 @@ impl<V: EditorView> EditorWrapper<V> {
             .finish();
 
         let show_add_as_context_button = self.add_hunk_as_context_button.is_some();
-        let show_revert_diff_hunk =
-            FeatureFlag::RevertDiffHunk.is_enabled() && self.revert_hunk_button.is_some();
+        let show_revert_diff_hunk = self.revert_hunk_button.is_some();
 
         // Show comment button independently of diff hunk state when requested
         let show_comment_button = FeatureFlag::InlineCodeReview.is_enabled()
