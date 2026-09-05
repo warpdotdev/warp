@@ -286,6 +286,65 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_models_get_the_kimi_logo_despite_unknown_provider() {
+    // Kimi models have no dedicated `LLMProvider` variant and report
+    // `Unknown`, so detection falls back to the `kimi-` id prefix.
+    for id in [
+        "kimi-k26-fireworks",
+        "kimi-k27-code-fireworks",
+        "kimi-k3-fireworks",
+    ] {
+        let llm = server_llm(id, None);
+        assert_eq!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "expected {id} to resolve to the Kimi logo"
+        );
+    }
+}
+
+#[test]
+fn kimi_hosts_and_special_states_take_priority_over_the_kimi_logo() {
+    let llm = server_llm("kimi-k3-fireworks", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+}
+
+#[test]
+fn unrelated_ids_do_not_misfire_as_kimi_models() {
+    // A substring match on "kimi" would incorrectly flag ids that merely
+    // contain that sequence; the check requires a `kimi-` prefix (or an
+    // exact `kimi` id) instead.
+    for id in ["anthropic-kimikaze", "not-kimi-related", "gpt-4o"] {
+        let llm = server_llm(id, None);
+        assert_ne!(
+            model_leading_icon(&llm, ModelIconFlags::default()),
+            Icon::KimiLogo,
+            "expected {id} to NOT resolve to the Kimi logo"
+        );
+    }
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(
