@@ -523,6 +523,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::OscHyperlinks,
         #[cfg(feature = "terminal_lifecycle_recovery")]
         FeatureFlag::TerminalLifecycleRecovery,
+        #[cfg(feature = "powershell_rich_tables")]
+        FeatureFlag::PowerShellRichTables,
         #[cfg(feature = "ctrl_c_cancels_third_party_harness")]
         FeatureFlag::CtrlCCancelsThirdPartyHarness,
         #[cfg(feature = "shell_widget_handoff")]

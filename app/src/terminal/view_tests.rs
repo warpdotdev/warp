@@ -69,7 +69,10 @@ use crate::terminal::cli_agent_sessions::{
     CLIAgentInputEntrypoint, CLIAgentInputState, CLIAgentRichInputCloseReason, CLIAgentSession,
     CLIAgentSessionContext, CLIAgentSessionStatus, CLIAgentSessionsModel,
 };
-use crate::terminal::model::ansi::{self, BootstrappedValue, InitShellValue, PreexecValue};
+use crate::terminal::model::ansi::{
+    self, BootstrappedValue, InitShellValue, PowerShellTableBeginValue, PowerShellTableColumn,
+    PowerShellTableEndValue, PowerShellTableRowsValue, PreexecValue,
+};
 use crate::terminal::model::block::AgentViewVisibility;
 use crate::terminal::model::blocks::{TotalIndex, insert_block};
 use crate::terminal::model::grid::Dimensions as _;
@@ -9777,6 +9780,162 @@ fn cmd_k_in_agent_view_cancels_in_progress_conversation_and_starts_new_one() {
                 Some(ConversationStatus::Cancelled),
                 "the old in-progress conversation must be Cancelled after cmd-k"
             );
+        });
+    })
+}
+
+fn view_powershell_table_begin(table_id: &str) -> PowerShellTableBeginValue {
+    PowerShellTableBeginValue {
+        table_id: table_id.to_owned(),
+        columns: vec![PowerShellTableColumn {
+            name: "Name".to_owned(),
+            property_name: "Name".to_owned(),
+            type_name: "System.String".to_owned(),
+        }],
+        ..Default::default()
+    }
+}
+
+fn view_powershell_table_rows(table_id: &str, value: &str) -> PowerShellTableRowsValue {
+    PowerShellTableRowsValue {
+        table_id: table_id.to_owned(),
+        rows: vec![vec![value.to_owned()]],
+        ..Default::default()
+    }
+}
+
+#[test]
+fn incomplete_powershell_table_stays_after_its_command_when_the_next_table_ends() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.start_command_execution();
+                for character in "Get-Thing".chars() {
+                    model.input(character);
+                }
+                model.preexec(PreexecValue {
+                    command: "Get-Thing".to_owned(),
+                    session_id: None,
+                });
+            }
+
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(
+                    view_powershell_table_begin("a"),
+                )),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(
+                    view_powershell_table_rows("a", "first"),
+                )),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(
+                    view_powershell_table_begin("b"),
+                )),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(
+                    view_powershell_table_rows("b", "second"),
+                )),
+                ctx,
+            );
+            let insert_before =
+                Some(view.model.lock().block_list().active_block_index() + BlockIndex::from(1));
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(
+                    PowerShellTableEndValue {
+                        table_id: "b".to_owned(),
+                        ..Default::default()
+                    },
+                    insert_before,
+                )),
+                ctx,
+            );
+
+            let model = view.model.lock();
+            let block_list = model.block_list();
+            let mut block_index = 0usize;
+            let mut ordered_content = Vec::new();
+            let mut cursor = block_list.block_heights().cursor::<TotalIndex, ()>();
+            cursor.seek(&TotalIndex(0), SeekBias::Left);
+            while let Some(item) = cursor.item() {
+                match item {
+                    BlockHeightItem::Block(_) => {
+                        let block = block_list
+                            .block_at(block_index.into())
+                            .expect("block height should have a block");
+                        if block.command_to_string().contains("Get-Thing") {
+                            ordered_content.push("command");
+                        }
+                        block_index += 1;
+                    }
+                    BlockHeightItem::RichContent(content)
+                        if content.content_type == Some(RichContentType::PowerShellTable) =>
+                    {
+                        ordered_content.push("table");
+                    }
+                    _ => {}
+                }
+                cursor.next();
+            }
+
+            assert_eq!(ordered_content, vec!["command", "table", "table"]);
+        });
+    })
+}
+
+#[test]
+fn alt_screen_transition_clears_an_incomplete_powershell_table() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableBegin(
+                    view_powershell_table_begin("crossing"),
+                )),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableRows(
+                    view_powershell_table_rows("crossing", "discarded"),
+                )),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::TerminalModeSwapped(TerminalMode::AltScreen),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::PowerShellTableEnd(
+                    PowerShellTableEndValue {
+                        table_id: "crossing".to_owned(),
+                        ..Default::default()
+                    },
+                    None,
+                )),
+                ctx,
+            );
+            view.handle_terminal_event(
+                &ModelEvent::Handler(AnsiHandlerEvent::UserCommandFinished),
+                ctx,
+            );
+
+            assert!(view.rich_content_views.iter().all(|content| {
+                !matches!(
+                    content.metadata(),
+                    Some(RichContentMetadata::PowerShellTable)
+                )
+            }));
         });
     })
 }

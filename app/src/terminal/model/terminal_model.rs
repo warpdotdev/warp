@@ -67,6 +67,7 @@ use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue,
     ExternalShellWidgetSelectionValue, Handler, InitShellValue, InitSubshellValue,
+    PowerShellTableBeginValue, PowerShellTableEndValue, PowerShellTableRowsValue,
     PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, PromptMetadata, SSHValue,
     SourcedRcFileForWarpValue,
 };
@@ -356,6 +357,14 @@ enum IsReceivingHook {
     No,
 }
 
+#[derive(Default)]
+enum PowerShellRichOutputPhase {
+    #[default]
+    Accepting,
+    Started,
+    Closed,
+}
+
 /// Information needed to render a warpify "success" block upon successful subshell bootstrap.
 #[derive(Debug, Clone)]
 pub struct SubshellSuccessBlockInfo {
@@ -388,6 +397,7 @@ pub struct TerminalModel {
     pub blocklist_has_been_cleared: bool,
 
     alt_screen_active: bool,
+    powershell_rich_output_phase: PowerShellRichOutputPhase,
 
     /// Stack of saved window titles. When a title is popped from this stack, the `title` for the
     /// term is set.
@@ -1087,6 +1097,7 @@ impl TerminalModel {
             lifecycle_coordinator: BlockLifecycleCoordinator::default(),
             blocklist_has_been_cleared: false,
             alt_screen_active: false,
+            powershell_rich_output_phase: PowerShellRichOutputPhase::default(),
             title_stack: Vec::new(),
             title: None,
             custom_title: None,
@@ -2149,6 +2160,8 @@ impl TerminalModel {
             return;
         }
 
+        self.powershell_rich_output_phase = PowerShellRichOutputPhase::Closed;
+
         // Set alt screen cursor to the current primary screen cursor.
         let block_list_cursor = self
             .block_list
@@ -2361,6 +2374,7 @@ impl TerminalModel {
 
     /// Applies the normal command-completion pipeline and its once-per-command side effects.
     fn complete_command(&mut self, data: CompletionMetadata) {
+        self.powershell_rich_output_phase = PowerShellRichOutputPhase::Closed;
         // If we ssh from a doesn't-understand-bracketed-paste shell into one
         // that enables it, then get disconnected, we'll be stuck in a state
         // of bracketed paste being enabled, but the local shell doesn't know
@@ -2404,6 +2418,7 @@ impl TerminalModel {
 
     /// Applies prompt metadata through the normal once-per-block path.
     fn apply_precmd_to_fresh_block(&mut self, data: PromptMetadata) {
+        self.powershell_rich_output_phase = PowerShellRichOutputPhase::Closed;
         self.ignore_bootstrapping_messages = false;
         let session_id = data.session_id;
         let mut env_vars = HashMap::new();
@@ -2421,6 +2436,7 @@ impl TerminalModel {
     }
 
     fn apply_preexec(&mut self, data: PreexecValue) {
+        self.powershell_rich_output_phase = PowerShellRichOutputPhase::Accepting;
         self.block_list.apply_preexec_to_active(data);
         self.emit_handler_event(HandlerEvent::Preexec);
     }
@@ -2592,6 +2608,9 @@ pub enum HandlerEvent {
     UnsetMode {
         mode: Mode,
     },
+    PowerShellTableBegin(PowerShellTableBeginValue),
+    PowerShellTableRows(PowerShellTableRowsValue),
+    PowerShellTableEnd(PowerShellTableEndValue, Option<BlockIndex>),
 }
 
 impl ansi::Handler for TerminalModel {
@@ -2601,6 +2620,48 @@ impl ansi::Handler for TerminalModel {
 
     fn should_validate_dcs_hook_session_id(&self) -> bool {
         !self.shared_session_status().is_viewer()
+    }
+    fn powershell_table_begin(&mut self, data: PowerShellTableBeginValue) {
+        if FeatureFlag::PowerShellRichTables.is_enabled()
+            && !self.alt_screen_active
+            && !matches!(
+                self.powershell_rich_output_phase,
+                PowerShellRichOutputPhase::Closed
+            )
+        {
+            self.powershell_rich_output_phase = PowerShellRichOutputPhase::Started;
+            self.emit_handler_event(HandlerEvent::PowerShellTableBegin(data));
+        }
+    }
+
+    fn powershell_table_rows(&mut self, data: PowerShellTableRowsValue) {
+        if FeatureFlag::PowerShellRichTables.is_enabled()
+            && !self.alt_screen_active
+            && matches!(
+                self.powershell_rich_output_phase,
+                PowerShellRichOutputPhase::Started
+            )
+        {
+            self.emit_handler_event(HandlerEvent::PowerShellTableRows(data));
+        }
+    }
+
+    fn powershell_table_end(&mut self, data: PowerShellTableEndValue) {
+        if FeatureFlag::PowerShellRichTables.is_enabled()
+            && !self.alt_screen_active
+            && matches!(
+                self.powershell_rich_output_phase,
+                PowerShellRichOutputPhase::Started
+            )
+        {
+            let insert_before_block_index = self
+                .block_list
+                .split_active_block_for_powershell_rich_table();
+            self.emit_handler_event(HandlerEvent::PowerShellTableEnd(
+                data,
+                insert_before_block_index,
+            ));
+        }
     }
 
     fn set_title(&mut self, title: Option<String>) {
@@ -2646,6 +2707,11 @@ impl ansi::Handler for TerminalModel {
             }
         }
 
+        if !self.alt_screen_active
+            && self.block_list.active_block().state() == BlockState::Executing
+        {
+            self.powershell_rich_output_phase = PowerShellRichOutputPhase::Closed;
+        }
         delegate!(self.input(c))
     }
 
@@ -2814,6 +2880,7 @@ impl ansi::Handler for TerminalModel {
     fn reset_state(&mut self) {
         self.title_stack = Vec::new();
         self.title = None;
+        self.powershell_rich_output_phase = PowerShellRichOutputPhase::default();
 
         self.alt_screen.reset_state();
         self.block_list.reset_state();

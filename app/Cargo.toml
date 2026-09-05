@@ -858,6 +858,7 @@ test-util = [
     "warp_server_client/test-util",
 ]
 terminal_lifecycle_recovery = []
+powershell_rich_tables = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = [
     "warp_cli/integration_tests",

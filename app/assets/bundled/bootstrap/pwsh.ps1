@@ -19,7 +19,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
 
     # Writes a hex-encoded JSON message to the PTY.
     function Warp-Send-JsonMessage([System.Collections.Hashtable]$table) {
-        $json = ConvertTo-Json -InputObject $table -Compress
+        $json = ConvertTo-Json -InputObject $table -Compress -Depth 8
         # Sends a message to the controlling terminal as an OSC control sequence.
         # TODO(CORE-2718): Determine if we need to hex encode the payload.
         # Note that because the JSON string may contain characters that we don't control (including
@@ -1029,6 +1029,511 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         Warp-Send-JsonMessage $inputBufferMsg
     }
 
+    function Warp-Get-PowerShellTableColumns {
+        param([psobject]$InputObject)
+
+        if ($null -eq $InputObject -or $InputObject.PSObject.BaseObject -is [string]) {
+            return $null
+        }
+
+        # Formatting records mean that the user explicitly invoked Format-Table, Format-List,
+        # Format-Wide, or Format-Custom. Preserve those records exactly as PowerShell produced them.
+        if ($InputObject.PSObject.TypeNames |
+            Where-Object { $_ -like 'Microsoft.PowerShell.Commands.Internal.Format.*' }) {
+            return $null
+        }
+
+        $displayEntries = $null
+        $labels = $null
+
+        # Get-FormatData returns effective selection-set views before narrower named views, even
+        # when the returned definition reports a different TypeName.
+        foreach ($typeName in $InputObject.PSObject.TypeNames) {
+            $formatData = Get-FormatData -TypeName $typeName -ErrorAction Ignore |
+                Select-Object -First 1
+            if ($null -eq $formatData) {
+                continue
+            }
+
+            $defaultView = $formatData.FormatViewDefinition | Select-Object -First 1
+            if ($null -eq $defaultView -or
+                $defaultView.Control.GetType().Name -ne 'TableControl') {
+                return $null
+            }
+
+            $row = $defaultView.Control.Rows | Select-Object -First 1
+            if ($null -eq $row) {
+                return $null
+            }
+
+            $displayEntries = @($row.Columns | ForEach-Object { $_.DisplayEntry })
+            $labels = @($defaultView.Control.Headers | ForEach-Object { $_.Label })
+            break
+        }
+        if ($null -eq $displayEntries) {
+            $defaultPropertySet =
+                $InputObject.PSStandardMembers.DefaultDisplayPropertySet.ReferencedPropertyNames
+            if ($null -ne $defaultPropertySet) {
+                $displayEntries = @($defaultPropertySet | ForEach-Object {
+                    @{
+                        Value = $_
+                        ValueType = 'Property'
+                    }
+                })
+            } else {
+                $displayEntries = @(
+                    $InputObject.PSObject.Properties |
+                        Where-Object {
+                            $_.MemberType -in @(
+                                'Property',
+                                'NoteProperty',
+                                'AliasProperty',
+                                'CodeProperty',
+                                'ScriptProperty'
+                            )
+                        } |
+                        ForEach-Object {
+                            @{
+                                Value = $_.Name
+                                ValueType = 'Property'
+                            }
+                        }
+                )
+                # PowerShell's default formatter uses a list once an unconfigured object has more
+                # than four display properties.
+                if ($displayEntries.Count -eq 0 -or $displayEntries.Count -gt 4) {
+                    return $null
+                }
+            }
+            $labels = @()
+        }
+
+        # PowerShell's default table view is unbounded, but Warp's prototype renderer
+        # cannot lay out an arbitrary number of columns. Fall back before any OSC.
+        if ($displayEntries.Count -gt 64) {
+            return $null
+        }
+
+        $columns = @()
+        for ($index = 0; $index -lt $displayEntries.Count; $index++) {
+            $displayEntry = $displayEntries[$index]
+            $displayValue = [string]$displayEntry.Value
+            if ([string]::IsNullOrEmpty($displayValue)) {
+                return $null
+            }
+
+            $propertyName = ''
+            $typeName = ''
+            $expression = $null
+            if ([string]$displayEntry.ValueType -eq 'Property') {
+                $propertyName = $displayValue
+                $property = $InputObject.PSObject.Properties[$propertyName]
+                if ($null -eq $property) {
+                    return $null
+                }
+                $typeName = if ([string]::IsNullOrEmpty($property.TypeNameOfValue)) {
+                    'System.Object'
+                } else {
+                    $property.TypeNameOfValue
+                }
+            } elseif ([string]$displayEntry.ValueType -eq 'ScriptBlock') {
+                try {
+                    $expression = [ScriptBlock]::Create($displayValue)
+                } catch {
+                    return $null
+                }
+            } else {
+                return $null
+            }
+
+            $label = if ($index -lt $labels.Count -and
+                -not [string]::IsNullOrEmpty([string]$labels[$index])) {
+                [string]$labels[$index]
+            } else {
+                $displayValue
+            }
+            $columns += @{
+                name = $label
+                property_name = $propertyName
+                type_name = $typeName
+                expression = $expression
+            }
+        }
+
+        return ,$columns
+    }
+
+    function Warp-Get-PowerShellTableWireColumns {
+        param([array]$Columns)
+
+        @($Columns | ForEach-Object {
+            @{
+                name = $_.name
+                property_name = $_.property_name
+                type_name = $_.type_name
+            }
+        })
+    }
+
+    function Warp-Get-PowerShellTableColumnSchema {
+        param([array]$Columns)
+
+        @($Columns | ForEach-Object {
+            @{
+                name = $_.name
+                property_name = $_.property_name
+                type_name = $_.type_name
+                expression = if ($null -eq $_.expression) {
+                    ''
+                } else {
+                    $_.expression.ToString()
+                }
+            }
+        })
+    }
+
+    function Warp-ConvertTo-PowerShellTableCell {
+        param([object]$Value)
+
+        $text = if ($null -eq $Value) {
+            ''
+        } elseif ($Value -is [System.Array]) {
+            ($Value | ForEach-Object { [string]$_ }) -join ', '
+        } else {
+            [string]$Value
+        }
+        [regex]::Replace(
+            $text,
+            '\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|[@-_])',
+            ''
+        )
+    }
+    function Warp-Get-PowerShellTableRow {
+        param(
+            [psobject]$InputObject,
+            [array]$Columns
+        )
+
+        $row = @()
+        foreach ($column in $Columns) {
+            try {
+                if ($null -eq $column.expression) {
+                    $value = $InputObject.PSObject.Properties[$column.property_name].Value
+                } else {
+                    $variables =
+                        [System.Collections.Generic.List[System.Management.Automation.PSVariable]]::new()
+                    $variables.Add(
+                        [System.Management.Automation.PSVariable]::new('_', $InputObject)
+                    )
+                    $variables.Add(
+                        [System.Management.Automation.PSVariable]::new('PSItem', $InputObject)
+                    )
+                    $variables.Add(
+                        [System.Management.Automation.PSVariable]::new(
+                            'ErrorActionPreference',
+                            [System.Management.Automation.ActionPreference]::Stop
+                        )
+                    )
+                    $expressionValues = @(
+                        $column.expression.InvokeWithContext($null, $variables, @())
+                    )
+                    if ($expressionValues.Count -gt 1) {
+                        return $null
+                    }
+                    $value = if ($expressionValues.Count -eq 0) {
+                        $null
+                    } else {
+                        $expressionValues[0]
+                    }
+                    if ($null -ne $value -and
+                        $value -isnot [string] -and
+                        $value -is [System.Collections.IEnumerable]) {
+                        return $null
+                    }
+                }
+                $row += Warp-ConvertTo-PowerShellTableCell $value
+            } catch {
+                return $null
+            }
+        }
+        return ,$row
+    }
+
+    function Warp-Test-PowerShellTableMessageFits {
+        param([System.Collections.Hashtable]$Message)
+
+        $maxEncodedMessageBytes = 65536
+        $json = ConvertTo-Json -InputObject $Message -Compress -Depth 8
+        $hexEncodedJsonBytes = 2 * [System.Text.Encoding]::UTF8.GetByteCount($json)
+        $oscFramingBytes = 10
+        ($hexEncodedJsonBytes + $oscFramingBytes) -le $maxEncodedMessageBytes
+    }
+
+    function Warp-Send-PowerShellTableRows {
+        param(
+            [string]$TableId,
+            [System.Collections.Generic.List[object]]$Rows,
+            [int]$MaxRowsPerMessage
+        )
+
+        if ([string]::IsNullOrEmpty($TableId) -or $Rows.Count -eq 0) {
+            return
+        }
+
+        $chunk = [System.Collections.Generic.List[object]]::new()
+        foreach ($row in $Rows) {
+            $candidateRows = @($chunk) + @(,$row)
+            $candidateMessage = @{
+                hook = 'PowerShellTableRows'
+                value = @{
+                    session_id = $global:_warpSessionId
+                    table_id = $TableId
+                    rows = $candidateRows
+                }
+            }
+            if ($chunk.Count -gt 0 -and (
+                $chunk.Count -ge $MaxRowsPerMessage -or
+                -not (Warp-Test-PowerShellTableMessageFits $candidateMessage)
+            )) {
+                Warp-Send-JsonMessage @{
+                    hook = 'PowerShellTableRows'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $TableId
+                        rows = @($chunk)
+                    }
+                }
+                $chunk.Clear()
+            }
+            $chunk.Add($row)
+        }
+
+        Warp-Send-JsonMessage @{
+            hook = 'PowerShellTableRows'
+            value = @{
+                session_id = $global:_warpSessionId
+                table_id = $TableId
+                rows = @($chunk)
+            }
+        }
+        $Rows.Clear()
+    }
+
+    function Warp-Start-PowerShellTable {
+        param(
+            [string]$TableId,
+            [array]$Columns
+        )
+
+        if ([string]::IsNullOrEmpty($TableId)) {
+            return
+        }
+
+        Warp-Send-JsonMessage @{
+            hook = 'PowerShellTableBegin'
+            value = @{
+                session_id = $global:_warpSessionId
+                table_id = $TableId
+                columns = $Columns
+            }
+        }
+    }
+
+    function Warp-Complete-PowerShellTable {
+        param(
+            [string]$TableId,
+            [System.Collections.Generic.List[object]]$Rows
+        )
+
+        if ([string]::IsNullOrEmpty($TableId)) {
+            return
+        }
+
+        Warp-Send-PowerShellTableRows -TableId $TableId -Rows $Rows -MaxRowsPerMessage 25
+        Warp-Send-JsonMessage @{
+            hook = 'PowerShellTableEnd'
+            value = @{
+                session_id = $global:_warpSessionId
+                table_id = $TableId
+            }
+        }
+    }
+
+    function Warp-Out-Default {
+        [CmdletBinding()]
+        param(
+            [Parameter(ValueFromPipeline = $true)]
+            [psobject]$InputObject,
+            [switch]$Transcript
+        )
+
+        begin {
+            $maxTableRows = 10000
+            $schema = $null
+            $tableId = $null
+            $rowBuffer = [System.Collections.Generic.List[object]]::new()
+            $acceptedRows = 0
+            $fallback = $false
+            $fallbackPipeline = $null
+        }
+        process {
+            if ($fallback) {
+                $fallbackPipeline.Process($InputObject)
+                return
+            }
+
+            $nextColumns = Warp-Get-PowerShellTableColumns $InputObject
+            $nextRow = $null
+            if ($null -ne $nextColumns) {
+                $nextRow = Warp-Get-PowerShellTableRow -InputObject $InputObject -Columns $nextColumns
+            }
+
+            $nextSchema = $null
+            if ($null -ne $nextColumns) {
+                $nextSchema = (
+                    Warp-Get-PowerShellTableColumnSchema $nextColumns |
+                        ConvertTo-Json -Compress -Depth 4
+                )
+            }
+
+            $schemaChanged = ($null -ne $schema -and $null -ne $nextSchema -and $schema -ne $nextSchema)
+            $unsupported = ($null -eq $nextColumns -or $null -eq $nextRow)
+            $overRowCap = (-not $schemaChanged -and $acceptedRows -ge $maxTableRows)
+
+            if ($unsupported -or $overRowCap) {
+                Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
+                $tableId = $null
+                $fallback = $true
+                $fallbackPipeline = {
+                    Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
+                }.GetSteppablePipeline($MyInvocation.CommandOrigin)
+                $fallbackPipeline.Begin($PSCmdlet)
+                $fallbackPipeline.Process($InputObject)
+                return
+            }
+
+            if ($schemaChanged) {
+                Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
+                $tableId = $null
+                $acceptedRows = 0
+            }
+
+            if ([string]::IsNullOrEmpty($tableId)) {
+                $nextTableId = [Guid]::NewGuid().ToString('N')
+                $nextWireColumns = Warp-Get-PowerShellTableWireColumns $nextColumns
+                $beginMessage = @{
+                    hook = 'PowerShellTableBegin'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $nextTableId
+                        columns = $nextWireColumns
+                    }
+                }
+                $endMessage = @{
+                    hook = 'PowerShellTableEnd'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $nextTableId
+                    }
+                }
+                $singleRowMessage = @{
+                    hook = 'PowerShellTableRows'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $nextTableId
+                        rows = @(,$nextRow)
+                    }
+                }
+                if (-not (Warp-Test-PowerShellTableMessageFits $beginMessage) -or
+                    -not (Warp-Test-PowerShellTableMessageFits $endMessage) -or
+                    -not (Warp-Test-PowerShellTableMessageFits $singleRowMessage)) {
+                    $fallback = $true
+                    $fallbackPipeline = {
+                        Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
+                    }.GetSteppablePipeline($MyInvocation.CommandOrigin)
+                    $fallbackPipeline.Begin($PSCmdlet)
+                    $fallbackPipeline.Process($InputObject)
+                    return
+                }
+
+                $tableId = $nextTableId
+                $schema = $nextSchema
+                Warp-Start-PowerShellTable -TableId $tableId -Columns $nextWireColumns
+            } else {
+                $singleRowMessage = @{
+                    hook = 'PowerShellTableRows'
+                    value = @{
+                        session_id = $global:_warpSessionId
+                        table_id = $tableId
+                        rows = @(,$nextRow)
+                    }
+                }
+                if (-not (Warp-Test-PowerShellTableMessageFits $singleRowMessage)) {
+                    Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
+                    $tableId = $null
+                    $fallback = $true
+                    $fallbackPipeline = {
+                        Microsoft.PowerShell.Core\Out-Default -Transcript:$Transcript
+                    }.GetSteppablePipeline($MyInvocation.CommandOrigin)
+                    $fallbackPipeline.Begin($PSCmdlet)
+                    $fallbackPipeline.Process($InputObject)
+                    return
+                }
+            }
+
+            $bufferedRowsMessage = @{
+                hook = 'PowerShellTableRows'
+                value = @{
+                    session_id = $global:_warpSessionId
+                    table_id = $tableId
+                    rows = @($rowBuffer) + @(,$nextRow)
+                }
+            }
+            if ($rowBuffer.Count -gt 0 -and
+                -not (Warp-Test-PowerShellTableMessageFits $bufferedRowsMessage)) {
+                Warp-Send-PowerShellTableRows `
+                    -TableId $tableId `
+                    -Rows $rowBuffer `
+                    -MaxRowsPerMessage 25
+            }
+            $rowBuffer.Add($nextRow)
+            $acceptedRows++
+            if ($rowBuffer.Count -ge 25) {
+                Warp-Send-PowerShellTableRows `
+                    -TableId $tableId `
+                    -Rows $rowBuffer `
+                    -MaxRowsPerMessage 25
+            }
+        }
+        end {
+            if ($fallback) {
+                if ($null -ne $fallbackPipeline) {
+                    $fallbackPipeline.End()
+                }
+                return
+            }
+
+            Warp-Complete-PowerShellTable -TableId $tableId -Rows $rowBuffer
+        }
+    }
+
+    function Warp-Install-PowerShellRichTables {
+        if ($env:WARP_POWERSHELL_RICH_TABLES -ne '1') {
+            return
+        }
+
+        # Profiles have already run. Do not replace any function, filter, or alias the user installed
+        # for Out-Default; only replace the untouched Microsoft.PowerShell.Core cmdlet.
+        $effectiveOutDefault = Get-Command Out-Default -ErrorAction Ignore | Select-Object -First 1
+        if ($null -eq $effectiveOutDefault -or
+            $effectiveOutDefault.CommandType -ne 'Cmdlet' -or
+            $effectiveOutDefault.ModuleName -ne 'Microsoft.PowerShell.Core') {
+            return
+        }
+
+        Set-Item -Path Function:\global:Out-Default -Value ${function:Warp-Out-Default}
+    }
+
     function Warp-Finish-Bootstrap {
         param([decimal]$rcStartTime, [decimal]$rcEndTime)
         Warp-Configure-PSReadLine
@@ -1067,6 +1572,7 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
         # This sets up our wrapper around $function:prompt, which runs the precmd hook
         # and computes the user's custom prompt.
         $function:global:prompt = (Get-Command Warp-Prompt).ScriptBlock
+        Warp-Install-PowerShellRichTables
         Warp-Bootstrapped -rcStartTime $rcStartTime -rcEndTime $rcEndTime
     }
 
