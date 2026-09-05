@@ -283,6 +283,37 @@ impl TableOffsetMap {
 // per-cell offsets can be derived by seeking to boundaries instead of re-parsing the
 // whole table on every edit. The current embedded-text-plus-cached-parse model is
 // sufficient for read-only tables; see PR #24326 discussion for context.
+/// If a raw HTML `<br>` line-break token begins at `idx` in `chars`, return its length in
+/// characters. Accepts the same forms as the Markdown parser (`markdown_parser::parse_inline_token_br`):
+/// `<br>`, `<br/>`, and `<br />` with a case-insensitive `br` and any run of ASCII whitespace
+/// before an optional self-closing slash. Attributes (e.g. `<br class="x">`) are not accepted,
+/// matching the parser, so such input is walked as ordinary source text.
+fn br_token_len_at(chars: &[char], idx: usize) -> Option<usize> {
+    let mut i = idx;
+    if chars.get(i)? != &'<' {
+        return None;
+    }
+    i += 1;
+    if !chars.get(i)?.eq_ignore_ascii_case(&'b') {
+        return None;
+    }
+    i += 1;
+    if !chars.get(i)?.eq_ignore_ascii_case(&'r') {
+        return None;
+    }
+    i += 1;
+    while chars.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+        i += 1;
+    }
+    if chars.get(i) == Some(&'/') {
+        i += 1;
+    }
+    if chars.get(i)? != &'>' {
+        return None;
+    }
+    Some(i + 1 - idx)
+}
+
 impl TableCellOffsetMap {
     /// Build a cell offset map from the raw cell `source` text and the parsed `inline`
     /// fragments produced by the Markdown parser.
@@ -306,52 +337,93 @@ impl TableCellOffsetMap {
                 continue;
             }
 
-            let first_rendered = rendered_chars[0];
-            while source_idx < total_source_chars {
-                let sc = source_chars[source_idx];
-                if sc == '\\'
-                    && source_idx + 1 < total_source_chars
-                    && source_chars[source_idx + 1] == first_rendered
-                {
+            // A fragment may embed authored hard breaks (rendered `\n`, spelled `<br>` in
+            // source). Walk it in newline-delimited segments and emit one range per segment so
+            // each range keeps a linear rendered↔source correspondence; the `<br>` token span
+            // between segments becomes a gap, handled the same way as Markdown markers between
+            // fragments (see the `source_end` back-fill below).
+            for (segment_index, segment) in rendered_chars.split(|&c| c == '\n').enumerate() {
+                if segment_index > 0 {
+                    // Scan forward to the `<br>` token that produced this break (skipping any
+                    // trailing Markdown markers, e.g. the closing `**` of a bold run) and
+                    // consume it.
+                    while source_idx < total_source_chars {
+                        if let Some(token_len) = br_token_len_at(&source_chars, source_idx) {
+                            source_idx += token_len;
+                            break;
+                        }
+                        source_idx += 1;
+                    }
+                    // Account for the rendered `\n` we split on.
+                    rendered_offset += CharOffset::from(1usize);
+                }
+
+                if segment.is_empty() {
+                    // An empty segment is a break with no visible text on this side of it
+                    // (a leading `<br>`, a trailing `<br>`, or one of a `<br><br>` run).
+                    // At this point `source_idx` sits just past the `<br>` token that produced
+                    // the preceding break — i.e. at the source boundary *before* the next
+                    // `<br>` token. Record a zero-length range there so every `<br>` owns a
+                    // distinct source boundary; without it, the `rendered_to_source` gap lookup
+                    // collapses consecutive or edge breaks onto a neighbouring fragment.
+                    let boundary = CharOffset::from(source_idx);
+                    fragment_ranges.push(TableCellFragmentRange {
+                        rendered_start: rendered_offset,
+                        rendered_end: rendered_offset,
+                        source_end: boundary,
+                        visible_source_start: boundary,
+                        visible_source_end: boundary,
+                    });
+                    continue;
+                }
+
+                let first_rendered = segment[0];
+                while source_idx < total_source_chars {
+                    let sc = source_chars[source_idx];
+                    if sc == '\\'
+                        && source_idx + 1 < total_source_chars
+                        && source_chars[source_idx + 1] == first_rendered
+                    {
+                        source_idx += 1;
+                        break;
+                    }
+                    if sc == first_rendered {
+                        break;
+                    }
                     source_idx += 1;
-                    break;
                 }
-                if sc == first_rendered {
-                    break;
+
+                let visible_source_start = CharOffset::from(source_idx);
+
+                for &rendered_char in segment {
+                    if source_idx >= total_source_chars {
+                        break;
+                    }
+                    let sc = source_chars[source_idx];
+                    if sc == '\\'
+                        && source_idx + 1 < total_source_chars
+                        && source_chars[source_idx + 1] == rendered_char
+                    {
+                        source_idx += 2;
+                    } else {
+                        source_idx += 1;
+                    }
                 }
-                source_idx += 1;
+
+                let visible_source_end = CharOffset::from(source_idx);
+                let rendered_start = rendered_offset;
+                let rendered_end = rendered_start + CharOffset::from(segment.len());
+
+                fragment_ranges.push(TableCellFragmentRange {
+                    rendered_start,
+                    rendered_end,
+                    source_end: visible_source_end,
+                    visible_source_start,
+                    visible_source_end,
+                });
+
+                rendered_offset = rendered_end;
             }
-
-            let visible_source_start = CharOffset::from(source_idx);
-
-            for &rendered_char in &rendered_chars {
-                if source_idx >= total_source_chars {
-                    break;
-                }
-                let sc = source_chars[source_idx];
-                if sc == '\\'
-                    && source_idx + 1 < total_source_chars
-                    && source_chars[source_idx + 1] == rendered_char
-                {
-                    source_idx += 2;
-                } else {
-                    source_idx += 1;
-                }
-            }
-
-            let visible_source_end = CharOffset::from(source_idx);
-            let rendered_start = rendered_offset;
-            let rendered_end = rendered_start + CharOffset::from(rendered_chars.len());
-
-            fragment_ranges.push(TableCellFragmentRange {
-                rendered_start,
-                rendered_end,
-                source_end: visible_source_end,
-                visible_source_start,
-                visible_source_end,
-            });
-
-            rendered_offset = rendered_end;
         }
 
         let total_source_offset = CharOffset::from(total_source_chars);
@@ -389,10 +461,18 @@ impl TableCellOffsetMap {
                 .unwrap_or(self.source_length);
         }
 
+        let mut previous_visible_source_end = CharOffset::zero();
         for fragment in &self.fragment_ranges {
+            // A rendered `\n` (authored `<br>`) sits in the gap before this range's
+            // `rendered_start`. Map it to the end of the previous range's visible source (the
+            // start of the `<br>` token) rather than interpolating into this range.
+            if rendered_offset < fragment.rendered_start {
+                return previous_visible_source_end;
+            }
             if rendered_offset < fragment.rendered_end {
                 return fragment.visible_source_start + (rendered_offset - fragment.rendered_start);
             }
+            previous_visible_source_end = fragment.visible_source_end;
         }
 
         self.source_length

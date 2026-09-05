@@ -431,7 +431,13 @@ impl FormattedTable {
     /// Serialize to GFM pipe-table markdown.
     pub fn to_plain_text(&self) -> String {
         fn inline_to_text(inline: &FormattedTextInline) -> String {
-            inline.iter().map(|f| f.text.as_str()).collect()
+            // Translate authored hard breaks (embedded newlines, from raw HTML `<br>`) back
+            // to `<br>` so an in-cell line break does not split the pipe-table row. A cell's
+            // text never contains a newline for any other reason.
+            inline
+                .iter()
+                .map(|f| f.text.replace('\n', "<br>"))
+                .collect()
         }
 
         let mut lines = Vec::new();
@@ -462,6 +468,14 @@ fn inline_to_markdown(inline: &FormattedTextInline) -> String {
         let mut text = fragment.text.clone();
         if text.is_empty() {
             continue;
+        }
+
+        // An authored hard break (raw HTML `<br>`) is stored as an embedded newline. Emit it
+        // as literal `<br>` so it survives the newline/tab/pipe-delimited table serialization
+        // formats without splitting a cell into a spurious extra row. Inline code spans are
+        // handled below (a newline cannot appear in one from the `.md` inline parser).
+        if !fragment.styles.inline_code && text.contains('\n') {
+            text = text.replace('\n', "<br>");
         }
 
         if fragment.styles.inline_code {
