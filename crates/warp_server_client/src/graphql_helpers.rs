@@ -28,6 +28,24 @@ where
     })
 }
 
+/// Sends a GraphQL operation scoped to a team via `X-Warp-Team-Uid`.
+pub fn send_team_scoped_graphql_request<'a, QF: 'a, O>(
+    base_client: &'a BaseClient,
+    operation: O,
+    timeout: Option<Duration>,
+    team_uid: Option<String>,
+) -> BoxFuture<'a, Result<QF>>
+where
+    O: Operation<QF> + Send + 'a,
+{
+    Box::pin(async move {
+        let options = base_client
+            .graphql_request_options_with_team(timeout, team_uid)
+            .await?;
+        send_graphql_request_with_options(base_client, operation, options).await
+    })
+}
+
 async fn send_graphql_request_with_options<QF, O>(
     base_client: &BaseClient,
     operation: O,

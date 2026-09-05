@@ -12,6 +12,66 @@ use warp_graphql::queries::get_runners::{
 
 use crate::ui_components::icons::Icon;
 
+#[derive(Debug)]
+pub(crate) struct RunnerFetchCache<T> {
+    entries: T,
+    loading: bool,
+    generation: u64,
+}
+
+impl<T: Default> Default for RunnerFetchCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: T::default(),
+            loading: false,
+            generation: 0,
+        }
+    }
+}
+
+impl<T> RunnerFetchCache<T> {
+    pub(crate) fn entries(&self) -> &T {
+        &self.entries
+    }
+
+    pub(crate) fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    pub(crate) fn begin_fetch(&mut self) -> Option<u64> {
+        if self.loading {
+            return None;
+        }
+        self.loading = true;
+        Some(self.generation)
+    }
+
+    pub(crate) fn complete_fetch(&mut self, generation: u64, entries: T) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.entries = entries;
+        self.loading = false;
+        true
+    }
+
+    pub(crate) fn fail_fetch(&mut self, generation: u64) -> bool {
+        if generation != self.generation {
+            return false;
+        }
+        self.loading = false;
+        true
+    }
+}
+
+impl<T: Default> RunnerFetchCache<T> {
+    pub(crate) fn invalidate(&mut self) {
+        self.entries = T::default();
+        self.loading = false;
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
+
 /// User-visible label for a runner's operating system.
 pub fn os_display(os: RunnerOs) -> &'static str {
     match os {
