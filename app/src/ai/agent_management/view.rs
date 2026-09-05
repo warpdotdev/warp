@@ -559,9 +559,7 @@ impl AgentManagementView {
         }
         sources.push(AgentSource::Linear);
         sources.push(AgentSource::Slack);
-        if FeatureFlag::ScheduledAmbientAgents.is_enabled() {
-            sources.push(AgentSource::ScheduledAgent);
-        }
+        sources.push(AgentSource::ScheduledAgent);
 
         let mut items = vec![MenuItem::Item(
             MenuItemFields::new("All").with_on_select_action(
