@@ -115,7 +115,7 @@ impl RenderableBlock for RenderableTaskList {
             app,
         );
         self.placeholder
-            .layout(&self.viewport_item, model, ctx, app, |block| {
+            .layout(&self.viewport_item, model, app, |block| {
                 placeholder::Options {
                     text: "To-do list",
                     block_style: match block {

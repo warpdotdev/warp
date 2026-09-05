@@ -40,10 +40,10 @@ impl RenderableBlock for RenderableOrderedListItem {
     fn layout(
         &mut self,
         model: &RenderState,
-        ctx: &mut warpui_core::LayoutContext,
+        _ctx: &mut warpui_core::LayoutContext,
         app: &warpui_core::AppContext,
     ) {
-        let text_layout = TextLayout::from_layout_context(ctx, app, model);
+        let text_layout = TextLayout::for_render_state(app, model);
         let block_style = BufferBlockStyle::OrderedList {
             indent_level: ListIndentLevel::One,
             number: None,
@@ -63,11 +63,9 @@ impl RenderableBlock for RenderableOrderedListItem {
         ));
 
         self.placeholder
-            .layout(&self.viewport_item, model, ctx, app, |_| {
-                placeholder::Options {
-                    block_style,
-                    text: "List",
-                }
+            .layout(&self.viewport_item, model, app, |_| placeholder::Options {
+                block_style,
+                text: "List",
             });
     }
 

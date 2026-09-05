@@ -70,7 +70,7 @@ impl RenderableBlock for RenderableBulletList {
             app,
         );
         self.placeholder
-            .layout(&self.viewport_item, model, ctx, app, |block| {
+            .layout(&self.viewport_item, model, app, |block| {
                 let indent_level = match block {
                     BlockItem::UnorderedList { indent_level, .. } => *indent_level,
                     _ => ListIndentLevel::One,

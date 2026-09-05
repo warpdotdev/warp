@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 #[cfg(test)]
 use markdown_parser::FormattedTextInline;
+use warpui_core::AppContext;
 use warpui_core::color::ColorU;
 use warpui_core::fonts::TextLayoutSystem;
 #[cfg(test)]
 use warpui_core::fonts::{Style, Weight};
 use warpui_core::text_layout::{
-    ClipConfig, LayoutCache, Line, StyleAndFont, TextAlignment, TextBorder, TextFrame, TextStyle,
+    ClipConfig, Line, StyleAndFont, TextAlignment, TextBorder, TextFrame, TextStyle,
 };
 use warpui_core::units::{IntoPixels, Pixels};
-use warpui_core::{AppContext, LayoutContext};
 
 use super::model::{BlockSpacing, ParagraphStyles, RenderState, RichTextStyles};
 use crate::content::text::{BufferBlockStyle, TextStylesWithMetadata};
@@ -68,7 +68,6 @@ pub(crate) struct InlineTextLayoutInput {
 
 /// Utility for laying out rich text.
 pub struct TextLayout<'a> {
-    layout_cache: &'a LayoutCache,
     font_cache: TextLayoutSystem<'a>,
     rich_text_styles: &'a RichTextStyles,
     max_width: f32,
@@ -77,13 +76,11 @@ pub struct TextLayout<'a> {
 
 impl<'a> TextLayout<'a> {
     pub fn new(
-        layout_cache: &'a LayoutCache,
         font_cache: TextLayoutSystem<'a>,
         rich_text_styles: &'a RichTextStyles,
         max_width: f32,
     ) -> Self {
         Self {
-            layout_cache,
             font_cache,
             rich_text_styles,
             max_width,
@@ -106,14 +103,9 @@ impl<'a> TextLayout<'a> {
         self.container_scrolls_horizontally
     }
 
-    /// Builds a [`TextLayout`] from the context passed to `Element::layout`.
-    pub fn from_layout_context(
-        ctx: &LayoutContext<'a>,
-        app: &'a AppContext,
-        model: &'a RenderState,
-    ) -> Self {
+    /// Builds a [`TextLayout`] for an editor render state.
+    pub fn for_render_state(app: &'a AppContext, model: &'a RenderState) -> Self {
         Self::new(
-            ctx.text_layout_cache,
             app.font_cache().text_layout_system(),
             model.styles(),
             model.viewport().width().as_f32(),
@@ -162,7 +154,7 @@ impl<'a> TextLayout<'a> {
             clamp_style_runs_for_layout(style_runs)
         });
 
-        self.layout_cache.layout_text(
+        Arc::new(self.font_cache.layout_text_uncached(
             shaped_text,
             paragraph_style.line_style(),
             clamped_style_runs.as_deref().unwrap_or(style_runs),
@@ -170,8 +162,7 @@ impl<'a> TextLayout<'a> {
             f32::MAX,
             alignment,
             None,
-            &self.font_cache,
-        )
+        ))
     }
 
     /// Lays out placeholder text for empty blocks.
@@ -188,14 +179,13 @@ impl<'a> TextLayout<'a> {
         );
         let text = truncate_text_for_layout(text);
         let style_runs = &[(0..text.chars().count(), style_and_font)];
-        self.layout_cache.layout_line(
+        Arc::new(self.font_cache.layout_line_uncached(
             text,
             paragraph_styles.line_style(),
             style_runs,
             self.content_width(spacing),
             ClipConfig::end(),
-            &self.font_cache,
-        )
+        ))
     }
 
     /// Returns the maximum width for text content laid out with the given spacing.

@@ -33,6 +33,7 @@ pub(crate) enum RequestedFallbackFontSource {
     GlyphForChar((FontId, char)),
     Line(text_layout::CacheKeyValue),
     TextFrame(text_layout::CacheKeyValue),
+    UncachedText,
 }
 
 pub(crate) struct FontBytes(pub Vec<u8>);

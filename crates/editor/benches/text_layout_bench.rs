@@ -12,12 +12,11 @@ use warp_editor::render::model::{
     BrokenLinkStyle, CheckBoxStyle, HorizontalRuleStyle, InlineCodeStyle, ParagraphStyles,
     RenderLayoutOptions, RichTextStyles, TableStyle,
 };
+use warpui_core::App;
 use warpui_core::color::ColorU;
 use warpui_core::elements::{Border, Fill};
 use warpui_core::fonts::{FamilyId, Weight};
-use warpui_core::text_layout::LayoutCache;
 use warpui_core::units::IntoPixels;
-use warpui_core::App;
 
 const BLOCK_COUNT: usize = 4_096;
 const BLOCK_TEXT: &str =
@@ -122,20 +121,9 @@ fn text_layout_benchmark(criterion: &mut Criterion) {
             group.throughput(Throughput::Elements(chars as u64));
             group.bench_function("layout_delta_4096_blocks", |bench| {
                 bench.iter(|| {
-                    let layout_cache = LayoutCache::new();
-                    let text_layout = TextLayout::new(
-                        &layout_cache,
-                        ctx.font_cache().text_layout_system(),
-                        &styles,
-                        f32::MAX,
-                    );
-                    black_box(delta.layout_delta(
-                        &text_layout,
-                        None,
-                        &layout_options,
-                        None,
-                        ctx,
-                    ))
+                    let text_layout =
+                        TextLayout::new(ctx.font_cache().text_layout_system(), &styles, f32::MAX);
+                    black_box(delta.layout_delta(&text_layout, None, &layout_options, None, ctx))
                 })
             });
             group.finish();

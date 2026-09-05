@@ -27,11 +27,11 @@ impl RenderableBlock for RenderableHeader {
     fn layout(
         &mut self,
         model: &RenderState,
-        ctx: &mut warpui_core::LayoutContext,
+        _ctx: &mut warpui_core::LayoutContext,
         app: &warpui_core::AppContext,
     ) {
         self.placeholder
-            .layout(&self.viewport_item, model, ctx, app, |block| {
+            .layout(&self.viewport_item, model, app, |block| {
                 let header_size = match block {
                     BlockItem::Header { header_size, .. } => *header_size,
                     other => {
