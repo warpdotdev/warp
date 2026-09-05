@@ -996,6 +996,10 @@ pub enum EditorAction {
     Scroll(Vector2F),
     Select(SelectAction),
     UserInsert(UserInput<String>),
+    /// Replaces the grapheme before the caret with the given text, as a single edit.
+    /// Produced by the macOS press-and-hold accent popup — see
+    /// [`warpui::Event::ReplacePrecedingCharacters`].
+    ReplacePrecedingCharacters(UserInput<String>),
     VimUserInsert(UserInput<String>),
     DragAndDropFiles(Vec<UserInput<String>>),
     SetMarkedText {
@@ -5031,6 +5035,29 @@ impl EditorView {
         );
     }
 
+    /// Replaces the grapheme before the caret with `text`.
+    ///
+    /// This exists for the macOS press-and-hold accent popup, which commits the base
+    /// character first and then commits the accented character as a replacement for it
+    /// (issue #13631). Both halves run inside one [`Self::edit`] call so the pair is a
+    /// single undo step and the buffer is never briefly in the `oò` state.
+    pub fn replace_preceding_characters(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        // Nothing to replace at the start of the buffer, so this degrades to an insert.
+        let has_preceding_grapheme =
+            !self.buffer_text(ctx).is_empty() && !self.single_cursor_at_buffer_start(ctx);
+
+        let action = PlainTextEditorViewAction::from_inserted_str(text);
+        self.edit(
+            ctx,
+            Edits::new().with_update_buffer(action, EditOrigin::UserTyped, |editor_model, ctx| {
+                if has_preceding_grapheme {
+                    editor_model.backspace(ctx);
+                }
+                editor_model.insert_internal(text, None, SelectionInsertion::No, ctx);
+            }),
+        );
+    }
+
     fn voice_input_toggle_key_code(&self, ctx: &AppContext) -> Option<KeyCode> {
         let ai_settings_handle = &AISettings::handle(ctx);
         ai_settings_handle
@@ -8556,6 +8583,9 @@ impl TypedActionView for EditorView {
             Scroll(position) => self.scroll(*position, ctx),
             Select(action) => self.select(action, ctx),
             UserInsert(text) => self.user_insert(text.as_ref(), ctx),
+            ReplacePrecedingCharacters(text) => {
+                self.replace_preceding_characters(text.as_ref(), ctx)
+            }
             #[cfg(feature = "voice_input")]
             ToggleVoiceInput(source) => {
                 self.toggle_voice_input(source, ctx);
