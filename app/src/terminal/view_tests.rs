@@ -691,6 +691,51 @@ fn ordinary_block_selection_unchanged_outside_agent_view() {
 }
 
 #[test]
+fn blurring_the_terminal_clears_marked_text_left_over_from_an_ime_composition() {
+    // Regression test for a focus change (e.g. the desktop text-input bridge's caret-owning
+    // surface changing, or any other internal focus transition) leaving a stale IME preedit on
+    // the raw terminal grid with no future event that could ever clear it.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _ime_marked_text = FeatureFlag::ImeMarkedText.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_long_running_block("vim", "");
+                model.set_marked_text("こんにちは", &(0..5));
+            }
+            assert!(
+                view.model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .output_grid()
+                    .grid_handler()
+                    .marked_text()
+                    .is_some(),
+                "marked text should be set before blur"
+            );
+
+            view.on_blur(&BlurContext::SelfBlurred, ctx);
+
+            assert!(
+                view.model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .output_grid()
+                    .grid_handler()
+                    .marked_text()
+                    .is_none(),
+                "blur must clear any marked text left over from an in-progress composition"
+            );
+        });
+    })
+}
+
+#[test]
 fn focus_reporting_writes_focus_events_in_normal_screen() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

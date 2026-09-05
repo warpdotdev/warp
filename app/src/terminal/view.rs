@@ -28902,6 +28902,19 @@ impl View for TerminalView {
             self.open_grid_link_tool_tip.take();
 
             self.maybe_report_focus_out(ctx);
+
+            // A focus change while an IME composition is targeting the raw grid (alt screen or
+            // a long-running command) leaves no other event that will ever clear it: unlike the
+            // prompt's EditorView, nothing else observes this view's own focus loss to discard
+            // the preedit. Restricted to the two states where marked text can actually be set,
+            // since clearing it elsewhere would just log a spurious "no active block" warning.
+            if matches!(
+                self.model.lock().terminal_input_state(),
+                TerminalInputState::AltScreen | TerminalInputState::LongRunningCommand
+            ) {
+                self.clear_marked_text_on_terminal(ctx);
+            }
+
             ctx.notify();
         }
     }
@@ -29101,6 +29114,7 @@ impl View for TerminalView {
             .map(|position| CursorInfo {
                 position,
                 font_size,
+                view_id: ctx.view_id(),
             })
     }
 
