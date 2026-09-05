@@ -127,6 +127,14 @@ impl StoredView {
         }
     }
 
+    pub fn child_view_ids(&self, app: &AppContext) -> Vec<EntityId> {
+        match self {
+            StoredView::Gui(view) => view.child_view_ids(app),
+            #[cfg(feature = "tui")]
+            StoredView::Tui(_) => Vec::new(),
+        }
+    }
+
     pub fn active_cursor_position(
         &self,
         app: &mut AppContext,
