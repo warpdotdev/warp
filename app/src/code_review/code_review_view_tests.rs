@@ -1,14 +1,20 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ai::agent::action::InsertReviewComment;
 use chrono::Local;
 use lsp::LspManagerModel;
+use remote_server::HostId;
+use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use warp_core::ui::appearance::Appearance;
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_editor::render::model::LineCount;
+use warp_files::FileModel;
+use warp_util::remote_path::RemotePath;
+use warp_util::standardized_path::StandardizedPath;
 use warpui::elements::{Empty, MouseStateHandle};
 use warpui::platform::WindowStyle;
 use warpui::{App, ViewHandle};
@@ -21,6 +27,7 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::buffer_location::LocalOrRemotePath;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView};
+use crate::code::global_buffer_model::GlobalBufferModel;
 use crate::code::local_code_editor::LocalCodeEditorView;
 use crate::code_review::GlobalCodeReviewModel;
 use crate::code_review::comments::{
@@ -29,7 +36,9 @@ use crate::code_review::comments::{
     PendingImportedReviewCommentTarget, attach_pending_imported_comments,
 };
 use crate::code_review::diff_size_limits::DiffSize;
-use crate::code_review::diff_state::{DiffStateModel, FileDiff, GitFileStatus};
+use crate::code_review::diff_state::{
+    DiffHunk, DiffLine, DiffLineType, DiffStateModel, FileDiff, GitFileStatus, LocalDiffStateModel,
+};
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::git_repo_model::GitRepoModels;
 use crate::pane_group::WorkingDirectoriesModel;
@@ -75,9 +84,9 @@ fn initialize_test_app(app: &mut App) {
     app.add_singleton_model(|_| SyncedInputState::mock());
     app.add_singleton_model(|_| VimRegisters::new());
     app.add_singleton_model(|_| KeybindingChangedNotifier::mock());
+    app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| DetectedRepositories::default());
     app.add_singleton_model(|_| GitRepoModels::new());
-    app.add_singleton_model(|_| LspManagerModel::new());
     app.add_singleton_model(|_| LocalShellState::NotLoaded);
     app.add_singleton_model(PersistedWorkspace::new_for_test);
     app.add_singleton_model(|_| GlobalCodeReviewModel);
@@ -296,14 +305,26 @@ struct TestContext {
 impl TestContext {
     /// Initialize common test state with a single file editor
     fn new(app: &mut App, file_path: impl Into<String>, editor_content: &str) -> Self {
+        Self::new_at_repo(
+            app,
+            PathBuf::from("/repo"),
+            file_path.into(),
+            editor_content,
+        )
+    }
+
+    fn new_at_repo(
+        app: &mut App,
+        repo_path: PathBuf,
+        file_path: String,
+        editor_content: &str,
+    ) -> Self {
         initialize_test_app(app);
 
         let editor = create_editor_with_content(app, editor_content);
-        let repo_path = PathBuf::from("/repo");
 
         let (window_id, _) = app.add_window(WindowStyle::NotStealFocus, |_| TestView);
-        let state =
-            create_loaded_state_with_editors(app, window_id, vec![(file_path.into(), editor)]);
+        let state = create_loaded_state_with_editors(app, window_id, vec![(file_path, editor)]);
 
         let diff_state_model = app.add_model(DiffStateModel::new_for_test);
 
@@ -334,6 +355,81 @@ impl TestContext {
     }
 }
 
+fn initialize_file_loading_models(app: &mut App) {
+    app.add_singleton_model(DirectoryWatcher::new);
+    app.add_singleton_model(RepoMetadataModel::new);
+    app.add_singleton_model(FileModel::new);
+    app.add_singleton_model(GlobalBufferModel::new);
+}
+
+async fn create_modified_repo(
+    file_path: &str,
+    base_content: &str,
+    current_content: &str,
+) -> tempfile::TempDir {
+    let repo = tempfile::tempdir().expect("create temp repo");
+    let repo_path = repo.path();
+    warp_util::git::run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("initialize git repository");
+    warp_util::git::run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("configure git email");
+    warp_util::git::run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("configure git name");
+    std::fs::write(repo_path.join(file_path), base_content).expect("write base content");
+    warp_util::git::run_git_command(repo_path, &["add", file_path])
+        .await
+        .expect("stage base content");
+    warp_util::git::run_git_command(repo_path, &["commit", "-m", "initial"])
+        .await
+        .expect("commit base content");
+    std::fs::write(repo_path.join(file_path), current_content).expect("write current content");
+    repo
+}
+
+async fn retrieve_collapsed_file(repo_path: &Path, file_path: &str) -> FileDiffAndContent {
+    let (_, file) = LocalDiffStateModel::retrieve_diff_state(
+        repo_path,
+        &repo_path.join(file_path),
+        &DiffMode::Head,
+        None,
+    )
+    .await
+    .expect("retrieve file diff");
+    let mut file = Arc::try_unwrap(file.expect("file should be part of diff"))
+        .expect("test should own the only diff reference");
+    file.file_diff.is_autogenerated = true;
+    file
+}
+
+async fn wait_for_deferred_load(app: &mut App, view: &ViewHandle<CodeReviewView>, file_path: &str) {
+    for _ in 0..5000 {
+        let finished = view.read(app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                return false;
+            };
+            let index = state
+                .file_states
+                .get_index_of(file_path)
+                .expect("file should remain in loaded state");
+            let _ = view.render_diff_at_index(index, ScrollOffset::default(), ctx);
+            let file = &state.file_states[file_path];
+            file.editor_state
+                .as_ref()
+                .is_some_and(CodeReviewEditorState::is_loaded)
+                || matches!(file.deferred_editor_load, DeferredEditorLoad::Failed(_))
+        });
+        if finished {
+            return;
+        }
+        futures_lite::future::yield_now().await;
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("timed out waiting for deferred editor load");
+}
+
 /// Creates a minimal LoadedState with file states containing editors.
 /// Must be called within an App context.
 fn create_loaded_state_with_editors(
@@ -362,6 +458,7 @@ fn create_loaded_state_with_editors(
                     size: DiffSize::Normal,
                 },
                 editor_state: Some(CodeReviewEditorState::new_loaded(editor)),
+                deferred_editor_load: DeferredEditorLoad::NotDeferred,
                 is_expanded: true,
                 sidebar_mouse_state: MouseStateHandle::default(),
                 header_mouse_state: MouseStateHandle::default(),
@@ -380,7 +477,739 @@ fn create_loaded_state_with_editors(
         total_additions: 0,
         total_deletions: 0,
         files_changed: 0,
+        initial_editors_loading: false,
     }
+}
+
+fn code_review_file(file_path: &str, content: &str, is_autogenerated: bool) -> FileDiffAndContent {
+    let content_line_count = content.lines().count();
+    let deleted_lines = content
+        .lines()
+        .enumerate()
+        .map(|(index, text)| DiffLine {
+            line_type: DiffLineType::Delete,
+            old_line_number: Some(index + 1),
+            new_line_number: None,
+            text: text.to_owned(),
+            no_trailing_newline: index + 1 == content_line_count && !content.ends_with('\n'),
+        })
+        .collect::<Vec<_>>();
+    let line_count = deleted_lines.len();
+    FileDiffAndContent {
+        file_diff: FileDiff {
+            file_path: file_path.to_string(),
+            status: GitFileStatus::Deleted,
+            hunks: Arc::new(vec![DiffHunk {
+                old_start_line: usize::from(line_count > 0),
+                old_line_count: line_count,
+                new_start_line: 0,
+                new_line_count: 0,
+                lines: deleted_lines,
+                unified_diff_start: 0,
+                unified_diff_end: 0,
+            }]),
+            is_binary: false,
+            is_autogenerated,
+            max_line_number: line_count,
+            has_hidden_bidi_chars: false,
+            size: DiffSize::Normal,
+        },
+        content_at_head: Some(content.to_string()),
+    }
+}
+
+fn install_diff_state(
+    view: &mut CodeReviewView,
+    diff_data: Arc<GitDiffWithBaseContent>,
+    ctx: &mut ViewContext<CodeReviewView>,
+) {
+    let file_states_vec = view.build_view_state_for_file_diffs(diff_data.files.iter(), ctx);
+    let initial_editors_loading = file_states_vec.iter().any(|file| {
+        file.is_expanded
+            && file
+                .editor_state
+                .as_ref()
+                .is_some_and(|editor| !editor.is_loaded())
+    });
+    let file_states = file_states_vec
+        .into_iter()
+        .map(|state| (state.file_diff.file_path.clone(), state))
+        .collect();
+    let files_changed = diff_data.files.len();
+
+    view.active_repo.as_mut().unwrap().state = CodeReviewViewState::Loaded(LoadedState {
+        file_states,
+        total_additions: 0,
+        total_deletions: 0,
+        files_changed,
+        initial_editors_loading,
+    });
+}
+
+#[test]
+fn test_collapsed_file_does_not_construct_editor() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file("generated.rs", "fn generated() {}", true)],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(!file.is_expanded);
+            assert!(file.editor_state.is_none());
+            assert_eq!(file.deferred_editor_load, DeferredEditorLoad::Ready);
+            assert!(view.all_editors_loaded());
+        });
+    });
+}
+
+#[test]
+fn test_remote_collapsed_file_constructs_editor_eagerly() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file(
+                "generated.rs",
+                "fn generated() {}\n",
+                true,
+            )],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.active_repo.as_mut().unwrap().repo_path =
+                LocalOrRemotePath::Remote(RemotePath::new(
+                    HostId::new("test-host".to_string()),
+                    StandardizedPath::try_new("/repo").expect("valid remote repo path"),
+                ));
+            assert!(!view.can_defer_editor_construction());
+            install_diff_state(view, diff_data, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(!file.is_expanded);
+            assert!(file.editor_state.is_some());
+            assert_eq!(file.deferred_editor_load, DeferredEditorLoad::NotDeferred);
+        });
+    });
+}
+
+#[test]
+fn test_collapsed_file_does_not_retain_diff_snapshot() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file(
+                "generated.rs",
+                &"large base content\n".repeat(1024),
+                true,
+            )],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let weak_diff_data = Arc::downgrade(&diff_data);
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            assert!(weak_diff_data.upgrade().is_none());
+        });
+    });
+}
+
+#[test]
+fn test_comment_for_deferred_file_is_not_marked_outdated() {
+    App::test((), |mut app| async move {
+        let test = TestContext::new(&mut app, "existing.txt", "existing");
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file("generated.rs", "fn generated() {}", true)],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let comment = create_line_comment(
+            "/repo/generated.rs",
+            0,
+            "fn generated() {}",
+            "Review generated code",
+        );
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+
+            let result = CodeReviewView::relocate_comments(
+                vec![comment],
+                state,
+                &LocalOrRemotePath::Local(PathBuf::from("/repo")),
+                ctx,
+            );
+
+            assert_eq!(result.comments.len(), 1);
+            assert!(!result.comments[0].outdated);
+            assert_eq!(result.fallback_count, 0);
+        });
+    });
+}
+
+#[test]
+fn test_expanding_collapsed_file_constructs_and_renders_loaded_editor() {
+    App::test((), |mut app| async move {
+        let repo =
+            create_modified_repo("generated.rs", "fn base() {}\n", "fn generated() {}\n").await;
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        initialize_file_loading_models(&mut app);
+        let file = retrieve_collapsed_file(repo.path(), "generated.rs").await;
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+
+            view.handle_action(
+                &CodeReviewAction::ToggleFileExpanded("generated.rs".to_string()),
+                ctx,
+            );
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(file.is_expanded);
+            assert!(file.editor_state.is_none());
+            assert!(matches!(
+                file.deferred_editor_load,
+                DeferredEditorLoad::Loading(_)
+            ));
+            assert_eq!(
+                view.active_repo
+                    .as_ref()
+                    .and_then(|repo| repo.file_expanded.get("generated.rs")),
+                Some(&true)
+            );
+            let _rendered_diff = view.render_diff_at_index(0, ScrollOffset::default(), ctx);
+        });
+
+        wait_for_deferred_load(&mut app, &test.code_review_view, "generated.rs").await;
+
+        test.code_review_view.read(&app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            let editor_state = file
+                .editor_state
+                .as_ref()
+                .expect("editor should be created");
+            assert!(editor_state.is_loaded());
+            assert_eq!(file.deferred_editor_load, DeferredEditorLoad::NotDeferred);
+            assert_eq!(
+                editor_state
+                    .editor()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .text(ctx)
+                    .into_string(),
+                "fn generated() {}\n"
+            );
+            let base = editor_state
+                .editor()
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .model
+                .as_ref(ctx)
+                .diff()
+                .as_ref(ctx)
+                .base()
+                .expect("editor should have an authoritative base");
+            assert_eq!(base.as_str(), "fn base() {}\n");
+            assert_eq!(view.editor_handles().count(), 1);
+        });
+    });
+}
+
+#[test]
+fn test_auto_expanded_file_constructs_editor_eagerly() {
+    App::test((), |mut app| async move {
+        let repo = tempfile::tempdir().expect("create temp repo");
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file("source.rs", "fn source() {}\n", false)],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["source.rs"];
+            assert!(file.is_expanded);
+            assert!(
+                file.editor_state
+                    .as_ref()
+                    .is_some_and(|state| state.is_loaded())
+            );
+            assert_eq!(file.deferred_editor_load, DeferredEditorLoad::NotDeferred);
+        });
+    });
+}
+
+#[test]
+fn test_comment_actions_wait_for_authoritative_deferred_editor_load() {
+    App::test((), |mut app| async move {
+        let repo = create_modified_repo("generated.rs", "first\nbase\n", "first\nsecond\n").await;
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        initialize_file_loading_models(&mut app);
+        let file = retrieve_collapsed_file(repo.path(), "generated.rs").await;
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let comment = create_line_comment(
+            repo.path().join("generated.rs"),
+            1,
+            "second",
+            "Review generated code",
+        );
+        let comment_id = comment.id;
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            view.active_comment_model
+                .clone()
+                .unwrap()
+                .update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+
+            view.handle_jump_to_comment_location(&comment_id, ctx);
+            view.handle_edit_comment(&comment_id, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(file.is_expanded);
+            assert!(file.editor_state.is_none());
+            assert!(matches!(
+                file.deferred_editor_load,
+                DeferredEditorLoad::Loading(_)
+            ));
+            assert_eq!(view.pending_jump_to_comment, Some(comment_id));
+            assert_eq!(view.pending_edit_comment, Some(comment_id));
+        });
+
+        wait_for_deferred_load(&mut app, &test.code_review_view, "generated.rs").await;
+
+        test.code_review_view.read(&app, |view, _| {
+            assert!(view.pending_jump_to_comment.is_none());
+            assert!(view.pending_edit_comment.is_none());
+            assert_eq!(view.viewported_list_state.get_scroll_index(), 0);
+            assert!(
+                !view
+                    .active_repo
+                    .as_ref()
+                    .unwrap()
+                    .file_expanded
+                    .contains_key("generated.rs")
+            );
+        });
+    });
+}
+
+#[test]
+fn test_single_file_update_restarts_deferred_load_and_rejects_old_completion() {
+    App::test((), |mut app| async move {
+        const OLD_LOAD_ID: u64 = 41;
+
+        let repo = create_modified_repo("generated.rs", "base\n", "first edit\n").await;
+        let stale_file = retrieve_collapsed_file(repo.path(), "generated.rs").await;
+        let stale_completion = Arc::new(retrieve_collapsed_file(repo.path(), "generated.rs").await);
+        std::fs::write(repo.path().join("generated.rs"), "second edit\n")
+            .expect("write newer file content");
+        let fresh_file = Arc::new(retrieve_collapsed_file(repo.path(), "generated.rs").await);
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        initialize_file_loading_models(&mut app);
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![stale_file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        let comment = create_line_comment(
+            repo.path().join("generated.rs"),
+            0,
+            "second edit",
+            "Review latest edit",
+        );
+        let comment_id = comment.id;
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            view.next_deferred_editor_load_id = OLD_LOAD_ID;
+            let Some(CodeReviewViewState::Loaded(state)) = view.state_mut() else {
+                panic!("expected loaded state");
+            };
+            let file = &mut state.file_states["generated.rs"];
+            file.is_expanded = true;
+            file.deferred_editor_load = DeferredEditorLoad::Loading(OLD_LOAD_ID);
+            view.active_comment_model
+                .clone()
+                .unwrap()
+                .update(ctx, |batch, ctx| batch.upsert_comment(comment, ctx));
+            view.handle_jump_to_comment_location(&comment_id, ctx);
+            view.handle_edit_comment(&comment_id, ctx);
+            assert_eq!(view.pending_jump_to_comment, Some(comment_id));
+            assert_eq!(view.pending_edit_comment, Some(comment_id));
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.update_from_single_file_diff_result(
+                "generated.rs".to_string(),
+                Some(fresh_file.clone()),
+                ctx,
+            );
+            let successor_load_id = match view.state() {
+                CodeReviewViewState::Loaded(state) => {
+                    match state.file_states["generated.rs"].deferred_editor_load {
+                        DeferredEditorLoad::Loading(load_id) => load_id,
+                        ref state => panic!("expected successor load, got {state:?}"),
+                    }
+                }
+                _ => panic!("expected loaded state"),
+            };
+            assert_ne!(successor_load_id, OLD_LOAD_ID);
+
+            view.finish_deferred_editor_load(
+                "generated.rs",
+                OLD_LOAD_ID,
+                Ok(stale_completion.clone()),
+                ctx,
+            );
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(file.editor_state.is_none());
+            assert_eq!(
+                file.deferred_editor_load,
+                DeferredEditorLoad::Loading(successor_load_id)
+            );
+            assert!(
+                file.file_diff
+                    .hunks
+                    .iter()
+                    .flat_map(|hunk| &hunk.lines)
+                    .any(|line| line.line_type == DiffLineType::Add && line.text == "second edit")
+            );
+            assert_eq!(view.pending_jump_to_comment, Some(comment_id));
+            assert_eq!(view.pending_edit_comment, Some(comment_id));
+
+            view.finish_deferred_editor_load(
+                "generated.rs",
+                successor_load_id,
+                Ok(fresh_file.clone()),
+                ctx,
+            );
+        });
+
+        wait_for_deferred_load(&mut app, &test.code_review_view, "generated.rs").await;
+
+        test.code_review_view.read(&app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let editor = state.file_states["generated.rs"]
+                .editor_state
+                .as_ref()
+                .expect("successor editor should load")
+                .editor();
+            assert_eq!(
+                editor.as_ref(ctx).editor().as_ref(ctx).text(ctx).as_str(),
+                "second edit\n"
+            );
+            let base = editor
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .model
+                .as_ref(ctx)
+                .diff()
+                .as_ref(ctx)
+                .base()
+                .expect("successor editor should retain the authoritative base");
+            assert_eq!(base.as_str(), "base\n");
+            assert!(view.pending_jump_to_comment.is_none());
+            assert!(view.pending_edit_comment.is_none());
+        });
+    });
+}
+#[test]
+fn test_deferred_editor_load_keeps_loaded_sibling_visible() {
+    App::test((), |mut app| async move {
+        let repo = create_modified_repo("generated.rs", "base\n", "generated\n").await;
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        initialize_file_loading_models(&mut app);
+
+        let loaded_file = code_review_file("source.rs", "source\n", false);
+        let deferred_file = retrieve_collapsed_file(repo.path(), "generated.rs").await;
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![loaded_file, deferred_file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 2,
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            assert!(!state.initial_editors_loading);
+            assert!(
+                state.file_states["source.rs"]
+                    .editor_state
+                    .as_ref()
+                    .is_some_and(CodeReviewEditorState::is_loaded)
+            );
+
+            view.set_file_expanded(1, true, true, ctx);
+
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            assert!(!state.initial_editors_loading);
+            assert!(
+                state.file_states["source.rs"]
+                    .editor_state
+                    .as_ref()
+                    .is_some_and(CodeReviewEditorState::is_loaded)
+            );
+            assert!(state.file_states["generated.rs"].editor_state.is_none());
+            assert!(matches!(
+                state.file_states["generated.rs"].deferred_editor_load,
+                DeferredEditorLoad::Loading(_)
+            ));
+            let _loaded_panel = view.render(ctx);
+            let _loaded_sibling = view.render_diff_at_index(0, ScrollOffset::default(), ctx);
+        });
+
+        wait_for_deferred_load(&mut app, &test.code_review_view, "generated.rs").await;
+
+        test.code_review_view.read(&app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            assert!(
+                state.file_states["source.rs"]
+                    .editor_state
+                    .as_ref()
+                    .is_some_and(CodeReviewEditorState::is_loaded)
+            );
+            assert!(
+                state.file_states["generated.rs"]
+                    .editor_state
+                    .as_ref()
+                    .is_some_and(CodeReviewEditorState::is_loaded)
+            );
+            let _loaded_sibling = view.render_diff_at_index(0, ScrollOffset::default(), ctx);
+        });
+    });
+}
+
+#[test]
+fn test_deferred_load_uses_fresh_diff_with_preloaded_global_buffer() {
+    App::test((), |mut app| async move {
+        let repo = create_modified_repo("generated.rs", "base\n", "first edit\n").await;
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        initialize_file_loading_models(&mut app);
+        let stale_file = retrieve_collapsed_file(repo.path(), "generated.rs").await;
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![stale_file],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+        });
+
+        std::fs::write(repo.path().join("generated.rs"), "second edit\n")
+            .expect("write newer collapsed-file content");
+        let buffer_state = GlobalBufferModel::handle(&app).update(&mut app, |model, ctx| {
+            model.open(
+                LocalOrRemotePath::Local(repo.path().join("generated.rs")),
+                ctx,
+            )
+        });
+        let version = ContentVersion::new();
+        GlobalBufferModel::handle(&app).update(&mut app, |model, ctx| {
+            model.populate_buffer_with_read_content(
+                buffer_state.file_id,
+                "second edit\n",
+                version,
+                version,
+                true,
+                ctx,
+            );
+        });
+        assert!(
+            GlobalBufferModel::handle(&app)
+                .read(&app, |model, _| model.buffer_loaded(buffer_state.file_id))
+        );
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.handle_action(
+                &CodeReviewAction::ToggleFileExpanded("generated.rs".to_string()),
+                ctx,
+            );
+        });
+        wait_for_deferred_load(&mut app, &test.code_review_view, "generated.rs").await;
+
+        test.code_review_view.read(&app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["generated.rs"];
+            assert!(
+                file.file_diff
+                    .hunks
+                    .iter()
+                    .flat_map(|hunk| &hunk.lines)
+                    .any(|line| line.line_type == DiffLineType::Add && line.text == "second edit")
+            );
+            let editor = file
+                .editor_state
+                .as_ref()
+                .expect("editor should load")
+                .editor();
+            assert_eq!(
+                editor.as_ref(ctx).editor().as_ref(ctx).text(ctx).as_str(),
+                "second edit\n"
+            );
+            let base = editor
+                .as_ref(ctx)
+                .editor()
+                .as_ref(ctx)
+                .model
+                .as_ref(ctx)
+                .diff()
+                .as_ref(ctx)
+                .base()
+                .expect("editor should have an authoritative base");
+            assert_eq!(base.as_str(), "base\n");
+        });
+        drop(buffer_state);
+    });
+}
+
+#[test]
+fn test_deferred_load_failure_remains_retryable_without_editor() {
+    App::test((), |mut app| async move {
+        let repo = create_modified_repo("tracked.rs", "base\n", "changed\n").await;
+        let test = TestContext::new_at_repo(
+            &mut app,
+            repo.path().to_path_buf(),
+            "existing.txt".to_string(),
+            "existing",
+        );
+        let diff_data = Arc::new(GitDiffWithBaseContent {
+            files: vec![code_review_file("missing.rs", "stale base\n", true)],
+            total_additions: 0,
+            total_deletions: 0,
+            files_changed: 1,
+        });
+        test.code_review_view.update(&mut app, |view, ctx| {
+            install_diff_state(view, diff_data, ctx);
+            view.handle_action(
+                &CodeReviewAction::ToggleFileExpanded("missing.rs".to_string()),
+                ctx,
+            );
+        });
+
+        wait_for_deferred_load(&mut app, &test.code_review_view, "missing.rs").await;
+
+        test.code_review_view.read(&app, |view, ctx| {
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            let file = &state.file_states["missing.rs"];
+            assert!(file.editor_state.is_none());
+            assert!(matches!(
+                file.deferred_editor_load,
+                DeferredEditorLoad::Failed(_)
+            ));
+            assert!(!view.all_editors_loaded());
+            let _error_state = view.render_diff_at_index(0, ScrollOffset::default(), ctx);
+        });
+
+        test.code_review_view.update(&mut app, |view, ctx| {
+            view.set_file_expanded(0, false, true, ctx);
+            let CodeReviewViewState::Loaded(state) = view.state() else {
+                panic!("expected loaded state");
+            };
+            assert_eq!(
+                state.file_states["missing.rs"].deferred_editor_load,
+                DeferredEditorLoad::Ready
+            );
+        });
+    });
 }
 
 #[test]
