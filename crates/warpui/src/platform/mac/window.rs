@@ -648,11 +648,29 @@ impl Window {
                 match options.style {
                     WindowStyle::Normal | WindowStyle::Pin => {
                         match options.bounds {
-                            WindowBounds::ExactPosition(_) => {
-                                // If specfied, we should set the window to the exact position.
-                                // Note that the final position could be different from the set one as the original
-                                // frame may no longer exist (e.g. user unplugs the monitor).
+                            // If specified, we should set the window to the exact position. A
+                            // saved position (e.g. restored from warp.sqlite) may target a
+                            // display that has since been disconnected, in which case applying
+                            // it verbatim would place the window somewhere the user can never
+                            // see it (see GH#15184). Guard against that by only honoring the
+                            // exact position when it still lands on a currently connected
+                            // screen, falling back to the same placement used for
+                            // WindowBounds::Default otherwise.
+                            WindowBounds::ExactPosition(_)
+                                if frame_intersects_any_screen(
+                                    MainThreadMarker::new_unchecked(),
+                                    frame,
+                                ) =>
+                            {
                                 position_at_given_location(native_window_ref, frame.origin)
+                            }
+                            WindowBounds::ExactPosition(_) => {
+                                log::warn!(
+                                    "Saved window position ({}, {}) does not intersect any connected screen; falling back to default placement",
+                                    frame.origin.x,
+                                    frame.origin.y
+                                );
+                                position_and_order_front(native_window_ref)
                             }
                             WindowBounds::ExactSize(_) | WindowBounds::Default => {
                                 // Otherwise we put it in the center of the window or cascade from the previous window.
@@ -1768,6 +1786,26 @@ pub fn transform_origin_from_frame_coord_to_rect_coord(
 
 fn transform_origin_from_rect_coord_to_frame_coord(origin: Vector2F, size: Vector2F) -> Vector2F {
     Vector2F::new(origin.x(), -(origin.y() + size.y()))
+}
+
+fn ns_rect_to_simple_rect(rect: NSRect) -> crate::windowing::SimpleRect {
+    (
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.width,
+        rect.size.height,
+    )
+}
+
+/// Returns whether `frame` (in AppKit screen coordinates) overlaps at least one currently
+/// connected screen. Used to avoid honoring an exact window position (e.g. restored from
+/// `warp.sqlite`) that targets a display which has since been disconnected (see GH#15184).
+fn frame_intersects_any_screen(mtm: MainThreadMarker, frame: NSRect) -> bool {
+    let screens = NSScreen::screens(mtm);
+    let screen_rects: Vec<_> = (0..screens.count())
+        .map(|i| ns_rect_to_simple_rect(screens.objectAtIndex(i).frame()))
+        .collect();
+    crate::windowing::rect_intersects_any_screen(ns_rect_to_simple_rect(frame), &screen_rects)
 }
 
 /// Reinterprets an objc2 object reference as the legacy `objc` `Object` type used
