@@ -286,6 +286,71 @@ fn models_without_a_host_fall_back_to_the_provider_icon() {
     );
 }
 
+#[test]
+fn kimi_model_ids_get_the_kimi_logo() {
+    let llm = server_llm("kimi-k26-fireworks", None);
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+
+    // Case-insensitive, and matches other known/future Kimi revisions sharing
+    // the `kimi-` id prefix.
+    let llm = server_llm("KIMI-K27-CODE-FIREWORKS", None);
+    assert_eq!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
+#[test]
+fn non_kimi_model_ids_do_not_get_the_kimi_logo() {
+    let llm = server_llm("gpt-kimi-tribute", None);
+    assert_ne!(
+        model_leading_icon(&llm, ModelIconFlags::default()),
+        Icon::KimiLogo
+    );
+}
+
+#[test]
+fn routing_icons_win_over_the_kimi_logo_even_for_kimi_like_ids() {
+    // Custom-router, auto, and Bedrock/Gemini Enterprise routing describe how
+    // the request is routed rather than which model handles it, so they must
+    // still take precedence even if the underlying id looks like a Kimi id.
+    let llm = server_llm("kimi-k26-fireworks", None);
+
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_custom_router: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Dataflow
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_auto: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Agent
+    );
+    assert_eq!(
+        model_leading_icon(
+            &llm,
+            ModelIconFlags {
+                is_using_bedrock: true,
+                ..Default::default()
+            }
+        ),
+        Icon::Aws
+    );
+}
+
 // -- build_custom_llm_infos / display label tests --
 
 fn endpoint(

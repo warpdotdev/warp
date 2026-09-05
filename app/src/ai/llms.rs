@@ -163,6 +163,19 @@ pub struct ModelIconFlags {
     pub is_using_gemini_enterprise: bool,
 }
 
+/// Non-first-party model brands not covered by [`LLMProvider::icon`], matched
+/// by a case-insensitive `id` prefix. To brand another non-first-party model,
+/// add one entry here.
+const NON_FIRST_PARTY_MODEL_BRAND_ICONS: &[(&str, Icon)] = &[("kimi-", Icon::KimiLogo)];
+
+fn non_first_party_model_icon(id: &str) -> Option<Icon> {
+    let id = id.to_ascii_lowercase();
+    NON_FIRST_PARTY_MODEL_BRAND_ICONS
+        .iter()
+        .find(|(prefix, _)| id.starts_with(prefix))
+        .map(|(_, icon)| *icon)
+}
+
 /// The leading icon shown next to a model in the model picker and model menus.
 ///
 /// Auto models deliberately get the generic agent glyph rather than a host or
@@ -177,7 +190,10 @@ pub fn model_leading_icon(llm: &LLMInfo, flags: ModelIconFlags) -> Icon {
     } else if flags.is_using_gemini_enterprise {
         Icon::GeminiEnterpriseAgentPlatform
     } else {
-        llm.provider.icon().unwrap_or(Icon::Agent)
+        llm.provider
+            .icon()
+            .or_else(|| non_first_party_model_icon(llm.id.as_str()))
+            .unwrap_or(Icon::Agent)
     }
 }
 
