@@ -11,6 +11,7 @@ use parking_lot::FairMutex;
 use session_sharing_protocol::common::CLIAgentSessionState;
 use warp_cli::agent::Harness;
 use warp_terminal::model::escape_sequences::{BRACKETED_PASTE_END, BRACKETED_PASTE_START, C0};
+use warp_terminal::model::{KeyboardModes, KeyboardModesApplyBehavior};
 use warpui::notification::UserNotification;
 use warpui::platform::WindowStyle;
 use warpui::{App, EntityIdSet, Presenter, ReadModel, WindowInvalidation};
@@ -80,6 +81,7 @@ use crate::terminal::shared_session::shared_handlers::{
 };
 use crate::terminal::shared_session::{SharedSessionSource, SharedSessionStatus};
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
+use crate::terminal::view::init::KEYBOARD_PROTOCOL_ENABLED_KEY;
 use crate::terminal::view::load_ai_conversation::{
     RestoreConversationEntryBehavior, RestoredAIConversation,
 };
@@ -4496,6 +4498,182 @@ fn test_alt_screen_copy_on_select() {
             assert_eq!("h", &read_from_clipboard(ctx));
         });
     })
+}
+
+/// Regression test for #14835: macOS-style line-editing shortcuts (word-left/word-right here,
+/// which are cross-platform bindings gated the same way as the mac-only cmd-left/cmd-right/
+/// cmd-backspace/cmd-delete bindings) must still send bytes to the PTY while a long-running,
+/// non-KKP alt-screen TUI (e.g. `fzf`, `less`) is active. Such TUIs never negotiate the Kitty
+/// keyboard protocol, and `LongRunningCommand` is explicitly suppressed from the keymap context
+/// while the alt screen is active, so the binding must also match on `AltScreen`.
+#[test]
+fn alt_screen_editing_shortcuts_are_dispatched_without_kkp() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        app.update(|ctx| {
+            crate::terminal::init(ctx);
+        });
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let keystroke = if cfg!(target_os = "macos") {
+            "alt-left"
+        } else {
+            "ctrl-left"
+        };
+
+        terminal.update(&mut app, |view, ctx| {
+            view.focus_terminal(ctx);
+        });
+
+        // Baseline: before the command starts running, the binding shouldn't fire at all.
+        let handled_before = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id()],
+                &Keystroke::parse(keystroke).expect("valid keystroke"),
+                false,
+            )
+            .expect("dispatch should succeed");
+        assert!(
+            !handled_before,
+            "{keystroke} shouldn't move the cursor by word outside of a running command"
+        );
+        assert!(pty_writes.borrow().is_empty());
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                // Simulate a long-running command (e.g. `fzf`) that then swaps to the alt
+                // screen without negotiating the Kitty keyboard protocol.
+                model.simulate_long_running_block("fzf", "");
+                model.set_mode(ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                });
+                assert!(model.is_alt_screen_active());
+            }
+            assert!(
+                view.is_long_running(),
+                "the active block should still be considered long-running while in the alt screen"
+            );
+            view.focus_terminal(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let context = view.keymap_context(ctx);
+            assert!(context.set.contains("AltScreen"));
+            assert!(
+                !context.set.contains("LongRunningCommand"),
+                "LongRunningCommand should remain suppressed while the alt screen is active"
+            );
+        });
+
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id()],
+                &Keystroke::parse(keystroke).expect("valid keystroke"),
+                false,
+            )
+            .expect("dispatch should succeed");
+        assert!(
+            handled,
+            "{keystroke} should move the cursor by word even inside a non-KKP alt-screen TUI"
+        );
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![EscCodes::WORD_LEFT.to_vec()],
+            "the word-left control sequence should reach the PTY"
+        );
+    });
+}
+
+/// Companion to `alt_screen_editing_shortcuts_are_dispatched_without_kkp`: a TUI that negotiated
+/// the Kitty keyboard protocol (Claude Code, opencode, …) encodes these chords itself, so the
+/// binding must NOT claim the keystroke. `AltScreenElement::dispatch_event` only falls back to
+/// `KeystrokeWithDetails::to_escape_sequence` — the modifier-aware encoder added in #14012 — when
+/// no keybinding matched, so a matching binding here would replace `CSI 1;3D` with a legacy
+/// `ESC b` and reintroduce the bug that PR fixed.
+#[test]
+fn alt_screen_editing_shortcuts_are_not_dispatched_with_kkp() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        app.update(|ctx| {
+            crate::terminal::init(ctx);
+        });
+
+        let (window_id, terminal) = add_window_with_id_and_terminal(&mut app, None);
+
+        let pty_writes: Rc<RefCell<Vec<Vec<u8>>>> = Rc::new(RefCell::new(Vec::new()));
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal, move |_, event, _| {
+                if let Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        let keystroke = if cfg!(target_os = "macos") {
+            "alt-left"
+        } else {
+            "ctrl-left"
+        };
+
+        terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.simulate_long_running_block("claude", "");
+                model.set_mode(ansi::Mode::SwapScreen {
+                    save_cursor_and_clear_screen: true,
+                });
+                // Entering the alt screen resets keyboard-mode state, so negotiate KKP after the
+                // swap, the way a TUI does.
+                model.alt_screen_mut().grid_handler_mut().set_keyboard_mode(
+                    KeyboardModes::DISAMBIGUATE_ESC_CODES,
+                    KeyboardModesApplyBehavior::Replace,
+                );
+                assert!(model.is_alt_screen_active());
+            }
+            view.focus_terminal(ctx);
+        });
+
+        terminal.read(&app, |view, ctx| {
+            let context = view.keymap_context(ctx);
+            assert!(context.set.contains("AltScreen"));
+            assert!(context.set.contains(KEYBOARD_PROTOCOL_ENABLED_KEY));
+        });
+
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id()],
+                &Keystroke::parse(keystroke).expect("valid keystroke"),
+                false,
+            )
+            .expect("dispatch should succeed");
+        assert!(
+            !handled,
+            "{keystroke} must fall through to the Kitty keyboard protocol encoder, not be claimed \
+             by the legacy editing binding"
+        );
+        assert!(
+            pty_writes.borrow().is_empty(),
+            "no legacy control sequence should be written for a KKP-negotiated alt-screen TUI"
+        );
+    });
 }
 
 #[test]
