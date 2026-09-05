@@ -67,6 +67,15 @@ fn file_attachment(file_name: &str) -> PendingAttachment {
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn restored_conversation_resume_starts_a_local_oz_hook_session() {
+    assert!(super::starts_local_oz_hook_session(
+        &AIAgentInput::ResumeConversation {
+            context: vec![].into()
+        }
+    ));
+}
 #[test]
 fn passive_suggestions_request_params_omit_ambient_agent_task_id() {
     App::test((), |mut app| async move {

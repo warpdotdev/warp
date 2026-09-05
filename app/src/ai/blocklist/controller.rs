@@ -429,6 +429,13 @@ enum WhichTask {
         task_id: TaskId,
     },
 }
+#[cfg(not(target_family = "wasm"))]
+fn starts_local_oz_hook_session(input: &AIAgentInput) -> bool {
+    matches!(
+        input,
+        AIAgentInput::UserQuery { .. } | AIAgentInput::ResumeConversation { .. }
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalClaudeWakeTrigger {
@@ -576,6 +583,117 @@ impl BlocklistAIController {
             },
         );
         true
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_failed_oz_stop_if_needed(
+        &mut self,
+        stream_id: ResponseStreamId,
+        error: Arc<AIApiError>,
+        conversation_id: AIConversationId,
+        response_stream: ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        if !response_stream.as_ref(ctx).is_completion_deferred() {
+            return false;
+        }
+        let Some(session) = self.oz_hook_sessions.get(&conversation_id) else {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        };
+        if session.is_driver_owned {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        }
+        let runtime = Arc::clone(&session.runtime);
+        let event = OzHookEvent {
+            invocation_id: uuid::Uuid::new_v4().to_string(),
+            tool_use_id: None,
+            payload: HookPayloadTemplate {
+                context: session.payload_context.clone(),
+                event: HookEventFields::Stop {
+                    turn_status: TurnStatus::Failed,
+                },
+            },
+        };
+        ctx.spawn(
+            async move {
+                runtime.observe(event).await;
+            },
+            move |me, _, ctx| {
+                me.handle_response_stream_error(
+                    error,
+                    &stream_id,
+                    conversation_id,
+                    &response_stream,
+                    ctx,
+                );
+                response_stream.update(ctx, |stream, ctx| {
+                    stream.finish_deferred_completion(ctx);
+                });
+            },
+        );
+        true
+    }
+
+    fn handle_response_stream_error(
+        &mut self,
+        error: Arc<AIApiError>,
+        stream_id: &ResponseStreamId,
+        conversation_id: AIConversationId,
+        response_stream: &ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(error.as_ref(), AIApiError::QuotaLimit { .. }) {
+            // If the error is a quota limit, refresh workspace metadata so AI overages are
+            // immediately up to date.
+            TeamUpdateManager::handle(ctx).update(ctx, |team_update_manager, ctx| {
+                std::mem::drop(team_update_manager.refresh_workspace_metadata(ctx));
+            });
+            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                model.enable_buy_credits_banner(ctx);
+            });
+        }
+        // A resume scheduled for this failure keeps the conversation in the non-terminal
+        // TransientError status instead of Error.
+
+        let recovery_pending = response_stream
+            .as_ref(ctx)
+            .should_resume_conversation_after_stream_finished();
+        let mut renderable_error: RenderableAIError = (&error).into();
+        if let RenderableAIError::Other {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        }
+        | RenderableAIError::TransientNetworkError {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        } = &mut renderable_error
+        {
+            // Rendering-only hints; state machine consumers key off the TransientError
+            // conversation status instead.
+            *will_attempt_resume |= recovery_pending;
+            if recovery_pending {
+                let network_status = NetworkStatus::as_ref(ctx);
+                *waiting_for_network = !network_status.is_online();
+            }
+        }
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.mark_response_stream_completed_with_error(
+                renderable_error,
+                recovery_pending,
+                stream_id,
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
+        });
     }
     #[cfg(not(target_family = "wasm"))]
     fn initialize_local_oz_hook_session(
@@ -2953,7 +3071,7 @@ impl BlocklistAIController {
         #[cfg(not(target_family = "wasm"))]
         let startup_hook = request_input
             .all_inputs()
-            .any(AIAgentInput::is_user_query)
+            .any(starts_local_oz_hook_session)
             .then(|| {
                 self.initialize_local_oz_hook_session(
                     conversation_id,
@@ -2967,15 +3085,17 @@ impl BlocklistAIController {
             request_params.oz_hook_context = Some(session.protocol_context.clone());
         }
         #[cfg(not(target_family = "wasm"))]
-        let prompt_hook = self
+        let pre_request_hooks = self
             .oz_hook_sessions
             .get(&conversation_id)
             .and_then(|session| {
-                request_input.all_inputs().find_map(|input| {
+                let mut events = startup_hook.into_iter().collect::<Vec<_>>();
+                if let Some(query) = request_input.all_inputs().find_map(|input| {
                     let AIAgentInput::UserQuery { query, .. } = input else {
                         return None;
                     };
-                    let mut events = startup_hook.clone().into_iter().collect::<Vec<_>>();
+                    Some(query)
+                }) {
                     events.push(OzHookEvent {
                         invocation_id: uuid::Uuid::new_v4().to_string(),
                         tool_use_id: None,
@@ -2986,13 +3106,13 @@ impl BlocklistAIController {
                             ),
                         },
                     });
-                    Some((Arc::clone(&session.runtime), events))
-                })
+                }
+                (!events.is_empty()).then(|| (Arc::clone(&session.runtime), events))
             });
         #[cfg(not(target_family = "wasm"))]
-        let should_defer_for_prompt_hook = prompt_hook.is_some();
+        let should_defer_for_pre_request_hooks = pre_request_hooks.is_some();
         #[cfg(target_family = "wasm")]
-        let should_defer_for_prompt_hook = false;
+        let should_defer_for_pre_request_hooks = false;
 
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();
@@ -3006,7 +3126,7 @@ impl BlocklistAIController {
                 client_exchange_id: None,
                 model_id: Some(request_params.model.clone()),
             };
-            if should_defer_for_prompt_hook {
+            if should_defer_for_pre_request_hooks {
                 ResponseStream::new_deferred(
                     request_params.clone(),
                     ai_identifiers,
@@ -3037,7 +3157,7 @@ impl BlocklistAIController {
             );
         });
         #[cfg(not(target_family = "wasm"))]
-        if let Some((runtime, events)) = prompt_hook {
+        if let Some((runtime, events)) = pre_request_hooks {
             let response_stream = response_stream.clone();
             ctx.spawn(
                 async move {
@@ -3549,58 +3669,23 @@ impl BlocklistAIController {
                         }
                     }
                     Err(e) => {
-                        if matches!(e.as_ref(), AIApiError::QuotaLimit { .. }) {
-                            // If the error is a quota limit, we want to refresh workspace metadata
-                            // So the current state of AI overages is immediately up to date.
-                            TeamUpdateManager::handle(ctx).update(
-                                ctx,
-                                |team_update_manager, ctx| {
-                                    std::mem::drop(
-                                        team_update_manager.refresh_workspace_metadata(ctx),
-                                    );
-                                },
-                            );
-                            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
-                                model.enable_buy_credits_banner(ctx);
-                            });
+                        #[cfg(not(target_family = "wasm"))]
+                        if self.defer_failed_oz_stop_if_needed(
+                            stream_id.clone(),
+                            Arc::clone(&e),
+                            conversation_id,
+                            response_stream.clone(),
+                            ctx,
+                        ) {
+                            return;
                         }
-
-                        // A resume scheduled for this failure keeps the conversation in
-                        // the non-terminal TransientError status instead of Error.
-                        let recovery_pending = response_stream
-                            .as_ref(ctx)
-                            .should_resume_conversation_after_stream_finished();
-                        let mut renderable_error: RenderableAIError = (&e).into();
-                        if let RenderableAIError::Other {
-                            will_attempt_resume,
-                            waiting_for_network,
-                            ..
-                        }
-                        | RenderableAIError::TransientNetworkError {
-                            will_attempt_resume,
-                            waiting_for_network,
-                            ..
-                        } = &mut renderable_error
-                        {
-                            // Rendering-only hints; state machine consumers key off the
-                            // TransientError conversation status instead.
-                            *will_attempt_resume |= recovery_pending;
-                            if recovery_pending {
-                                let network_status = NetworkStatus::as_ref(ctx);
-                                *waiting_for_network = !network_status.is_online();
-                            }
-                        }
-
-                        history_model.update(ctx, |history_model, ctx| {
-                            history_model.mark_response_stream_completed_with_error(
-                                renderable_error,
-                                recovery_pending,
-                                &stream_id,
-                                conversation_id,
-                                self.terminal_surface_id,
-                                ctx,
-                            );
-                        });
+                        self.handle_response_stream_error(
+                            e,
+                            &stream_id,
+                            conversation_id,
+                            response_stream,
+                            ctx,
+                        );
                     }
                 }
             }

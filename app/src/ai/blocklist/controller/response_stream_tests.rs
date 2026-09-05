@@ -5,7 +5,7 @@ use std::time::Duration;
 use super::apply_geap_refresh_to_params;
 use super::{FailReason, MAX_RECOVERY_ATTEMPTS, RecoveryAction, RecoveryBudget, recovery_action};
 #[cfg(not(target_family = "wasm"))]
-use super::{ResponseStream, ResponseStreamId};
+use super::{PendingResume, ResponseStream, ResponseStreamId};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::AIIdentifiers;
 #[cfg(not(target_family = "wasm"))]
@@ -260,6 +260,37 @@ fn cancelled_deferred_request_cannot_start() {
     assert!(stream.take_pending_start().is_none());
     assert!(stream.pending_start.is_none());
     assert!(stream.current_request_id.is_none());
+}
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn failed_turn_completion_is_deferred_when_oz_stop_is_enabled() {
+    let mut stream = deferred_stream();
+    stream.params.oz_hook_context = Some(warp_multi_agent_api::OzHookContext {
+        enabled_events: vec![warp_multi_agent_api::OzHookEvent::Stop as i32],
+        supported_payload_schema_versions: vec![],
+    });
+
+    stream.defer_failed_completion_for_oz_stop();
+
+    assert!(stream.is_completion_deferred());
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn failed_turn_completion_is_not_deferred_before_a_scheduled_resume() {
+    let mut stream = deferred_stream();
+    stream.params.oz_hook_context = Some(warp_multi_agent_api::OzHookContext {
+        enabled_events: vec![warp_multi_agent_api::OzHookEvent::Stop as i32],
+        supported_payload_schema_versions: vec![],
+    });
+    stream.pending_resume = Some(PendingResume::new_for_test(
+        RecoveryBudget::fresh().next_attempt(),
+        Duration::ZERO,
+    ));
+
+    stream.defer_failed_completion_for_oz_stop();
+
+    assert!(!stream.is_completion_deferred());
 }
 
 #[cfg(not(target_family = "wasm"))]

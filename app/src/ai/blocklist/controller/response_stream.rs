@@ -448,6 +448,20 @@ impl ResponseStream {
     pub fn is_completion_deferred(&self) -> bool {
         self.completion_deferred
     }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_completion_for_oz_stop(&mut self) {
+        self.completion_deferred = self.params.oz_hook_context.as_ref().is_some_and(|context| {
+            context
+                .enabled_events
+                .contains(&(maa_api::OzHookEvent::Stop as i32))
+        });
+    }
+    #[cfg(not(target_family = "wasm"))]
+    fn defer_failed_completion_for_oz_stop(&mut self) {
+        if self.pending_resume.is_none() {
+            self.defer_completion_for_oz_stop();
+        }
+    }
 
     fn take_pending_start(&mut self) -> Option<(Uuid, oneshot::Receiver<()>)> {
         if self.cancellation_tx.is_none() {
@@ -760,6 +774,7 @@ impl ResponseStream {
     fn surface_grok_refresh_failure(&mut self, request_id: Uuid, ctx: &mut ModelContext<Self>) {
         let error = Arc::new(AIApiError::GrokSubscriptionTokenRefreshFailed);
         self.error_event_emitted = true;
+        self.defer_failed_completion_for_oz_stop();
         self.report_request_failure(
             &error,
             NetworkStatus::as_ref(ctx).is_online(),
@@ -847,6 +862,8 @@ impl ResponseStream {
                     NetworkStatus::as_ref(ctx).is_online(),
                     self.recovery.attempts_used(),
                 );
+                #[cfg(not(target_family = "wasm"))]
+                self.defer_failed_completion_for_oz_stop();
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
                     error,
                 ))));
@@ -889,17 +906,7 @@ impl ResponseStream {
                                 Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None
                             ) {
                                 #[cfg(not(target_family = "wasm"))]
-                                {
-                                    self.completion_deferred = self
-                                        .params
-                                        .oz_hook_context
-                                        .as_ref()
-                                        .is_some_and(|context| {
-                                            context
-                                                .enabled_events
-                                                .contains(&(maa_api::OzHookEvent::Stop as i32))
-                                        });
-                                }
+                                self.defer_completion_for_oz_stop();
                                 // Emit retry success telemetry if this was a successful completion after retries
                                 if self.retries_sent > 0
                                     && let Some(original_error) = &self.original_error {
@@ -928,6 +935,8 @@ impl ResponseStream {
                     // Don't emit the error event, we're recovering in-request.
                     return;
                 }
+                #[cfg(not(target_family = "wasm"))]
+                self.defer_failed_completion_for_oz_stop();
 
                 ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(event)));
             }
@@ -962,9 +971,15 @@ impl ResponseStream {
             ) {
                 return;
             }
+            #[cfg(not(target_family = "wasm"))]
+            self.defer_failed_completion_for_oz_stop();
             ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Err(
                 unexpected_eof,
             ))));
+            if self.completion_deferred {
+                self.completion_waiting = true;
+                return;
+            }
         }
 
         ctx.emit(ResponseStreamEvent::AfterStreamFinished { cancellation: None });
