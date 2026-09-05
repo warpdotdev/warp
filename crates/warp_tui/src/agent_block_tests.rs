@@ -1695,7 +1695,7 @@ fn code_children_reconcile_across_streamed_section_boundaries() {
     });
 }
 #[test]
-fn streaming_reasoning_renders_thinking_header_with_body() {
+fn streaming_reasoning_renders_collapsed_thinking_header() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| Appearance::mock());
         let block = test_agent_block(
@@ -1716,6 +1716,36 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
                 }]
             );
 
+            assert_eq!(
+                render_block_lines(block, 40, app_ctx),
+                vec!["Thinking... ▸"]
+            );
+            assert!(
+                render_block_lines_including_blank(block, 40, app_ctx)
+                    .iter()
+                    .all(|line| !line.contains("line one") && !line.contains("line two"))
+            );
+        });
+    });
+}
+
+#[test]
+fn manual_expand_override_shows_streaming_reasoning_body() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: reasoning_status(None, "line one\nline two"),
+            },
+        );
+        app.read(|app_ctx| {
+            let block = block.as_ref(app_ctx);
+            block
+                .collapsible_states
+                .set_collapsed(MessageId::new("reasoning-1".to_owned()), false);
+
             // A blank line separates the header from the body, and body lines
             // are left-aligned with the header (no indent).
             let rendered = render_block_lines_including_blank(block, 40, app_ctx);
@@ -1726,6 +1756,43 @@ fn streaming_reasoning_renders_thinking_header_with_body() {
             assert_eq!(rendered[header + 1], "");
             assert_eq!(rendered[header + 2], "line one");
             assert_eq!(rendered[header + 3], "line two");
+        });
+    });
+}
+
+/// A thinking block that auto-expands while streaming and auto-collapses when
+/// reasoning finishes shrinks the block by its whole body in a single frame.
+/// With the transcript viewport pinned to the content end, that height delta
+/// rewrites `scroll_top` all at once and jumps every visible row — the reported
+/// streaming jitter. The block's height must therefore not change when
+/// reasoning finishes.
+#[test]
+fn reasoning_block_height_is_unchanged_when_reasoning_finishes() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| Appearance::mock());
+        let block = test_agent_block(
+            &mut app,
+            FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: reasoning_status(None, "line one\nline two\nline three"),
+            },
+        );
+        let streaming_height =
+            app.read(|app_ctx| desired_height(block.as_ref(app_ctx), 40, app_ctx));
+
+        block.update(&mut app, |block, _| {
+            block.block_model = Rc::new(FakeAgentBlockModel {
+                inputs: Vec::new(),
+                status: reasoning_status(
+                    Some(Duration::from_secs(9)),
+                    "line one\nline two\nline three",
+                ),
+            });
+        });
+
+        app.read(|app_ctx| {
+            let finished_height = desired_height(block.as_ref(app_ctx), 40, app_ctx);
+            assert_eq!(streaming_height, finished_height);
         });
     });
 }
@@ -2009,8 +2076,11 @@ fn multiple_reasoning_blocks_render_independent_collapse_state() {
         );
         app.read(|app_ctx| {
             let block = block.as_ref(app_ctx);
-            // The finished block collapses; the streaming one stays expanded.
-            // Blank-line gap, then the left-aligned body.
+            // Both blocks start collapsed; expanding one leaves the other
+            // alone. Blank-line gap, then the left-aligned body.
+            block
+                .collapsible_states
+                .set_collapsed(MessageId::new("r2".to_owned()), false);
             let rendered = render_block_lines_including_blank(block, 40, app_ctx);
             assert!(
                 rendered
