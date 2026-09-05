@@ -443,6 +443,14 @@ impl BlocklistAIActionExecutor {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn oz_hook_session(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<OzHookSession> {
+        self.oz_hook_sessions.get(&conversation_id).cloned()
+    }
+
     pub fn async_executing_action(&self, action_id: &AIAgentActionId) -> Option<&AIAgentAction> {
         self.async_executing_actions
             .get(action_id)

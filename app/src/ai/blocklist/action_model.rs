@@ -65,6 +65,10 @@ use crate::ai::agent::{
 };
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::hooks::OzHookSession;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::payload::{HookEventFields, HookPayloadTemplate, TurnStatus};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::runtime::OzHookEvent;
 use crate::ai::blocklist::action_model::execute::suggest_new_conversation::SuggestNewConversationExecutor;
 use crate::ai::blocklist::telemetry::send_run_agents_completed_telemetry;
 use crate::ai::document::ai_document_model::AIDocumentModel;
@@ -890,18 +894,69 @@ impl BlocklistAIActionModel {
             ctx.emit(BlocklistAIActionEvent::ActionBlockedOnUserConfirmation(
                 action.id.clone(),
             ));
+            let blocked_action = format!("{:?}", action.action.user_friendly_name());
+            #[cfg(not(target_family = "wasm"))]
+            if let Some(session) = self
+                .executor
+                .as_ref(ctx)
+                .oz_hook_session(conversation_id)
+                .filter(OzHookSession::claim_stop)
+            {
+                let payload_context = session.payload_context.clone();
+                let terminal_view_id = self.terminal_view_id;
+                ctx.spawn(
+                    async move {
+                        session
+                            .runtime
+                            .observe(OzHookEvent {
+                                invocation_id: uuid::Uuid::new_v4().to_string(),
+                                tool_use_id: None,
+                                payload: HookPayloadTemplate {
+                                    context: payload_context,
+                                    event: HookEventFields::Stop {
+                                        turn_status: TurnStatus::Blocked,
+                                    },
+                                },
+                            })
+                            .await;
+                    },
+                    move |_, _, ctx| {
+                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                            history_model.update_conversation_status(
+                                terminal_view_id,
+                                conversation_id,
+                                ConversationStatus::Blocked { blocked_action },
+                                ctx,
+                            );
+                        });
+                    },
+                );
+                return;
+            }
             BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-                let blocked_action_user_friendly_str = action.action.user_friendly_name();
                 history_model.update_conversation_status(
                     self.terminal_view_id,
                     conversation_id,
-                    ConversationStatus::Blocked {
-                        blocked_action: format!("{blocked_action_user_friendly_str:?}"),
-                    },
+                    ConversationStatus::Blocked { blocked_action },
                     ctx,
                 );
             });
         }
+    }
+
+    #[cfg(test)]
+    pub fn block_action_for_test(
+        &self,
+        action: &AIAgentAction,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.handle_not_executed_action(
+            action,
+            NotExecutedReason::NeedsConfirmation,
+            conversation_id,
+            ctx,
+        );
     }
 
     fn action_phase_for_action(

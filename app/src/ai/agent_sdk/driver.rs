@@ -1122,16 +1122,16 @@ impl AgentDriver {
             permission_mode: "supervised".into(),
         };
         let runtime: Arc<dyn OzHookRuntime> = Arc::new(OzHookRuntimeService::new(config));
-        let session = OzHookSession {
-            runtime: Arc::clone(&runtime),
-            protocol_context: warp_multi_agent_api::OzHookContext {
+        let session = OzHookSession::new(
+            Arc::clone(&runtime),
+            warp_multi_agent_api::OzHookContext {
                 enabled_events,
                 supported_payload_schema_versions: vec![PAYLOAD_SCHEMA_VERSION.into()],
             },
-            payload_context: payload_context.clone(),
-            redactor: HookRedactor::new(secrets.values().flat_map(secret_values)),
-            is_driver_owned: true,
-        };
+            payload_context.clone(),
+            HookRedactor::new(secrets.values().flat_map(secret_values)),
+            true,
+        );
         foreground
             .spawn(move |me, ctx| {
                 me.terminal_driver.update(ctx, |driver, ctx| {
@@ -1227,6 +1227,9 @@ impl AgentDriver {
         let Ok(Some(session)) = Self::current_oz_hook_session(foreground).await else {
             return;
         };
+        if !session.claim_stop() {
+            return;
+        }
         let turn_status = match status {
             SDKConversationOutputStatus::Success => TurnStatus::Completed,
             SDKConversationOutputStatus::Error { .. } => TurnStatus::Failed,

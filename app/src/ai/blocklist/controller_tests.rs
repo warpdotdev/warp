@@ -6,19 +6,36 @@ use ai::api_keys::{
     ApiKeyManager, AwsCredentials, AwsCredentialsState, CustomEndpointParams, GeapCredentials,
     GeapCredentialsState,
 };
+#[cfg(not(target_family = "wasm"))]
+use async_trait::async_trait;
 use chrono::Local;
+#[cfg(not(target_family = "wasm"))]
+use futures::channel::oneshot;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
 use warpui::{App, SingletonEntity, ViewHandle};
 
+#[cfg(not(target_family = "wasm"))]
+use super::local_oz_session_start_source;
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    AIAgentAction, AIAgentActionId, AIAgentActionType, AIAgentAttachment, AIAgentContext,
+    AIAgentInput, CancellationReason, ImageContext, PassiveSuggestionTrigger, UserQueryMode,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::payload::{HookEventFields, HookPayloadContext, TurnStatus};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::redaction::HookRedactor;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::runtime::{
+    OzHookCancellationScope, OzHookEvent, OzHookObservation, OzHookRuntime, OzPreToolUseDecision,
+    OzPreToolUseEvent,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::agent_sdk::hooks::{OzHookSession, PAYLOAD_SCHEMA_VERSION};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
@@ -48,6 +65,81 @@ const GEAP_TEST_SA_EMAIL: &str = "warp-geap@test-project.iam.gserviceaccount.com
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
+}
+#[cfg(not(target_family = "wasm"))]
+struct PausingStopRuntime {
+    statuses: async_channel::Sender<TurnStatus>,
+    release: Mutex<Option<oneshot::Receiver<()>>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[async_trait]
+impl OzHookRuntime for PausingStopRuntime {
+    async fn observe(&self, event: OzHookEvent) -> OzHookObservation {
+        if let HookEventFields::Stop { turn_status } = event.payload.event {
+            self.statuses.send(turn_status).await.unwrap();
+            let release = self.release.lock().unwrap().take();
+            if let Some(release) = release {
+                let _ = release.await;
+            }
+        }
+        OzHookObservation::default()
+    }
+
+    async fn pre_tool_use(&self, _: OzPreToolUseEvent) -> OzPreToolUseDecision {
+        OzPreToolUseDecision::Continue {
+            diagnostics: Vec::new(),
+        }
+    }
+
+    fn cancel(&self, _: OzHookCancellationScope) {}
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn pausing_oz_session(
+    conversation_id: AIConversationId,
+) -> (
+    OzHookSession,
+    async_channel::Receiver<TurnStatus>,
+    oneshot::Sender<()>,
+) {
+    let (statuses_tx, statuses_rx) = async_channel::unbounded();
+    let (release_tx, release_rx) = oneshot::channel();
+    let runtime: Arc<dyn OzHookRuntime> = Arc::new(PausingStopRuntime {
+        statuses: statuses_tx,
+        release: Mutex::new(Some(release_rx)),
+    });
+    let session = OzHookSession::new(
+        runtime,
+        warp_multi_agent_api::OzHookContext {
+            enabled_events: vec![warp_multi_agent_api::OzHookEvent::Stop.into()],
+            supported_payload_schema_versions: vec![PAYLOAD_SCHEMA_VERSION.into()],
+        },
+        HookPayloadContext {
+            session_id: "session".into(),
+            run_id: "run".into(),
+            conversation_id: conversation_id.to_string(),
+            cwd: "/tmp".into(),
+            model: "model".into(),
+            permission_mode: "supervised".into(),
+        },
+        HookRedactor::new([]),
+        false,
+    );
+    (session, statuses_rx, release_tx)
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn restored_resume_request_starts_an_oz_resume_session() {
+    let inputs = [AIAgentInput::ResumeConversation {
+        context: Arc::from([]),
+    }];
+
+    assert_eq!(
+        local_oz_session_start_source(inputs.iter(), false),
+        Some(crate::ai::agent_sdk::hooks::payload::SessionStartSource::Resume)
+    );
 }
 
 fn image_attachment(file_name: &str) -> PendingAttachment {
@@ -370,6 +462,209 @@ fn mock_response_stream_updates_history_through_controller() {
                 ..
             } if *id == conversation_id
         )));
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn failed_response_waits_for_stop_before_publishing_terminal_status() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, stream, stop_statuses, release_stop) =
+            terminal.update(&mut app, |view, ctx| {
+                let terminal_surface_id = view.id();
+                let stream_id = ResponseStreamId::new_for_test();
+                let conversation_id =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        let conversation_id = history.start_new_conversation(
+                            terminal_surface_id,
+                            false,
+                            false,
+                            false,
+                            ctx,
+                        );
+                        let task_id = history
+                            .conversation(&conversation_id)
+                            .unwrap()
+                            .get_root_task_id()
+                            .clone();
+                        history
+                            .update_conversation_for_new_request_input(
+                                RequestInput {
+                                    conversation_id,
+                                    input_messages: HashMap::from([(task_id, vec![])]),
+                                    working_directory: None,
+                                    model_id: LLMId::from("test-model"),
+                                    coding_model_id: LLMId::from("test-coding-model"),
+                                    cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                    computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                    shared_session_response_initiator: None,
+                                    request_start_ts: Local::now(),
+                                    supported_tools_override: None,
+                                },
+                                stream_id.clone(),
+                                terminal_surface_id,
+                                ctx,
+                            )
+                            .unwrap();
+                        conversation_id
+                    });
+                let (session, stop_statuses, release_stop) = pausing_oz_session(conversation_id);
+                let hook_context = session.protocol_context.clone();
+                let stream = ctx.add_model(|_| {
+                    let mut stream = ResponseStream::new_for_test(stream_id.clone());
+                    stream.set_oz_hook_context_for_test(hook_context);
+                    stream
+                });
+                view.ai_controller().update(ctx, |controller, ctx| {
+                    controller.set_oz_hook_session(conversation_id, Some(session), ctx);
+                    controller.register_mock_stream_for_test(
+                        stream_id,
+                        conversation_id,
+                        stream.clone(),
+                        ctx,
+                    );
+                });
+                (conversation_id, stream, stop_statuses, release_stop)
+            });
+        let (terminal_status_tx, terminal_status_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), move |_, event, _| {
+                if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                    conversation_id: updated_id,
+                    new_status,
+                    ..
+                } = event
+                    && *updated_id == conversation_id
+                    && new_status.is_error()
+                {
+                    terminal_status_tx.try_send(new_status.clone()).unwrap();
+                }
+            });
+        });
+
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(
+                warp_multi_agent_api::ResponseEvent {
+                    r#type: Some(response_event::Type::Finished(
+                        response_event::StreamFinished {
+                            reason: Some(response_event::stream_finished::Reason::Other(
+                                response_event::stream_finished::Other {},
+                            )),
+                            conversation_usage_metadata: None,
+                            token_usage: vec![],
+                            should_refresh_model_config: false,
+                            #[allow(deprecated)]
+                            request_cost: None,
+                            request_charges: None,
+                        },
+                    )),
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(stop_statuses.recv().await.unwrap(), TurnStatus::Failed);
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert!(
+                history
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .status()
+                    .is_in_progress()
+            );
+        });
+
+        release_stop.send(()).unwrap();
+        assert!(terminal_status_rx.recv().await.unwrap().is_error());
+        assert!(stop_statuses.try_recv().is_err());
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn blocked_action_waits_for_stop_before_publishing_terminal_status() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, action_model, stop_statuses, release_stop) =
+            terminal.update(&mut app, |view, ctx| {
+                let terminal_surface_id = view.id();
+                let conversation_id =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        let conversation_id = history.start_new_conversation(
+                            terminal_surface_id,
+                            false,
+                            false,
+                            false,
+                            ctx,
+                        );
+                        history.update_conversation_status(
+                            terminal_surface_id,
+                            conversation_id,
+                            crate::ai::agent::conversation::ConversationStatus::InProgress,
+                            ctx,
+                        );
+                        conversation_id
+                    });
+                let (session, stop_statuses, release_stop) = pausing_oz_session(conversation_id);
+                let action_model = view.ai_controller().as_ref(ctx).action_model.clone();
+                view.ai_controller().update(ctx, |controller, ctx| {
+                    controller.set_oz_hook_session(conversation_id, Some(session), ctx);
+                });
+                (conversation_id, action_model, stop_statuses, release_stop)
+            });
+        let (terminal_status_tx, terminal_status_rx) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&BlocklistAIHistoryModel::handle(ctx), move |_, event, _| {
+                if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                    conversation_id: updated_id,
+                    new_status,
+                    ..
+                } = event
+                    && *updated_id == conversation_id
+                    && new_status.is_blocked()
+                {
+                    terminal_status_tx.try_send(new_status.clone()).unwrap();
+                }
+            });
+        });
+        let action = AIAgentAction {
+            id: AIAgentActionId::from("blocked-action".to_owned()),
+            task_id: TaskId::new("task".to_owned()),
+            action: AIAgentActionType::RequestCommandOutput {
+                command: "echo blocked".into(),
+                is_read_only: None,
+                is_risky: None,
+                rationale: None,
+                uses_pager: None,
+                wait_until_completion: true,
+                citations: Vec::new(),
+            },
+            requires_result: true,
+        };
+
+        action_model.update(&mut app, |model, ctx| {
+            model.block_action_for_test(&action, conversation_id, ctx);
+        });
+
+        assert_eq!(stop_statuses.recv().await.unwrap(), TurnStatus::Blocked);
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert!(
+                history
+                    .conversation(&conversation_id)
+                    .unwrap()
+                    .status()
+                    .is_in_progress()
+            );
+        });
+
+        release_stop.send(()).unwrap();
+        assert!(terminal_status_rx.recv().await.unwrap().is_blocked());
+        assert!(stop_statuses.try_recv().is_err());
     });
 }
 

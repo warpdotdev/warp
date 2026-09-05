@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,47 @@ pub(crate) struct OzHookSession {
     pub(crate) payload_context: payload::HookPayloadContext,
     pub(crate) redactor: redaction::HookRedactor,
     pub(crate) is_driver_owned: bool,
+    turn_state: Arc<Mutex<OzHookTurnState>>,
+}
+
+#[derive(Default)]
+struct OzHookTurnState {
+    generation: u64,
+    stopped_generation: Option<u64>,
+}
+
+impl OzHookSession {
+    pub(crate) fn new(
+        runtime: Arc<dyn runtime::OzHookRuntime>,
+        protocol_context: warp_multi_agent_api::OzHookContext,
+        payload_context: payload::HookPayloadContext,
+        redactor: redaction::HookRedactor,
+        is_driver_owned: bool,
+    ) -> Self {
+        Self {
+            runtime,
+            protocol_context,
+            payload_context,
+            redactor,
+            is_driver_owned,
+            turn_state: Default::default(),
+        }
+    }
+
+    pub(crate) fn begin_turn(&self) {
+        let mut state = self.turn_state.lock().unwrap();
+        state.generation = state.generation.wrapping_add(1);
+        state.stopped_generation = None;
+    }
+
+    pub(crate) fn claim_stop(&self) -> bool {
+        let mut state = self.turn_state.lock().unwrap();
+        if state.stopped_generation == Some(state.generation) {
+            return false;
+        }
+        state.stopped_generation = Some(state.generation);
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]

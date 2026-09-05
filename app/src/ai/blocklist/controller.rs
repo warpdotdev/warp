@@ -466,6 +466,25 @@ struct InputQuery {
     queued_query_id: Option<QueuedQueryId>,
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn local_oz_session_start_source<'a>(
+    inputs: impl Iterator<Item = &'a AIAgentInput>,
+    has_existing_exchanges: bool,
+) -> Option<SessionStartSource> {
+    let mut has_user_query = false;
+    for input in inputs {
+        match input {
+            AIAgentInput::ResumeConversation { .. } => return Some(SessionStartSource::Resume),
+            AIAgentInput::UserQuery { .. } => has_user_query = true,
+            _ => {}
+        }
+    }
+    has_user_query.then_some(if has_existing_exchanges {
+        SessionStartSource::Resume
+    } else {
+        SessionStartSource::Startup
+    })
+}
 impl InputQuery {
     fn query(&self) -> String {
         match &self.input_query {
@@ -532,6 +551,20 @@ impl BlocklistAIController {
         if !response_stream.as_ref(ctx).is_completion_deferred() {
             return false;
         }
+        let turn_status = match &finished_event.reason {
+            Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
+                TurnStatus::Completed
+            }
+            Some(
+                warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::ContextWindowExceeded(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::QuotaLimit(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::LlmUnavailable(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::InvalidApiKey(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::InternalError(_)
+                | warp_multi_agent_api::response_event::stream_finished::Reason::MaxTokenLimit(_),
+            ) => TurnStatus::Failed,
+        };
         let has_actions = self.oz_hook_action_streams.contains(&stream_id)
             || BlocklistAIHistoryModel::as_ref(ctx)
                 .conversation(&conversation_id)
@@ -548,7 +581,13 @@ impl BlocklistAIController {
             });
             return false;
         };
-        if has_actions {
+        if has_actions && matches!(turn_status, TurnStatus::Completed) {
+            response_stream.update(ctx, |stream, ctx| {
+                stream.finish_deferred_completion(ctx);
+            });
+            return false;
+        }
+        if !session.claim_stop() {
             response_stream.update(ctx, |stream, ctx| {
                 stream.finish_deferred_completion(ctx);
             });
@@ -560,9 +599,7 @@ impl BlocklistAIController {
             tool_use_id: None,
             payload: HookPayloadTemplate {
                 context: session.payload_context.clone(),
-                event: HookEventFields::Stop {
-                    turn_status: TurnStatus::Completed,
-                },
+                event: HookEventFields::Stop { turn_status },
             },
         };
         ctx.spawn(
@@ -602,7 +639,7 @@ impl BlocklistAIController {
             });
             return false;
         };
-        if session.is_driver_owned {
+        if !session.claim_stop() {
             response_stream.update(ctx, |stream, ctx| {
                 stream.finish_deferred_completion(ctx);
             });
@@ -625,8 +662,8 @@ impl BlocklistAIController {
             },
             move |me, _, ctx| {
                 me.handle_response_stream_error(
-                    error,
                     &stream_id,
+                    error,
                     conversation_id,
                     &response_stream,
                     ctx,
@@ -638,68 +675,12 @@ impl BlocklistAIController {
         );
         true
     }
-
-    fn handle_response_stream_error(
-        &mut self,
-        error: Arc<AIApiError>,
-        stream_id: &ResponseStreamId,
-        conversation_id: AIConversationId,
-        response_stream: &ModelHandle<ResponseStream>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        if matches!(error.as_ref(), AIApiError::QuotaLimit { .. }) {
-            // If the error is a quota limit, refresh workspace metadata so AI overages are
-            // immediately up to date.
-            TeamUpdateManager::handle(ctx).update(ctx, |team_update_manager, ctx| {
-                std::mem::drop(team_update_manager.refresh_workspace_metadata(ctx));
-            });
-            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
-                model.enable_buy_credits_banner(ctx);
-            });
-        }
-        // A resume scheduled for this failure keeps the conversation in the non-terminal
-        // TransientError status instead of Error.
-
-        let recovery_pending = response_stream
-            .as_ref(ctx)
-            .should_resume_conversation_after_stream_finished();
-        let mut renderable_error: RenderableAIError = (&error).into();
-        if let RenderableAIError::Other {
-            will_attempt_resume,
-            waiting_for_network,
-            ..
-        }
-        | RenderableAIError::TransientNetworkError {
-            will_attempt_resume,
-            waiting_for_network,
-            ..
-        } = &mut renderable_error
-        {
-            // Rendering-only hints; state machine consumers key off the TransientError
-            // conversation status instead.
-            *will_attempt_resume |= recovery_pending;
-            if recovery_pending {
-                let network_status = NetworkStatus::as_ref(ctx);
-                *waiting_for_network = !network_status.is_online();
-            }
-        }
-
-        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
-            history_model.mark_response_stream_completed_with_error(
-                renderable_error,
-                recovery_pending,
-                stream_id,
-                conversation_id,
-                self.terminal_surface_id,
-                ctx,
-            );
-        });
-    }
     #[cfg(not(target_family = "wasm"))]
     fn initialize_local_oz_hook_session(
         &mut self,
         conversation_id: AIConversationId,
         model: String,
+        source: SessionStartSource,
         ctx: &mut ModelContext<Self>,
     ) -> Option<OzHookEvent> {
         if !FeatureFlag::OzLifecycleHooks.is_enabled()
@@ -741,24 +722,16 @@ impl BlocklistAIController {
             model,
             permission_mode: "supervised".into(),
         };
-        let source = if BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .is_some_and(|conversation| conversation.exchange_count() > 0)
-        {
-            SessionStartSource::Resume
-        } else {
-            SessionStartSource::Startup
-        };
-        let session = OzHookSession {
-            runtime: Arc::clone(&runtime),
-            protocol_context: warp_multi_agent_api::OzHookContext {
+        let session = OzHookSession::new(
+            Arc::clone(&runtime),
+            warp_multi_agent_api::OzHookContext {
                 enabled_events,
                 supported_payload_schema_versions: vec![PAYLOAD_SCHEMA_VERSION.into()],
             },
-            payload_context: payload_context.clone(),
-            redactor: HookRedactor::new([]),
-            is_driver_owned: false,
-        };
+            payload_context.clone(),
+            HookRedactor::new([]),
+            false,
+        );
         self.set_oz_hook_session(conversation_id, Some(session), ctx);
         Some(OzHookEvent {
             invocation_id: uuid::Uuid::new_v4().to_string(),
@@ -3069,17 +3042,29 @@ impl BlocklistAIController {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
         #[cfg(not(target_family = "wasm"))]
-        let startup_hook = request_input
-            .all_inputs()
-            .any(starts_local_oz_hook_session)
-            .then(|| {
-                self.initialize_local_oz_hook_session(
-                    conversation_id,
-                    request_params.model.to_string(),
-                    ctx,
-                )
-            })
-            .flatten();
+        let has_existing_exchanges = history_model
+            .as_ref(ctx)
+            .conversation(&conversation_id)
+            .is_some_and(|conversation| conversation.exchange_count() > 0);
+        #[cfg(not(target_family = "wasm"))]
+        let session_start_source =
+            local_oz_session_start_source(request_input.all_inputs(), has_existing_exchanges);
+        #[cfg(not(target_family = "wasm"))]
+        let session_start_hook = session_start_source.and_then(|source| {
+            self.initialize_local_oz_hook_session(
+                conversation_id,
+                request_params.model.to_string(),
+                source,
+                ctx,
+            )
+        });
+        #[cfg(not(target_family = "wasm"))]
+        if session_start_hook.is_none()
+            && request_input.all_inputs().any(AIAgentInput::is_user_query)
+            && let Some(session) = self.oz_hook_sessions.get(&conversation_id)
+        {
+            session.begin_turn();
+        }
         #[cfg(not(target_family = "wasm"))]
         if let Some(session) = self.oz_hook_sessions.get(&conversation_id) {
             request_params.oz_hook_context = Some(session.protocol_context.clone());
@@ -3089,7 +3074,7 @@ impl BlocklistAIController {
             .oz_hook_sessions
             .get(&conversation_id)
             .and_then(|session| {
-                let mut events = startup_hook.into_iter().collect::<Vec<_>>();
+                let mut events = session_start_hook.clone().into_iter().collect::<Vec<_>>();
                 if let Some(query) = request_input.all_inputs().find_map(|input| {
                     let AIAgentInput::UserQuery { query, .. } = input else {
                         return None;
@@ -3485,6 +3470,55 @@ impl BlocklistAIController {
         self.in_flight_response_streams
             .try_cancel_stream(response_stream_id, reason, ctx)
     }
+    fn handle_response_stream_error(
+        &mut self,
+        stream_id: &ResponseStreamId,
+        error: Arc<AIApiError>,
+        conversation_id: AIConversationId,
+        response_stream: &ModelHandle<ResponseStream>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(error.as_ref(), AIApiError::QuotaLimit { .. }) {
+            TeamUpdateManager::handle(ctx).update(ctx, |team_update_manager, ctx| {
+                std::mem::drop(team_update_manager.refresh_workspace_metadata(ctx));
+            });
+            AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
+                model.enable_buy_credits_banner(ctx);
+            });
+        }
+
+        let recovery_pending = response_stream
+            .as_ref(ctx)
+            .should_resume_conversation_after_stream_finished();
+        let mut renderable_error: RenderableAIError = (&error).into();
+        if let RenderableAIError::Other {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        }
+        | RenderableAIError::TransientNetworkError {
+            will_attempt_resume,
+            waiting_for_network,
+            ..
+        } = &mut renderable_error
+        {
+            *will_attempt_resume |= recovery_pending;
+            if recovery_pending {
+                *waiting_for_network = !NetworkStatus::as_ref(ctx).is_online();
+            }
+        }
+
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+            history_model.mark_response_stream_completed_with_error(
+                renderable_error,
+                recovery_pending,
+                stream_id,
+                conversation_id,
+                self.terminal_surface_id,
+                ctx,
+            );
+        });
+    }
 
     fn handle_response_stream_event(
         &mut self,
@@ -3680,8 +3714,8 @@ impl BlocklistAIController {
                             return;
                         }
                         self.handle_response_stream_error(
-                            e,
                             &stream_id,
+                            e,
                             conversation_id,
                             response_stream,
                             ctx,

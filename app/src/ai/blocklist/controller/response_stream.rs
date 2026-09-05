@@ -314,9 +314,15 @@ impl ResponseStream {
         event: warp_multi_agent_api::ResponseEvent,
         ctx: &mut ModelContext<Self>,
     ) {
-        ctx.emit(ResponseStreamEvent::ReceivedEvent(Consumable::new(Ok(
-            event,
-        ))));
+        let request_id = self
+            .current_request_id
+            .expect("test response stream has a current request");
+        self.handle_response_stream_event(request_id, Ok(event), ctx);
+    }
+
+    #[cfg(test)]
+    pub fn set_oz_hook_context_for_test(&mut self, context: warp_multi_agent_api::OzHookContext) {
+        self.params.oz_hook_context = Some(context);
     }
 
     /// Emits the natural-completion `AfterStreamFinished` event (no cancellation) through
@@ -900,13 +906,13 @@ impl ResponseStream {
                         }
                         warp_multi_agent_api::response_event::Type::Finished(finished_event) => {
                             self.stream_finished_received = true;
+                            #[cfg(not(target_family = "wasm"))]
+                            self.defer_completion_for_oz_stop();
                             // Emit retry success telemetry on successful completion
                             if matches!(
                                 finished_event.reason,
                                 Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None
                             ) {
-                                #[cfg(not(target_family = "wasm"))]
-                                self.defer_completion_for_oz_stop();
                                 // Emit retry success telemetry if this was a successful completion after retries
                                 if self.retries_sent > 0
                                     && let Some(original_error) = &self.original_error {
