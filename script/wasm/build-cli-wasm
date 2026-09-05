@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Build the warp_cli_wasm spike crate for wasm32-unknown-unknown and run
+# wasm-bindgen --target nodejs to produce a Node-loadable module.
+#
+# This is the **spike** build path for the sandboxless-orchestrator feasibility
+# prototype — distinct from `script/wasm/bundle`, which builds the full GUI
+# `warp` app for the browser. See crates/warp_cli_wasm/README.md for findings.
+#
+# Usage:
+#   script/wasm/build-cli-wasm            # build + bindgen to target/wasm-cli-pkg
+#   script/wasm/build-cli-wasm --check    # cargo check only (faster smoke test)
+#
+# Requirements:
+#   - rustup target wasm32-unknown-unknown installed
+#   - wasm-bindgen-cli matching the resolved wasm-bindgen version
+#     (install with: cargo install wasm-bindgen-cli --version $(cargo tree -p
+#     warp_cli_wasm --target wasm32-unknown-unknown -i wasm-bindgen | head -1
+#     | sed 's/.*v//'))
+#
+# Output:
+#   target/wasm-cli-pkg/warp_cli_wasm.js       — Node glue (require() this)
+#   target/wasm-cli-pkg/warp_cli_wasm_bg.wasm  — the WASM artifact
+#
+# Then run the harness:
+#   node crates/warp_cli_wasm/harness/run.mjs
+
+set -euo pipefail
+
+# This script lives at script/wasm/build-cli-wasm (two levels deep), so climb
+# up to the repo root.
+cd "$(dirname "$0")/../.."
+
+CHECK_ONLY=0
+if [[ "${1:-}" == "--check" ]]; then
+  CHECK_ONLY=1
+fi
+
+TARGET_DIR="${CARGO_TARGET_DIR:-target}"
+PROFILE="${WASM_CLI_PROFILE:-release}"
+
+if [[ "$CHECK_ONLY" -eq 1 ]]; then
+  echo ">> cargo check -p warp_cli_wasm --target wasm32-unknown-unknown"
+  cargo check -p warp_cli_wasm --target wasm32-unknown-unknown
+  echo ">> check OK"
+  exit 0
+fi
+
+echo ">> cargo build -p warp_cli_wasm --target wasm32-unknown-unknown --lib --$PROFILE"
+cargo build -p warp_cli_wasm --target wasm32-unknown-unknown --lib --"$PROFILE"
+
+WASM_ARTIFACT="$TARGET_DIR/wasm32-unknown-unknown/$PROFILE/warp_cli_wasm.wasm"
+if [[ ! -f "$WASM_ARTIFACT" ]]; then
+  echo "error: expected wasm artifact not found at $WASM_ARTIFACT" >&2
+  exit 1
+fi
+
+OUT_DIR="$TARGET_DIR/wasm-cli-pkg"
+mkdir -p "$OUT_DIR"
+
+# Resolve the wasm-bindgen-cli version that matches the resolved wasm-bindgen
+# dependency. The workspace pins `wasm-bindgen = "0.2.89"` but the lockfile may
+# resolve a newer patch; the CLI must match the resolved version exactly.
+WBG_VERSION=$(cargo tree -p warp_cli_wasm --target wasm32-unknown-unknown -i wasm-bindgen 2>/dev/null \
+  | grep -oE 'wasm-bindgen v[0-9]+\.[0-9]+\.[0-9]+' | head -1 | sed 's/.*v//')
+echo ">> resolved wasm-bindgen: ${WBG_VERSION:-unknown}"
+
+WBG_BIN="${WASM_BINDGEN_CLI:-wasm-bindgen}"
+if ! command -v "$WBG_BIN" >/dev/null 2>&1; then
+  echo "error: wasm-bindgen CLI not found. Install with:" >&2
+  echo "  cargo install wasm-bindgen-cli --version ${WBG_VERSION:-0.2.117}" >&2
+  exit 1
+fi
+
+echo ">> wasm-bindgen --target nodejs --out-dir $OUT_DIR $WASM_ARTIFACT"
+"$WBG_BIN" --target nodejs --out-dir "$OUT_DIR" "$WASM_ARTIFACT"
+
+echo ">> done. Node package in $OUT_DIR"
+echo "   run: node crates/warp_cli_wasm/harness/run.mjs $OUT_DIR/warp_cli_wasm.js"
