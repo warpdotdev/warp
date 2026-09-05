@@ -657,6 +657,51 @@ fn test_update_dirty_matches_clear_range() {
     assert_eq!(stored[1].start_row(), 25);
 }
 
+#[test]
+fn test_update_dirty_matches_boundary_spanning_match_keeps_order() {
+    let mut results = BlockFindResults::default();
+    let block_index = BlockIndex(0);
+    let grid_type = GridType::Output;
+
+    // Seed with sorted matches: one ending on row 9 and one on row 11 ending
+    // at column 2.
+    results.terminal_matches.insert(
+        (block_index, grid_type),
+        vec![make_match(9), make_match_at(11, 0, 2)],
+    );
+
+    // Rescanning dirty row 10 yields a match that starts on row 10 and spans
+    // onto row 11, ending at column 4 — past the retained row-11 match's end
+    // column. The row-based splice window does not cover the retained row-11
+    // match, so the merged vector is only ordered if the merge accounts for
+    // column-level `Ord`.
+    let spanning_match = AbsoluteMatch {
+        start: AbsolutePoint { row: 10, col: 0 },
+        end: AbsolutePoint { row: 11, col: 4 },
+        is_filtered: false,
+    };
+    results.update_dirty_matches(
+        block_index,
+        grid_type,
+        10..=10,
+        vec![spanning_match.clone()],
+    );
+
+    let stored = results
+        .terminal_matches
+        .get(&(block_index, grid_type))
+        .unwrap();
+    assert_eq!(stored.len(), 3);
+    assert!(
+        stored.windows(2).all(|w| w[0] <= w[1]),
+        "matches must remain in ascending order after a boundary-spanning dirty update: {stored:?}"
+    );
+    assert!(
+        stored.contains(&spanning_match),
+        "the boundary-spanning match must be retained: {stored:?}"
+    );
+}
+
 fn assert_async_focused_order_matches_sync(block_sort_direction: BlockSortDirection) {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
