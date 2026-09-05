@@ -311,6 +311,22 @@ fn file_status_changed_deleted_state(
     false
 }
 
+/// Whether an editor can be constructed for `file`: binary files never get
+/// one, and (outside wasm) a file also needs base content to diff against.
+fn expects_editor(file: &FileDiffAndContent) -> bool {
+    if file.file_diff.is_binary {
+        return false;
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        file.content_at_head.is_some()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        true
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodeReviewAction {
     OpenInNewTab {
@@ -2525,27 +2541,108 @@ impl CodeReviewView {
             return;
         };
 
-        // Deallocate global buffers that are going to be invalidated.
+        // Retain reusable file states to avoid recreating their initial layouts.
+        let mut old_file_states = self
+            .active_repo
+            .as_mut()
+            .and_then(RepositoryState::pop_loaded_state)
+            .map(|state| state.file_states)
+            .unwrap_or_default();
+
         if let Some(repo) = self.active_repo.as_mut() {
             repo.state = CodeReviewViewState::None;
-            GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
-                model.remove_deallocated_buffers(ctx);
-            });
         }
 
-        // Create a new list state for this update
-        self.viewported_list_state = Self::create_list_state(ctx);
+        let repo_path = self.repo_path().cloned();
+        let mut files_to_build: Vec<&FileDiffAndContent> = Vec::new();
+        let mut decisions: Vec<Option<FileState>> = Vec::with_capacity(diff_data.files.len());
+        for file in &diff_data.files {
+            let path = &file.file_diff.file_path;
+            let can_reuse = old_file_states.get(path).is_some_and(|existing| {
+                !file_status_changed_deleted_state(
+                    &existing.file_diff.status,
+                    &file.file_diff.status,
+                ) && existing.editor_state.is_some() == expects_editor(file)
+                    && !existing
+                        .editor_state
+                        .as_ref()
+                        .is_some_and(|state| state.has_unsaved_changes(ctx))
+            });
 
-        let file_states_vec = self.build_view_state_for_file_diffs(&diff_data.files, ctx);
+            if can_reuse {
+                let mut reused = old_file_states
+                    .shift_remove(path)
+                    .expect("checked can_reuse above");
+                reused.file_diff = file.file_diff.clone();
+                reused.is_expanded = self.should_auto_expand_file(&file.file_diff);
+
+                // Refresh the diff base/hunks/hidden-lines on the existing
+                // editor so a reused editor never shows a stale diff, without
+                // paying for a full editor/buffer recreation.
+                if let Some(editor) = reused.editor_state.as_ref().map(|s| s.editor().clone())
+                    && let Some(repo_path) = &repo_path
+                {
+                    let full_file_location = repo_path.join(path);
+                    let comment_line_numbers =
+                        self.comment_line_numbers_for_file(&full_file_location, ctx);
+                    Self::apply_diff_to_code_editor(
+                        &editor,
+                        file,
+                        false,
+                        &comment_line_numbers,
+                        ctx,
+                    );
+                }
+
+                decisions.push(Some(reused));
+            } else {
+                files_to_build.push(file);
+                decisions.push(None);
+            }
+        }
+
+        // Anything left in `old_file_states` belongs to files that were
+        // removed from the diff, or whose deleted-status changed enough to
+        // require a rebuild. Build fresh states only for what's actually
+        // needed, then drop the leftovers so `remove_deallocated_buffers`
+        // below can reclaim buffers that only they referenced.
+        let mut built_states = self
+            .build_view_state_for_file_diffs(files_to_build, ctx)
+            .into_iter();
+
+        let mut file_states = IndexMap::with_capacity(diff_data.files.len());
+        for (file, decision) in diff_data.files.iter().zip(decisions) {
+            let state = decision.unwrap_or_else(|| {
+                built_states
+                    .next()
+                    .expect("one built FileState per file queued for building")
+            });
+            file_states.insert(file.file_diff.file_path.clone(), state);
+        }
+        drop(old_file_states);
+
+        // Rebuild the viewported list state to match the new file count and
+        // order. `ListState` only supports appending at the end or removing
+        // by index -- it has no operation to insert or reorder items in
+        // place -- so per-item height caches for reused files aren't carried
+        // over. That's an acceptable, cheap re-measure pass (the cache holds
+        // only an `Option<Pixels>`, no editor or buffer content); it does not
+        // undo the memory win from reusing FileStates above.
+        self.viewported_list_state = Self::create_list_state(ctx);
+        for _ in file_states.values() {
+            self.viewported_list_state.add_item();
+        }
+
+        GlobalBufferModel::handle(ctx).update(ctx, |model, ctx| {
+            model.remove_deallocated_buffers(ctx);
+        });
+
         let is_local = self.repo_is_local();
         let diff_mode = self.diff_state_model.as_ref(ctx).diff_mode(ctx);
 
         if let Some(repo) = self.active_repo.as_mut() {
             repo.state = CodeReviewViewState::Loaded(LoadedState {
-                file_states: file_states_vec
-                    .into_iter()
-                    .map(|fs| (fs.file_diff.file_path.clone(), fs))
-                    .collect(),
+                file_states,
                 total_additions: diff_data.total_additions,
                 total_deletions: diff_data.total_deletions,
                 files_changed: diff_data.files_changed,
@@ -2580,9 +2677,9 @@ impl CodeReviewView {
     }
 
     /// Builds view state for the given file diffs, returning the list of newly created file states.
-    fn build_view_state_for_file_diffs(
+    fn build_view_state_for_file_diffs<'a>(
         &self,
-        files: &[FileDiffAndContent],
+        files: impl IntoIterator<Item = &'a FileDiffAndContent>,
         ctx: &mut ViewContext<Self>,
     ) -> Vec<FileState> {
         let git_operation_blocked = self
@@ -3001,7 +3098,7 @@ impl CodeReviewView {
     ) -> Option<CodeReviewEditorState> {
         let repo_path = self.repo_path()?.clone();
         // Skip editor creation for binary files or files without content (e.g., pure renames)
-        if file.file_diff.is_binary || file.content_at_head.is_none() {
+        if !expects_editor(file) {
             None
         } else if matches!(file.file_diff.status, GitFileStatus::Deleted) {
             // For deleted files, the file doesn't exist on disk anymore, so we can't use
@@ -3103,7 +3200,7 @@ impl CodeReviewView {
     ) -> Option<CodeReviewEditorState> {
         let repo_path = self.repo_path()?.clone();
 
-        if file.file_diff.is_binary {
+        if !expects_editor(file) {
             None
         } else {
             let self_handle = ctx.handle();
