@@ -22,7 +22,7 @@ Warp can latch rich status.
         "hooks": [
           {
             "type": "command",
-            "command": "bin/warp-plugin.sh",
+            "command": "bin/warp-plugin.sh SessionStart",
             "timeout": 5
           }
         ]
@@ -73,12 +73,8 @@ Warp can latch rich status.
 # emits Warp OSC 777 on stderr.
 set -euo pipefail
 
-payload="$(cat)"
-hook_event="$(printf '%s' "$payload" | sed -n 's/.*"hookEventName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-session_id="$(printf '%s' "$payload" | sed -n 's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-cwd="$(printf '%s' "$payload" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-prompt="$(printf '%s' "$payload" | sed -n 's/.*"prompt"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-error="$(printf '%s' "$payload" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+payload="$(</dev/stdin)"
+hook_event="${1:-}"
 
 case "$hook_event" in
   session_start|SessionStart) event="session_start" ;;
@@ -88,27 +84,30 @@ case "$hook_event" in
   *) exit 0 ;;
 esac
 
-# Prefer python for safe JSON if available.
 if command -v python3 >/dev/null 2>&1; then
-  body="$(HOOK_EVENT="$event" SESSION_ID="$session_id" CWD="$cwd" QUERY="$prompt" ERROR_TYPE="$error" python3 - <<'PY'
-import json, os
+  body="$(printf '%s' "$payload" | HOOK_EVENT="$event" python3 -c '
+import json
+import os
+import sys
+
+payload = json.load(sys.stdin)
 body = {
-  "v": 1,
-  "agent": "grok",
-  "event": os.environ["HOOK_EVENT"],
-  "plugin_version": "1.0.0",
+    "v": 1,
+    "agent": "grok",
+    "event": os.environ["HOOK_EVENT"],
+    "plugin_version": "1.0.0",
 }
-if os.environ.get("SESSION_ID"):
-  body["session_id"] = os.environ["SESSION_ID"]
-if os.environ.get("CWD"):
-  body["cwd"] = os.environ["CWD"]
-if os.environ.get("QUERY"):
-  body["query"] = os.environ["QUERY"]
-if os.environ.get("ERROR_TYPE"):
-  body["error_type"] = os.environ["ERROR_TYPE"]
+for source, target in (
+    ("sessionId", "session_id"),
+    ("cwd", "cwd"),
+    ("prompt", "query"),
+    ("error", "error_type"),
+):
+    value = payload.get(source)
+    if isinstance(value, str) and value:
+        body[target] = value
 print(json.dumps(body, separators=(",", ":")))
-PY
-)"
+')"
 else
   body="{\"v\":1,\"agent\":\"grok\",\"event\":\"$event\",\"plugin_version\":\"1.0.0\"}"
 fi

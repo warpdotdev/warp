@@ -288,7 +288,6 @@ pub enum Icon {
     CursorLogo,
     GooseLogo,
     AntigravityLogo,
-    GrokLogo,
     NLD,
     Oz,
     /// The Warp "W" glyph used as the agent brand mark (sourced from
@@ -637,7 +636,6 @@ impl From<Icon> for &'static str {
             Icon::CursorLogo => "bundled/svg/cursor.svg",
             Icon::GooseLogo => "bundled/svg/goose.svg",
             Icon::AntigravityLogo => "bundled/svg/antigravity_cli.svg",
-            Icon::GrokLogo => "bundled/svg/grok.svg",
             Icon::NLD => "bundled/svg/nld.svg",
             Icon::Oz => "bundled/svg/warp-3.svg",
             Icon::Agent => "bundled/svg/warp-drive.svg",

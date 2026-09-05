@@ -63,11 +63,10 @@ whose last segment is `grok` are **not** special-cased (same as Claude/Codex).
 
 ### 2. Icon asset
 
-- Add `app/assets/bundled/svg/grok.svg` — official Grok logomark paths, monochrome
-  with `fill="#FF0000"` (icon red-channel alpha mask; runtime tint for light/dark).
+- Reuse the existing `Icon::GrokLogo` mapping and
+  `app/assets/bundled/svg/grok.svg` asset from `master`.
 - Do **not** ship separate light/dark SVGs; Warp recolors one asset (same as Claude
   / OpenAI). Black-filled source art is invisible under the icon shader.
-- `Icon::GrokLogo` in `crates/warp_core/src/ui/icons.rs` → `bundled/svg/grok.svg`.
 
 ### 3. Listener + OSC 9
 
@@ -119,12 +118,11 @@ whose last segment is `grok` are **not** special-cased (same as Claude/Codex).
 
 ### 7. Tests
 
-- `cli_agent_tests`: detect `grok`, args; **not** bare `agent`; identity helpers
-  (display name, icon, bash, skills prefix).
-- Listener tests: Grok supported; OSC 9 / OSC 777 paths; drop OSC 9 after rich.
-- Plugin manager tests: install instructions non-empty; `can_auto_install` true;
-  install under `$GROK_HOME`; `needs_update` when missing/old version; env tests
-  use `#[serial_test::serial]`.
+- `cli_agent_tests`: basic `grok` detection and public identity configuration.
+- Listener tests: Grok support, OSC 9 / OSC 777 precedence, and wrong-agent rejection.
+- Plugin manager tests: real file install and permissions, escaped JSON metadata,
+  and current/missing/old version states; environment tests use
+  `#[serial_test::serial]` and restore the prior `$GROK_HOME` value on drop.
 
 ## Data flow
 
@@ -160,8 +158,9 @@ Manual proof required on the PR (screenshots + short recording).
 
 - Official SVG must stay monochrome `#FF0000` for the icon red-channel mask.
 - Submit strategy may need BracketedPaste if DelayedEnter flakes on Grok.
-- Hooks plugin uses lightweight JSON field extraction in bash; prompts with
-  complex quoting may omit optional fields until python3 builds the body.
+- Hooks pass the event name as an argument and use `python3` for JSON metadata
+  when available. Without it, the script emits a valid event without optional
+  metadata instead of attempting unsafe string parsing.
 
 ## Follow-ups (not this PR)
 

@@ -51,7 +51,7 @@ guidance (official package filenames; logomark only):
   https://data.x.ai/logos/xAI_Grok_Assets.zip.
 - Canonical package files for avatars: `Grok_Logomark_Light.svg` /
   `Grok_Logomark_Dark.svg` (issue recommendation for dark/light UI).
-- **Warp adaptation:** ship **one** monochrome SVG at
+- **Warp adaptation:** reuse the existing monochrome SVG at
   `app/assets/bundled/svg/grok.svg` with `fill="#FF0000"` (icon red-channel
   alpha mask). Warp tints the mark at paint time for light/dark chrome — the
   same pipeline as Claude / Codex / OpenAI. Dual on-disk light/dark files would
