@@ -1,7 +1,6 @@
 use super::placeholder::{BlockPlaceholder, Options};
 use super::{RenderContext, RenderableBlock};
 use crate::content::text::{BlockHeaderSize, BufferBlockStyle};
-use crate::extract_block;
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState};
 
@@ -56,10 +55,18 @@ impl RenderableBlock for RenderableHeader {
         _app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let (paragraph, header_size) = extract_block!(
-            self.viewport_item, content,
-            (block, BlockItem::Header { header_size, paragraph }) => (block.header(paragraph), header_size)
-        );
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let BlockItem::Header {
+            header_size,
+            paragraph,
+        } = block.item
+        else {
+            return;
+        };
+        let paragraph = block.header(paragraph);
 
         if self
             .placeholder

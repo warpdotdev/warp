@@ -66,6 +66,7 @@ env_logger.workspace = true
 sum_tree = { workspace = true, features = ["test-util"] }
 warp_core = { workspace = true, features = ["test-util"] }
 warpui = { workspace = true, features = ["test-util"] }
+warpui_core = { workspace = true, features = ["test-util"] }
 criterion = { version = "0.5.1", features = ["html_reports"] }
 
 [[bench]]

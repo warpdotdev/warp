@@ -41,6 +41,7 @@ use self::table::RenderableTable;
 use self::task_list::RenderableTaskList;
 use self::text_block::RenderableTextBlock;
 use self::unordered_list::RenderableBulletList;
+use super::layout::TextLayout;
 use super::model::viewport::{SizeInfo, ViewportItem};
 use super::model::{
     BlockItem, ElementUpdate, HitTestOptions, LineCount, Location, RenderState, RichTextStyles,
@@ -836,44 +837,61 @@ impl<V: EditorView> RichTextElement<V> {
 
     /// Builds a [`RenderableBlock`] for each block in the current viewport. This is done lazily,
     /// during layout.
-    fn renderable_blocks(&mut self, styles: &RichTextStyles, ctx: &AppContext) {
-        let parent = match self.parent_view.upgrade(ctx) {
-            Some(handle) => handle.as_ref(ctx),
+    fn renderable_blocks(
+        &mut self,
+        styles: &RichTextStyles,
+        layout_ctx: &LayoutContext,
+        app: &AppContext,
+    ) {
+        let parent = match self.parent_view.upgrade(app) {
+            Some(handle) => handle.as_ref(app),
             None => {
                 report_error!("Parent rich-text editor view dropped before layout");
                 return;
             }
         };
-
-        let model = self.model.as_ref(ctx);
+        let model = self.model.as_ref(app);
         let mut ordered_list_numbering = model.viewport_list_numbering();
-        let scroll_data = self.vertical_scroll_data(ctx);
-
-        let content = model.content();
-        let viewport_items = content.viewport_items(
+        let scroll_data = self.vertical_scroll_data(app);
+        let text_layout = TextLayout::for_materialization(layout_ctx, app, model);
+        self.blocks = None;
+        let viewport_items = model.materialize_viewport(
+            &text_layout,
             scroll_data.visible_px,
             model.viewport().width(),
             scroll_data.scroll_start,
         );
 
         let blocks = viewport_items
-            .map(|(item, block)| {
+            .into_iter()
+            .map(|item| {
+                let content = model.content();
+                let Some(resolved_block) = item.resolved_block(&content) else {
+                    return Empty::new(item).finish();
+                };
+                if matches!(&*resolved_block, BlockItem::Table(_)) {
+                    drop(content);
+                    return RenderableTable::new(item).finish();
+                }
+                let block = resolved_block.clone();
+                drop(content);
+                let is_ordered_list = matches!(block, BlockItem::OrderedList { .. });
                 let renderable_block = match block {
                     BlockItem::Paragraph(_) => RenderableParagraph::new(item).finish(),
                     BlockItem::TextBlock { .. } => RenderableTextBlock::new(item).finish(),
                     BlockItem::Header { .. } => RenderableHeader::new(item).finish(),
                     BlockItem::UnorderedList { indent_level, .. } => {
-                        RenderableBulletList::new(*indent_level, styles, item).finish()
+                        RenderableBulletList::new(indent_level, styles, item).finish()
                     }
                     BlockItem::TaskList {
                         complete,
                         mouse_state,
                         ..
                     } => RenderableTaskList::new(
-                        *complete,
+                        complete,
                         styles,
                         item,
-                        mouse_state.clone(),
+                        mouse_state,
                         self.parent_view.clone(),
                     )
                     .finish(),
@@ -883,30 +901,30 @@ impl<V: EditorView> RichTextElement<V> {
                         ..
                     } => {
                         let indent = indent_level.as_usize();
-                        let number = ordered_list_numbering.advance(indent, *number).label_index;
-                        RenderableOrderedListItem::new(*indent_level, item, number).finish()
+                        let number = ordered_list_numbering.advance(indent, number).label_index;
+                        RenderableOrderedListItem::new(indent_level, item, number).finish()
                     }
                     BlockItem::RunnableCodeBlock { .. } => {
                         // For layout purposes, the start marker for the command block is considered
                         // the ending newline of the _previous_ block.
                         let start_offset = item.block_offset;
-                        let runnable_command = parent.runnable_command_at(start_offset, ctx);
+                        let runnable_command = parent.runnable_command_at(start_offset, app);
                         RenderableRunnableCommand::new(
                             item,
                             runnable_command,
                             self.display_options.focused,
-                            ctx,
+                            app,
                         )
                         .finish()
                     }
                     BlockItem::MermaidDiagram { .. } => {
                         let start_offset = item.block_offset;
-                        let runnable_command = parent.runnable_command_at(start_offset, ctx);
+                        let runnable_command = parent.runnable_command_at(start_offset, app);
                         RenderableMermaidDiagram::new(
                             item,
                             runnable_command,
                             self.display_options.focused,
-                            ctx,
+                            app,
                         )
                         .finish()
                     }
@@ -914,11 +932,10 @@ impl<V: EditorView> RichTextElement<V> {
                         decoration,
                         text_decoration,
                         ..
-                    } => RenderableTemporaryBlock::new(item, *decoration, text_decoration.clone())
-                        .finish(),
+                    } => RenderableTemporaryBlock::new(item, decoration, text_decoration).finish(),
                     BlockItem::HorizontalRule(_) => HorizontalRule::new(item).finish(),
                     BlockItem::Image { .. } => RenderableImage::new(item).finish(),
-                    BlockItem::Table { .. } => RenderableTable::new(item).finish(),
+                    BlockItem::Table { .. } => unreachable!("tables are handled without cloning"),
                     BlockItem::TrailingNewLine(_) => Empty::new(item).finish(),
                     BlockItem::Hidden(config) => {
                         let full_line_range = model.line_range_at_offset(item.block_offset);
@@ -929,18 +946,18 @@ impl<V: EditorView> RichTextElement<V> {
                             full_line_range,
                             styles,
                             self.parent_view.clone(),
-                            ctx,
+                            app,
                         )
                         .finish()
                     }
                     BlockItem::Embedded(embed) => {
                         let start_offset = item.block_offset;
-                        let child_model = parent.embedded_item_at(start_offset, ctx);
-                        embed.element(model, item, child_model, ctx)
+                        let child_model = parent.embedded_item_at(start_offset, app);
+                        embed.element(model, item, child_model, app)
                     }
                 };
 
-                if !matches!(block, BlockItem::OrderedList { .. }) {
+                if !is_ordered_list {
                     ordered_list_numbering.reset();
                 }
 
@@ -1042,7 +1059,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
         let size = constraint.max;
         self.element_size = Some(size);
 
-        self.renderable_blocks(model.styles(), app);
+        self.renderable_blocks(model.styles(), ctx, app);
         match self.blocks.as_mut() {
             Some(blocks) => {
                 for block in blocks.iter_mut() {

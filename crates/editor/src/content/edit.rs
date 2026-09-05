@@ -653,6 +653,7 @@ impl EditDelta {
             if let Some(trailing_newline) = chunk_trailing_newline.into_inner() {
                 has_trailing_newline = Some(trailing_newline);
             }
+            layout.finish_cache_frame();
             chunk_start += chunk_len;
         }
 
@@ -750,6 +751,7 @@ pub fn layout_temporary_blocks(
             .collect();
 
         results.extend(chunk_results);
+        layout.finish_cache_frame();
         chunk_start += chunk_len;
     }
 
@@ -1122,13 +1124,10 @@ fn layout_text_block(
 
         if new_line && !matches!(text_block.style, BufferBlockStyle::Table { .. }) {
             let offsets = active_line.finish_offsets();
-            paragraphs.push(Paragraph::new(
-                layout.layout_text(
-                    &active_line.text,
-                    &paragraph_styles,
-                    &spacing,
-                    &active_line.style_runs,
-                ),
+            paragraphs.push(paragraph_from_layout(
+                layout,
+                &active_line,
+                paragraph_styles,
                 offsets,
                 active_line.content_length,
                 active_line.active_line_url.clone(),
@@ -1141,13 +1140,10 @@ fn layout_text_block(
 
     let has_trailing_newline = if !active_line.is_empty() {
         let offsets = active_line.finish_offsets();
-        paragraphs.push(Paragraph::new(
-            layout.layout_text(
-                &active_line.text,
-                &paragraph_styles,
-                &spacing,
-                &active_line.style_runs,
-            ),
+        paragraphs.push(paragraph_from_layout(
+            layout,
+            &active_line,
+            paragraph_styles,
             offsets,
             // This assumes that every line is ended by a newline, block marker, or
             // block item. Currently, that's true of every paragraph but the last,
@@ -1156,7 +1152,7 @@ fn layout_text_block(
             // the buffer and distinguish between the end of the last paragraph and
             // a potential TrailingNewline item.
             active_line.content_length + 1,
-            active_line.active_line_url,
+            active_line.active_line_url.clone(),
             spacing,
             rich_text_styles.minimum_paragraph_height,
         ));
@@ -1270,6 +1266,44 @@ fn layout_text_block(
     };
 
     block_item.map(|item| (item, has_trailing_newline))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paragraph_from_layout(
+    layout: &TextLayout,
+    line: &LayOutArgs,
+    paragraph_styles: ParagraphStyles,
+    offsets: OffsetMap,
+    content_length: CharOffset,
+    active_url: Vec<ParsedUrl>,
+    spacing: BlockSpacing,
+    minimum_height: Option<Pixels>,
+) -> Paragraph {
+    if layout.supports_deferred_paragraphs() {
+        let frame =
+            layout.layout_text_uncached(&line.text, &paragraph_styles, &spacing, &line.style_runs);
+        Paragraph::new_deferred(
+            frame,
+            line.text.clone(),
+            line.style_runs.clone(),
+            paragraph_styles,
+            offsets,
+            content_length,
+            active_url,
+            spacing,
+            minimum_height,
+        )
+    } else {
+        let frame = layout.layout_text(&line.text, &paragraph_styles, &spacing, &line.style_runs);
+        Paragraph::new(
+            frame,
+            offsets,
+            content_length,
+            active_url,
+            spacing,
+            minimum_height,
+        )
+    }
 }
 
 fn layout_mermaid_diagram_block(
@@ -1514,19 +1548,35 @@ fn layout_temporary_block(content: String, layout: &TextLayout) -> ParagraphBloc
         );
 
         let offsets = active_line.finish_offsets();
-        paragraphs.push(Paragraph::new(
-            layout.layout_text(
-                &active_line.text,
-                &styles,
-                &spacing,
-                &active_line.style_runs,
-            ),
-            offsets,
-            active_line.content_length,
-            active_line.active_line_url.clone(),
-            spacing,
-            rich_text_styles.minimum_paragraph_height,
-        ));
+        let frame = layout.layout_text(
+            &active_line.text,
+            &styles,
+            &spacing,
+            &active_line.style_runs,
+        );
+        let paragraph = if layout.supports_deferred_paragraphs() {
+            Paragraph::new_deferred(
+                frame,
+                active_line.text.clone(),
+                active_line.style_runs.clone(),
+                styles,
+                offsets,
+                active_line.content_length,
+                active_line.active_line_url.clone(),
+                spacing,
+                rich_text_styles.minimum_paragraph_height,
+            )
+        } else {
+            Paragraph::new(
+                frame,
+                offsets,
+                active_line.content_length,
+                active_line.active_line_url.clone(),
+                spacing,
+                rich_text_styles.minimum_paragraph_height,
+            )
+        };
+        paragraphs.push(paragraph);
         active_line.reset_for_newline();
     }
 

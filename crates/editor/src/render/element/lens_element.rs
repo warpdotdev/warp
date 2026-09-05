@@ -14,6 +14,7 @@ use crate::editor::EditorView;
 use crate::render::element::paragraph::RenderableParagraph;
 use crate::render::element::temporary_block::RenderableTemporaryBlock;
 use crate::render::element::{DisplayOptions, RenderContext, RenderableBlock};
+use crate::render::layout::TextLayout;
 use crate::render::model::{BlockItem, RenderLineLocation, RenderState};
 
 pub struct RichTextElementLens<V: EditorView> {
@@ -65,22 +66,32 @@ impl<V: EditorView> Element for RichTextElementLens<V> {
     ) -> Vector2F {
         let model = self.model.as_ref(app);
         let mut total_height = 0.;
-        let blocks =
-            model.blocks_in_line_range(self.line_range.clone(), constraint.max.x().into_pixels());
+        let text_layout = TextLayout::for_materialization(ctx, app, model);
+        self.blocks = None;
+        let blocks = model.materialize_line_range(
+            &text_layout,
+            self.line_range.clone(),
+            constraint.max.x().into_pixels(),
+        );
 
         // Only support paragraphs and temporary blocks for now. This should be extensible to more block types in the future.
         let mut renderable_blocks: Vec<Box<dyn RenderableBlock>> = blocks
             .into_iter()
-            .filter_map(|(item, block)| match block {
-                BlockItem::Paragraph(_) => Some(RenderableParagraph::new(item).finish()),
-                BlockItem::TemporaryBlock {
-                    decoration,
-                    text_decoration,
-                    ..
-                } => {
-                    Some(RenderableTemporaryBlock::new(item, decoration, text_decoration).finish())
+            .filter_map(|item| {
+                let content = model.content();
+                let block = item.resolved_block(&content)?.clone();
+                drop(content);
+                match block {
+                    BlockItem::Paragraph(_) => Some(RenderableParagraph::new(item).finish()),
+                    BlockItem::TemporaryBlock {
+                        decoration,
+                        text_decoration,
+                        ..
+                    } => Some(
+                        RenderableTemporaryBlock::new(item, decoration, text_decoration).finish(),
+                    ),
+                    _ => None, /* other block types not supported */
                 }
-                _ => None, /* other block types not supported */
             })
             .collect();
 

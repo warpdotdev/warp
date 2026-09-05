@@ -33,6 +33,7 @@ pub(crate) enum RequestedFallbackFontSource {
     GlyphForChar((FontId, char)),
     Line(text_layout::CacheKeyValue),
     TextFrame(text_layout::CacheKeyValue),
+    RedrawOnly,
 }
 
 pub(crate) struct FontBytes(pub Vec<u8>);
@@ -99,6 +100,13 @@ impl FontFallbackCache {
             return;
         }
 
+        if source == RequestedFallbackFontSource::RedrawOnly
+            && !self
+                .requested_redraw_only_families
+                .insert(fallback_font_family.clone())
+        {
+            return;
+        }
         self.requested_fallback_families
             .entry(fallback_font_family)
             .or_default()
@@ -158,6 +166,9 @@ impl Cache {
             .map(|mut entry| (entry.key().clone(), mem::take(entry.value_mut())))
             .collect_vec();
         self.font_fallback_cache.requested_fallback_families.clear();
+        self.font_fallback_cache
+            .requested_redraw_only_families
+            .clear();
         result.into_iter()
     }
 
@@ -167,3 +178,7 @@ impl Cache {
             .contains_key(family)
     }
 }
+
+#[cfg(test)]
+#[path = "external_fallback_tests.rs"]
+mod tests;

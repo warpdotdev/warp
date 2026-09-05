@@ -105,6 +105,24 @@ impl<T> TextCache<T> {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
+impl TextCache<TextFrame> {
+    fn payload_counts(&self) -> (usize, usize) {
+        let prev_frame = self.prev_frame.lock();
+        let curr_frame = self.curr_frame.read();
+        prev_frame
+            .values()
+            .chain(curr_frame.values())
+            .flat_map(|frame| frame.lines())
+            .fold((0, 0), |(glyphs, carets), line| {
+                (
+                    glyphs + line.runs.iter().map(|run| run.glyphs.len()).sum::<usize>(),
+                    carets + line.caret_positions.len(),
+                )
+            })
+    }
+}
+
 pub struct LayoutCache {
     line_cache: TextCache<Line>,
     text_frame_cache: TextCache<TextFrame>,
@@ -129,6 +147,12 @@ impl LayoutCache {
         self.text_frame_cache.finish_frame();
     }
 
+    /// Returns glyph and caret payload counts retained by cached text frames.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn cached_text_frame_payload_counts(&self) -> (usize, usize) {
+        self.text_frame_cache.payload_counts()
+    }
+
     pub fn remove_line(&self, key: &dyn CacheKey) {
         self.line_cache.remove(key);
     }
@@ -136,7 +160,6 @@ impl LayoutCache {
     pub fn remove_text_frame(&self, key: &dyn CacheKey) {
         self.text_frame_cache.remove(key);
     }
-
     #[allow(clippy::too_many_arguments)]
     pub fn layout_text<'a>(
         &'a self,
@@ -148,6 +171,58 @@ impl LayoutCache {
         alignment: TextAlignment,
         first_line_head_indent: Option<f32>,
         text_layout_system: &'a TextLayoutSystem<'a>,
+    ) -> Arc<TextFrame> {
+        self.layout_text_with_fallback_source(
+            text,
+            line_style,
+            styles,
+            max_width,
+            max_height,
+            alignment,
+            first_line_head_indent,
+            text_layout_system,
+            false,
+        )
+    }
+
+    /// Lays out a text frame whose fallback-font requests only need to trigger a redraw.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_text_redraw_only<'a>(
+        &'a self,
+        text: &'a str,
+        line_style: LineStyle,
+        styles: &'a [StyleRun],
+        max_width: f32,
+        max_height: f32,
+        alignment: TextAlignment,
+        first_line_head_indent: Option<f32>,
+        text_layout_system: &'a TextLayoutSystem<'a>,
+    ) -> Arc<TextFrame> {
+        self.layout_text_with_fallback_source(
+            text,
+            line_style,
+            styles,
+            max_width,
+            max_height,
+            alignment,
+            first_line_head_indent,
+            text_layout_system,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn layout_text_with_fallback_source<'a>(
+        &'a self,
+        text: &'a str,
+        line_style: LineStyle,
+        styles: &'a [StyleRun],
+        max_width: f32,
+        max_height: f32,
+        alignment: TextAlignment,
+        first_line_head_indent: Option<f32>,
+        text_layout_system: &'a TextLayoutSystem<'a>,
+        redraw_only: bool,
     ) -> Arc<TextFrame> {
         let (text, adjusted_styles) = strip_leading_unicode_bom(text, styles);
         let styles = adjusted_styles
@@ -193,10 +268,12 @@ impl LayoutCache {
             };
             for line in text_frame.lines() {
                 for ch in &line.chars_with_missing_glyphs {
-                    text_layout_system.request_fallback_font_for_char(
-                        *ch,
-                        RequestedFallbackFontSource::TextFrame(key.clone()),
-                    );
+                    let source = if redraw_only {
+                        RequestedFallbackFontSource::RedrawOnly
+                    } else {
+                        RequestedFallbackFontSource::TextFrame(key.clone())
+                    };
+                    text_layout_system.request_fallback_font_for_char(*ch, source);
                 }
             }
             self.text_frame_cache.insert(key, text_frame.clone());
@@ -712,6 +789,39 @@ impl TextFrame {
             lines: vec1![Line::empty(font_size, line_height_ratio, 0)],
             max_width: 0.0,
             alignment: Default::default(),
+        }
+    }
+
+    /// Keeps line geometry and boundary carets while dropping render-only glyph and caret payloads.
+    pub fn compact_for_deferred_layout(&self) -> Self {
+        let lines = self.lines.mapped_ref(|line| {
+            let mut boundary_carets = Vec::with_capacity(2);
+            if let Some(first) = line.caret_positions.first() {
+                boundary_carets.push(first.clone());
+            }
+            if line.caret_positions.len() > 1
+                && let Some(last) = line.caret_positions.last()
+            {
+                boundary_carets.push(last.clone());
+            }
+            Line {
+                width: line.width,
+                trailing_whitespace_width: line.trailing_whitespace_width,
+                runs: Vec::new(),
+                font_size: line.font_size,
+                line_height_ratio: line.line_height_ratio,
+                baseline_ratio: line.baseline_ratio,
+                clip_config: line.clip_config,
+                ascent: line.ascent,
+                descent: line.descent,
+                caret_positions: boundary_carets,
+                chars_with_missing_glyphs: Vec::new(),
+            }
+        });
+        Self {
+            lines,
+            max_width: self.max_width,
+            alignment: self.alignment,
         }
     }
 

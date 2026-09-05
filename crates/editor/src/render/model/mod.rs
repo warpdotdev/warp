@@ -4,6 +4,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU8;
 use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::{fmt, mem};
 
@@ -35,7 +36,7 @@ use warpui_core::fonts::{FamilyId, Properties, Weight};
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::platform::LineStyle;
-use warpui_core::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
+use warpui_core::text_layout::{CaretPosition, LayoutCache, Line, StyleAndFont, TextFrame};
 use warpui_core::text_selection_utils::{
     NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
     selection_crosses_newline_offset_based,
@@ -56,7 +57,7 @@ use self::viewport::{
 use super::BLOCK_FOOTER_HEIGHT;
 use super::element::broken_embedding::RenderableBrokenEmbedding;
 use super::element::{CursorData, RenderContext, RenderableBlock};
-use super::layout::{TextLayout, line_height};
+use super::layout::{MAX_LAYOUT_LINE_CHARS, TextLayout, line_height};
 use crate::content::edit::{
     EditDelta, LaidOutRenderDelta, ParsedUrl, TemporaryBlock, layout_temporary_blocks,
 };
@@ -93,6 +94,143 @@ const DEFAULT_CHAR_CELL_TAB_SIZE: NonZeroU8 = NonZeroU8::new(4).unwrap();
 /// The minimum height of a paragraph, not including padding or margins.
 pub const PARAGRAPH_MIN_HEIGHT: Pixels = Pixels::new(24.);
 const TABLE_SCROLL_REVEAL_MARGIN: Pixels = Pixels::new(8.);
+
+fn fair_layout_allocations(demands: &[usize], max_chars: usize) -> Vec<usize> {
+    let mut remaining_chars = max_chars;
+    let mut remaining_demands = demands.to_vec();
+    let mut allocations = vec![0; demands.len()];
+    while remaining_chars > 0 {
+        let active_items = remaining_demands
+            .iter()
+            .filter(|demand| **demand > 0)
+            .count();
+        if active_items == 0 {
+            break;
+        }
+
+        let share = remaining_chars / active_items;
+        if share == 0 {
+            let mut active = remaining_demands
+                .iter()
+                .enumerate()
+                .filter(|(_, demand)| **demand > 0)
+                .collect_vec();
+            active.sort_unstable_by_key(|(_, demand)| std::cmp::Reverse(**demand));
+            for (index, _) in active.into_iter().take(remaining_chars) {
+                allocations[index] += 1;
+            }
+            break;
+        }
+
+        for (index, demand) in remaining_demands.iter_mut().enumerate() {
+            let allocation = (*demand).min(share);
+            allocations[index] += allocation;
+            *demand -= allocation;
+            remaining_chars -= allocation;
+        }
+    }
+
+    allocations
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct BlockIdentity {
+    block_offset: CharOffset,
+    block_index: usize,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct MaterializationKey {
+    block: BlockIdentity,
+    paragraph_start: usize,
+    paragraph_end: usize,
+}
+
+#[derive(Default)]
+struct MaterializedLayoutRetention {
+    active: Vec<Weak<MaterializedBlockSnapshot>>,
+    reusable: HashMap<MaterializationKey, Weak<MaterializedBlockSnapshot>>,
+}
+
+impl MaterializedLayoutRetention {
+    fn sweep(&mut self) {
+        self.active.retain(|snapshot| snapshot.strong_count() > 0);
+        self.reusable
+            .retain(|_, snapshot| snapshot.strong_count() > 0);
+    }
+
+    fn reusable(&mut self, key: MaterializationKey) -> Option<Rc<MaterializedBlockSnapshot>> {
+        self.reusable.get(&key)?.upgrade()
+    }
+
+    fn retain(&mut self, key: MaterializationKey, snapshot: Rc<MaterializedBlockSnapshot>) {
+        let weak = Rc::downgrade(&snapshot);
+        self.active.push(weak.clone());
+        self.reusable.insert(key, weak);
+    }
+    fn rebalance(&mut self, layout: &TextLayout, max_chars: usize) {
+        self.sweep();
+        let snapshots = self.active.iter().filter_map(Weak::upgrade).collect_vec();
+        let demands = snapshots
+            .iter()
+            .flat_map(|snapshot| snapshot.demands.iter().copied())
+            .collect_vec();
+        let allocations = fair_layout_allocations(&demands, max_chars);
+        let mut allocations = allocations.as_slice();
+        for snapshot in snapshots {
+            let (snapshot_allocations, remaining) = allocations.split_at(snapshot.demands.len());
+            allocations = remaining;
+            snapshot.materialize(layout, snapshot_allocations);
+        }
+    }
+
+    fn invalidate_reuse(&mut self) {
+        self.reusable.clear();
+    }
+
+    #[cfg(test)]
+    fn reusable_len(&self) -> usize {
+        self.reusable.len()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct MaterializedBlockSnapshot {
+    source: BlockItem,
+    paragraph_range: Range<usize>,
+    demands: Vec<usize>,
+    allocations: RefCell<Vec<usize>>,
+    block: RefCell<Option<Rc<BlockItem>>>,
+}
+
+impl MaterializedBlockSnapshot {
+    fn new(source: BlockItem, paragraph_range: Range<usize>) -> Self {
+        let demands = source.materialization_demands(paragraph_range.clone());
+        Self {
+            source,
+            paragraph_range,
+            demands,
+            allocations: RefCell::new(Vec::new()),
+            block: RefCell::new(None),
+        }
+    }
+
+    fn materialize(&self, layout: &TextLayout, allocations: &[usize]) {
+        if *self.allocations.borrow() == allocations && self.block.borrow().is_some() {
+            return;
+        }
+        let block = self
+            .source
+            .materialized(layout, self.paragraph_range.clone(), allocations)
+            .map(Rc::new);
+        *self.allocations.borrow_mut() = allocations.to_vec();
+        *self.block.borrow_mut() = block;
+    }
+
+    pub(super) fn block(&self) -> Option<Rc<BlockItem>> {
+        self.block.borrow().clone()
+    }
+}
 
 pub const EMBEDDED_ITEM_FIRST_LINE_HEIGHT: f32 = 24.;
 
@@ -242,7 +380,10 @@ impl RenderDecoration {
 /// Wrapper around a reference to the underlying render state sumtree.
 /// This is so we could define an interface that returns objects with the same lifetime as the inner
 /// reference with interior mutability.
-pub struct RenderContentTreeRef<'a>(Ref<'a, SumTree<BlockItem>>);
+pub struct RenderContentTreeRef<'a>(
+    Ref<'a, SumTree<BlockItem>>,
+    Ref<'a, HashMap<BlockIdentity, Rc<BlockItem>>>,
+);
 
 impl<'a> RenderContentTreeRef<'a> {
     pub fn block_items(&self) -> impl Iterator<Item = &BlockItem> {
@@ -265,7 +406,13 @@ impl<'a> RenderContentTreeRef<'a> {
         viewport_width: Pixels,
         scroll_top: Pixels,
     ) -> impl Iterator<Item = (ViewportItem, &BlockItem)> {
-        ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width)
+        ViewportIterator::new(&self.0, scroll_top, viewport_height, viewport_width).map(
+            |(mut item, block)| {
+                let materialized = self.1.get(&item.block_identity()).cloned();
+                item.set_materialized_override(materialized);
+                (item, block)
+            },
+        )
     }
 
     /// Describe only the content of the rendering model.
@@ -275,6 +422,23 @@ impl<'a> RenderContentTreeRef<'a> {
     }
 
     pub fn block_at_height(&self, height: f64) -> Option<Positioned<'_, BlockItem>> {
+        let height = Height(OrderedFloat(height));
+        let mut cursor = self.0.cursor::<Height, LayoutSummary>();
+        cursor.seek(&height, SeekBias::Right);
+        let block_index = cursor.start().item_count;
+        let block = cursor.positioned_item()?;
+        let item = self
+            .1
+            .get(&BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
+            .map(Rc::as_ref)
+            .unwrap_or(block.item);
+        Some(Positioned { item, ..block })
+    }
+
+    fn base_block_at_height(&self, height: f64) -> Option<Positioned<'_, BlockItem>> {
         let height = Height(OrderedFloat(height));
 
         let mut cursor = self.0.cursor::<Height, LayoutSummary>();
@@ -330,13 +494,55 @@ impl<'a> RenderContentTreeRef<'a> {
     pub fn block_at_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
         let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
         if cursor.seek(&offset, SeekBias::Right) {
-            cursor.positioned_item()
+            let block_index = cursor.start().item_count;
+            let block = cursor.positioned_item()?;
+            let item = self
+                .1
+                .get(&BlockIdentity {
+                    block_offset: block.start_char_offset,
+                    block_index,
+                })
+                .map(Rc::as_ref)
+                .unwrap_or(block.item);
+            Some(Positioned { item, ..block })
         } else {
             // If we can't seek exactly to the starting CharOffset of the block, the render model
             // has probably changed since this item was created. To be safe, fail the lookup.
             log::trace!("ViewportItem invalidated: no block starting at {offset}");
             None
         }
+    }
+
+    fn block_containing_offset(&self, offset: CharOffset) -> Option<Positioned<'_, BlockItem>> {
+        let mut cursor = self.0.cursor::<CharOffset, LayoutSummary>();
+        cursor.seek(&offset, SeekBias::Right);
+        let block_index = cursor.start().item_count;
+        let block = cursor.positioned_item()?;
+        let item = self
+            .1
+            .get(&BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
+            .map(Rc::as_ref)
+            .unwrap_or(block.item);
+        Some(Positioned { item, ..block })
+    }
+
+    fn block_at_line(&self, line: LineCount) -> Option<Positioned<'_, BlockItem>> {
+        let mut cursor = self.0.cursor::<LineCount, LayoutSummary>();
+        cursor.seek(&line, SeekBias::Right);
+        let block_index = cursor.start().item_count;
+        let block = cursor.positioned_item()?;
+        let item = self
+            .1
+            .get(&BlockIdentity {
+                block_offset: block.start_char_offset,
+                block_index,
+            })
+            .map(Rc::as_ref)
+            .unwrap_or(block.item);
+        Some(Positioned { item, ..block })
     }
 
     /// The full line range of the first collapsed hidden section, or `None` if
@@ -1073,6 +1279,9 @@ pub struct RenderState {
     /// Content is wrapped in a RefCell so we could mutate it when we are laying out the editor element.
     /// We know this is safe because there is a one-to-one relationship between element and model.
     content: RefCell<SumTree<BlockItem>>,
+    materialized_blocks: RefCell<HashMap<BlockIdentity, Rc<BlockItem>>>,
+    materialized_block_keys: RefCell<HashMap<BlockIdentity, MaterializationKey>>,
+    materialized_layout_retention: RefCell<MaterializedLayoutRetention>,
 
     selections: RefCell<RenderedSelectionSet>,
     decorations: RenderDecoration,
@@ -1636,69 +1845,180 @@ impl BlockSpacing {
 
 #[derive(Debug, Clone)]
 pub struct ParagraphBlock {
-    paragraphs: Vec1<Paragraph>,
+    paragraphs: Arc<Vec1<Paragraph>>,
+    paragraph_index: Arc<Vec<ParagraphGeometry>>,
+    width: Pixels,
+    materialized_paragraphs: HashMap<usize, Paragraph>,
+}
+
+#[derive(Debug)]
+struct ParagraphGeometry {
+    start_height: Pixels,
+    end_height: Pixels,
+    start_line: LineCount,
+    end_line: LineCount,
+    end_offset: CharOffset,
 }
 
 impl ParagraphBlock {
     pub fn new(paragraphs: Vec1<Paragraph>) -> Self {
-        Self { paragraphs }
+        let mut height = Pixels::zero();
+        let mut line = LineCount::zero();
+        let mut offset = CharOffset::zero();
+        let width = paragraphs
+            .iter()
+            .map(Paragraph::width)
+            .max_by(|a, b| a.as_f32().total_cmp(&b.as_f32()))
+            .unwrap_or(Pixels::zero());
+        let paragraph_index = paragraphs
+            .iter()
+            .map(|paragraph| {
+                let geometry = ParagraphGeometry {
+                    start_height: height,
+                    end_height: height + paragraph.height(),
+                    start_line: line,
+                    end_line: line + paragraph.lines(),
+                    end_offset: offset + paragraph.content_length,
+                };
+                height = geometry.end_height;
+                line = geometry.end_line;
+                offset = geometry.end_offset;
+                geometry
+            })
+            .collect();
+        Self {
+            paragraphs: Arc::new(paragraphs),
+            paragraph_index: Arc::new(paragraph_index),
+            width,
+            materialized_paragraphs: HashMap::new(),
+        }
     }
 
     pub fn spacing(&self) -> BlockSpacing {
         // In the future, we should support two separate level of spacing in a
         // ParagraphBlock: 1) the internal spacing between paragraphs 2) the overall
         // spacing of the block.
-        self.paragraphs.first().spacing()
+        self.paragraph(0).spacing()
     }
 
     pub fn first_line_height(&self) -> f32 {
-        self.paragraphs.first().first_line_height()
+        self.paragraph(0).first_line_height()
     }
 
-    pub fn paragraphs(&self) -> &[Paragraph] {
-        &self.paragraphs
+    pub fn paragraphs(&self) -> impl ExactSizeIterator<Item = &Paragraph> {
+        (0..self.paragraphs.len()).map(|index| self.paragraph(index))
+    }
+    fn paragraphs_in(
+        &self,
+        paragraph_range: Range<usize>,
+    ) -> impl ExactSizeIterator<Item = &Paragraph> {
+        paragraph_range.map(|index| self.paragraph(index))
+    }
+
+    fn paragraph(&self, index: usize) -> &Paragraph {
+        self.materialized_paragraphs
+            .get(&index)
+            .unwrap_or(&self.paragraphs[index])
+    }
+
+    fn materialization_demands(&self, paragraph_range: Range<usize>) -> Vec<usize> {
+        self.paragraphs[paragraph_range]
+            .iter()
+            .map(Paragraph::layout_chars_to_materialize)
+            .collect()
+    }
+
+    fn materialized(
+        &self,
+        layout: &TextLayout,
+        paragraph_range: Range<usize>,
+        allocations: &[usize],
+    ) -> Option<Self> {
+        let mut materialized_paragraphs = HashMap::new();
+        for (index, allocation) in paragraph_range.zip(allocations.iter().copied()) {
+            let paragraph = &self.paragraphs[index];
+            if let Some(paragraph) = paragraph.materialized(layout, allocation) {
+                materialized_paragraphs.insert(index, paragraph);
+            }
+        }
+        (!materialized_paragraphs.is_empty()).then(|| Self {
+            paragraphs: self.paragraphs.clone(),
+            paragraph_index: self.paragraph_index.clone(),
+            width: self.width,
+            materialized_paragraphs,
+        })
+    }
+
+    fn paragraph_range_for_height(
+        &self,
+        block_start: Pixels,
+        visible_range: Range<Pixels>,
+    ) -> Range<usize> {
+        let content_start = block_start + self.spacing().top_offset();
+        let start = self.paragraph_index.partition_point(|paragraph| {
+            content_start + paragraph.end_height <= visible_range.start
+        });
+        let end = self.paragraph_index.partition_point(|paragraph| {
+            content_start + paragraph.start_height < visible_range.end
+        });
+        if start < end { start..end } else { 0..0 }
+    }
+
+    fn paragraph_range_for_lines(
+        &self,
+        block_start: LineCount,
+        visible_range: Range<LineCount>,
+    ) -> Range<usize> {
+        let start = self
+            .paragraph_index
+            .partition_point(|paragraph| block_start + paragraph.end_line <= visible_range.start);
+        let end = self
+            .paragraph_index
+            .partition_point(|paragraph| block_start + paragraph.start_line < visible_range.end);
+        if start < end { start..end } else { 0..0 }
+    }
+
+    fn paragraph_range_for_offset(&self, offset: CharOffset) -> Range<usize> {
+        let index = self
+            .paragraph_index
+            .partition_point(|paragraph| paragraph.end_offset <= offset)
+            .min(self.paragraphs.len() - 1);
+        index..index + 1
+    }
+
+    #[cfg(test)]
+    fn materialized_layout_chars(&self) -> usize {
+        self.materialized_paragraphs
+            .values()
+            .map(Paragraph::materialized_layout_chars)
+            .sum()
     }
 
     fn content_length(&self) -> CharOffset {
-        self.paragraphs
-            .iter()
-            .fold(CharOffset::zero(), |sum, paragraph| {
-                sum + paragraph.content_length
-            })
+        self.paragraph_index
+            .last()
+            .map_or(CharOffset::zero(), |paragraph| paragraph.end_offset)
     }
 
     pub fn width(&self) -> Pixels {
-        self.paragraphs
-            .iter()
-            .map(|paragraph| paragraph.width().as_f32())
-            .max_by(|a, b| a.partial_cmp(b).expect("Tried to compare a NaN"))
-            .unwrap_or(0.)
-            .into_pixels()
+        self.width
     }
 
     pub fn height(&self) -> Pixels {
-        self.paragraphs
-            .iter()
-            .map(|paragraph| paragraph.height.as_f32())
-            .sum::<f32>()
-            .into_pixels()
+        self.paragraph_index
+            .last()
+            .map_or(Pixels::zero(), |paragraph| paragraph.end_height)
     }
 
     /// The size of this paragraph block's content, as currently laid out.
     pub fn content_size(&self) -> Vector2F {
-        let width = self
-            .paragraphs
-            .iter()
-            .map(|paragraph| paragraph.frame.max_width())
-            .reduce(f32::max)
-            .unwrap_or(0.);
-        vec2f(width, self.height().as_f32())
+        vec2f(self.width.as_f32(), self.height().as_f32())
     }
 
     fn lines(&self) -> LineCount {
-        self.paragraphs
-            .iter()
-            .fold(LineCount(0), |sum, paragraph| sum + paragraph.lines())
+        self.paragraph_index
+            .last()
+            .map_or(LineCount::zero(), |paragraph| paragraph.end_line)
     }
 
     /// Returns `true` if this paragraph block is effectively empty.
@@ -1706,7 +2026,7 @@ impl ParagraphBlock {
         // If there are multiple empty paragraphs, consider the paragraph non-empty, since that
         // implies the user added at least one line. If there are no paragraphs, or a single empty
         // paragraph (more likely, given our layout logic), consider the whole block empty.
-        match self.paragraphs.iter().at_most_one() {
+        match self.paragraphs().at_most_one() {
             Ok(None) => true,
             Ok(Some(paragraph)) => paragraph.is_empty(),
             Err(_) => false,
@@ -1716,8 +2036,10 @@ impl ParagraphBlock {
 
 #[derive(Clone)]
 pub struct Paragraph {
-    /// Laid-out text content of this paragraph.
+    /// Compact or fully laid-out text content of this paragraph.
     frame: Arc<TextFrame>,
+    deferred_layout: Option<Arc<DeferredParagraphLayout>>,
+    materialized_layout_chars: usize,
     /// Mapping between [`TextFrame`] characters and content characters.
     offsets: OffsetMap,
     /// Cached height of this paragraph's text frame.
@@ -1728,6 +2050,13 @@ pub struct Paragraph {
     detected_url: Vec<ParsedUrl>,
     spacing: BlockSpacing,
     minimum_height: Option<Pixels>,
+}
+#[derive(Debug)]
+struct DeferredParagraphLayout {
+    text: String,
+    style_runs: Vec<(Range<usize>, StyleAndFont)>,
+    paragraph_styles: ParagraphStyles,
+    layout_chars: usize,
 }
 
 impl Paragraph {
@@ -1748,6 +2077,8 @@ impl Paragraph {
         let width = frame.max_width().into_pixels();
         Self {
             frame,
+            deferred_layout: None,
+            materialized_layout_chars: 0,
             offsets,
             height,
             width,
@@ -1756,6 +2087,84 @@ impl Paragraph {
             spacing,
             minimum_height,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_deferred(
+        frame: Arc<TextFrame>,
+        text: String,
+        style_runs: Vec<(Range<usize>, StyleAndFont)>,
+        paragraph_styles: ParagraphStyles,
+        offsets: OffsetMap,
+        content_length: CharOffset,
+        active_url: Vec<ParsedUrl>,
+        spacing: BlockSpacing,
+        minimum_height: Option<Pixels>,
+    ) -> Self {
+        let mut paragraph = Self::new(
+            Arc::new(frame.compact_for_deferred_layout()),
+            offsets,
+            content_length,
+            active_url,
+            spacing,
+            minimum_height,
+        );
+        paragraph.deferred_layout = Some(Arc::new(DeferredParagraphLayout {
+            layout_chars: text.chars().take(MAX_LAYOUT_LINE_CHARS).count(),
+            text,
+            style_runs,
+            paragraph_styles,
+        }));
+        paragraph.materialized_layout_chars = 0;
+        paragraph
+    }
+
+    fn layout_chars_to_materialize(&self) -> usize {
+        self.deferred_layout
+            .as_ref()
+            .map_or(0, |layout| layout.layout_chars)
+    }
+    #[cfg(test)]
+    fn materialized_layout_chars(&self) -> usize {
+        self.materialized_layout_chars
+    }
+
+    fn materialized(&self, layout: &TextLayout, max_chars: usize) -> Option<Self> {
+        let Some(deferred) = &self.deferred_layout else {
+            return None;
+        };
+        let layout_chars = self.layout_chars_to_materialize().min(max_chars);
+        if layout_chars == 0 {
+            return None;
+        }
+        let mut paragraph = self.clone();
+        paragraph.frame = layout.layout_text_prefix_uncached(
+            &deferred.text,
+            &deferred.paragraph_styles,
+            &self.spacing,
+            &deferred.style_runs,
+            layout_chars,
+        );
+        paragraph.materialized_layout_chars = layout_chars;
+        Some(paragraph)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn is_deferred(&self) -> bool {
+        self.deferred_layout.is_some() && self.materialized_layout_chars == 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_payload_counts(&self) -> (usize, usize) {
+        self.frame
+            .lines()
+            .iter()
+            .fold((0, 0), |(glyphs, carets), line| {
+                (
+                    glyphs + line.runs.iter().map(|run| run.glyphs.len()).sum::<usize>(),
+                    carets + line.caret_positions.len(),
+                )
+            })
     }
 
     pub fn first_line_height(&self) -> f32 {
@@ -1776,6 +2185,9 @@ impl Paragraph {
 
     /// Whether or not this paragraph is effectively empty.
     pub(super) fn is_empty(&self) -> bool {
+        if let Some(deferred) = &self.deferred_layout {
+            return deferred.text.is_empty();
+        }
         let lines = self.frame.lines();
         lines.is_empty() || lines.iter().all(|line| line.runs.is_empty())
     }
@@ -2521,6 +2933,9 @@ impl RenderState {
             selections: Default::default(),
             decorations: Default::default(),
             content: RefCell::new(SumTree::new()),
+            materialized_blocks: RefCell::new(HashMap::new()),
+            materialized_block_keys: RefCell::new(HashMap::new()),
+            materialized_layout_retention: RefCell::new(Default::default()),
             element_tx,
             layout_tx,
             width_setting: Default::default(),
@@ -2585,6 +3000,9 @@ impl RenderState {
             selections: Default::default(),
             decorations: Default::default(),
             content: RefCell::new(content),
+            materialized_blocks: RefCell::new(HashMap::new()),
+            materialized_block_keys: RefCell::new(HashMap::new()),
+            materialized_layout_retention: RefCell::new(Default::default()),
             element_tx,
             layout_tx,
             width_setting: Default::default(),
@@ -2678,12 +3096,176 @@ impl RenderState {
 
     /// Returns reference to the underlying content tree.
     pub fn content(&self) -> RenderContentTreeRef<'_> {
-        RenderContentTreeRef(self.content.borrow())
+        RenderContentTreeRef(self.content.borrow(), self.materialized_blocks.borrow())
+    }
+
+    pub(crate) fn materialize_viewport(
+        &self,
+        layout: &TextLayout,
+        viewport_height: Pixels,
+        viewport_width: Pixels,
+        scroll_top: Pixels,
+    ) -> Vec<ViewportItem> {
+        self.materialize_viewport_with_max_chars(
+            layout,
+            viewport_height,
+            viewport_width,
+            scroll_top,
+            MAX_LAYOUT_LINE_CHARS,
+        )
+    }
+
+    fn materialize_viewport_with_max_chars(
+        &self,
+        layout: &TextLayout,
+        viewport_height: Pixels,
+        viewport_width: Pixels,
+        scroll_top: Pixels,
+        max_chars: usize,
+    ) -> Vec<ViewportItem> {
+        self.materialized_blocks.borrow_mut().clear();
+        self.materialized_block_keys.borrow_mut().clear();
+        let blocks = {
+            let content = self.content.borrow();
+            ViewportIterator::new(&content, scroll_top, viewport_height, viewport_width)
+                .map(|(item, block)| (item, block.materializable_clone()))
+                .collect()
+        };
+        let items = self.materialize_items(layout, blocks, max_chars);
+        *self.materialized_block_keys.borrow_mut() = items
+            .iter()
+            .filter_map(|item| {
+                item.materialized_block
+                    .as_ref()
+                    .map(|_| (item.block_identity(), item.materialization_key()))
+            })
+            .collect();
+        self.sync_materialized_blocks();
+        items
+    }
+
+    fn sync_materialized_blocks(&self) {
+        let keys = self.materialized_block_keys.borrow();
+        let mut blocks = self.materialized_blocks.borrow_mut();
+        let mut retention = self.materialized_layout_retention.borrow_mut();
+        for (identity, key) in keys.iter() {
+            if let Some(block) = retention
+                .reusable(*key)
+                .and_then(|snapshot| snapshot.block())
+            {
+                blocks.insert(*identity, block);
+            } else {
+                blocks.remove(identity);
+            }
+        }
+    }
+
+    pub(crate) fn materialize_line_range(
+        &self,
+        layout: &TextLayout,
+        line_range: Range<RenderLineLocation>,
+        max_width: Pixels,
+    ) -> Vec<ViewportItem> {
+        let blocks = self.blocks_in_line_range(line_range, max_width);
+        self.materialize_items(layout, blocks, MAX_LAYOUT_LINE_CHARS)
+    }
+
+    fn materialize_items(
+        &self,
+        layout: &TextLayout,
+        blocks: Vec<(ViewportItem, Option<BlockItem>)>,
+        max_chars: usize,
+    ) -> Vec<ViewportItem> {
+        let mut retention = self.materialized_layout_retention.borrow_mut();
+        retention.sweep();
+        let items = blocks
+            .into_iter()
+            .map(|(mut item, source)| {
+                let key = item.materialization_key();
+                let snapshot = retention.reusable(key).or_else(|| {
+                    let source = source?;
+                    let snapshot = Rc::new(MaterializedBlockSnapshot::new(
+                        source,
+                        item.paragraph_range.clone(),
+                    ));
+                    retention.retain(key, snapshot.clone());
+                    Some(snapshot)
+                });
+                if let Some(snapshot) = snapshot {
+                    item.set_materialized_block(Some(snapshot));
+                }
+                item
+            })
+            .collect_vec();
+        retention.rebalance(layout, max_chars);
+        drop(retention);
+        self.sync_materialized_blocks();
+        items
+    }
+
+    fn materialize_geometry_offsets(&self, layout: &TextLayout, offsets: &[CharOffset]) {
+        self.materialized_blocks.borrow_mut().clear();
+        let blocks = {
+            let content = self.content.borrow();
+            let mut blocks: Vec<(BlockIdentity, Range<usize>, Option<BlockItem>)> = Vec::new();
+            for offset in offsets {
+                let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
+                cursor.seek(offset, SeekBias::Right);
+                let block_index = cursor.start().item_count;
+                let Some(block) = cursor.positioned_item() else {
+                    continue;
+                };
+                let identity = BlockIdentity {
+                    block_offset: block.start_char_offset,
+                    block_index,
+                };
+                let offset_in_block = *offset - block.start_char_offset;
+                let paragraph_range = block
+                    .item
+                    .materialization_paragraph_range_for_offset(offset_in_block);
+                if let Some((_, existing_range, _)) =
+                    blocks.iter_mut().find(|(block, _, _)| *block == identity)
+                {
+                    existing_range.start = existing_range.start.min(paragraph_range.start);
+                    existing_range.end = existing_range.end.max(paragraph_range.end);
+                } else {
+                    blocks.push((identity, paragraph_range, block.item.materializable_clone()));
+                }
+            }
+            blocks
+                .into_iter()
+                .map(|(block, paragraph_range, source)| {
+                    (
+                        MaterializationKey {
+                            block,
+                            paragraph_start: paragraph_range.start,
+                            paragraph_end: paragraph_range.end,
+                        },
+                        paragraph_range,
+                        source,
+                    )
+                })
+                .collect_vec()
+        };
+        let mut materialized = HashMap::new();
+        for (key, paragraph_range, source) in blocks {
+            if let Some(source) = source {
+                let demands = source.materialization_demands(paragraph_range.clone());
+                if let Some(block) = source.materialized(layout, paragraph_range, &demands) {
+                    let block = Rc::new(block);
+                    materialized.insert(key.block, block);
+                }
+            }
+        }
+        *self.materialized_blocks.borrow_mut() = materialized;
     }
 
     pub fn with_width_setting(mut self, setting: WidthSetting) -> Self {
         self.width_setting = setting;
         self
+    }
+    pub(crate) fn width_setting(&self) -> &WidthSetting {
+        &self.width_setting
     }
 
     /// Whether the surrounding container for this render state already provides horizontal
@@ -2823,7 +3405,7 @@ impl RenderState {
         &self,
         line_range: Range<RenderLineLocation>,
         max_width: Pixels,
-    ) -> Vec<(ViewportItem, BlockItem)> {
+    ) -> Vec<(ViewportItem, Option<BlockItem>)> {
         let content = self.content.borrow();
         let mut cursor = content.cursor::<LineCount, LayoutSummary>();
         Self::move_cursor_to_location(&mut cursor, line_range.start);
@@ -2853,14 +3435,27 @@ impl RenderState {
 
             let spacing = item.item.spacing();
             let content_width = max_width - spacing.x_axis_offset();
+            let requested_lines = line_range.start.line_count()..line_range.end.line_count();
+            let visible_lines = if requested_lines.is_empty() {
+                item.start_line..item.end_line()
+            } else {
+                requested_lines
+            };
             let viewport_item = ViewportItem {
                 viewport_offset: Pixels::zero(),
                 content_offset: item.start_y_offset,
                 content_size: vec2f(content_width.as_f32(), item.item.content_height().as_f32()),
                 spacing,
                 block_offset: item.start_char_offset,
+                block_index: cursor.start().item_count,
+                start_line: item.start_line,
+                paragraph_range: item
+                    .item
+                    .materialization_paragraph_range_for_lines(item.start_line, visible_lines),
+                materialized_block: None,
+                materialized_override: None,
             };
-            blocks.push((viewport_item, item.item.clone()));
+            blocks.push((viewport_item, item.item.materializable_clone()));
 
             // For iterating on current line ranges, once we detect that the current item matches / or exceeds the end line,
             // we can break out of the loop. For temporary line ranges, we should check if 1) the current item hasn't past the at line
@@ -3250,15 +3845,23 @@ impl RenderState {
                 }
             },
             LayoutAction::Autoscroll { mode } => {
+                let layout_cache = LayoutCache::new();
+                let layout = self.layout_context(&layout_cache, ctx);
+                self.materialize_geometry_offsets(&layout, &mode.offsets(self));
                 self.autoscroll(mode, ctx);
+                self.materialized_blocks.borrow_mut().clear();
             }
             LayoutAction::ScrollTo(position) => {
+                let layout_cache = LayoutCache::new();
+                let layout = self.layout_context(&layout_cache, ctx);
+                self.materialize_geometry_offsets(&layout, &[position.first_character_offset()]);
                 if self
                     .viewport
                     .scroll_to(position.to_scroll_top(self), self.height())
                 {
                     ctx.notify();
                 }
+                self.materialized_blocks.borrow_mut().clear();
             }
             LayoutAction::ScrollToFraction {
                 fraction,
@@ -3542,6 +4145,11 @@ impl RenderState {
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
+        self.materialized_blocks.borrow_mut().clear();
+        self.materialized_block_keys.borrow_mut().clear();
+        self.materialized_layout_retention
+            .borrow_mut()
+            .invalidate_reuse();
         *self.content.borrow_mut() = new_tree;
     }
 
@@ -3685,6 +4293,11 @@ impl RenderState {
         log::trace!("Resulting blocks:\n{}", new_tree.describe());
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&new_tree));
+        self.materialized_blocks.borrow_mut().clear();
+        self.materialized_block_keys.borrow_mut().clear();
+        self.materialized_layout_retention
+            .borrow_mut()
+            .invalidate_reuse();
         let mut content_mut = self.content.borrow_mut();
         *content_mut = new_tree;
     }
@@ -4007,11 +4620,7 @@ impl RenderState {
         }
 
         // Pixels path: use the font-laid-out SumTree<BlockItem>.
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
-
-        cursor.seek(&offset, SeekBias::Right);
-        match cursor.positioned_item() {
+        match self.content().block_containing_offset(offset) {
             Some(item) => item.offset_to_softwrap_point(offset),
             None => SoftWrapPoint::new(self.max_line().as_u32(), ColumnUnit::pixels_zero()),
         }
@@ -4024,12 +4633,9 @@ impl RenderState {
         }
 
         // Pixels path.
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<LineCount, LayoutSummary>();
 
         let line = LineCount(point.row() as usize);
-        cursor.seek(&line, SeekBias::Right);
-        match cursor.positioned_item() {
+        match self.content().block_at_line(line) {
             Some(item) => item.softwrap_point_to_offset(point),
             None => self.max_offset(),
         }
@@ -4052,11 +4658,8 @@ impl RenderState {
 
     /// The bounding box of the character at `offset`.
     fn character_bounds(&self, offset: CharOffset) -> Option<RectF> {
-        let content = self.content.borrow();
-        let mut cursor = content.cursor::<CharOffset, LayoutSummary>();
-        cursor.seek(&offset, SeekBias::Right);
-        cursor
-            .positioned_item()
+        self.content()
+            .block_containing_offset(offset)
             .and_then(|item| item.character_bounds(offset))
     }
 
@@ -4177,6 +4780,11 @@ impl RenderState {
         }
         self.has_final_trailing_newline
             .set(Self::tree_ends_with_trailing_newline(&content));
+        self.materialized_blocks.get_mut().clear();
+        self.materialized_block_keys.get_mut().clear();
+        self.materialized_layout_retention
+            .get_mut()
+            .invalidate_reuse();
         self.content = content.into();
     }
 
@@ -4192,17 +4800,15 @@ impl RenderState {
 
     /// Line number of the first line in the block.
     pub fn start_line_index(&self, block: &dyn RenderableBlock) -> Option<LineCount> {
-        let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(content.block_at_offset(offset)?.start_line)
+        Some(block.viewport_item().start_line())
     }
 
     /// The line height of the first line. Different from `first_line_bounds`, this does not
     /// return the viewport origin.
     pub fn first_line_height(&self, block: &dyn RenderableBlock) -> Option<f32> {
         let content = self.content();
-        let block = content.block_at_height(block.viewport_item().height())?;
-        Some(block.item.first_line_height())
+        let item = block.viewport_item().resolved_block(&content)?;
+        Some(item.first_line_height())
     }
 
     /// The bounding box of the first line of this block, based on its viewport location.
@@ -4212,16 +4818,17 @@ impl RenderState {
         ctx: &RenderContext,
     ) -> Option<RectF> {
         let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        let block = content.block_at_offset(offset)?;
+        let item = block.viewport_item().resolved_block(&content)?;
+        let block = block.viewport_item().positioned_block(&item);
         Some(ctx.content_rect_to_screen(block.first_line_bounds()?))
     }
 
     pub fn line_range(&self, block: &dyn RenderableBlock) -> Option<Range<LineCount>> {
         let start = self.start_line_index(block)?;
         let content = self.content();
-        let offset = block.viewport_item().block_offset();
-        Some(start..start + content.block_at_offset(offset)?.item.lines())
+        let item = block.viewport_item().resolved_block(&content)?;
+        let lines = item.lines();
+        Some(start..start + lines)
     }
 
     /// The full line range of the block starting at `offset`, resolved without a
@@ -4265,6 +4872,23 @@ pub enum AutoScrollMode {
     /// The bounding box is computed as the character position ± half the viewport dimensions,
     /// clamped to the content bounds.
     PositionOffsetInViewportCenter(CharOffset),
+}
+
+impl AutoScrollMode {
+    fn offsets(&self, state: &RenderState) -> Vec<CharOffset> {
+        match self {
+            Self::ScrollOffsetsIntoViewport(offsets) => vec![offsets.start, offsets.end],
+            Self::ScrollToExactVertical {
+                character_offset, ..
+            }
+            | Self::PositionOffsetInViewportCenter(character_offset) => vec![*character_offset],
+            Self::ScrollToActiveSelections { .. } => state
+                .selections()
+                .iter()
+                .map(|selection| selection.head)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4432,6 +5056,247 @@ impl AddAssign<&LayoutSummary> for LayoutSummary {
 }
 
 impl BlockItem {
+    fn materialization_demands(&self, paragraph_range: Range<usize>) -> Vec<usize> {
+        match self {
+            Self::Paragraph(paragraph)
+            | Self::TaskList { paragraph, .. }
+            | Self::UnorderedList { paragraph, .. }
+            | Self::OrderedList { paragraph, .. }
+            | Self::Header { paragraph, .. } => {
+                if paragraph_range.contains(&0) {
+                    vec![paragraph.layout_chars_to_materialize()]
+                } else {
+                    Vec::new()
+                }
+            }
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.materialization_demands(paragraph_range),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => Vec::new(),
+        }
+    }
+
+    fn materialized(
+        &self,
+        layout: &TextLayout,
+        paragraph_range: Range<usize>,
+        allocations: &[usize],
+    ) -> Option<Self> {
+        let allocation = allocations.first().copied().unwrap_or(0);
+        match self {
+            Self::Paragraph(paragraph) => paragraph
+                .materialized(layout, allocation)
+                .map(Self::Paragraph),
+            Self::TextBlock { paragraph_block } => paragraph_block
+                .materialized(layout, paragraph_range, allocations)
+                .map(|paragraph_block| Self::TextBlock { paragraph_block }),
+            Self::TemporaryBlock {
+                paragraph_block,
+                text_decoration,
+                decoration,
+            } => paragraph_block
+                .materialized(layout, paragraph_range, allocations)
+                .map(|paragraph_block| Self::TemporaryBlock {
+                    paragraph_block,
+                    text_decoration: text_decoration.clone(),
+                    decoration: *decoration,
+                }),
+            Self::RunnableCodeBlock {
+                paragraph_block,
+                code_block_type,
+                pending_mermaid_asset,
+            } => paragraph_block
+                .materialized(layout, paragraph_range, allocations)
+                .map(|paragraph_block| Self::RunnableCodeBlock {
+                    paragraph_block,
+                    code_block_type: code_block_type.clone(),
+                    pending_mermaid_asset: pending_mermaid_asset.clone(),
+                }),
+            Self::TaskList {
+                indent_level,
+                complete,
+                paragraph,
+                mouse_state,
+            } => paragraph
+                .materialized(layout, allocation)
+                .map(|paragraph| Self::TaskList {
+                    indent_level: *indent_level,
+                    complete: *complete,
+                    paragraph,
+                    mouse_state: mouse_state.clone(),
+                }),
+            Self::UnorderedList {
+                indent_level,
+                paragraph,
+            } => paragraph
+                .materialized(layout, allocation)
+                .map(|paragraph| Self::UnorderedList {
+                    indent_level: *indent_level,
+                    paragraph,
+                }),
+            Self::OrderedList {
+                indent_level,
+                number,
+                paragraph,
+            } => paragraph
+                .materialized(layout, allocation)
+                .map(|paragraph| Self::OrderedList {
+                    indent_level: *indent_level,
+                    number: *number,
+                    paragraph,
+                }),
+            Self::Header {
+                header_size,
+                paragraph,
+            } => paragraph
+                .materialized(layout, allocation)
+                .map(|paragraph| Self::Header {
+                    header_size: *header_size,
+                    paragraph,
+                }),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => None,
+        }
+    }
+    fn materializable_clone(&self) -> Option<Self> {
+        match self {
+            Self::Paragraph(_)
+            | Self::TextBlock { .. }
+            | Self::TemporaryBlock { .. }
+            | Self::RunnableCodeBlock { .. }
+            | Self::TaskList { .. }
+            | Self::UnorderedList { .. }
+            | Self::OrderedList { .. }
+            | Self::Header { .. } => Some(self.clone()),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => None,
+        }
+    }
+
+    fn materialization_paragraph_range_for_height(
+        &self,
+        block_start: Pixels,
+        visible_range: Range<Pixels>,
+    ) -> Range<usize> {
+        match self {
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.paragraph_range_for_height(block_start, visible_range),
+            Self::Paragraph(_)
+            | Self::TaskList { .. }
+            | Self::UnorderedList { .. }
+            | Self::OrderedList { .. }
+            | Self::Header { .. } => 0..1,
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => 0..0,
+        }
+    }
+
+    fn materialization_paragraph_range_for_lines(
+        &self,
+        block_start: LineCount,
+        visible_range: Range<LineCount>,
+    ) -> Range<usize> {
+        match self {
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.paragraph_range_for_lines(block_start, visible_range),
+            Self::Paragraph(_)
+            | Self::TaskList { .. }
+            | Self::UnorderedList { .. }
+            | Self::OrderedList { .. }
+            | Self::Header { .. } => 0..1,
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => 0..0,
+        }
+    }
+
+    fn materialization_paragraph_range_for_offset(&self, offset: CharOffset) -> Range<usize> {
+        match self {
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.paragraph_range_for_offset(offset),
+            Self::Paragraph(_)
+            | Self::TaskList { .. }
+            | Self::UnorderedList { .. }
+            | Self::OrderedList { .. }
+            | Self::Header { .. } => 0..1,
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => 0..0,
+        }
+    }
+
+    #[cfg(test)]
+    fn materialized_layout_chars(&self) -> usize {
+        match self {
+            Self::Paragraph(paragraph)
+            | Self::TaskList { paragraph, .. }
+            | Self::UnorderedList { paragraph, .. }
+            | Self::OrderedList { paragraph, .. }
+            | Self::Header { paragraph, .. } => paragraph.materialized_layout_chars(),
+            Self::TextBlock { paragraph_block }
+            | Self::TemporaryBlock {
+                paragraph_block, ..
+            }
+            | Self::RunnableCodeBlock {
+                paragraph_block, ..
+            } => paragraph_block.materialized_layout_chars(),
+            Self::MermaidDiagram { .. }
+            | Self::Embedded(_)
+            | Self::HorizontalRule(_)
+            | Self::Image { .. }
+            | Self::Table(_)
+            | Self::TrailingNewLine(_)
+            | Self::Hidden(_) => 0,
+        }
+    }
     pub fn paragraph(
         frame: Arc<TextFrame>,
         offsets: OffsetMap,
@@ -4650,10 +5515,8 @@ impl Positioned<'_, BlockItem> {
             BlockItem::Paragraph(inner) => self.paragraph(inner).softwrap_point_to_offset(point),
             BlockItem::TextBlock { paragraph_block } => {
                 let text_block = self.text_block(paragraph_block);
-
-                let mut paragraphs = text_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_line().as_u32() > point.row())
+                text_block
+                    .paragraph_at_line(LineCount(point.row() as usize))
                     .map_or(self.end_char_offset(), |paragraph| {
                         paragraph.softwrap_point_to_offset(point)
                     })
@@ -4674,10 +5537,8 @@ impl Positioned<'_, BlockItem> {
                 paragraph_block, ..
             } => {
                 let code_block = self.code_block(paragraph_block);
-
-                let mut paragraphs = code_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_line().as_u32() > point.row())
+                code_block
+                    .paragraph_at_line(LineCount(point.row() as usize))
                     .map_or(self.end_char_offset(), |paragraph| {
                         paragraph.softwrap_point_to_offset(point)
                     })
@@ -4711,14 +5572,10 @@ impl Positioned<'_, BlockItem> {
             BlockItem::Paragraph(inner) => self.paragraph(inner).offset_to_softwrap_point(offset),
             BlockItem::TextBlock { paragraph_block } => {
                 let text_block = self.text_block(paragraph_block);
-
-                let mut paragraphs = text_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_char_offset() > offset)
-                    .map_or(
-                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
-                        |paragraph| paragraph.offset_to_softwrap_point(offset),
-                    )
+                text_block.paragraph_at_offset(offset).map_or(
+                    SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
+                    |paragraph| paragraph.offset_to_softwrap_point(offset),
+                )
             }
             BlockItem::UnorderedList { paragraph, .. } => self
                 .unordered_list(paragraph)
@@ -4736,14 +5593,10 @@ impl Positioned<'_, BlockItem> {
                 paragraph_block, ..
             } => {
                 let code_block = self.code_block(paragraph_block);
-
-                let mut paragraphs = code_block.paragraphs();
-                paragraphs
-                    .find(|paragraph| paragraph.end_char_offset() > offset)
-                    .map_or(
-                        SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
-                        |paragraph| paragraph.offset_to_softwrap_point(offset),
-                    )
+                code_block.paragraph_at_offset(offset).map_or(
+                    SoftWrapPoint::new(self.end_line().as_u32(), ColumnUnit::pixels_zero()),
+                    |paragraph| paragraph.offset_to_softwrap_point(offset),
+                )
             }
             BlockItem::MermaidDiagram { .. } => {
                 SoftWrapPoint::new(self.start_line.as_u32(), ColumnUnit::pixels_zero())
@@ -4779,8 +5632,7 @@ impl Positioned<'_, BlockItem> {
             BlockItem::TextBlock { paragraph_block } => {
                 let text_block = self.text_block(paragraph_block);
                 text_block
-                    .paragraphs()
-                    .find_or_last(|paragraph| paragraph.end_char_offset() > offset)
+                    .paragraph_at_offset_or_last(offset)
                     .and_then(|paragraph| paragraph.character_bounds(offset))
             }
             BlockItem::UnorderedList { paragraph, .. } => {
@@ -4798,8 +5650,7 @@ impl Positioned<'_, BlockItem> {
             } => {
                 let code_block = self.code_block(paragraph_block);
                 code_block
-                    .paragraphs()
-                    .find_or_last(|paragraph| paragraph.end_char_offset() > offset)
+                    .paragraph_at_offset_or_last(offset)
                     .and_then(|paragraph| paragraph.character_bounds(offset))
             }
             BlockItem::MermaidDiagram { config, .. } => {
@@ -5435,13 +6286,29 @@ impl<'a> Positioned<'a, Paragraph> {
 }
 
 impl<'a> Positioned<'a, ParagraphBlock> {
-    pub(super) fn paragraphs(&self) -> impl Iterator<Item = Positioned<'a, Paragraph>> + '_ {
-        self.item.paragraphs.iter().scan(
-            (
-                self.start_char_offset,
-                self.start_y_offset + self.style.top_offset(),
-                self.start_line,
-            ),
+    pub(super) fn paragraphs_in(
+        &self,
+        paragraph_range: Range<usize>,
+    ) -> impl Iterator<Item = Positioned<'a, Paragraph>> + '_ {
+        let start = paragraph_range.start;
+        let preceding_geometry = start
+            .checked_sub(1)
+            .and_then(|index| self.item.paragraph_index.get(index));
+        let start_geometry = self.item.paragraph_index.get(start);
+        let char_offset = preceding_geometry.map_or(self.start_char_offset, |geometry| {
+            self.start_char_offset + geometry.end_offset
+        });
+        let y_offset = start_geometry.map_or_else(
+            || self.start_y_offset + self.style.top_offset() + self.item.height(),
+            |geometry| self.start_y_offset + self.style.top_offset() + geometry.start_height,
+        );
+        let line = start_geometry.map_or_else(
+            || self.start_line + self.item.lines(),
+            |geometry| self.start_line + geometry.start_line,
+        );
+
+        self.item.paragraphs_in(paragraph_range).scan(
+            (char_offset, y_offset, line),
             |(char_offset_acc, y_offset_acc, line_acc), paragraph| {
                 let positioned = Some(Positioned {
                     start_y_offset: *y_offset_acc,
@@ -5460,9 +6327,43 @@ impl<'a> Positioned<'a, ParagraphBlock> {
         )
     }
 
+    fn paragraph_at_offset(&self, offset: CharOffset) -> Option<Positioned<'a, Paragraph>> {
+        let relative_offset = offset.saturating_sub(&self.start_char_offset);
+        if relative_offset >= self.item.content_length() {
+            return None;
+        }
+        self.paragraphs_in(self.item.paragraph_range_for_offset(relative_offset))
+            .next()
+    }
+    fn paragraph_at_offset_or_last(&self, offset: CharOffset) -> Option<Positioned<'a, Paragraph>> {
+        let relative_offset = offset.saturating_sub(&self.start_char_offset);
+        self.paragraphs_in(self.item.paragraph_range_for_offset(relative_offset))
+            .next()
+    }
+
+    fn paragraph_at_line(&self, line: LineCount) -> Option<Positioned<'a, Paragraph>> {
+        self.paragraphs_in(
+            self.item
+                .paragraph_range_for_lines(self.start_line, line..line + LineCount(1)),
+        )
+        .next()
+    }
+
+    fn paragraph_at_y(&self, y: Pixels) -> Option<Positioned<'a, Paragraph>> {
+        let content_start = self.start_y_offset + self.style.top_offset();
+        if y >= content_start + self.item.height() {
+            return None;
+        }
+        let index = self
+            .item
+            .paragraph_index
+            .partition_point(|paragraph| content_start + paragraph.end_height <= y)
+            .min(self.item.paragraphs.len() - 1);
+        self.paragraphs_in(index..index + 1).next()
+    }
     /// The bounds of the first line of the first paragraph. See [`Positioned::<Paragraph>::first_line_bounds`].
     fn first_line_bounds(&self) -> Option<RectF> {
-        self.paragraphs().next()?.first_line_bounds()
+        self.paragraphs_in(0..1).next()?.first_line_bounds()
     }
 }
 

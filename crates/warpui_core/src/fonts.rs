@@ -6,9 +6,9 @@ mod text_layout_system;
 use std::hash::Hash;
 
 use anyhow::{Error, Result};
-use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::Ref;
+use dashmap::{DashMap, DashSet};
 use enum_iterator::Sequence;
 use markdown_parser::weight::CustomWeight;
 use ordered_float::OrderedFloat;
@@ -224,6 +224,7 @@ pub struct Cache {
 struct FontFallbackCache {
     loaded_fallback_families: DashMap<FontFamilyName, FamilyId>,
     requested_fallback_families: DashMap<ExternalFontFamily, Vec<RequestedFallbackFontSource>>,
+    requested_redraw_only_families: DashSet<ExternalFontFamily>,
     fallback_font_fn: Option<Box<dyn Fn(char) -> Option<ExternalFontFamily> + Send + Sync>>,
 }
 

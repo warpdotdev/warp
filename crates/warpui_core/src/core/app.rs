@@ -3782,6 +3782,7 @@ impl AppContext {
                             .remove_text_frame(&key);
                     }
                 }
+                RequestedFallbackFontSource::RedrawOnly => {}
             }
         }
 

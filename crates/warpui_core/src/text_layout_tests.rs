@@ -87,6 +87,60 @@ fn test_empty_text_frame() {
 }
 
 #[test]
+fn test_compact_for_deferred_layout_preserves_geometry_and_bounds_payload() {
+    let first_line = TextFrame::mock_with_positions("abcd", 7.0);
+    let mut second_line = TextFrame::mock_with_positions("xy", 11.0);
+    second_line.lines[0].font_size = 18.0;
+    second_line.lines[0].line_height_ratio = 1.5;
+    second_line.lines[0].trailing_whitespace_width = 3.0;
+    second_line.lines[0].chars_with_missing_glyphs = vec!['?'];
+    let frame = TextFrame::new(
+        vec1::vec1![first_line.lines[0].clone(), second_line.lines[0].clone()],
+        28.0,
+        TextAlignment::Center,
+    );
+
+    let compact = frame.compact_for_deferred_layout();
+
+    assert_eq!(compact.max_width, frame.max_width);
+    assert_eq!(compact.alignment, frame.alignment);
+    assert_eq!(compact.height(), frame.height());
+    assert_eq!(compact.lines.len(), frame.lines.len());
+    for (actual, expected) in compact.lines.iter().zip(frame.lines.iter()) {
+        assert_eq!(actual.width, expected.width);
+        assert_eq!(
+            actual.trailing_whitespace_width,
+            expected.trailing_whitespace_width
+        );
+        assert_eq!(actual.font_size, expected.font_size);
+        assert_eq!(actual.line_height_ratio, expected.line_height_ratio);
+        assert_eq!(actual.baseline_ratio, expected.baseline_ratio);
+        assert_eq!(actual.ascent, expected.ascent);
+        assert_eq!(actual.descent, expected.descent);
+        assert_eq!(actual.clip_config, expected.clip_config);
+        assert!(actual.runs.is_empty());
+        assert!(actual.chars_with_missing_glyphs.is_empty());
+        assert!(actual.caret_positions.len() <= 2);
+        assert_eq!(
+            actual
+                .caret_positions
+                .first()
+                .map(|caret| caret.start_offset),
+            expected
+                .caret_positions
+                .first()
+                .map(|caret| caret.start_offset)
+        );
+        assert_eq!(
+            actual.caret_positions.last().map(|caret| caret.last_offset),
+            expected
+                .caret_positions
+                .last()
+                .map(|caret| caret.last_offset)
+        );
+    }
+}
+#[test]
 fn test_cache_key_includes_fixed_width_tab_size() {
     let text = "abc";
     let style_runs: &[(Range<usize>, StyleAndFont)] = &[];

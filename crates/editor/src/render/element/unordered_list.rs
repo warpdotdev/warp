@@ -6,7 +6,6 @@ use super::RenderableBlock;
 use super::paint::RenderContext;
 use super::placeholder::{self, BlockPlaceholder};
 use crate::content::text::BufferBlockStyle;
-use crate::extract_block;
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState, RichTextStyles, bounds};
 
@@ -89,7 +88,17 @@ impl RenderableBlock for RenderableBulletList {
         app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let unordered_list = extract_block!(self.viewport_item, content, (block, BlockItem::UnorderedList{ paragraph: inner, ..}) => block.unordered_list(inner));
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let BlockItem::UnorderedList {
+            paragraph: inner, ..
+        } = block.item
+        else {
+            return;
+        };
+        let unordered_list = block.unordered_list(inner);
 
         let text_styling = &model.styles().base_text;
 

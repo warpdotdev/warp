@@ -8,7 +8,6 @@ use super::RenderableBlock;
 use super::paint::RenderContext;
 use super::placeholder::{self, BlockPlaceholder};
 use crate::content::text::BufferBlockStyle;
-use crate::extract_block;
 use crate::render::layout::TextLayout;
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState};
@@ -78,7 +77,17 @@ impl RenderableBlock for RenderableOrderedListItem {
         _app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let paragraph = extract_block!(self.viewport_item, content, (block, BlockItem::OrderedList{ paragraph: inner, ..}) => block.ordered_list(inner));
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let BlockItem::OrderedList {
+            paragraph: inner, ..
+        } = block.item
+        else {
+            return;
+        };
+        let paragraph = block.ordered_list(inner);
 
         let text_styling = &model.styles().base_text;
 

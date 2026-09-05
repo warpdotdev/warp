@@ -12,7 +12,6 @@ use super::placeholder::{self, BlockPlaceholder};
 use super::{RenderableBlock, RichTextAction};
 use crate::content::text::BufferBlockStyle;
 use crate::editor::EditorView;
-use crate::extract_block;
 use crate::render::model::viewport::ViewportItem;
 use crate::render::model::{BlockItem, RenderState, RichTextStyles, bounds};
 
@@ -143,7 +142,17 @@ impl RenderableBlock for RenderableTaskList {
         app: &warpui_core::AppContext,
     ) {
         let content = model.content();
-        let task_list = extract_block!(self.viewport_item, content, (block, BlockItem::TaskList{ paragraph: inner, ..}) => block.task_list(inner));
+        let Some(item) = self.viewport_item.resolved_block(&content) else {
+            return;
+        };
+        let block = self.viewport_item.positioned_block(&item);
+        let BlockItem::TaskList {
+            paragraph: inner, ..
+        } = block.item
+        else {
+            return;
+        };
+        let task_list = block.task_list(inner);
         let text_styling = &model.styles().base_text;
 
         let line_origin = ctx.content_to_screen(bounds::visible_origin(
