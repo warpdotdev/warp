@@ -26,7 +26,7 @@ use super::{
     OZ_MESSAGE_LISTENER_STATE_ROOT_ENV, WARP_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV,
     WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
 };
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::setup_observability::SetupClientEventReporter;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
@@ -99,7 +99,7 @@ impl TryFrom<ResumePayload> for CodexResumeInfo {
 /// Fetch the harness transcript for `conversation_id` and deserialize it into `E`.
 pub(super) async fn fetch_transcript_envelope<E: serde::de::DeserializeOwned>(
     harness_label: &str,
-    conversation_id: &AIConversationId,
+    conversation_id: &ServerConversationToken,
     client: Arc<dyn HarnessSupportClient>,
 ) -> Result<E, AgentDriverError> {
     let bytes = client.fetch_transcript().await.map_err(|err| {
@@ -181,7 +181,7 @@ pub(crate) trait ThirdPartyHarness: Send + Sync {
     /// [`AgentDriverError::ConversationResumeStateMissing`] tagged with the harness label).
     async fn fetch_resume_payload(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
         _harness_support_client: Arc<dyn HarnessSupportClient>,
     ) -> Result<Option<ResumePayload>, AgentDriverError> {
         Ok(None)
@@ -624,12 +624,12 @@ pub(super) fn write_temp_file(
 /// Upload a [`SerializedBlock`] as the JSON block snapshot for a third-party harness conversation.
 pub(crate) async fn upload_block_snapshot(
     client: &dyn HarnessSupportClient,
-    conversation_id: AIConversationId,
+    conversation_id: &ServerConversationToken,
     block: SerializedBlock,
 ) -> Result<()> {
     log::info!("Uploading block snapshot for CLI agent to conversation {conversation_id}");
     let target = client
-        .get_block_snapshot_upload_target(&conversation_id)
+        .get_block_snapshot_upload_target(conversation_id)
         .await
         .with_context(|| {
             format!("Unable to get block upload slot for conversation {conversation_id}")
@@ -649,7 +649,7 @@ pub(super) async fn upload_current_block_snapshot(
     foreground: &ModelSpawner<AgentDriver>,
     terminal_driver: &ModelHandle<TerminalDriver>,
     client: &dyn HarnessSupportClient,
-    conversation_id: AIConversationId,
+    conversation_id: &ServerConversationToken,
     block_id: BlockId,
 ) -> Result<()> {
     let td = terminal_driver.clone();

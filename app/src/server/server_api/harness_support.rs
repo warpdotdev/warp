@@ -12,7 +12,7 @@ use super::ServerApi;
 #[cfg(feature = "local_fs")]
 pub use super::presigned_upload::FileUploadBody;
 pub use super::presigned_upload::UploadBody;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::retry::with_bounded_retry;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -297,19 +297,21 @@ impl ReportShutdownRequest {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait HarnessSupportClient: 'static + Send + Sync {
-    /// Create a new external conversation for a third-party harness.
-    async fn create_external_conversation(&self, format: &str) -> Result<AIConversationId>;
+    /// Create a new external conversation for a third-party harness. Returns a
+    /// server-issued [`ServerConversationToken`], not a client-local `AIConversationId`:
+    /// a 3rd-party-harness conversation is never represented in `BlocklistAIHistoryModel`.
+    async fn create_external_conversation(&self, format: &str) -> Result<ServerConversationToken>;
 
     /// Get a presigned upload target for the conversation's raw transcript.
     async fn get_transcript_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget>;
 
     /// Get a presigned upload target for the conversation's block snapshot.
     async fn get_block_snapshot_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget>;
 
     /// Resolve the prompt for a third-party harness run for a task stored on the server.
@@ -486,7 +488,7 @@ impl ServerApi {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 impl HarnessSupportClient for ServerApi {
-    async fn create_external_conversation(&self, format: &str) -> Result<AIConversationId> {
+    async fn create_external_conversation(&self, format: &str) -> Result<ServerConversationToken> {
         let response: CreateExternalConversationResponse = self
             .post_public_api(
                 "harness-support/external-conversation",
@@ -496,13 +498,12 @@ impl HarnessSupportClient for ServerApi {
             )
             .await?;
 
-        AIConversationId::try_from(response.conversation_id)
-            .context("Server returned an invalid conversation ID")
+        Ok(ServerConversationToken::new(response.conversation_id))
     }
 
     async fn get_transcript_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         self.post_public_api(
             "harness-support/transcript",
@@ -515,7 +516,7 @@ impl HarnessSupportClient for ServerApi {
 
     async fn get_block_snapshot_upload_target(
         &self,
-        conversation_id: &AIConversationId,
+        conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         self.post_public_api(
             "harness-support/block-snapshot",

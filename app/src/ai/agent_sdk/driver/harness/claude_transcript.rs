@@ -26,7 +26,7 @@ use uuid::Uuid;
 use warp_core::safe_warn;
 
 use super::json_utils::entries_to_jsonl;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 
 /// JSON envelope sent to the server representing a complete Claude Code session.
 ///
@@ -59,7 +59,7 @@ pub(crate) struct ClaudeResumeInfo {
     /// The Warp server-side conversation id. The runner stores this instead of calling
     /// `create_external_conversation` so subsequent transcript/block-snapshot uploads overwrite
     /// the same GCS objects.
-    pub(crate) conversation_id: AIConversationId,
+    pub(crate) conversation_id: ServerConversationToken,
     /// The Claude session uuid to pass to `claude --resume`. Matches `envelope.uuid`.
     pub(crate) session_id: Uuid,
     /// Envelope from the server. Its `cwd` field is rewritten to the current run's working

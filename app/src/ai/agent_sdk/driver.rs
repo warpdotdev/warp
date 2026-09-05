@@ -37,7 +37,9 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::r#async::{FutureExt, TimeoutError, Timer};
-use warpui::{AppContext, Entity, ModelContext, ModelHandle, ModelSpawner, SingletonEntity};
+use warpui::{
+    AppContext, Entity, EntityId, ModelContext, ModelHandle, ModelSpawner, SingletonEntity,
+};
 
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{
@@ -67,6 +69,7 @@ use crate::ai::blocklist::orchestration_event_streamer::{
     register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIHistoryModel, ConversationStatusUpdate, FinalizeReason,
     finalize_recording_for_conversation,
@@ -181,6 +184,15 @@ const HARNESS_EXIT_FORCE_KILL_DELAY: Duration = Duration::from_secs(14);
 const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bounded fallback for draining `PendingCliHarnessPromptQueue`: some CLI-harness sessions
+/// (e.g. Codex using only its OSC 9 notification fallback, when the platform plugin is
+/// unavailable or disabled) never emit a genuine `CLIAgentSessionsModelEvent::StatusChanged`
+/// with `CLIAgentSessionStatus::InProgress` — Codex's OSC 9 path only ever produces opaque
+/// `Stop` notifications, which map to `Success`, not `InProgress`. Once this window elapses
+/// after harness setup, drain and deliver any still-queued prompts anyway rather than losing
+/// them forever; draining is idempotent, so this is a no-op when the normal `InProgress`-driven
+/// drain already ran.
+const PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
@@ -3992,6 +4004,22 @@ impl AgentDriver {
             LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, ctx| {
                 model.register_cli_session(terminal_view_id, task_id, ctx);
             });
+
+            // See `PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT`: bounded fallback
+            // in case this session never emits a genuine `StatusChanged{InProgress}` (e.g. a
+            // Codex session on the OSC 9 fallback path).
+            ctx.spawn(
+                async move {
+                    Timer::after(PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT).await;
+                },
+                move |me, _, ctx| {
+                    me.drain_and_deliver_pending_cli_harness_prompts(
+                        task_id,
+                        terminal_view_id,
+                        ctx,
+                    );
+                },
+            );
         }
 
         ctx.subscribe_to_model(&CLIAgentSessionsModel::handle(ctx), move |me, _, event, ctx| match event {
@@ -4044,6 +4072,20 @@ impl AgentDriver {
                                 me.task_id
                             );
                             harness_exit.cancel_idle_timeout();
+
+                            // A genuine, plugin-reported confirmation that the harness is
+                            // already running — unlike the synthetic `InProgress` optimistically
+                            // set at registration (which never emits `StatusChanged`; see
+                            // `LocalAgentTaskSyncModel::register_cli_session`) — so it's safe to
+                            // deliver any shared-session prompts queued while waiting for this
+                            // task's harness session to start.
+                            if let Some(task_id) = me.task_id {
+                                me.drain_and_deliver_pending_cli_harness_prompts(
+                                    task_id,
+                                    terminal_view_id,
+                                    ctx,
+                                );
+                            }
                         }
                     }
                 }
@@ -4083,12 +4125,47 @@ impl AgentDriver {
             });
     }
 
-    /// Removes the task mapping registered for CLI agent session status updates.
+    /// Drains and delivers, as genuine PTY follow-ups via `TerminalDriver::send_text_to_cli`,
+    /// any shared-session prompts queued (see `accept_agent_prompt` in
+    /// `terminal_view_adaptor.rs`) while `task_id`'s CLI-harness session had no live PTY yet.
+    /// Safe to call from multiple triggers (the normal `StatusChanged{InProgress}` signal and
+    /// the bounded fallback timeout) since draining is idempotent: nothing happens once the
+    /// queue for this task is already empty.
+    fn drain_and_deliver_pending_cli_harness_prompts(
+        &self,
+        task_id: AmbientAgentTaskId,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let queued = PendingCliHarnessPromptQueue::handle(ctx)
+            .update(ctx, |queue, _ctx| queue.drain(task_id));
+        for prompt in queued {
+            log::info!(
+                "Delivering a shared-session prompt that had been queued while waiting for \
+                 this task's CLI-harness session to start (event=queued_shared_session_prompt_delivered \
+                 task_id={task_id} terminal_view_id={terminal_view_id:?} \
+                 participant_id={:?})",
+                prompt.participant_id
+            );
+            self.terminal_driver.update(ctx, |terminal_driver, ctx| {
+                terminal_driver.send_text_to_cli(prompt.prompt, ctx);
+            });
+        }
+    }
+
+    /// Removes the task mapping registered for CLI agent session status updates, and drops any
+    /// shared-session prompts still queued for it (its CLI-harness session either never started
+    /// or already ended).
     fn unregister_cli_agent_task_sync(&self, ctx: &mut ModelContext<Self>) {
         let terminal_view_id = self.terminal_driver.as_ref(ctx).terminal_view().id();
         LocalAgentTaskSyncModel::handle(ctx).update(ctx, |model, _| {
             model.unregister_cli_session(terminal_view_id);
         });
+        if let Some(task_id) = self.task_id {
+            PendingCliHarnessPromptQueue::handle(ctx).update(ctx, |queue, _ctx| {
+                queue.clear(task_id);
+            });
+        }
     }
 
     /// Handle events re-emitted by the `TerminalDriver`.

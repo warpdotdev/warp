@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use super::super::codex_transcript::CodexTranscriptEnvelope;
 use super::*;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::server::server_api::harness_support::MockHarnessSupportClient;
 
 #[test]
@@ -703,7 +703,7 @@ async fn fetch_resume_payload_maps_404_to_resume_state_missing() {
     let mut mock = MockHarnessSupportClient::new();
     mock.expect_fetch_transcript()
         .returning(|| Err(anyhow::anyhow!("upstream returned status 404")));
-    let conversation_id = AIConversationId::new();
+    let conversation_id = ServerConversationToken::new("test-conversation-id".to_string());
 
     let result = CodexHarness
         .fetch_resume_payload(&conversation_id, Arc::new(mock))
@@ -722,7 +722,7 @@ async fn fetch_resume_payload_maps_other_errors_to_load_failed() {
     let mut mock = MockHarnessSupportClient::new();
     mock.expect_fetch_transcript()
         .returning(|| Err(anyhow::anyhow!("connection reset")));
-    let conversation_id = AIConversationId::new();
+    let conversation_id = ServerConversationToken::new("test-conversation-id".to_string());
 
     let result = CodexHarness
         .fetch_resume_payload(&conversation_id, Arc::new(mock))
@@ -857,7 +857,7 @@ async fn fetch_resume_payload_returns_codex_variant_on_success() {
     let mut mock = MockHarnessSupportClient::new();
     mock.expect_fetch_transcript()
         .returning(move || Ok(bytes::Bytes::from(bytes.clone())));
-    let conversation_id = AIConversationId::new();
+    let conversation_id = ServerConversationToken::new("test-conversation-id".to_string());
 
     let payload = CodexHarness
         .fetch_resume_payload(&conversation_id, Arc::new(mock))

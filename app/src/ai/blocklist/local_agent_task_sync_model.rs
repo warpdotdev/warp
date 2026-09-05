@@ -57,6 +57,7 @@ pub struct LocalAgentTaskSyncModel {
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
+
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
 /// which server field.

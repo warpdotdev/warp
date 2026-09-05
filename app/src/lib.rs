@@ -2249,6 +2249,9 @@ pub(crate) fn initialize_app(
         ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel::new,
     );
     ctx.add_singleton_model(
+        ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue::new,
+    );
+    ctx.add_singleton_model(
         ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer::new,
     );
 
