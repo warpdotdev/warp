@@ -131,6 +131,60 @@ fn test_spawn_abortable_from_view() {
 }
 
 #[test]
+fn test_notify_dedups_consecutive_calls() {
+    struct View;
+
+    impl Entity for View {
+        type Event = ();
+    }
+
+    impl super::View for View {
+        fn render<'a>(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "View"
+        }
+    }
+
+    impl TypedActionView for View {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let (_, handle) = app.add_window(WindowStyle::NotStealFocus, |_| View);
+
+        handle.update(&mut app, |_, ctx| {
+            let effects_before = ctx.app.pending_effects.len();
+
+            // Repeated, consecutive calls to notify() should coalesce into a
+            // single queued effect instead of growing pending_effects
+            // unboundedly (see APP-5741).
+            ctx.notify();
+            ctx.notify();
+            ctx.notify();
+
+            assert_eq!(ctx.app.pending_effects.len(), effects_before + 1);
+        });
+
+        // A notify() for a different view should still queue its own effect
+        // rather than being swallowed by the dedup guard.
+        let (_, other_handle) = app.add_window(WindowStyle::NotStealFocus, |_| View);
+        handle.update(&mut app, |_, ctx| {
+            let effects_before = ctx.app.pending_effects.len();
+            ctx.notify();
+            assert_eq!(ctx.app.pending_effects.len(), effects_before + 1);
+        });
+        other_handle.update(&mut app, |_, ctx| {
+            let effects_before = ctx.app.pending_effects.len();
+            ctx.notify();
+            assert_eq!(ctx.app.pending_effects.len(), effects_before + 1);
+        });
+    });
+}
+
+#[test]
 fn test_view_spawner() {
     #[derive(Default)]
     struct View {
