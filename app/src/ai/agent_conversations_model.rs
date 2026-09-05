@@ -920,6 +920,9 @@ impl AgentConversationsModel {
                                 updated_after: Some(updated_after),
                                 ..Default::default()
                             },
+                            // TODO: Multi-team UI needs a team component in the cache or equivalent
+                            // scope-aware filtering before this request can supply team scope.
+                            None,
                         )
                         .await
                 }
@@ -992,6 +995,9 @@ impl AgentConversationsModel {
                             creator_uid: Some(creator_uid),
                             ..Default::default()
                         },
+                        // TODO: Multi-team UI needs a team component in the cache or equivalent
+                        // scope-aware filtering before this request can supply team scope.
+                        None,
                     );
                     let conversation_metadata_future =
                         ai_client.list_ai_conversation_metadata(None);
@@ -1221,7 +1227,13 @@ impl AgentConversationsModel {
                 let ai_client = ai_client.clone();
                 async move {
                     ai_client
-                        .list_ambient_agent_tasks(100, TaskListFilter::default())
+                        .list_ambient_agent_tasks(
+                            100,
+                            TaskListFilter::default(),
+                            // TODO: Multi-team UI needs a team component in the cache or equivalent
+                            // scope-aware filtering before this request can supply team scope.
+                            None,
+                        )
                         .await
                 }
             },
@@ -2035,7 +2047,13 @@ impl AgentConversationsModel {
                 let task_filter = task_filter.clone();
                 async move {
                     ai_client
-                        .list_ambient_agent_tasks(INITIAL_TASK_AMOUNT, task_filter)
+                        .list_ambient_agent_tasks(
+                            INITIAL_TASK_AMOUNT,
+                            task_filter,
+                            // TODO: Multi-team UI needs a team component in the cache or equivalent
+                            // scope-aware filtering before this request can supply team scope.
+                            None,
+                        )
                         .await
                 }
             },

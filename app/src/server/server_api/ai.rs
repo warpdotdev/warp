@@ -7,7 +7,7 @@ use ai::index::full_source_code_embedding::store_client::{IntermediateNode, Stor
 use ai::index::full_source_code_embedding::{
     self, CodebaseContextConfig, ContentHash, EmbeddingConfig, NodeHash, RepoMetadata,
 };
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use base64::Engine;
 use bytes::Bytes;
@@ -121,6 +121,7 @@ use warp_graphql::queries::task_git_credentials::{
     TaskGitCredentialsLegacyVariables, TaskGitCredentialsResult, TaskGitCredentialsVariables,
 };
 use warp_multi_agent_api::ConversationData;
+use warp_server_client::base_client::TEAM_UID_HEADER;
 
 use super::ServerApi;
 #[cfg(not(target_family = "wasm"))]
@@ -160,6 +161,7 @@ use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguag
 use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
@@ -1310,6 +1312,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error>;
 
     /// List agent runs and return the raw server JSON response.
@@ -1317,6 +1320,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
     async fn get_ambient_agent_task(
@@ -1624,7 +1628,52 @@ fn into_file_artifact_record(
     }
 }
 
+fn with_request_team_scope(
+    mut request: http_client::RequestBuilder<'_>,
+    request_team_scope: Option<RequestTeamScope>,
+) -> http_client::RequestBuilder<'_> {
+    if let Some(team_uid) = request_team_scope.and_then(RequestTeamScope::team_uid) {
+        request = request.header(TEAM_UID_HEADER, team_uid.uid());
+    }
+    request
+}
+
 impl ServerApi {
+    async fn get_public_api_with_team_scope<R>(
+        &self,
+        path: &str,
+        request_team_scope: Option<RequestTeamScope>,
+    ) -> anyhow::Result<R>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        let auth_token = self
+            .get_or_refresh_access_token()
+            .await
+            .context("Failed to get access token for API request")?;
+        let url = format!("{}/api/v1/{path}", ChannelState::server_root_url());
+        let mut request = self.base_client.http_client().get(&url);
+        if let Some(token) = auth_token.as_bearer_token() {
+            request = request.bearer_auth(token);
+        }
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+        let request = with_request_team_scope(request, request_team_scope);
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to send API request to {url}"))?;
+        if !response.status().is_success() {
+            self.observe_iap_challenge(&response);
+            return Err(Self::error_from_response(response).await);
+        }
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
     pub(crate) async fn send_agent_message_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -2410,9 +2459,12 @@ impl AIClient for ServerApi {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error> {
         let url = build_list_agent_runs_url(limit, &filter);
-        let response: ListRunsResponse = self.get_public_api(&url).await?;
+        let response: ListRunsResponse = self
+            .get_public_api_with_team_scope(&url, request_team_scope)
+            .await?;
         Ok(response.runs)
     }
 
@@ -2420,9 +2472,12 @@ impl AIClient for ServerApi {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
         let url = build_list_agent_runs_url(limit, &filter);
-        let response: serde_json::Value = self.get_public_api(&url).await?;
+        let response: serde_json::Value = self
+            .get_public_api_with_team_scope(&url, request_team_scope)
+            .await?;
         Ok(response)
     }
 
