@@ -2184,7 +2184,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Sign Warp Agent CLI and PTY executables
-        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -2662,7 +2662,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Sign the executables with Azure Trusted Signing
-        uses: azure/artifact-signing-action@b443cf8ea4124818d2ea9f043cba29fc3ec47b16 # v1.2.0
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
