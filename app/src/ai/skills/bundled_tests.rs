@@ -39,6 +39,8 @@ fn factory_mcp_bundled_skill_bootstraps_canonical_mcp_resource() {
     let skill = include_str!("../../../../resources/bundled/skills/factory-mcp/SKILL.md");
 
     assert!(skill.contains("skill://warp/factory-mcp/SKILL.md"));
+    assert!(skill.contains("server instructions and"));
+    assert!(skill.contains("Do not claim that"));
     assert!(!skill.contains("references/factory-mcp-tools.md"));
 }
 

@@ -202,8 +202,32 @@ impl AgentDriver {
             })
             .await??;
         installations.extend(resolved_specs.ephemeral_installations);
+        let mut resolved = Self::mcp_installations_to_json(installations, secrets.as_ref())?;
+        let credentials = foreground
+            .spawn(|_, ctx| {
+                let auth_state = AuthStateProvider::as_ref(ctx).get();
+                (!auth_state.is_anonymous_or_logged_out())
+                    .then(|| auth_state.credentials())
+                    .flatten()
+            })
+            .await?;
+        Self::add_builtin_factory_mcp_to_json(&mut resolved, credentials.as_ref())?;
+        Ok(resolved)
+    }
 
-        Self::mcp_installations_to_json(installations, secrets.as_ref())
+    fn add_builtin_factory_mcp_to_json(
+        resolved: &mut HashMap<String, JSONMCPServer>,
+        credentials: Option<&Credentials>,
+    ) -> Result<(), AgentDriverError> {
+        let taken_server_names = resolved.keys().cloned().collect();
+        let Some(installation) =
+            Self::builtin_factory_mcp_for_run(credentials, &taken_server_names)
+        else {
+            return Ok(());
+        };
+        let builtin = Self::mcp_installations_to_json(vec![installation], &HashMap::new())?;
+        resolved.extend(builtin);
+        Ok(())
     }
 
     fn mcp_installations_to_json(

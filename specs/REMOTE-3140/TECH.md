@@ -44,6 +44,7 @@ Extend the shared publisher in `harness/skill_dirs_publish.rs` so harness setup 
 - Codex target: `<harness_working_dir>/.agents/skills/factory-mcp`.
 - Source: `<bundled_resources_dir>/bundled/skills/factory-mcp`.
 - Reuse the existing symlink, Git exclude, repeat-run, and conflict handling. Do not copy or fork the skill.
+- Process configured `WARP_SKILL_DIRS` sources first, so a configured `factory-mcp` skill keeps precedence over the bundled bootstrap.
 - Keep the same `FactoryMcp` feature gate as Oz. Skill publication does not depend on credentials or on whether the built-in lost an MCP name collision; the bootstrap already verifies server availability before use.
 
 Update the bootstrap text to define the resource fallback in Product behavior 6. Do not embed the canonical Factory workflow in Warp. The live MCP resources and tool schemas must remain server-owned.
@@ -86,7 +87,7 @@ Add focused tests under `app/src/ai/agent_sdk/driver`:
 
 Run:
 
-- `cargo test -p warp --lib ai::agent_sdk::driver::mcp_startup_tests`
+- `cargo test -p warp --lib ai::agent_sdk::driver::mcp_startup::tests`
 - `cargo test -p warp --lib ai::agent_sdk::driver::harness::claude_code::tests`
 - `cargo test -p warp --lib ai::agent_sdk::driver::harness::codex::tests`
 - `cargo test -p warp --lib ai::agent_sdk::driver::harness::skill_dirs_publish::tests`

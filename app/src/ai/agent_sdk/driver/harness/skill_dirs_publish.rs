@@ -1,6 +1,6 @@
-//! Makes the skills listed in `WARP_SKILL_DIRS` available to third-party
-//! harnesses (Claude Code, Codex), by symlinking them into a skill root each
-//! harness already searches on its own.
+//! Makes Warp-provided skills available to third-party harnesses (Claude Code,
+//! Codex) by symlinking them into a skill root each harness already searches
+//! on its own.
 //!
 //! Oz reads `WARP_SKILL_DIRS` directly (see
 //! `crate::ai::agent_sdk::driver::AgentDriver::load_skills_dirs`). Third-party
@@ -10,6 +10,8 @@
 //! The published name must match the real skill name (rather than some
 //! namespaced alias) because an agent prompt, or another skill, may
 //! reference a skill by that name. Skill frontmatter is never rewritten.
+//! The feature-gated Factory MCP bootstrap is appended after these configured
+//! sources, so a configured `factory-mcp` skill retains precedence.
 //!
 //! A publish target already counts as ours only when it is a symlink whose
 //! canonical destination is this exact source directory — publishing is then
@@ -46,6 +48,7 @@ use std::path::{Path, PathBuf};
 
 use ai::skills::{parse_skills_dirs_env, resolve_skills_dirs};
 use anyhow::{Context, Result};
+use warp_core::features::FeatureFlag;
 use warp_core::safe_warn;
 
 /// Suffix appended to a real (non-symlink) file or directory this module
@@ -64,28 +67,39 @@ pub(super) fn warp_skill_source_dirs(working_dir: &Path) -> Vec<PathBuf> {
     resolve_skills_dirs(working_dir, parse_skills_dirs_env())
 }
 
-/// Publish every skill found under `source_dirs` into `skill_root` as a
-/// symlink under the skill's own name, pointing at the real skill folder.
-/// Returns the paths of the published symlinks. See [`publish_skill`] for the
-/// conflict-resolution behavior `is_sandbox` selects.
-///
-/// `source_dirs` is most-specific-first: when two directories contain a skill
-/// folder with the same name, only the one from the first (most specific)
-/// directory is published under that name — the same precedence Oz applies
-/// when it reads these directories directly. This precedence choice among our
-/// own source directories is not logged as a conflict; only a conflict with
-/// an entry that did not come from this pass is (see [`publish_skill`]).
-///
-/// A failure to publish one skill (an unreadable directory, a missing
-/// `SKILL.md`, a filesystem error) is logged and does not stop the rest of
-/// the skills from publishing. Does nothing (not even creating `skill_root`)
-/// when `source_dirs` is empty.
-pub(super) fn publish_skill_dirs(
+pub(super) fn publish_third_party_skills(
     skill_root: &Path,
-    source_dirs: &[PathBuf],
+    working_dir: &Path,
     is_sandbox: bool,
 ) -> Vec<PathBuf> {
-    if source_dirs.is_empty() {
+    let source_dirs = warp_skill_source_dirs(working_dir);
+    let bundled_skill_dirs =
+        bundled_factory_mcp_skill_dirs(warp_core::paths::bundled_resources_dir());
+    publish_skill_dirs_with_additional(skill_root, &source_dirs, &bundled_skill_dirs, is_sandbox)
+}
+
+fn bundled_factory_mcp_skill_dirs(resources_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    if !FeatureFlag::FactoryMcp.is_enabled() {
+        return Vec::new();
+    }
+    resources_dir
+        .map(|resources_dir| {
+            resources_dir
+                .join("bundled")
+                .join("skills")
+                .join("factory-mcp")
+        })
+        .into_iter()
+        .collect()
+}
+
+fn publish_skill_dirs_with_additional(
+    skill_root: &Path,
+    source_dirs: &[PathBuf],
+    additional_skill_dirs: &[PathBuf],
+    is_sandbox: bool,
+) -> Vec<PathBuf> {
+    if source_dirs.is_empty() && additional_skill_dirs.is_empty() {
         return Vec::new();
     }
 
@@ -140,6 +154,24 @@ pub(super) fn publish_skill_dirs(
                         full: ("WARP_SKILL_DIRS publish: failed to publish '{name}': {err:#}")
                     );
                 }
+            }
+        }
+    }
+    for source_path in additional_skill_dirs {
+        let Some(name) = source_path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !published_names.insert(name.to_owned()) {
+            continue;
+        }
+        match publish_skill(skill_root, name, source_path, is_sandbox) {
+            Ok(Some(path)) => published.push(path),
+            Ok(None) => {}
+            Err(err) => {
+                safe_warn!(
+                    safe: ("Bundled skill publish: failed to publish a skill"),
+                    full: ("Bundled skill publish: failed to publish '{name}': {err:#}")
+                );
             }
         }
     }

@@ -569,13 +569,12 @@ fn prepare_codex_environment_config(
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
-    publish_warp_skill_dirs_for_codex(workspace_root, harness_working_dir);
+    publish_skills_for_codex(workspace_root, harness_working_dir);
     Ok(())
 }
 
-/// Publish the skills listed in `WARP_SKILL_DIRS`, under their own names, as
-/// symlinks under `<harness_working_dir>/.agents/skills`, so an agent running on
-/// Codex sees the same skills the Oz harness loads from `WARP_SKILL_DIRS`.
+/// Publish `WARP_SKILL_DIRS` and eligible bundled skills under
+/// `<harness_working_dir>/.agents/skills`.
 ///
 /// Relative source directories are resolved from the workspace root, matching
 /// Oz. The links are published into the harness working directory because
@@ -586,17 +585,15 @@ fn prepare_codex_environment_config(
 /// existing entry with the same name (see
 /// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
 /// depending on whether this run is sandboxed (see
-/// `warp_isolation_platform::detect`). A no-op when `WARP_SKILL_DIRS` is not
-/// configured for this run.
-fn publish_warp_skill_dirs_for_codex(workspace_root: &Path, harness_working_dir: &Path) {
-    let source_dirs = super::skill_dirs_publish::warp_skill_source_dirs(workspace_root);
-    if source_dirs.is_empty() {
-        return;
-    }
+/// `warp_isolation_platform::detect`).
+fn publish_skills_for_codex(workspace_root: &Path, harness_working_dir: &Path) {
     let skill_root = harness_working_dir.join(".agents").join("skills");
     let is_sandbox = warp_isolation_platform::detect().is_some();
-    let published =
-        super::skill_dirs_publish::publish_skill_dirs(&skill_root, &source_dirs, is_sandbox);
+    let published = super::skill_dirs_publish::publish_third_party_skills(
+        &skill_root,
+        workspace_root,
+        is_sandbox,
+    );
     super::skill_dirs_publish::exclude_published_skill_paths_from_git(
         harness_working_dir,
         &published,
@@ -604,9 +601,9 @@ fn publish_warp_skill_dirs_for_codex(workspace_root: &Path, harness_working_dir:
     if !published.is_empty() {
         let published = published.len();
         safe_info!(
-            safe: ("Published {published} WARP_SKILL_DIRS skill(s) to the Codex skill root"),
+            safe: ("Published {published} skill(s) to the Codex skill root"),
             full: (
-                "Published {published} WARP_SKILL_DIRS skill(s) to Codex skill root {}",
+                "Published {published} skill(s) to Codex skill root {}",
                 skill_root.display()
             )
         );

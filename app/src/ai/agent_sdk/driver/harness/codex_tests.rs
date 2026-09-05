@@ -429,27 +429,36 @@ fn write_codex_mcp_servers_cli_server() {
 }
 
 #[test]
-fn write_codex_mcp_servers_sse_server() {
+fn write_codex_mcp_servers_preserves_factory_mcp_auth() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("config.toml");
     let working_dir = tmp.path().join("workspace");
     fs::create_dir_all(&working_dir).unwrap();
 
     let servers = HashMap::from([(
-        "remote-mcp".to_string(),
+        "warp-factory".to_string(),
         JSONMCPServer {
             transport_type: JSONTransportType::SSEServer {
-                url: "https://mcp.example.com/sse".to_string(),
-                headers: HashMap::from([("X-Key".to_string(), "val".to_string())]),
+                url: "https://app.warp.dev/api/v1/mcp/factory".to_string(),
+                headers: HashMap::from([(
+                    "Authorization".to_string(),
+                    "Bearer wk-test-key".to_string(),
+                )]),
             },
         },
     )]);
     prepare_codex_config_toml(&config_path, &working_dir, &servers, None, None).unwrap();
 
     let cfg = read_codex_config(&config_path);
-    let mcp = &cfg["mcp_servers"]["remote-mcp"];
-    assert_eq!(mcp["url"].as_str(), Some("https://mcp.example.com/sse"));
-    assert_eq!(mcp["http_headers"]["X-Key"].as_str(), Some("val"));
+    let mcp = &cfg["mcp_servers"]["warp-factory"];
+    assert_eq!(
+        mcp["url"].as_str(),
+        Some("https://app.warp.dev/api/v1/mcp/factory")
+    );
+    assert_eq!(
+        mcp["http_headers"]["Authorization"].as_str(),
+        Some("Bearer wk-test-key")
+    );
 }
 
 #[test]
