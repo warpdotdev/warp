@@ -373,7 +373,7 @@ impl Buffer {
         EditResult {
             undo_item: Some(undo_arg),
             delta: Some(EditDelta {
-                precise_deltas,
+                precise_deltas: Arc::new(precise_deltas),
                 old_offset: replacement_range.old_range,
                 new_lines,
             }),
