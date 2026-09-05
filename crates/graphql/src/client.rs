@@ -166,6 +166,9 @@ where
                     .is_some_and(|v| v.contains("text/html"));
 
                 if is_html {
+                    log::error!(
+                        "{operation_name} request to /graphql/v2 not authorized for staging"
+                    );
                     return Err(GraphQLError::StagingAccessBlocked);
                 }
             }
@@ -256,3 +259,7 @@ macro_rules! define_operation {
     };
 }
 pub(crate) use define_operation;
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "client_tests.rs"]
+mod tests;
