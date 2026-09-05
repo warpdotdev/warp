@@ -372,6 +372,9 @@ pub struct AgentMessageHeader {
     pub read_at: Option<String>,
 }
 
+/// Wire `event_type` for a parent's own inbox message events.
+pub const AGENT_RUN_EVENT_TYPE_NEW_MESSAGE: &str = "new_message";
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AgentRunEvent {
     pub event_type: String,

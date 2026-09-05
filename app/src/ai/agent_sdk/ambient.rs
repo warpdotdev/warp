@@ -42,9 +42,10 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
-    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, ArtifactType, ExecutionLocation,
-    ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
-    SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
+    AGENT_RUN_EVENT_TYPE_NEW_MESSAGE, AIClient, AgentMessageHeader, AgentRunEvent, AgentSource,
+    ArtifactType, ExecutionLocation, ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy,
+    RunSortOrder, SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest,
+    TaskListFilter,
 };
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
@@ -1216,7 +1217,9 @@ async fn watch_messages_forever(
                         continue;
                     }
 
-                    if event.event_type != "new_message" || event.run_id != run_id {
+                    if event.event_type != AGENT_RUN_EVENT_TYPE_NEW_MESSAGE
+                        || event.run_id != run_id
+                    {
                         last_seen_sequence = event.sequence;
                         continue;
                     }
