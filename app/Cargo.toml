@@ -572,7 +572,6 @@ default = [
     "get_started_tab",
     "file_tree",
     "vim_code_editor",
-    "code_launch_modal",
     "allow_ignoring_input_suggestions",
     "mcp_oauth",
     "expand_edit_to_pane",
@@ -935,7 +934,6 @@ revert_diff_hunk = []
 code_review_save_changes = []
 remote_code_review = []
 file_tree = []
-code_launch_modal = []
 api_key_management = []
 diff_set_as_context = []
 discard_per_file_and_all_changes = []
