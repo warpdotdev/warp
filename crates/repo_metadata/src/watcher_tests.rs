@@ -273,10 +273,9 @@ impl RepositorySubscriber for TestSubscriber {
     fn on_files_updated(
         &mut self,
         _repository: &Repository,
-        update: &RepositoryUpdate,
+        update: RepositoryUpdate,
         _ctx: &mut ModelContext<Repository>,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + 'static>> {
-        let update = update.clone();
         let update_completed_tx = self.update_completed_tx.clone();
         let active_tasks = self.active_tasks.clone();
 
