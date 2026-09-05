@@ -329,7 +329,6 @@ static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plu
     ],
     post_install_notes: &[
         "Without the plugin, Warp still detects Grok Build and offers the toolbar, rich input, and image paste.",
-        "Native OSC 9 notifications from Grok Build provide basic turn-complete signals before the Warp plugin is installed.",
     ],
 });
 
