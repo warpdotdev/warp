@@ -1079,6 +1079,8 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config.as_ref(),
         ));
+        git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars)
+            .map_err(AgentDriverError::ConfigBuildFailed)?;
 
         // Signal to third-party harnesses (e.g. Claude Code) that we're in a sandbox
         // so they allow root execution with permissive flags.
