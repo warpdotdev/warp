@@ -185,6 +185,9 @@ async fn convert_multi_agent_client_error(
         warp_multi_agent_client::Error::EventSource(error) => {
             AIApiError::from_stream_error("GenerateMultiAgentOutput", *error).await
         }
+        warp_multi_agent_client::Error::RequestTooLarge { encoded_len } => {
+            AIApiError::RequestTooLarge { encoded_len }
+        }
     };
     Arc::new(error)
 }

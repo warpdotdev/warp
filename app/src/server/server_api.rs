@@ -201,6 +201,12 @@ pub enum AIApiError {
         "Grok subscription token could not be refreshed. Please try reconnecting your subscription."
     )]
     GrokSubscriptionTokenRefreshFailed,
+
+    #[error("{}", warp_multi_agent_client::REQUEST_TOO_LARGE_USER_MESSAGE)]
+    RequestTooLarge { encoded_len: usize },
+
+    #[error("{message}")]
+    Forbidden { message: String },
 }
 
 impl From<http_client::ResponseError> for AIApiError {
@@ -290,6 +296,15 @@ impl AIApiError {
         }
     }
 
+    fn error_for_non_429_stream_status(status: http::StatusCode, body: String) -> Self {
+        if status == http::StatusCode::FORBIDDEN {
+            return AIApiError::Forbidden {
+                message: warp_multi_agent_client::user_message_for_forbidden_body(&body),
+            };
+        }
+        AIApiError::ErrorStatus(status, body)
+    }
+
     /// Format a stream error into a human-readable error message. This will read the response
     /// body if there is one.
     pub(crate) async fn from_stream_error(
@@ -305,12 +320,13 @@ impl AIApiError {
                 let body = res.text().await.ok();
                 Self::error_for_429(&headers, body)
             }
-            reqwest_eventsource::Error::InvalidStatusCode(status, res) => Self::ErrorStatus(
-                status,
-                res.text()
+            reqwest_eventsource::Error::InvalidStatusCode(status, res) => {
+                let body = res
+                    .text()
                     .await
-                    .unwrap_or_else(|e| format!("(no response body: {e:#})")),
-            ),
+                    .unwrap_or_else(|e| format!("(no response body: {e:#})"));
+                Self::error_for_non_429_stream_status(status, body)
+            }
             reqwest_eventsource::Error::Transport(err) => Self::from_transport_error(err),
             err => AIApiError::Stream {
                 stream_type,
@@ -345,8 +361,14 @@ impl AIApiError {
             // A failed Grok token refresh is a credential problem the user must
             // fix by reconnecting, so retrying or resuming won't help.
             AIApiError::GrokSubscriptionTokenRefreshFailed => false,
-            // By default, attempt recovery on error.
-            _ => true,
+            AIApiError::RequestTooLarge { .. } | AIApiError::Forbidden { .. } => false,
+            AIApiError::QuotaLimit { .. }
+            | AIApiError::ServerOverloaded
+            | AIApiError::Deserialization(_)
+            | AIApiError::NoContextFound
+            | AIApiError::Other(_)
+            | AIApiError::Stream { .. }
+            | AIApiError::UnexpectedEof => true,
         }
     }
 }
@@ -366,7 +388,9 @@ impl ErrorExt for AIApiError {
             AIApiError::QuotaLimit { .. }
             | AIApiError::ServerOverloaded
             | AIApiError::NoContextFound
-            | AIApiError::GrokSubscriptionTokenRefreshFailed => false,
+            | AIApiError::GrokSubscriptionTokenRefreshFailed
+            | AIApiError::RequestTooLarge { .. }
+            | AIApiError::Forbidden { .. } => false,
         }
     }
 }

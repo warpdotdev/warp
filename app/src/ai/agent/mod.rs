@@ -866,6 +866,11 @@ impl From<&Arc<AIApiError>> for RenderableAIError {
                 "Grok subscription token could not be refreshed. Please try reconnecting your subscription.",
                 true,
             ),
+            AIApiError::RequestTooLarge { .. } => Self::other(
+                warp_multi_agent_client::REQUEST_TOO_LARGE_USER_MESSAGE,
+                true,
+            ),
+            AIApiError::Forbidden { message } => Self::other(message.clone(), true),
             AIApiError::Deserialization(DeserializationError::Json(_))
             | AIApiError::NoContextFound
             | AIApiError::ErrorStatus(_, _)

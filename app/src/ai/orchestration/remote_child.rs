@@ -353,7 +353,9 @@ pub fn classify_cloud_agent_startup_error(error: &anyhow::Error) -> CloudAgentSt
             | AIApiError::Other(_)
             | AIApiError::Stream { .. }
             | AIApiError::UnexpectedEof
-            | AIApiError::GrokSubscriptionTokenRefreshFailed => {}
+            | AIApiError::GrokSubscriptionTokenRefreshFailed
+            | AIApiError::RequestTooLarge { .. }
+            | AIApiError::Forbidden { .. } => {}
         }
     }
     CloudAgentStartupIssue::Failed(CloudAgentStartupFailure::Other {

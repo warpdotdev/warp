@@ -131,6 +131,55 @@ fn transient_network_error_reports_pending_resume() {
 }
 
 #[test]
+fn request_too_large_renders_exact_user_copy_and_is_terminal() {
+    let api_error = Arc::new(AIApiError::RequestTooLarge {
+        encoded_len: 50_000_001,
+    });
+    let error = RenderableAIError::from(&api_error);
+
+    assert_eq!(
+        error.to_string(),
+        warp_multi_agent_client::REQUEST_TOO_LARGE_USER_MESSAGE
+    );
+    assert!(!error.will_attempt_resume());
+    assert!(matches!(
+        error,
+        RenderableAIError::Other {
+            is_user_error: true,
+            will_attempt_resume: false,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn forbidden_html_is_not_rendered_raw() {
+    let api_error = Arc::new(AIApiError::Forbidden {
+        message: warp_multi_agent_client::FORBIDDEN_FALLBACK_USER_MESSAGE.to_owned(),
+    });
+    let error = RenderableAIError::from(&api_error);
+    let rendered = error.to_string();
+
+    assert_eq!(
+        rendered,
+        warp_multi_agent_client::FORBIDDEN_FALLBACK_USER_MESSAGE
+    );
+    assert!(!rendered.contains('<'));
+    assert!(!rendered.to_ascii_lowercase().contains("html"));
+    assert!(!error.will_attempt_resume());
+}
+
+#[test]
+fn structured_forbidden_message_is_preserved() {
+    let api_error = Arc::new(AIApiError::Forbidden {
+        message: "model not allowed on this plan".to_owned(),
+    });
+    let error = RenderableAIError::from(&api_error);
+
+    assert_eq!(error.to_string(), "model not allowed on this plan");
+}
+
+#[test]
 fn test_convert_files() {
     let a = FileContext::new(
         "a.txt".to_string(),
