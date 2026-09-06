@@ -85,6 +85,61 @@ fn azure_cli_wrapper_path(home: &Path) -> PathBuf {
         .join(AZURE_CLI_FILENAME)
 }
 
+fn prepare_azure_devops_auth_dir(home: &Path) -> Result<PathBuf> {
+    let auth_dir = azure_devops_auth_dir(home);
+    std::fs::create_dir_all(&auth_dir)
+        .with_context(|| format!("Failed to create {}", auth_dir.display()))?;
+    let metadata = std::fs::symlink_metadata(&auth_dir)
+        .with_context(|| format!("Failed to inspect {}", auth_dir.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "Azure DevOps auth path is not a real directory: {}",
+            auth_dir.display()
+        );
+    }
+    Ok(auth_dir)
+}
+
+fn write_azure_cli_token(auth_dir: &Path, token: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    let token_path = auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME);
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(&format!(".{AZURE_DEVOPS_TOKEN_FILENAME}.tmp-"))
+        .tempfile_in(auth_dir)
+        .with_context(|| {
+            format!(
+                "Failed to create a temporary token in {}",
+                auth_dir.display()
+            )
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        temp_file
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "Failed to set permissions on temporary token in {}",
+                    auth_dir.display()
+                )
+            })?;
+    }
+    temp_file
+        .write_all(token.as_bytes())
+        .with_context(|| format!("Failed to write temporary token in {}", auth_dir.display()))?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("Failed to sync temporary token in {}", auth_dir.display()))?;
+    temp_file
+        .persist(&token_path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to replace {}", token_path.display()))?;
+    Ok(())
+}
+
 fn shell_single_quote(value: &Path) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
 }
@@ -105,23 +160,14 @@ fn write_azure_cli_auth_for_executable(
     home: &Path,
     azure_cli: &Path,
 ) -> Result<()> {
-    let auth_dir = azure_devops_auth_dir(home);
+    let auth_dir = prepare_azure_devops_auth_dir(home)?;
     let bin_dir = auth_dir.join(AZURE_DEVOPS_BIN_DIR);
     std::fs::create_dir_all(&bin_dir)
         .with_context(|| format!("Failed to create {}", bin_dir.display()))?;
-
-    let token_path = auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME);
-    let token_tmp_path = auth_dir.join(format!("{AZURE_DEVOPS_TOKEN_FILENAME}.tmp"));
-    write_secret_file(&token_tmp_path, &credential.token)?;
-    std::fs::rename(&token_tmp_path, &token_path).with_context(|| {
-        format!(
-            "Failed to rename {} to {}",
-            token_tmp_path.display(),
-            token_path.display()
-        )
-    })?;
+    write_azure_cli_token(&auth_dir, &credential.token)?;
 
     let wrapper_path = azure_cli_wrapper_path(home);
+    let token_path = auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME);
     let wrapper = format!(
         "#!/bin/sh\n\
          AZURE_DEVOPS_EXT_PAT=\"$(cat {})\" || exit 1\n\
@@ -143,17 +189,8 @@ fn write_azure_cli_auth(credentials: &[GitCredential], home: &Path) -> Result<()
 
     let wrapper_path = azure_cli_wrapper_path(home);
     if wrapper_path.exists() {
-        let token_path = azure_devops_auth_dir(home).join(AZURE_DEVOPS_TOKEN_FILENAME);
-        let token_tmp_path = token_path.with_extension("tmp");
-        write_secret_file(&token_tmp_path, &credential.token)?;
-        std::fs::rename(&token_tmp_path, &token_path).with_context(|| {
-            format!(
-                "Failed to rename {} to {}",
-                token_tmp_path.display(),
-                token_path.display()
-            )
-        })?;
-        return Ok(());
+        let auth_dir = prepare_azure_devops_auth_dir(home)?;
+        return write_azure_cli_token(&auth_dir, &credential.token);
     }
 
     let Some(azure_cli) = resolve_executable(AZURE_CLI_FILENAME) else {

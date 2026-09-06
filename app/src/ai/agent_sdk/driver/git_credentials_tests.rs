@@ -155,7 +155,7 @@ fn azure_cli_wrapper_uses_refreshed_entra_token() -> Result<()> {
     assert!(initial_output.status.success());
 
     let refreshed = azure_devops_credential("refreshed-token");
-    write_azure_cli_auth_for_executable(&refreshed, temp_dir.path(), &azure_cli)?;
+    write_azure_cli_auth(&[refreshed], temp_dir.path())?;
     let refreshed_output = BlockingCommand::new(&wrapper)
         .env("EXPECTED_TOKEN", "refreshed-token")
         .env_remove("AZURE_DEVOPS_EXT_PAT")
@@ -176,6 +176,40 @@ fn azure_cli_wrapper_uses_refreshed_entra_token() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn azure_cli_token_write_does_not_follow_predictable_temp_symlink() -> Result<()> {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temp_dir = tempfile::tempdir()?;
+    let auth_dir = azure_devops_auth_dir(temp_dir.path());
+    std::fs::create_dir_all(&auth_dir)?;
+    let victim = temp_dir.path().join("victim");
+    std::fs::write(&victim, "unchanged")?;
+    let predictable_temp_path = auth_dir.join(format!("{AZURE_DEVOPS_TOKEN_FILENAME}.tmp"));
+    symlink(&victim, &predictable_temp_path)?;
+
+    let azure_cli = temp_dir.path().join("real-az");
+    std::fs::write(&azure_cli, "#!/bin/sh\n")?;
+    std::fs::set_permissions(&azure_cli, std::fs::Permissions::from_mode(0o700))?;
+    write_azure_cli_auth_for_executable(
+        &azure_devops_credential("azure-token"),
+        temp_dir.path(),
+        &azure_cli,
+    )?;
+
+    assert_eq!(std::fs::read_to_string(&victim)?, "unchanged");
+    assert!(
+        std::fs::symlink_metadata(&predictable_temp_path)?
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_to_string(auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME))?,
+        "azure-token"
+    );
+    Ok(())
+}
 #[test]
 fn azure_cli_wrapper_path_is_injected_without_a_token_env_var() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
