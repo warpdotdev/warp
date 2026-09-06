@@ -16,6 +16,7 @@ use super::{
     command_to_telemetry_event, reconcile_task_harness, resolve_local_run_team_scope,
 };
 use crate::ai::agent_sdk::driver::AgentDriverOptions;
+use crate::root_view::NewWorkspaceSource;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, MockAIClient};
@@ -113,9 +114,9 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
         let selected_team_uid = selected_team.uid;
         initialize_team_scope_test_app(&mut app, vec![first_team, selected_team]);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
-        let window_id = WindowId::new();
+        let existing_window_id = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
-            workspaces.register_window(window_id, Some(first_team_uid), ctx);
+            workspaces.register_window(existing_window_id, Some(first_team_uid), ctx);
         });
         let args = parse_run_agent_args(&[
             "agent",
@@ -159,15 +160,20 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
                 .and_then(TeamScope::team_uid),
             Some(selected_team_uid)
         );
+        let workspace_source = NewWorkspaceSource::Session {
+            options: Box::default(),
+            initial_team_uid: driver_options
+                .team_scope
+                .as_ref()
+                .and_then(TeamScope::team_uid),
+        };
+        let initial_team_uid = app.read(|ctx| workspace_source.team_uid(ctx));
+        let headless_window_id = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
-            workspaces.set_team_for_window_from_scope(
-                window_id,
-                driver_options.team_scope.as_ref().unwrap(),
-                ctx,
-            );
+            workspaces.register_window(headless_window_id, initial_team_uid, ctx);
         });
         assert_eq!(
-            app.read(|ctx| UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id)),
+            app.read(|ctx| UserWorkspaces::as_ref(ctx).team_uid_for_window(headless_window_id)),
             Some(selected_team_uid)
         );
     });

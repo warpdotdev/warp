@@ -4041,7 +4041,7 @@ impl Workspace {
                 self.open_launch_config_window(window_template, ctx);
                 self.check_and_trigger_onboarding(ctx);
             }
-            NewWorkspaceSource::Session { options } => {
+            NewWorkspaceSource::Session { options, .. } => {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(options),
                     Arc::new(HashMap::new()),

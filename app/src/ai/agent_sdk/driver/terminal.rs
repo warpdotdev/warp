@@ -38,7 +38,7 @@ use crate::terminal::model::terminal_model::ShellProcessInfo;
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionSource};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event};
-use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli, UserWorkspaces};
 
 /// Describes why a terminal session bootstrap failed.
 #[derive(Debug)]
@@ -202,7 +202,8 @@ fn create_terminal_view(
         IsSharedSessionCreator::No
     };
 
-    let (window_id, root_view) = open_new_with_workspace_source(
+    let initial_team_uid = options.team_scope.as_ref().and_then(TeamScope::team_uid);
+    let (_, root_view) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::new(NewTerminalOptions {
                 is_shared_session_creator,
@@ -211,14 +212,10 @@ fn create_terminal_view(
                 conversation_restoration: options.conversation_restoration,
                 ..Default::default()
             }),
+            initial_team_uid,
         },
         ctx,
     );
-    if let Some(team_scope) = options.team_scope {
-        UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
-            workspaces.set_team_for_window_from_scope(window_id, &team_scope, ctx);
-        });
-    }
 
     root_view
         .as_ref(ctx)
