@@ -31,7 +31,7 @@ use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
 use warp_core::features::FeatureFlag;
-use warp_core::{safe_debug, safe_error, safe_info};
+use warp_core::{safe_debug, safe_error, safe_info, safe_warn};
 use warp_errors::{ErrorExt, register_error, report_error, report_if_error};
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_managed_secrets::ManagedSecretValue;
@@ -1079,8 +1079,12 @@ impl AgentDriver {
             selected_harness,
             third_party_harness_model_config.as_ref(),
         ));
-        git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars)
-            .map_err(AgentDriverError::ConfigBuildFailed)?;
+        if let Err(error) = git_credentials::prepend_azure_cli_wrapper_to_path(&mut env_vars) {
+            safe_warn!(
+                safe: ("Failed to add the Azure CLI authentication wrapper to PATH"),
+                full: ("Failed to add the Azure CLI authentication wrapper to PATH: {error:#}")
+            );
+        }
 
         // Signal to third-party harnesses (e.g. Claude Code) that we're in a sandbox
         // so they allow root execution with permissive flags.

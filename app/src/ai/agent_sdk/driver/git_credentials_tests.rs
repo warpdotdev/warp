@@ -128,6 +128,7 @@ fn merged_credentials_include_each_provider_host() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn azure_cli_wrapper_uses_refreshed_entra_token() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
