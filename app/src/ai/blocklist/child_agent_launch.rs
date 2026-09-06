@@ -14,20 +14,20 @@ use {
 };
 
 use crate::AIExecutionProfilesModel;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
 use crate::ai::execution_profiles::ExecutionProfileId;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::llms::LLMId;
 use crate::ai::llms::LLMPreferences;
 use crate::workspaces::user_workspaces::TeamScope;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
 #[derive(Clone)]
 pub struct ChildAgentSettingsSnapshot {
     profile_id: ExecutionProfileId,
     model_selection: Option<LLMId>,
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
 pub fn capture_child_agent_settings(
     parent_surface_id: EntityId,
     model_id: Option<&str>,
@@ -48,7 +48,7 @@ pub fn capture_child_agent_settings(
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
 pub fn apply_child_agent_settings(
     settings: ChildAgentSettingsSnapshot,
     child_surface_id: EntityId,

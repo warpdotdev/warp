@@ -45,6 +45,10 @@ pub(crate) use action_model::recording_controller::RecordingController;
 pub(crate) use action_model::recording_finalize::{
     FinalizeReason, finalize_recording_for_conversation,
 };
+#[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+pub use child_agent_launch::{
+    ChildAgentSettingsSnapshot, apply_child_agent_settings, capture_child_agent_settings,
+};
 // Consumed by `tui_export` for the `warp_tui` frontend.
 #[cfg(feature = "tui")]
 pub use action_model::{
@@ -79,8 +83,7 @@ pub use child_agent_launch::inherit_child_agent_settings;
 #[cfg(not(target_family = "wasm"))]
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use child_agent_launch::{
-    ChildAgentSettingsSnapshot, PreparedLocalOzChildLaunch, apply_child_agent_model_override,
-    apply_child_agent_settings, capture_child_agent_settings, finish_local_oz_child_conversation,
+    PreparedLocalOzChildLaunch, apply_child_agent_model_override, finish_local_oz_child_conversation,
     prepare_local_oz_child_launch,
 };
 #[cfg(feature = "tui")]

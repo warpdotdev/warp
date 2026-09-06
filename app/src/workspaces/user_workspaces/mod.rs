@@ -47,10 +47,10 @@ use crate::workspaces::workspace::{
 };
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
-#[cfg(not(target_family = "wasm"))]
-pub(crate) use team_workspace_settings::GeminiEnterpriseBackgroundHost;
 #[cfg(test)]
 pub(crate) use team_workspace_settings::TeamlessScopeForTest;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use team_workspace_settings::{GeminiEnterpriseBackgroundHost, TeamScopeForCli};
 pub use team_workspace_settings::{
     ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver, TeamScope,
 };

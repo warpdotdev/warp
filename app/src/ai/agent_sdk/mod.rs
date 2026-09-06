@@ -76,7 +76,7 @@ use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-use crate::workspaces::user_workspaces::ResolvedTeamScope;
+use crate::workspaces::user_workspaces::TeamScopeForCli;
 
 mod admin;
 mod agent_config;
@@ -360,7 +360,7 @@ fn build_merged_config_and_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
     prompt: &Option<Prompt>,
-    local_run_team_scope: Option<&ResolvedTeamScope>,
+    local_run_team_scope: Option<&TeamScopeForCli>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
     // Server-side prompt resolution (task_id is set): the task config already lives on the
@@ -633,23 +633,19 @@ impl warpui::Entity for AgentDriverRunner {
 
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
-struct LocalRunTeamScopes {
-    request: RequestTeamScope,
-    resolved: Arc<ResolvedTeamScope>,
+struct LocalRunTeamScope {
+    scope: TeamScopeForCli,
 }
 
-fn resolve_local_run_team_scopes(
+fn resolve_local_run_team_scope(
     args: &RunAgentArgs,
     ctx: &AppContext,
-) -> anyhow::Result<Option<LocalRunTeamScopes>> {
+) -> anyhow::Result<Option<LocalRunTeamScope>> {
     if args.task_id.is_some() {
         return Ok(None);
     }
     let scope = common::resolve_team_scope(&args.team_selection, ctx)?;
-    Ok(Some(LocalRunTeamScopes {
-        request: RequestTeamScope::from_scope(&scope),
-        resolved: Arc::new(ResolvedTeamScope::from_scope(&scope)),
-    }))
+    Ok(Some(LocalRunTeamScope { scope }))
 }
 
 impl AgentDriverRunner {
@@ -687,8 +683,8 @@ impl AgentDriverRunner {
             )
             .await?;
         let args_for_team_scope = args.clone();
-        let local_run_team_scopes = foreground
-            .spawn(move |_, ctx| resolve_local_run_team_scopes(&args_for_team_scope, ctx))
+        let local_run_team_scope = foreground
+            .spawn(move |_, ctx| resolve_local_run_team_scope(&args_for_team_scope, ctx))
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
 
@@ -742,7 +738,7 @@ impl AgentDriverRunner {
                 Self::build_driver_options_and_task(
                     &foreground,
                     args,
-                    local_run_team_scopes,
+                    local_run_team_scope,
                     &server_api,
                     &setup_events,
                 )
@@ -1052,7 +1048,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        local_run_team_scopes: Option<LocalRunTeamScopes>,
+        local_run_team_scope: Option<LocalRunTeamScope>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1075,19 +1071,18 @@ impl AgentDriverRunner {
         let task_id_str = args.task_id.clone();
         let prompt = args.prompt_arg.to_prompt();
         let skill = args.skill.clone();
-        let local_run_team_scope = local_run_team_scopes
-            .as_ref()
-            .map(|team_scopes| team_scopes.resolved.clone());
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
-        let (merged_config, mut task, mut driver_options) = foreground
+        let (merged_config, mut task, mut driver_options, local_run_team_scope) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
                 let (merged_config, task) = build_merged_config_and_task(
                     &args,
                     &resolved_skill,
                     &prompt_clone,
-                    local_run_team_scope.as_deref(),
+                    local_run_team_scope
+                        .as_ref()
+                        .map(|team_scope| &team_scope.scope),
                     ctx,
                 )?;
 
@@ -1131,7 +1126,7 @@ impl AgentDriverRunner {
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
                 };
 
-                Ok((merged_config, task, driver_options))
+                Ok((merged_config, task, driver_options, local_run_team_scope))
             })
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
@@ -1171,7 +1166,7 @@ impl AgentDriverRunner {
                 server_api,
                 prompt_for_task_creation,
                 merged_config,
-                local_run_team_scopes.expect("new local runs resolve team scopes"),
+                local_run_team_scope.expect("new local runs resolve a team scope"),
                 &mut driver_options,
             )
             .await?;
@@ -1207,10 +1202,12 @@ impl AgentDriverRunner {
         server_api: &Arc<dyn AIClient>,
         prompt: String,
         merged_config: AgentConfigSnapshot,
-        team_scopes: LocalRunTeamScopes,
+        team_scope: LocalRunTeamScope,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
-        driver_options.team_scope = Some(team_scopes.resolved);
+        let LocalRunTeamScope { scope } = team_scope;
+        let request_team_scope = RequestTeamScope::from_scope(&scope);
+        driver_options.team_scope = Some(scope);
         let environment = merged_config.environment_id.clone();
         let task_config = if merged_config.is_empty() {
             None
@@ -1222,7 +1219,7 @@ impl AgentDriverRunner {
         };
 
         let task_id = match server_api
-            .create_agent_task(prompt, environment, None, task_config, team_scopes.request)
+            .create_agent_task(prompt, environment, None, task_config, request_team_scope)
             .await
             .context("Failed to create task")
         {

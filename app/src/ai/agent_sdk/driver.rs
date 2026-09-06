@@ -110,7 +110,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::model::BlockId;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamScopeForCli, UserWorkspaces};
 use crate::workspaces::workspace::BillingMetadata;
 
 pub(crate) mod attachments;
@@ -673,7 +673,7 @@ pub struct AgentDriverOptions {
     /// Model config for the selected harness. Only used for non-Oz harnesses.
     pub third_party_harness_model_config: Option<HarnessModelConfig>,
     /// Team scope assigned to a newly created local run's headless window.
-    pub team_scope: Option<Arc<ResolvedTeamScope>>,
+    pub team_scope: Option<TeamScopeForCli>,
     /// Whether to skip end-of-run snapshot upload.
     pub snapshot_disabled: Option<bool>,
     /// End-of-run snapshot upload timeout override.

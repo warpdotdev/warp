@@ -13,7 +13,7 @@ use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
-    command_to_telemetry_event, reconcile_task_harness, resolve_local_run_team_scopes,
+    command_to_telemetry_event, reconcile_task_harness, resolve_local_run_team_scope,
 };
 use crate::ai::agent_sdk::driver::AgentDriverOptions;
 use crate::server::ids::ServerId;
@@ -124,11 +124,11 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
             "hello",
             &format!("--team={selected_team_uid}"),
         ]);
-        let team_scopes = app
-            .read(|ctx| resolve_local_run_team_scopes(&args, ctx))
+        let team_scope = app
+            .read(|ctx| resolve_local_run_team_scope(&args, ctx))
             .unwrap()
-            .expect("new local run should resolve scopes");
-        assert_eq!(team_scopes.resolved.team_uid(), Some(selected_team_uid));
+            .expect("new local run should resolve a scope");
+        assert_eq!(team_scope.scope.team_uid(), Some(selected_team_uid));
 
         let mut ai_client = MockAIClient::new();
         ai_client
@@ -146,7 +146,7 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
             &ai_client,
             "hello".to_string(),
             AgentConfigSnapshot::default(),
-            team_scopes,
+            team_scope,
             &mut driver_options,
         )
         .await
@@ -155,14 +155,14 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
         assert_eq!(
             driver_options
                 .team_scope
-                .as_deref()
+                .as_ref()
                 .and_then(TeamScope::team_uid),
             Some(selected_team_uid)
         );
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
             workspaces.set_team_for_window_from_scope(
                 window_id,
-                driver_options.team_scope.as_deref().unwrap(),
+                driver_options.team_scope.as_ref().unwrap(),
                 ctx,
             );
         });
@@ -185,7 +185,7 @@ fn task_id_run_skips_cli_team_resolution_and_new_run_scopes() {
 
     App::test((), |app| async move {
         assert!(
-            app.read(|ctx| resolve_local_run_team_scopes(&args, ctx))
+            app.read(|ctx| resolve_local_run_team_scope(&args, ctx))
                 .unwrap()
                 .is_none()
         );
