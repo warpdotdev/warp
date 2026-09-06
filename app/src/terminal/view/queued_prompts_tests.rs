@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 
 use warp_cli::agent::Harness;
+use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
 
@@ -29,6 +30,7 @@ use crate::ai::blocklist::{
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::settings::import::model::ImportedConfigModel;
 use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
@@ -1607,6 +1609,69 @@ fn redetermine_terminal_focus_preserves_focused_queued_prompt_editor() {
         });
         QueuedQueryModel::handle(&app).read(&app, |model, _| {
             assert_eq!(model.editing_row(conversation_id), Some(row_id));
+        });
+    });
+}
+
+#[test]
+fn question_mark_is_inserted_while_editing_queued_prompt() {
+    App::test((), |mut app| async move {
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+        let _queue_flag = FeatureFlag::QueueSlashCommand.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(ImportedConfigModel::new);
+        app.update(|ctx| {
+            crate::terminal::input::init(ctx);
+            crate::editor::init(ctx);
+        });
+
+        let terminal = add_window_with_terminal(&mut app, None);
+        let terminal_view_id = terminal.read(&app, |view, _| view.view_id);
+        let conversation_id =
+            BlocklistAIHistoryModel::handle(&app).update(&mut app, |history, ctx| {
+                let id = history.start_new_conversation(terminal_view_id, false, false, false, ctx);
+                history.set_active_conversation_id(id, terminal_view_id, ctx);
+                id
+            });
+        terminal.update(&mut app, |view, ctx| {
+            view.enter_agent_view_for_conversation(
+                None,
+                AgentViewEntryOrigin::ConversationSelector,
+                conversation_id,
+                ctx,
+            );
+        });
+
+        let input = terminal.read(&app, |view, _| view.input.clone());
+        let panel = input
+            .read(&app, |input, _| input.queued_prompts_panel().cloned())
+            .expect("queue flag should create a queued prompts panel");
+        let row_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(conversation_id, user_query("edit me"), ctx)
+        });
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::StartEditingRow(row_id), ctx);
+        });
+
+        let edit_editor = panel.read(&app, |panel, _| panel.edit_editor_for_test());
+        let window_id = app.read(|ctx| terminal.window_id(ctx));
+        let handled = app
+            .dispatch_keystroke(
+                window_id,
+                &[terminal.id(), input.id(), panel.id(), edit_editor.id()],
+                &Keystroke::parse("shift-?").expect("question-mark keystroke should parse"),
+                false,
+            )
+            .expect("keystroke dispatch should succeed");
+        assert!(
+            !handled,
+            "the parent input should not handle the queued editor's question mark"
+        );
+        edit_editor.update(&mut app, |editor, ctx| {
+            editor.user_insert("?", ctx);
+        });
+        edit_editor.read(&app, |editor, ctx| {
+            assert_eq!(editor.buffer_text(ctx), "edit me?");
         });
     });
 }
