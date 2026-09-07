@@ -36,6 +36,10 @@ The Warp team applies one of the following labels when an issue is ready for con
 
 Anyone can pick up a ready issue — readiness labels are not assignments, and the best implementation wins through normal review. If an issue has been sitting un-triaged or you'd like readiness re-evaluated, mention **@oss-maintainers** in a comment to flag it for the team.
 
+### Escalation for maintainer attention
+
+Beyond the readiness labels above, we run an internal process that surfaces untriaged or unreviewed issues for direct Warp team attention. An issue is escalated through that process only once it has received **at least 5 upvotes** (👍 reactions on the issue). Issues labeled **`feature`** are never escalated through this path, regardless of upvote count — feature requests are already tracked through the `ready-to-spec` / `ready-to-implement` labeling flow described above. If you'd like an issue looked at sooner and it doesn't yet meet the upvote bar, mention **@oss-maintainers** in a comment instead of waiting.
+
 ## Contribution Flow
 
 Steps owned by you (the contributor) are shown in yellow; steps owned by the Warp team or Oz are shown in blue.

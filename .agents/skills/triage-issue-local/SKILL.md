@@ -35,6 +35,15 @@ The label taxonomy for this repository is managed in `.github/issue-triage/confi
 
 Evaluate `ready-to-implement` during triage instead of relying on issue-template defaults. For bug reports, apply `ready-to-implement` only when the issue is reproducible from the provided evidence or straightforward local verification and the likely fix appears narrow enough to implement without a product spec, design mocks, or substantial investigation. If the bug is not reproducible, lacks a clear fix path, requires product/design decisions, or needs deeper technical discovery, omit `ready-to-implement` and prefer `needs-info`, `ready-to-spec`, `needs-mocks`, or the appropriate `repro:*` label.
 
+### `feature` vs `bug` / `enhancement`
+
+`feature` is in this repository's taxonomy (`.github/issue-triage/config.json`). Apply it **at your discretion** whenever the issue is a feature request, alongside the following guidelines:
+
+- **`feature`** — the reporter is asking for something that does not exist in Warp today: a new command, setting, surface, integration, or workflow. If the classification step (core skill, step 2) identifies the issue as an enhancement/feature request rather than a bug, and the request describes genuinely new functionality, include `feature` in the label set.
+- **`bug`** — the reporter describes existing functionality behaving incorrectly (crashes, wrong output, broken rendering, regressions). Never apply `feature` to a bug report, even when the reporter frames a gap as "broken" — if the described behavior never existed in Warp, classify it as a feature request (`feature`), not a bug, regardless of how the reporter phrased it.
+- **`enhancement` vs `feature`** — both describe non-bug requests, so both may be relevant on the same issue: apply `enhancement` when the ask improves, extends, or reconfigures something that already exists (e.g. more granular control over an existing setting, better performance on an existing flow); apply `feature` when the ask is for new functionality that doesn't exist yet. A single issue can carry both when a feature request also reads as a meaningful enhancement to an adjacent existing capability, but most feature requests only need `feature`. When uncertain whether something "already exists", check the codebase and docs (per the core skill's process) before deciding.
+- The feature-request issue template currently seeds `enhancement` only — this is a template default, not a triage signal. Add `feature` on top of the template's seeded labels whenever the request is a genuine feature ask; do not treat the template's `enhancement` seed as a reason to omit `feature`.
+
 Use area labels based on the user's reported surface:
 
 - `area:shell-terminal` for terminal output, block rendering, shell integration, prompt rendering, command execution display, and terminal-emulation behavior.
