@@ -1,9 +1,8 @@
 /// Git credentials management for cloud agent sandboxes.
 ///
 /// This module handles:
-/// - Writing provider credentials to `~/.git-credentials`, plus GitHub
-///   credentials to `~/.config/gh/hosts.yml`, without requiring environment
-///   variables.
+/// - Writing provider credentials to `~/.git-credentials`, GitHub credentials
+///   to `~/.config/gh/hosts.yml`, and refresh-safe Azure CLI authentication.
 /// - One-time git configuration (`credential.helper store`, SSH→HTTPS URL
 ///   rewrites).
 /// - Configuring the git user identity from the server-returned username/email.
@@ -12,7 +11,8 @@
 ///   authenticated for their entire duration.
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    ffi::{OsStr, OsString},
+    path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -23,6 +23,7 @@ use anyhow::{Context, Result, bail};
 use command::blocking::Command as BlockingCommand;
 
 use crate::server::server_api::ai::{AIClient, GitCredential, TaskGitCredentialsResponse};
+use crate::util::path::resolve_executable;
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
@@ -34,6 +35,11 @@ const GITHUB_HOST: &str = "github.com";
 const GH_HOSTS_FILENAME: &str = "hosts.yml";
 const GLAB_HOST: &str = "gitlab.com";
 const GLAB_CONFIG_FILENAME: &str = "config.yml";
+const AZURE_DEVOPS_HOST: &str = "dev.azure.com";
+const AZURE_DEVOPS_AUTH_DIR: &str = "azure-devops";
+const AZURE_DEVOPS_TOKEN_FILENAME: &str = "entra-token";
+const AZURE_DEVOPS_BIN_DIR: &str = "bin";
+const AZURE_CLI_FILENAME: &str = "az";
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
@@ -66,6 +72,165 @@ fn write_secret_file(path: &std::path::Path, content: &str) -> Result<()> {
         std::fs::write(path, content)
             .with_context(|| format!("Failed to write {}", path.display()))?;
     }
+    Ok(())
+}
+
+fn azure_devops_auth_dir(home: &Path) -> PathBuf {
+    home.join(".warp").join(AZURE_DEVOPS_AUTH_DIR)
+}
+
+fn azure_cli_wrapper_path(home: &Path) -> PathBuf {
+    azure_devops_auth_dir(home)
+        .join(AZURE_DEVOPS_BIN_DIR)
+        .join(AZURE_CLI_FILENAME)
+}
+
+fn prepare_azure_devops_auth_dir(home: &Path) -> Result<PathBuf> {
+    let auth_dir = azure_devops_auth_dir(home);
+    std::fs::create_dir_all(&auth_dir)
+        .with_context(|| format!("Failed to create {}", auth_dir.display()))?;
+    let metadata = std::fs::symlink_metadata(&auth_dir)
+        .with_context(|| format!("Failed to inspect {}", auth_dir.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "Azure DevOps auth path is not a real directory: {}",
+            auth_dir.display()
+        );
+    }
+    Ok(auth_dir)
+}
+
+fn write_azure_cli_token(auth_dir: &Path, token: &str) -> Result<()> {
+    use std::io::Write as _;
+
+    let token_path = auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME);
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(&format!(".{AZURE_DEVOPS_TOKEN_FILENAME}.tmp-"))
+        .tempfile_in(auth_dir)
+        .with_context(|| {
+            format!(
+                "Failed to create a temporary token in {}",
+                auth_dir.display()
+            )
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        temp_file
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .with_context(|| {
+                format!(
+                    "Failed to set permissions on temporary token in {}",
+                    auth_dir.display()
+                )
+            })?;
+    }
+    temp_file
+        .write_all(token.as_bytes())
+        .with_context(|| format!("Failed to write temporary token in {}", auth_dir.display()))?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("Failed to sync temporary token in {}", auth_dir.display()))?;
+    temp_file
+        .persist(&token_path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("Failed to replace {}", token_path.display()))?;
+    Ok(())
+}
+
+fn shell_single_quote(value: &Path) -> String {
+    format!("'{}'", value.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
+fn write_executable_file(path: &Path, content: &str) -> Result<()> {
+    write_secret_file(path, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("Failed to set permissions on {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn write_azure_cli_auth_for_executable(
+    credential: &GitCredential,
+    home: &Path,
+    azure_cli: &Path,
+) -> Result<()> {
+    let auth_dir = prepare_azure_devops_auth_dir(home)?;
+    let bin_dir = auth_dir.join(AZURE_DEVOPS_BIN_DIR);
+    std::fs::create_dir_all(&bin_dir)
+        .with_context(|| format!("Failed to create {}", bin_dir.display()))?;
+    write_azure_cli_token(&auth_dir, &credential.token)?;
+
+    let wrapper_path = azure_cli_wrapper_path(home);
+    let token_path = auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME);
+    let wrapper = format!(
+        "#!/bin/sh\n\
+         AZURE_DEVOPS_EXT_PAT=\"$(cat {})\" || exit 1\n\
+         export AZURE_DEVOPS_EXT_PAT\n\
+         exec {} \"$@\"\n",
+        shell_single_quote(&token_path),
+        shell_single_quote(azure_cli),
+    );
+    write_executable_file(&wrapper_path, &wrapper)
+}
+
+fn write_azure_cli_auth(credentials: &[GitCredential], home: &Path) -> Result<()> {
+    let Some(credential) = credentials
+        .iter()
+        .find(|credential| credential.host == AZURE_DEVOPS_HOST)
+    else {
+        return Ok(());
+    };
+
+    let wrapper_path = azure_cli_wrapper_path(home);
+    if wrapper_path.exists() {
+        let auth_dir = prepare_azure_devops_auth_dir(home)?;
+        return write_azure_cli_token(&auth_dir, &credential.token);
+    }
+
+    let Some(azure_cli) = resolve_executable(AZURE_CLI_FILENAME) else {
+        log::warn!("Azure CLI not found; skipped Azure DevOps CLI authentication");
+        return Ok(());
+    };
+    write_azure_cli_auth_for_executable(credential, home, &azure_cli)
+}
+
+pub(crate) fn prepend_azure_cli_wrapper_to_path(
+    env_vars: &mut HashMap<OsString, OsString>,
+) -> Result<()> {
+    let home = home_dir()?;
+    prepend_azure_cli_wrapper_to_path_for_home(env_vars, &home)
+}
+
+fn prepend_azure_cli_wrapper_to_path_for_home(
+    env_vars: &mut HashMap<OsString, OsString>,
+    home: &Path,
+) -> Result<()> {
+    let wrapper_path = azure_cli_wrapper_path(home);
+    if !wrapper_path.exists() {
+        return Ok(());
+    }
+
+    let path_key = OsStr::new("PATH");
+    let current_path = env_vars
+        .get(path_key)
+        .cloned()
+        .or_else(|| std::env::var_os(path_key))
+        .unwrap_or_default();
+    let wrapper_dir = wrapper_path
+        .parent()
+        .expect("Azure CLI wrapper always has a parent directory")
+        .to_path_buf();
+    let path = std::env::join_paths(
+        std::iter::once(wrapper_dir).chain(std::env::split_paths(&current_path)),
+    )
+    .context("Failed to prepend the Azure CLI wrapper to PATH")?;
+    env_vars.insert(path_key.to_os_string(), path);
     Ok(())
 }
 
@@ -325,6 +490,7 @@ pub(crate) fn write_git_credentials_with_failures(
         write_git_credentials_file(credentials),
         write_gh_hosts_yml(credentials, &home),
         write_glab_config(credentials, &home),
+        write_azure_cli_auth(credentials, &home),
     ];
     let mut first_error = None;
     for outcome in outcomes {

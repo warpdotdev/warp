@@ -12,7 +12,7 @@ use crate::environment::EnvironmentCreateArgs;
 use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::share::ShareArgs;
 use crate::skill::SkillSpec;
 
@@ -48,6 +48,8 @@ pub enum RepositoryForge {
     GitHub,
     #[serde(rename = "GITLAB")]
     GitLab,
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
 }
 /// Server-supplied repository HEAD used to prepare an agent run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -418,6 +420,8 @@ impl AgentCommand {
 pub struct RunAgentArgs {
     #[command(flatten)]
     pub prompt_arg: PromptArg,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,

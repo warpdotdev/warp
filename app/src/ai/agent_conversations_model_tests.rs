@@ -27,7 +27,9 @@ use crate::ai::agent::conversation::{
     AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
     ServerAIConversationMetadata,
 };
-use crate::ai::ambient_agents::task::{HarnessConfig, TaskPrincipalInfo, TaskStatusMessage};
+use crate::ai::ambient_agents::task::{
+    HarnessConfig, TaskPrincipalInfo, TaskScope, TaskStatusMessage,
+};
 use crate::ai::ambient_agents::{
     AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
     ExecutionLocation,
@@ -44,6 +46,7 @@ use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::test_util::ai_agent_tasks::{create_api_task, create_message};
 use crate::test_util::settings::initialize_history_persistence_for_tests;
 use crate::workspace::{WorkspaceAction, WorkspaceRegistry};
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 /// Creates a test task with specified creator UID and updated_at time
 fn create_test_task(
@@ -635,6 +638,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                     status: StatusFilter::Done,
                     ..Default::default()
                 },
+                &TeamlessScopeForTest,
                 ctx,
             );
             assert_eq!(done_items.len(), 1);
@@ -649,9 +653,73 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                     status: StatusFilter::Working,
                     ..Default::default()
                 },
+                &TeamlessScopeForTest,
                 ctx,
             );
             assert!(working_items.is_empty());
+        });
+    });
+}
+
+#[test]
+fn window_team_projection_keeps_matching_and_unscoped_tasks() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+        let now = Utc::now();
+        let team_a = ServerId::from(1);
+        let team_b = ServerId::from(2);
+        let mut model = create_test_model();
+
+        let mut team_a_task = create_test_task(&make_uuid(4100), "user-a", now);
+        team_a_task.scope = Some(TaskScope {
+            scope_type: "team".to_string(),
+            uid: team_a.to_string(),
+        });
+        let team_a_task_id = team_a_task.task_id;
+        model.tasks.insert(team_a_task.task_id, team_a_task);
+
+        let mut team_b_task = create_test_task(&make_uuid(4101), "user-b", now);
+        team_b_task.scope = Some(TaskScope {
+            scope_type: "TEAM".to_string(),
+            uid: team_b.to_string(),
+        });
+        let team_b_task_id = team_b_task.task_id;
+        model.tasks.insert(team_b_task.task_id, team_b_task);
+
+        let mut personal_task = create_test_task(&make_uuid(4102), "user-a", now);
+        personal_task.scope = Some(TaskScope {
+            scope_type: "personal".to_string(),
+            uid: "user-a".to_string(),
+        });
+        let personal_task_id = personal_task.task_id;
+        model.tasks.insert(personal_task.task_id, personal_task);
+
+        let unscoped_task = create_test_task(&make_uuid(4103), "user-b", now);
+        let unscoped_task_id = unscoped_task.task_id;
+        model.tasks.insert(unscoped_task.task_id, unscoped_task);
+
+        app.update(|ctx| {
+            let team_a_scope = TeamContextForOperation::new_for_test(team_a);
+            let team_a_entries = model.get_entries(&all_owner_filters(), &team_a_scope, ctx);
+            let team_a_ids = team_a_entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            assert!(team_a_ids.contains(&AgentConversationEntryId::AmbientRun(team_a_task_id)));
+            assert!(!team_a_ids.contains(&AgentConversationEntryId::AmbientRun(team_b_task_id)));
+            assert!(team_a_ids.contains(&AgentConversationEntryId::AmbientRun(personal_task_id)));
+            assert!(team_a_ids.contains(&AgentConversationEntryId::AmbientRun(unscoped_task_id)));
+
+            let teamless_entries =
+                model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
+            let teamless_ids = teamless_entries
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>();
+            assert!(!teamless_ids.contains(&AgentConversationEntryId::AmbientRun(team_a_task_id)));
+            assert!(!teamless_ids.contains(&AgentConversationEntryId::AmbientRun(team_b_task_id)));
+            assert!(teamless_ids.contains(&AgentConversationEntryId::AmbientRun(personal_task_id)));
+            assert!(teamless_ids.contains(&AgentConversationEntryId::AmbientRun(unscoped_task_id)));
         });
     });
 }
@@ -719,7 +787,7 @@ fn conversation_query_caps_recent_entries_and_places_newest_last() {
         }
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let results = query_conversation_entries(entries, "");
 
             assert_eq!(results.len(), DEFAULT_RESULT_COUNT);
@@ -763,7 +831,7 @@ fn conversation_query_filters_titles_and_caps_best_fuzzy_results() {
         }
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let results = query_conversation_entries(entries, "deploy");
 
             assert_eq!(results.len(), MAX_SEARCH_RESULTS);
@@ -795,7 +863,7 @@ fn conversation_query_orders_equal_fuzzy_scores_by_recency() {
         }
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let results = query_conversation_entries(entries, "deploy");
 
             assert!(results.windows(2).all(|window| {
@@ -958,7 +1026,7 @@ fn test_get_entries_includes_task_only_entry() {
         model.tasks.insert(task.task_id, task.clone());
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -989,7 +1057,7 @@ fn test_task_entry_preserves_execution_location_independently_of_task_backing() 
         model.tasks.insert(remote_task.task_id, remote_task);
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             let local_entry = entries
                 .iter()
                 .find(|entry| entry.execution_location == Some(ExecutionLocation::Local))
@@ -1035,7 +1103,7 @@ fn test_ambient_conversation_without_task_preserves_cloud_classification() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1060,7 +1128,7 @@ fn test_get_entries_includes_local_only_entry() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1097,7 +1165,7 @@ fn test_get_entries_excludes_child_agent_task() {
         model.tasks.insert(child_task.task_id, child_task.clone());
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
             assert_eq!(entries.len(), 1);
             assert_eq!(
                 entries[0].id,
@@ -1156,11 +1224,13 @@ fn test_get_entries_excludes_conversation_shadowed_by_child_task() {
 
         app.update(|ctx| {
             assert!(
-                model.get_entries(&all_owner_filters(), ctx).is_empty(),
+                model
+                    .get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx)
+                    .is_empty(),
                 "a conversation shadowed by a child task must be hidden with it"
             );
             assert!(
-                !model.has_items(ctx),
+                !model.has_items(&TeamlessScopeForTest, ctx),
                 "a conversation shadowed by a child task must not count as a visible item"
             );
         });
@@ -1211,11 +1281,11 @@ fn test_has_items_ignores_child_agent_tasks() {
 
         app.update(|ctx| {
             assert!(
-                !child_only.has_items(ctx),
+                !child_only.has_items(&TeamlessScopeForTest, ctx),
                 "a child-only model should be treated as empty"
             );
             assert!(
-                with_parent.has_items(ctx),
+                with_parent.has_items(&TeamlessScopeForTest, ctx),
                 "a model with a non-child task should have items"
             );
         });
@@ -1238,7 +1308,7 @@ fn test_get_entries_includes_cloud_metadata_only_entry() {
         let model = create_test_model();
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1304,7 +1374,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1360,7 +1430,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             let entry = &entries[0];
@@ -1395,7 +1465,7 @@ fn test_get_entries_keeps_unrelated_task_and_conversation_entries() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 2);
             assert!(
@@ -1755,8 +1825,11 @@ fn test_resolve_open_action_opens_metadata_only_cloud_conversation_by_server_tok
         app.add_singleton_model(|_| create_test_model());
 
         app.update(|ctx| {
-            let entries =
-                AgentConversationsModel::as_ref(ctx).get_entries(&all_owner_filters(), ctx);
+            let entries = AgentConversationsModel::as_ref(ctx).get_entries(
+                &all_owner_filters(),
+                &TeamlessScopeForTest,
+                ctx,
+            );
             let entry = entries
                 .iter()
                 .find(|entry| {
@@ -2349,6 +2422,55 @@ fn test_eviction_noop_when_under_cap() {
 }
 
 #[test]
+fn test_eviction_caps_explicit_teams_independently() {
+    let now = Utc::now();
+    let team_a = ServerId::from(10);
+    let team_b = ServerId::from(20);
+    let mut model = create_test_model();
+
+    for i in 0..350 {
+        let mut task = create_test_task(
+            &make_uuid(10_000 + i),
+            "team-a-user",
+            now - Duration::hours(i as i64),
+        );
+        task.scope = Some(TaskScope {
+            scope_type: "team".to_string(),
+            uid: team_a.to_string(),
+        });
+        model.tasks.insert(task.task_id, task);
+    }
+    for i in 0..350 {
+        let mut task = create_test_task(
+            &make_uuid(20_000 + i),
+            "team-b-user",
+            now - Duration::hours(i as i64),
+        );
+        task.scope = Some(TaskScope {
+            scope_type: "team".to_string(),
+            uid: team_b.to_string(),
+        });
+        model.tasks.insert(task.task_id, task);
+    }
+
+    model.enforce_task_cap("current-user");
+
+    let count_for_team = |team_uid: ServerId| {
+        model
+            .tasks
+            .values()
+            .filter(|task| {
+                task.scope
+                    .as_ref()
+                    .is_some_and(|scope| scope.is_team() && scope.uid == team_uid.to_string())
+            })
+            .count()
+    };
+    assert_eq!(count_for_team(team_a), MAX_TEAM_TASKS);
+    assert_eq!(count_for_team(team_b), MAX_TEAM_TASKS);
+}
+
+#[test]
 fn test_environment_none_filter_includes_conversations() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
@@ -2381,7 +2503,7 @@ fn test_environment_none_filter_includes_conversations() {
         };
 
         app.update(|ctx| {
-            let entries = model.get_entries(&filters, ctx);
+            let entries = model.get_entries(&filters, &TeamlessScopeForTest, ctx);
 
             assert!(
                 entries.iter().any(
@@ -2503,7 +2625,7 @@ fn test_get_entries_prefers_task_when_task_id_matches_conversation_run_id() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             assert_eq!(
@@ -2564,7 +2686,7 @@ fn test_get_entries_prefers_task_when_server_token_matches() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 1);
             assert_eq!(
@@ -2596,7 +2718,7 @@ fn test_get_entries_keeps_unrelated_tasks_and_conversations() {
         );
 
         app.update(|ctx| {
-            let entries = model.get_entries(&all_owner_filters(), ctx);
+            let entries = model.get_entries(&all_owner_filters(), &TeamlessScopeForTest, ctx);
 
             assert_eq!(entries.len(), 2);
             assert!(
@@ -2660,6 +2782,7 @@ fn test_harness_filter_matches_only_selected_harness() {
                             harness: filter,
                             ..Default::default()
                         },
+                        &TeamlessScopeForTest,
                         ctx,
                     )
                     .into_iter()

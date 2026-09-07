@@ -375,14 +375,13 @@ fn run_list_scope_uses_team_loaded_by_workspace_refresh() {
             .expect("workspace refresh succeeds");
 
         app.read(|ctx| {
-            let scope = request_team_scope_for_cli(
-                &TeamSelection {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&TeamSelection {
                     team: Some(Some(team_uid.to_string())),
-                },
-                ctx,
-            )
-            .expect("the selected team resolves from refreshed metadata");
-            assert_eq!(scope.team_uid(), Some(team_uid));
+                })
+                .expect("the selected team resolves from refreshed metadata");
+            let request_scope = RequestTeamScope::from_scope(&scope);
+            assert_eq!(request_scope.team_uid(), Some(team_uid));
         });
     });
 }

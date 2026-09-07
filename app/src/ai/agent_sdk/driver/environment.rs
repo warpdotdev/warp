@@ -588,6 +588,7 @@ fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
     match repo.code_forge {
         Some(CodeForge::GitHub) => Some(RepositoryForge::GitHub),
         Some(CodeForge::GitLab) => Some(RepositoryForge::GitLab),
+        Some(CodeForge::AzureDevOps) => Some(RepositoryForge::AzureDevOps),
         Some(CodeForge::None | CodeForge::Unknown) | None => None,
     }
 }

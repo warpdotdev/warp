@@ -191,22 +191,25 @@ fn serialize_claude_mcp_config_cli_server_omits_cwd_when_none() {
 }
 
 #[test]
-fn serialize_claude_mcp_config_sse_server() {
+fn serialize_claude_mcp_config_preserves_factory_mcp_auth() {
     let servers = HashMap::from([(
-        "remote".to_string(),
+        "warp-factory".to_string(),
         JSONMCPServer {
             transport_type: JSONTransportType::SSEServer {
-                url: "https://mcp.example.com".to_string(),
-                headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+                url: "https://app.warp.dev/api/v1/mcp/factory".to_string(),
+                headers: HashMap::from([(
+                    "Authorization".to_string(),
+                    "Bearer wk-test-key".to_string(),
+                )]),
             },
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let server = &parsed["mcpServers"]["remote"];
+    let server = &parsed["mcpServers"]["warp-factory"];
     assert_eq!(server["type"], "http");
-    assert_eq!(server["url"], "https://mcp.example.com");
-    assert_eq!(server["headers"]["Authorization"], "Bearer tok");
+    assert_eq!(server["url"], "https://app.warp.dev/api/v1/mcp/factory");
+    assert_eq!(server["headers"]["Authorization"], "Bearer wk-test-key");
 }
 
 #[test]

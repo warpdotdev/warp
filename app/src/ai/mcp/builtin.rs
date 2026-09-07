@@ -13,7 +13,7 @@
 //! CLI agent runs (`oz agent run`, including the cloud workers behind
 //! `oz agent run-cloud`) bypass that manager path; the agent driver attaches
 //! the same installation per-run instead (see
-//! `AgentDriver::builtin_factory_mcp_for_run`), with the token pinned for the
+//! `AgentDriver::resolve_mcp_specs_to_json`), with the token pinned for the
 //! duration of the run.
 //!
 //! [`TemplatableMCPServerManager::sync_builtin_servers`]: super::TemplatableMCPServerManager::sync_builtin_servers

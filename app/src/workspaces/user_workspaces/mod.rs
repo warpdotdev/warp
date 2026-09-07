@@ -47,12 +47,13 @@ use crate::workspaces::workspace::{
 };
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
-#[cfg(not(target_family = "wasm"))]
-pub(crate) use team_workspace_settings::GeminiEnterpriseBackgroundHost;
-pub(crate) use team_workspace_settings::TeamContextForOperation;
 #[cfg(test)]
 pub(crate) use team_workspace_settings::TeamlessScopeForTest;
-pub use team_workspace_settings::{ResolvedTeamScope, TeamContext, TeamContextResolver, TeamScope};
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use team_workspace_settings::{GeminiEnterpriseBackgroundHost, TeamScopeForCli};
+pub use team_workspace_settings::{
+    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver, TeamScope,
+};
 
 const STRIPE_SUBSCRIPTION_INTERVAL_PAGE_PREFIX: &str = "/upgrade";
 
@@ -753,6 +754,16 @@ impl UserWorkspaces {
 
     pub fn has_workspaces(&self) -> bool {
         !self.workspaces.is_empty()
+    }
+
+    /// Cloud agents require a team only in native workspaces: a legacy
+    /// (non-native) workspace's teamless state is resolved by creating a
+    /// team, not by joining an existing one, so it isn't subject to this
+    /// blocker (see `TeamsPageView::page_sections_for`).
+    pub fn cloud_agents_require_team(&self) -> bool {
+        self.current_workspace().is_some_and(|workspace| {
+            workspace.is_native_workspaces_enabled() && workspace.teams.is_empty()
+        })
     }
 
     pub fn update_workspaces(&mut self, workspaces: Vec<Workspace>, ctx: &mut ModelContext<Self>) {

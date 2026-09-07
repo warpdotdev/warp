@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use settings::Setting;
 #[cfg(not(target_family = "wasm"))]
-use warp_cli::scope::TeamSelection;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
@@ -44,15 +44,10 @@ mod sealed {
 
 /// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
 ///
-/// Either of [`TeamContextForOperation`] or [`TeamContext`] is the "key" external
-/// modules use to obtain a team-level setting. The only external modules can obtain
-/// this "key" is by exchanging a ViewContext or a ViewHandle for one. Once minted,
-/// both [`TeamContextForOperation`] or [`TeamContext`] cannot be copied, cloned, or
-/// moved. This ensures that the external operations which need TeamScopes (i.e. to
-/// exchange for a team setting) is scoped to the view (and therefore team-scoped
-/// window) that started the operation. External callers shouldn't copy a TeamContext
-/// to a Singleton model for example, risking leaking that TeamContext / team info to
-/// a different window with another team.
+/// Application code obtains a [`TeamContext`] or [`TeamContextForOperation`] by exchanging a
+/// view context or handle. Neither type can be copied or cloned. `TeamContext` is borrow-bound to
+/// an immediate read, while `TeamContextForOperation` is owned so one operation can move it across
+/// an asynchronous boundary without re-resolving against a different window team.
 ///
 /// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
 /// outside [`UserWorkspaces`].
@@ -61,7 +56,8 @@ pub trait TeamScope: sealed::Sealed {
     fn team_uid(&self) -> Option<ServerId>;
 }
 
-pub(crate) struct TeamContextForOperation {
+/// The team selected when a view-scoped operation starts.
+pub struct TeamContextForOperation {
     team_uid: Option<ServerId>,
 }
 
@@ -100,7 +96,10 @@ impl TeamScope for TeamContext<'_> {
 /// The team a headless CLI invocation acts as, resolved from its command-line selection and
 /// memberships instead of from a window.
 #[cfg(not(target_family = "wasm"))]
-pub struct TeamScopeForCli(Option<ServerId>);
+pub enum TeamScopeForCli {
+    Personal,
+    Team(ServerId),
+}
 
 #[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}
@@ -108,7 +107,10 @@ impl sealed::Sealed for TeamScopeForCli {}
 #[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
-        self.0
+        match self {
+            TeamScopeForCli::Personal => None,
+            TeamScopeForCli::Team(team_uid) => Some(*team_uid),
+        }
     }
 }
 
@@ -187,7 +189,7 @@ impl UserWorkspaces {
     /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
     /// succeeds -- a window with no team selected still yields a scope, just one whose
     /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
-    pub(crate) fn team_context_for_operation<T: Entity>(
+    pub fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
     ) -> TeamContextForOperation {
@@ -232,7 +234,22 @@ impl UserWorkspaces {
         {
             return Err(NotATeamMemberError { team_uid }.into());
         }
-        Ok(TeamScopeForCli(team_uid))
+        Ok(match team_uid {
+            Some(team_uid) => TeamScopeForCli::Team(team_uid),
+            None => TeamScopeForCli::Personal,
+        })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn team_scope_for_cli_object(
+        &self,
+        object_scope: &ObjectScope,
+    ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
+        if object_scope.personal {
+            Ok(TeamScopeForCli::Personal)
+        } else {
+            self.team_scope_for_cli(&object_scope.team_selection)
+        }
     }
 
     pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {
@@ -249,6 +266,10 @@ impl UserWorkspaces {
     #[cfg(any(test, feature = "test-util"))]
     pub fn teamless_context_resolver_for_test() -> TeamContextResolver {
         Rc::new(|_| TeamContext { team_uid: None })
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn teamless_context_for_operation_for_test() -> TeamContextForOperation {
+        TeamContextForOperation { team_uid: None }
     }
 
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {

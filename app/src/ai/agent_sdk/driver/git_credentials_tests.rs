@@ -91,6 +91,14 @@ fn github_credential() -> GitCredential {
         host: "github.com".to_string(),
     }
 }
+fn azure_devops_credential(token: &str) -> GitCredential {
+    GitCredential {
+        token: token.to_string(),
+        username: None,
+        email: None,
+        host: AZURE_DEVOPS_HOST.to_string(),
+    }
+}
 
 fn gitlab_credential() -> GitCredential {
     GitCredential {
@@ -103,14 +111,127 @@ fn gitlab_credential() -> GitCredential {
 
 #[test]
 fn merged_credentials_include_each_provider_host() {
-    let content =
-        merge_git_credentials_file_content("", &[github_credential(), gitlab_credential()]);
+    let content = merge_git_credentials_file_content(
+        "",
+        &[
+            github_credential(),
+            gitlab_credential(),
+            azure_devops_credential("azure-token"),
+        ],
+    );
 
     assert_eq!(
         content,
         "https://x-access-token:github-token@github.com\n\
-         https://oauth2:gitlab-token@gitlab.com\n"
+         https://oauth2:gitlab-token@gitlab.com\n\
+         https://x-access-token:azure-token@dev.azure.com\n"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn azure_cli_wrapper_uses_refreshed_entra_token() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let azure_cli = temp_dir.path().join("real-az");
+    std::fs::write(
+        &azure_cli,
+        "#!/bin/sh\n\
+         test \"$AZURE_DEVOPS_EXT_PAT\" = \"$EXPECTED_TOKEN\" && \
+         test -z \"${AZURE_DEVOPS_TOKEN+x}\"\n",
+    )?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&azure_cli, std::fs::Permissions::from_mode(0o700))?;
+    }
+
+    let initial = azure_devops_credential("initial-token");
+    write_azure_cli_auth_for_executable(&initial, temp_dir.path(), &azure_cli)?;
+    let wrapper = azure_cli_wrapper_path(temp_dir.path());
+    let initial_output = BlockingCommand::new(&wrapper)
+        .env("EXPECTED_TOKEN", "initial-token")
+        .env_remove("AZURE_DEVOPS_EXT_PAT")
+        .env_remove("AZURE_DEVOPS_TOKEN")
+        .output()?;
+    assert!(initial_output.status.success());
+
+    let refreshed = azure_devops_credential("refreshed-token");
+    write_azure_cli_auth(&[refreshed], temp_dir.path())?;
+    let refreshed_output = BlockingCommand::new(&wrapper)
+        .env("EXPECTED_TOKEN", "refreshed-token")
+        .env_remove("AZURE_DEVOPS_EXT_PAT")
+        .env_remove("AZURE_DEVOPS_TOKEN")
+        .output()?;
+    assert!(refreshed_output.status.success());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let token_path = azure_devops_auth_dir(temp_dir.path()).join(AZURE_DEVOPS_TOKEN_FILENAME);
+        assert_eq!(
+            std::fs::metadata(token_path)?.permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn azure_cli_token_write_does_not_follow_predictable_temp_symlink() -> Result<()> {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+    let temp_dir = tempfile::tempdir()?;
+    let auth_dir = azure_devops_auth_dir(temp_dir.path());
+    std::fs::create_dir_all(&auth_dir)?;
+    let victim = temp_dir.path().join("victim");
+    std::fs::write(&victim, "unchanged")?;
+    let predictable_temp_path = auth_dir.join(format!("{AZURE_DEVOPS_TOKEN_FILENAME}.tmp"));
+    symlink(&victim, &predictable_temp_path)?;
+
+    let azure_cli = temp_dir.path().join("real-az");
+    std::fs::write(&azure_cli, "#!/bin/sh\n")?;
+    std::fs::set_permissions(&azure_cli, std::fs::Permissions::from_mode(0o700))?;
+    write_azure_cli_auth_for_executable(
+        &azure_devops_credential("azure-token"),
+        temp_dir.path(),
+        &azure_cli,
+    )?;
+
+    assert_eq!(std::fs::read_to_string(&victim)?, "unchanged");
+    assert!(
+        std::fs::symlink_metadata(&predictable_temp_path)?
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_to_string(auth_dir.join(AZURE_DEVOPS_TOKEN_FILENAME))?,
+        "azure-token"
+    );
+    Ok(())
+}
+#[test]
+fn azure_cli_wrapper_path_is_injected_without_a_token_env_var() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let credential = azure_devops_credential("token");
+    let azure_cli = temp_dir.path().join("real-az");
+    std::fs::write(&azure_cli, "")?;
+    write_azure_cli_auth_for_executable(&credential, temp_dir.path(), &azure_cli)?;
+
+    let mut env_vars = HashMap::from([(OsString::from("PATH"), OsString::from("/usr/bin"))]);
+    prepend_azure_cli_wrapper_to_path_for_home(&mut env_vars, temp_dir.path())?;
+
+    let path = env_vars.get(OsStr::new("PATH")).expect("PATH is set");
+    assert_eq!(
+        std::env::split_paths(path).next(),
+        azure_cli_wrapper_path(temp_dir.path())
+            .parent()
+            .map(Path::to_path_buf)
+    );
+    assert!(!env_vars.contains_key(OsStr::new("AZURE_DEVOPS_EXT_PAT")));
+    assert!(!env_vars.contains_key(OsStr::new("AZURE_DEVOPS_TOKEN")));
+    Ok(())
 }
 
 #[test]
