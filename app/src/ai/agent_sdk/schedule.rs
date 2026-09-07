@@ -90,7 +90,14 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 }
             };
 
-            let owner = match super::common::resolve_owner(&args.scope, ctx) {
+            let team_scope = match super::common::resolve_object_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                    return;
+                }
+            };
+            let owner = match super::common::resolve_owner_for_team_scope(&team_scope, ctx) {
                 Ok(owner) => owner,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -134,9 +141,9 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 .model_id
                 .as_deref()
                 .map(|model_id| {
-                    super::common::validate_agent_mode_base_model_id_for_scope(
+                    super::common::validate_agent_mode_base_model_id_for_team_scope(
                         model_id,
-                        &args.scope.team_selection,
+                        &team_scope,
                         ctx,
                     )
                 })

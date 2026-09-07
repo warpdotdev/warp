@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 use settings::Setting;
 #[cfg(not(target_family = "wasm"))]
-use warp_cli::scope::TeamSelection;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, Entity, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
@@ -229,6 +229,18 @@ impl UserWorkspaces {
             return Err(NotATeamMemberError { team_uid }.into());
         }
         Ok(TeamScopeForCli(team_uid))
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn team_scope_for_cli_object(
+        &self,
+        object_scope: &ObjectScope,
+    ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
+        if object_scope.personal {
+            Ok(TeamScopeForCli(None))
+        } else {
+            self.team_scope_for_cli(&object_scope.team_selection)
+        }
     }
 
     pub(crate) fn team_context_for_view<T: Entity>(&self, ctx: &ViewContext<T>) -> TeamContext<'_> {

@@ -157,6 +157,15 @@ pub(super) fn resolve_team_scope(
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 
+pub(super) fn resolve_object_scope(
+    object_scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    UserWorkspaces::as_ref(ctx)
+        .team_scope_for_cli_object(object_scope)
+        .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+
 fn validate_custom_llm_for_team_scope(
     model_id: &str,
     llm_id: LLMId,
@@ -198,32 +207,23 @@ pub(super) fn validate_agent_mode_base_model_id_for_team_scope(
     validate_custom_llm_for_team_scope(model_id, llm_id, llm, team_scope, llm_prefs, ctx)
 }
 
-/// [`validate_agent_mode_base_model_id`], also rejecting a model `scope`'s team does not let this
-/// member use.
-///
-/// The team is resolved only once the model turns out to be one of the member's own custom
-/// endpoints, since that is the only kind a team withholds. Resolving it eagerly would make a
-/// multi-team user pass `--team` to name a model no team governs.
-pub fn validate_agent_mode_base_model_id_for_scope(
-    model_id: &str,
-    team_selection: &TeamSelection,
-    ctx: &AppContext,
-) -> anyhow::Result<LLMId> {
-    let llm_id = validate_agent_mode_base_model_id(model_id, ctx)?;
-    let prefs = LLMPreferences::as_ref(ctx);
-    let Some(llm) = prefs.custom_llm_info_for_id(&llm_id) else {
-        return Ok(llm_id);
-    };
-
-    let team_scope = resolve_team_scope(team_selection, ctx)?;
-    validate_custom_llm_for_team_scope(model_id, llm_id, llm, &team_scope, prefs, ctx)
-}
-
 fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {
     AuthStateProvider::as_ref(ctx)
         .get()
         .user_id()
         .ok_or_else(|| anyhow::anyhow!("User should be logged in"))
+}
+
+pub(super) fn resolve_owner_for_team_scope(
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<Owner> {
+    match team_scope.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        }),
+    }
 }
 
 /// Resolve the owner of a new cloud object, based on the CLI `--team` and `--personal` flags.
@@ -232,26 +232,8 @@ fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {
 /// a personal one. A user on several teams is asked to choose rather than silently handed a
 /// personal object.
 pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Owner> {
-    if scope.personal {
-        return Ok(Owner::User {
-            user_uid: current_user_uid(ctx)?,
-        });
-    }
-    match resolve_team_scope(&scope.team_selection, ctx)?.team_uid() {
-        Some(team_uid) => Ok(Owner::Team { team_uid }),
-        None => Ok(Owner::User {
-            user_uid: current_user_uid(ctx)?,
-        }),
-    }
-}
-
-/// Checks `--team` against the caller's memberships, for commands that leave the owner for the
-/// server to resolve.
-pub fn validate_team_scope(team_selection: &TeamSelection, ctx: &AppContext) -> anyhow::Result<()> {
-    if !team_selection.is_team() {
-        return Ok(());
-    }
-    resolve_team_scope(team_selection, ctx).map(|_| ())
+    let team_scope = resolve_object_scope(scope, ctx)?;
+    resolve_owner_for_team_scope(&team_scope, ctx)
 }
 
 /// Refresh workspace metadata before executing an operation.

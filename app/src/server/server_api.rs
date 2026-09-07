@@ -591,12 +591,18 @@ impl ServerApi {
         mut options: warp_graphql::client::RequestOptions,
         team_scope: RequestTeamScope,
     ) -> warp_graphql::client::RequestOptions {
-        if let Some(team_uid) = team_scope.team_uid() {
+        if let Some(team_uid) = Self::team_uid_header_value(team_scope) {
             options
                 .headers
-                .insert(TEAM_UID_HEADER.to_string(), team_uid.uid().to_string());
+                .insert(TEAM_UID_HEADER.to_string(), team_uid);
         }
         options
+    }
+
+    fn team_uid_header_value(team_scope: RequestTeamScope) -> Option<String> {
+        team_scope
+            .team_uid()
+            .map(|team_uid| team_uid.uid().to_string())
     }
 
     /// Opens an SSE stream to the agent event-push endpoint.
@@ -723,6 +729,19 @@ impl ServerApi {
     where
         B: Serialize,
     {
+        self.post_public_api_response_for_team(path, body, None)
+            .await
+    }
+
+    async fn post_public_api_response_for_team<B>(
+        &self,
+        path: &str,
+        body: &B,
+        team_scope: Option<RequestTeamScope>,
+    ) -> Result<http_client::Response>
+    where
+        B: Serialize,
+    {
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -737,6 +756,9 @@ impl ServerApi {
 
         for (name, value) in self.ambient_agent_headers().await? {
             request = request.header(name, value);
+        }
+        if let Some(team_uid) = team_scope.and_then(Self::team_uid_header_value) {
+            request = request.header(TEAM_UID_HEADER, team_uid);
         }
 
         let response = request
@@ -812,6 +834,26 @@ impl ServerApi {
         R: serde::de::DeserializeOwned,
     {
         let response = self.post_public_api_response(path, body).await?;
+        let url = response.url().clone();
+        response
+            .json::<R>()
+            .await
+            .with_context(|| format!("Failed to deserialize response from {url}"))
+    }
+
+    async fn post_public_api_for_team<B, R>(
+        &self,
+        path: &str,
+        body: &B,
+        team_scope: RequestTeamScope,
+    ) -> Result<R>
+    where
+        B: Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let response = self
+            .post_public_api_response_for_team(path, body, Some(team_scope))
+            .await?;
         let url = response.url().clone();
         response
             .json::<R>()

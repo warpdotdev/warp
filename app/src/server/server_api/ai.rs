@@ -1287,6 +1287,12 @@ pub trait AIClient: 'static + Send + Sync {
         request: SpawnAgentRequest,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error>;
 
+    async fn spawn_agent_for_team(
+        &self,
+        request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error>;
+
     /// Allocate an initial snapshot token and presigned upload URLs for staging local-to-cloud
     /// handoff snapshot files before the corresponding cloud task exists.
     async fn upload_local_handoff_snapshot(
@@ -2367,6 +2373,17 @@ impl AIClient for ServerApi {
         request: SpawnAgentRequest,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
         let response: SpawnAgentResponse = self.post_public_api("agent/run", &request).await?;
+        Ok(response)
+    }
+
+    async fn spawn_agent_for_team(
+        &self,
+        request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
+        let response: SpawnAgentResponse = self
+            .post_public_api_for_team("agent/run", &request, team_scope)
+            .await?;
         Ok(response)
     }
 

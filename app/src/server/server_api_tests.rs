@@ -127,5 +127,9 @@ fn graphql_request_options_include_only_resolved_team_scope() {
         team_options.headers.get(TEAM_UID_HEADER),
         Some(&team_uid.uid().to_string())
     );
+    assert_eq!(
+        ServerApi::team_uid_header_value(team_scope),
+        Some(team_uid.uid().to_string())
+    );
     assert!(!teamless_options.headers.contains_key(TEAM_UID_HEADER));
 }

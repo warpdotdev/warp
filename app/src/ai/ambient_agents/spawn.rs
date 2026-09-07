@@ -14,6 +14,7 @@ use crate::server::retry_strategies::with_bounded_retry;
 use crate::server::server_api::ai::{
     AIClient, RunFollowupRequest, SpawnAgentRequest, TaskStatusMessage,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 
 /// How long to poll for the agent to be ready.
@@ -104,11 +105,33 @@ pub fn spawn_task(
     ai_client: Arc<dyn AIClient>,
     timeout: Option<Duration>,
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
+    spawn_task_with_scope(request, None, ai_client, timeout)
+}
+
+pub fn spawn_task_for_team(
+    request: SpawnAgentRequest,
+    team_scope: RequestTeamScope,
+    ai_client: Arc<dyn AIClient>,
+    timeout: Option<Duration>,
+) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
+    spawn_task_with_scope(request, Some(team_scope), ai_client, timeout)
+}
+
+fn spawn_task_with_scope(
+    request: SpawnAgentRequest,
+    team_scope: Option<RequestTeamScope>,
+    ai_client: Arc<dyn AIClient>,
+    timeout: Option<Duration>,
+) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
     // We can't use try_stream! because of the select! macro invocation.
     // See https://github.com/tokio-rs/async-stream/issues/63.
     async_stream::stream! {
         // First, spawn the ambient agent task.
-        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request).await {
+        let response = match team_scope {
+            Some(team_scope) => ai_client.spawn_agent_for_team(request, team_scope).await,
+            None => ai_client.spawn_agent(request).await,
+        };
+        let (task_id, run_id, at_capacity) = match response {
             Ok(response) => (response.task_id, response.run_id, response.at_capacity),
             Err(err) => {
                 yield Err(err);
