@@ -111,25 +111,16 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
 }
 
 #[test]
-fn graphql_request_options_include_only_resolved_team_scope() {
+fn team_uid_header_value_includes_only_resolved_team_scope() {
     let team_uid = 7.into();
     let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
-    let team_options = ServerApi::graphql_request_options_for_team(
-        warp_graphql::client::RequestOptions::default(),
-        team_scope,
-    );
-    let teamless_options = ServerApi::graphql_request_options_for_team(
-        warp_graphql::client::RequestOptions::default(),
-        RequestTeamScope::from_scope(&TeamlessScopeForTest),
-    );
 
-    assert_eq!(
-        team_options.headers.get(TEAM_UID_HEADER),
-        Some(&team_uid.uid().to_string())
-    );
     assert_eq!(
         ServerApi::team_uid_header_value(team_scope),
         Some(team_uid.uid().to_string())
     );
-    assert!(!teamless_options.headers.contains_key(TEAM_UID_HEADER));
+    assert_eq!(
+        ServerApi::team_uid_header_value(RequestTeamScope::from_scope(&TeamlessScopeForTest)),
+        None
+    );
 }

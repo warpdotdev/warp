@@ -575,28 +575,21 @@ impl ServerApi {
     where
         QF: 'a,
     {
-        Box::pin(async move {
-            let options = self.base_client.graphql_request_options(None).await?;
-            let options = Self::graphql_request_options_for_team(options, team_scope);
-            warp_server_client::graphql_helpers::send_graphql_request_with_options(
+        match Self::team_uid_header_value(team_scope) {
+            Some(team_uid) => {
+                warp_server_client::graphql_helpers::send_team_scoped_graphql_request(
+                    &self.base_client,
+                    operation,
+                    None,
+                    team_uid,
+                )
+            }
+            None => warp_server_client::graphql_helpers::send_graphql_request(
                 &self.base_client,
                 operation,
-                options,
-            )
-            .await
-        })
-    }
-
-    fn graphql_request_options_for_team(
-        mut options: warp_graphql::client::RequestOptions,
-        team_scope: RequestTeamScope,
-    ) -> warp_graphql::client::RequestOptions {
-        if let Some(team_uid) = Self::team_uid_header_value(team_scope) {
-            options
-                .headers
-                .insert(TEAM_UID_HEADER.to_string(), team_uid);
+                None,
+            ),
         }
-        options
     }
 
     fn team_uid_header_value(team_scope: RequestTeamScope) -> Option<String> {
