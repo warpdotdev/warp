@@ -15,7 +15,6 @@ fn key_with_uid(uid: &str, name: &str, scope: &str, created_at: DateTime<Utc>) -
         expires_at: None,
     }
 }
-
 #[test]
 fn sort_api_keys_sorts_by_name_ascending() {
     let created_at = Utc::now();
@@ -62,7 +61,7 @@ fn resolve_api_key_identifier_prefers_uid_match() {
         resolve_api_key_identifier(&keys, "target")
             .unwrap()
             .unwrap(),
-        keys[0].clone()
+        ApiKeyExpirationTarget::Scoped(keys[0].clone())
     );
 }
 
@@ -75,12 +74,12 @@ fn resolve_api_key_identifier_falls_back_to_name_match() {
         resolve_api_key_identifier(&keys, "deploy-key")
             .unwrap()
             .unwrap(),
-        keys[0].clone()
+        ApiKeyExpirationTarget::Scoped(keys[0].clone())
     );
 }
 
 #[test]
-fn resolve_api_key_identifier_accepts_uid_shaped_name() {
+fn resolve_api_key_identifier_prefers_scoped_name_over_direct_uid_fallback() {
     let created_at = Utc::now();
     let key = key_with_uid(
         "different-key-uid",
@@ -93,7 +92,17 @@ fn resolve_api_key_identifier_accepts_uid_shaped_name() {
         resolve_api_key_identifier(std::slice::from_ref(&key), "abcdefghijklmnopqrstuv")
             .unwrap()
             .unwrap(),
-        key
+        ApiKeyExpirationTarget::Scoped(key)
+    );
+}
+
+#[test]
+fn resolve_api_key_identifier_falls_back_to_direct_uid() {
+    assert_eq!(
+        resolve_api_key_identifier(&[], "abcdefghijklmnopqrstuv")
+            .unwrap()
+            .unwrap(),
+        ApiKeyExpirationTarget::DirectUid("abcdefghijklmnopqrstuv".to_string())
     );
 }
 

@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use crate::SortOrderArg;
 use crate::date_time::parse_rfc3339;
 use crate::json_filter::JsonOutput;
-use crate::scope::TeamSelection;
+use crate::scope::{ObjectScope, TeamSelection};
 
 /// API key-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -31,7 +31,7 @@ impl ApiKeyCommand {
 #[derive(Debug, Clone, Args)]
 pub struct ListApiKeysArgs {
     #[command(flatten)]
-    pub team_selection: TeamSelection,
+    pub scope: ObjectScope,
     /// Sort field.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<ApiKeySortByArg>,
@@ -86,8 +86,6 @@ pub struct ExpireApiKeyArgs {
     /// Name or UID of the API key to expire.
     #[arg(value_name = "NAME_OR_UID")]
     pub key_uid: String,
-    #[command(flatten)]
-    pub team_selection: TeamSelection,
 
     /// Expire without asking for confirmation.
     #[arg(long, default_value_t = false)]

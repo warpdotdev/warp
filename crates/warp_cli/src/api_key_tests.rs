@@ -20,6 +20,11 @@ fn parse_command(argv: &[&str]) -> ApiKeyCommand {
         .expect("parse succeeds")
         .command
 }
+fn parse_command_err(argv: &[&str]) -> clap::Error {
+    let mut full = vec!["test"];
+    full.extend_from_slice(argv);
+    TestApiKey::try_parse_from(full).expect_err("parse fails")
+}
 
 fn parse_create(argv: &[&str]) -> CreateApiKeyArgs {
     let mut full = vec!["test"];
@@ -41,8 +46,10 @@ fn list_accepts_explicit_team_selection() {
     let ApiKeyCommand::List(args) = command else {
         panic!("Expected list command");
     };
-
-    assert_eq!(args.team_selection.team, Some(Some("team-uid".to_string())));
+    assert_eq!(
+        args.scope.team_selection.team,
+        Some(Some("team-uid".to_string()))
+    );
 }
 
 #[test]
@@ -51,8 +58,36 @@ fn list_accepts_bare_team_selection() {
     let ApiKeyCommand::List(args) = command else {
         panic!("Expected list command");
     };
+    assert_eq!(args.scope.team_selection.team, Some(None));
+}
 
-    assert_eq!(args.team_selection.team, Some(None));
+#[test]
+fn list_defaults_to_all_scopes() {
+    let command = parse_command(&["list"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+
+    assert_eq!(args.scope.team_selection.team, None);
+    assert!(!args.scope.personal);
+}
+
+#[test]
+fn list_accepts_personal_selection() {
+    let command = parse_command(&["list", "--personal"]);
+    let ApiKeyCommand::List(args) = command else {
+        panic!("Expected list command");
+    };
+
+    assert!(args.scope.personal);
+    assert_eq!(args.scope.team_selection.team, None);
+}
+
+#[test]
+fn list_rejects_team_and_personal_selection() {
+    let err = parse_command_err(&["list", "--team", "--personal"]);
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]
@@ -107,12 +142,18 @@ fn create_accepts_rfc3339_expiration() {
 
 #[test]
 fn delete_is_alias_for_expire() {
-    let command = parse_command(&["delete", "deploy-key", "--team=team-uid", "--force"]);
+    let command = parse_command(&["delete", "deploy-key", "--force"]);
     let ApiKeyCommand::Expire(args) = command else {
         panic!("Expected expire command");
     };
 
     assert_eq!(args.key_uid, "deploy-key");
-    assert_eq!(args.team_selection.team, Some(Some("team-uid".to_string())));
     assert!(args.force);
+}
+
+#[test]
+fn expire_rejects_team_selection() {
+    let err = parse_command_err(&["expire", "deploy-key", "--team=team-uid"]);
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
 }

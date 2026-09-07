@@ -15,15 +15,15 @@ use warp_cli::api_key::{
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_graphql::mutations::expire_api_key::ExpireApiKeyResult;
 use warp_graphql::mutations::generate_api_key::GenerateApiKeyResult;
+use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::ApiKeyProperties;
 use warp_graphql::scalars::Time;
-use warp_server_client::auth::RequestTeamScope;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
 use crate::ServerApiProvider;
-use crate::server::ids::ApiKeyUid;
+use crate::server::ids::{ApiKeyUid, ServerId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::TeamScope;
 
@@ -71,22 +71,34 @@ impl ApiKeyCommandRunner {
                 super::report_fatal_error(error, ctx);
                 return;
             }
-            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => team_scope,
-                Err(error) => {
-                    super::report_fatal_error(error, ctx);
-                    return;
+            let team_scope = if args.scope.is_team() || args.scope.personal {
+                match super::common::resolve_object_scope(&args.scope, ctx) {
+                    Ok(team_scope) => Some(team_scope),
+                    Err(error) => {
+                        super::report_fatal_error(error, ctx);
+                        return;
+                    }
                 }
+            } else {
+                None
             };
-            let request_team_scope = RequestTeamScope::from_resolved_team(team_scope.team_uid());
+            let team_uid = team_scope.as_ref().and_then(TeamScope::team_uid);
             let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
             ctx.spawn(
                 async move {
                     let mut keys: Vec<_> = auth_client
-                        .list_api_keys(request_team_scope)
+                        .list_api_keys(team_uid)
                         .await?
                         .into_iter()
+                        .filter(|key| {
+                            team_scope
+                                .as_ref()
+                                .is_none_or(|team_scope| match key.owner_type {
+                                    OwnerType::User => team_scope.team_uid().is_none(),
+                                    OwnerType::Team => team_scope.team_uid().is_some(),
+                                })
+                        })
                         .map(ApiKeyInfo::from)
                         .collect();
                     sort_api_keys(&mut keys, args.sort_by, args.sort_order);
@@ -165,121 +177,105 @@ impl ApiKeyCommandRunner {
         let key_identifier = args.key_uid;
         let force = args.force;
         let json_output = args.json_output;
-        let refresh = super::common::refresh_workspace_metadata(ctx);
-        ctx.spawn(refresh, move |_, result, ctx| {
-            if let Err(error) = result {
-                super::report_fatal_error(error, ctx);
-                return;
-            }
-            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => team_scope,
-                Err(error) => {
-                    super::report_fatal_error(error, ctx);
-                    return;
-                }
-            };
-            let request_team_scope =
-                RequestTeamScope::from_resolved_team(team_scope.team_uid());
-            let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
-            ctx.spawn(
-                async move {
-                    let keys = auth_client
-                        .list_api_keys(request_team_scope)
-                        .await?
-                        .into_iter()
-                        .map(ApiKeyInfo::from)
-                        .collect();
-                    Ok(keys)
-                },
-                move |_, result: Result<Vec<ApiKeyInfo>>, ctx| {
-                    let keys = match result {
-                        Ok(keys) => keys,
-                        Err(err) => {
-                            super::report_fatal_error(err, ctx);
-                            return;
-                        }
-                    };
+        ctx.spawn(
+            async move {
+                let keys = auth_client
+                    .list_api_keys(None)
+                    .await?
+                    .into_iter()
+                    .map(ApiKeyInfo::from)
+                    .collect();
+                Ok(keys)
+            },
+            move |_, result: Result<Vec<ApiKeyInfo>>, ctx| {
+                let keys = match result {
+                    Ok(keys) => keys,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
 
-                    let key = match resolve_api_key_identifier(&keys, &key_identifier) {
-                        Ok(Some(key)) => key,
-                        Ok(None) => {
-                            ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                            return;
-                        }
-                        Err(err) => {
-                            super::report_fatal_error(err, ctx);
-                            return;
-                        }
-                    };
+                let target = match resolve_api_key_identifier(&keys, &key_identifier) {
+                    Ok(Some(target)) => target,
+                    Ok(None) => {
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                        return;
+                    }
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
 
-                    if !force {
-                        if !io::stdin().is_terminal() {
-                            super::report_fatal_error(
-                                anyhow!(
-                                    "Refusing to expire API key without confirmation in non-interactive mode (use --force to bypass)"
-                                ),
-                                ctx,
-                            );
-                            return;
-                        }
-
-                        let prompt = format!("Expire API key '{key}'?");
-                        let should_expire = match Confirm::new(&prompt)
-                            .with_default(false)
-                            .with_help_message("This action takes effect immediately")
-                            .prompt()
-                        {
-                            Ok(should_expire) => should_expire,
-                            Err(
-                                InquireError::OperationCanceled
-                                | InquireError::OperationInterrupted,
-                            ) => {
-                                ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                                return;
-                            }
-                            Err(err) => {
-                                super::report_fatal_error(err.into(), ctx);
-                                return;
-                            }
-                        };
-
-                        if !should_expire {
-                            println!("Expiration cancelled");
-                            ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                            return;
-                        }
+                if !force {
+                    if !io::stdin().is_terminal() {
+                        super::report_fatal_error(
+                            anyhow!(
+                                "Refusing to expire API key without confirmation in non-interactive mode (use --force to bypass)"
+                            ),
+                            ctx,
+                        );
+                        return;
                     }
 
-                    let uid = ApiKeyUid::from(key.uid);
-                    let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
-                    ctx.spawn(
-                        async move {
-                            let result = auth_client.expire_api_key(&uid).await?;
-                            let expired = match result {
-                                ExpireApiKeyResult::ExpireApiKeyOutput(output) => output.success,
-                                ExpireApiKeyResult::UserFacingError(e) => {
-                                    return Err(anyhow!(
-                                        warp_graphql::client::get_user_facing_error_message(e)
-                                    ));
-                                }
-                                ExpireApiKeyResult::Unknown => {
-                                    return Err(anyhow!("failed to expire API key"));
-                                }
-                            };
-                            print_expire_api_key_result(
-                                uid.to_string(),
-                                expired,
-                                output_format,
-                                json_output,
-                            )?;
-                            Ok(())
-                        },
-                        |_, result: Result<()>, ctx| finish_command(result, ctx),
-                    );
-                },
-            );
-        });
+                    let prompt = format!("Expire API key '{target}'?");
+                    let should_expire = match Confirm::new(&prompt)
+                        .with_default(false)
+                        .with_help_message("This action takes effect immediately")
+                        .prompt()
+                    {
+                        Ok(should_expire) => should_expire,
+                        Err(
+                            InquireError::OperationCanceled
+                            | InquireError::OperationInterrupted,
+                        ) => {
+                            ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                            return;
+                        }
+                        Err(err) => {
+                            super::report_fatal_error(err.into(), ctx);
+                            return;
+                        }
+                    };
+
+                    if !should_expire {
+                        println!("Expiration cancelled");
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                        return;
+                    }
+                }
+
+                let uid = target.into_uid();
+                let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+                ctx.spawn(
+                    async move {
+                        let result = auth_client.expire_api_key(&uid).await?;
+                        let expired = match result {
+                            ExpireApiKeyResult::ExpireApiKeyOutput(output) => output.success,
+                            ExpireApiKeyResult::UserFacingError(e) => {
+                                return Err(anyhow!(
+                                    warp_graphql::client::get_user_facing_error_message(e)
+                                ));
+                            }
+                            ExpireApiKeyResult::Unknown => {
+                                return Err(anyhow!("failed to expire API key"));
+                            }
+                        };
+                        print_expire_api_key_result(
+                            uid.to_string(),
+                            expired,
+                            output_format,
+                            json_output,
+                        )?;
+                        Ok(())
+                    },
+                    |_, result: Result<()>, ctx| finish_command(result, ctx),
+                );
+            },
+        );
     }
 }
 
@@ -360,9 +356,9 @@ impl TableFormat for ApiKeyInfo {
 fn resolve_api_key_identifier(
     keys: &[ApiKeyInfo],
     key_identifier: &str,
-) -> Result<Option<ApiKeyInfo>> {
+) -> Result<Option<ApiKeyExpirationTarget>> {
     if let Some(key) = keys.iter().find(|key| key.uid == key_identifier) {
-        return Ok(Some(key.clone()));
+        return Ok(Some(ApiKeyExpirationTarget::Scoped(key.clone())));
     }
 
     let mut matches = keys
@@ -373,9 +369,14 @@ fn resolve_api_key_identifier(
     matches.sort_by_key(|key| Reverse(key.created_at));
 
     if matches.is_empty() {
+        if ServerId::try_from(key_identifier).is_ok() {
+            return Ok(Some(ApiKeyExpirationTarget::DirectUid(
+                key_identifier.to_string(),
+            )));
+        }
         return Err(anyhow!("API key '{key_identifier}' not found"));
     } else if matches.len() == 1 {
-        return Ok(Some(matches[0].clone()));
+        return Ok(Some(ApiKeyExpirationTarget::Scoped(matches[0].clone())));
     }
 
     if io::stdin().is_terminal() {
@@ -385,7 +386,7 @@ fn resolve_api_key_identifier(
         )
         .prompt()
         {
-            Ok(key) => Ok(Some(key)),
+            Ok(key) => Ok(Some(ApiKeyExpirationTarget::Scoped(key))),
             Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(None),
             Err(err) => Err(err.into()),
         };
@@ -398,6 +399,30 @@ fn resolve_api_key_identifier(
     Err(anyhow!(
         "Multiple API keys match '{key_identifier}'; specify the key by UID"
     ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ApiKeyExpirationTarget {
+    Scoped(ApiKeyInfo),
+    DirectUid(ApiKeyUid),
+}
+
+impl ApiKeyExpirationTarget {
+    fn into_uid(self) -> ApiKeyUid {
+        match self {
+            Self::Scoped(key) => key.uid,
+            Self::DirectUid(uid) => uid,
+        }
+    }
+}
+
+impl fmt::Display for ApiKeyExpirationTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Scoped(key) => key.fmt(f),
+            Self::DirectUid(uid) => uid.fmt(f),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

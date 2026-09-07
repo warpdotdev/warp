@@ -11,7 +11,7 @@ use super::{
     AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
     HeaderOverride, TEAM_UID_HEADER,
 };
-use crate::auth::{AuthClient, AuthClientImpl, RequestTeamScope};
+use crate::auth::{AuthClient, AuthClientImpl};
 
 struct StaticIapTokenProvider;
 
@@ -243,9 +243,9 @@ fn list_api_keys_sends_selected_team_header() {
     let team_uid = "abcdefghijklmnopqrstuv";
     let request = mock_api_key_list("/api-key-selected");
     let (auth_client, observed_team_uid) = api_key_client("/api-key-selected");
-    let scope = RequestTeamScope::from_resolved_team(Some(ServerId::try_from(team_uid).unwrap()));
 
-    let keys = block_on(auth_client.list_api_keys(scope)).unwrap();
+    let keys =
+        block_on(auth_client.list_api_keys(Some(ServerId::try_from(team_uid).unwrap()))).unwrap();
 
     assert!(keys.is_empty());
     assert_eq!(observed_team_uid.lock().unwrap().as_deref(), Some(team_uid));
@@ -257,7 +257,7 @@ fn list_api_keys_omits_team_header_when_unscoped() {
     let request = mock_api_key_list("/api-key-unscoped");
     let (auth_client, observed_team_uid) = api_key_client("/api-key-unscoped");
 
-    let keys = block_on(auth_client.list_api_keys(RequestTeamScope::unscoped())).unwrap();
+    let keys = block_on(auth_client.list_api_keys(None)).unwrap();
 
     assert!(keys.is_empty());
     assert_eq!(observed_team_uid.lock().unwrap().as_deref(), None);
