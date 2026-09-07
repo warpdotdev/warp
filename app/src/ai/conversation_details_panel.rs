@@ -53,7 +53,7 @@ use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label}
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
-use crate::ai::runner_display::{self, RunnerFetchCache, RunnerPlatform};
+use crate::ai::runner_display::{self, RunnerPlatform};
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectLookup as _;
@@ -80,7 +80,7 @@ use crate::view_components::copyable_text_field::{
 };
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
@@ -730,7 +730,8 @@ pub struct ConversationDetailsPanel {
     selected_text: Arc<RwLock<Option<String>>>,
     /// Runner compute by UID. Runners are not synced as cloud objects, so the
     /// panel fetches them on demand to report the platform a run executes on.
-    runner_platforms: RunnerFetchCache<HashMap<String, RunnerPlatform>>,
+    runner_platforms: HashMap<String, RunnerPlatform>,
+    runners_loading: bool,
 }
 
 fn trimmed_initial_query(source_prompt: &Option<String>) -> Option<&str> {
@@ -778,18 +779,6 @@ impl ConversationDetailsPanel {
                 ctx.notify();
             }
         });
-        let window_id = ctx.window_id();
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |me, _, event, ctx| {
-            if matches!(
-                event,
-                UserWorkspacesEvent::WindowTeamChanged { window_id: changed_window_id }
-                    if *changed_window_id == window_id
-            ) {
-                me.runner_platforms.invalidate();
-                me.ensure_runner_platforms(ctx);
-                ctx.notify();
-            }
-        });
 
         Self {
             data: ConversationDetailsData::default(),
@@ -805,7 +794,8 @@ impl ConversationDetailsPanel {
             copy_feedback_times: HashMap::new(),
             selection_handle: SelectionHandle::default(),
             selected_text: Default::default(),
-            runner_platforms: RunnerFetchCache::default(),
+            runner_platforms: HashMap::new(),
+            runners_loading: false,
         }
     }
 
@@ -861,41 +851,31 @@ impl ConversationDetailsPanel {
     /// Loads the runners needed to name this run's platform. Runs that
     /// reference no runner need no fetch: their compute is the system default.
     fn ensure_runner_platforms(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.runner_platforms.is_loading() {
+        if self.runners_loading {
             return;
         }
         let Some(runner_uid) = self.referenced_runner_uid(ctx) else {
             return;
         };
-        if self.runner_platforms.entries().contains_key(&runner_uid) {
+        if self.runner_platforms.contains_key(&runner_uid) {
             return;
         }
-
-        let Some(generation) = self.runner_platforms.begin_fetch() else {
-            return;
-        };
+        self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
         let team_scope = RequestTeamScope::from_scope(
             &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
         );
         ctx.spawn(
-            async move { client.get_runners(None, team_scope).await },
-            move |me, result: anyhow::Result<Vec<Runner>>, ctx| {
-                let applied = match result {
-                    Ok(runners) => me
-                        .runner_platforms
-                        .complete_fetch(generation, runner_display::platforms_by_uid(&runners)),
-                    Err(err) => {
-                        if me.runner_platforms.fail_fetch(generation) {
-                            log::warn!("Failed to fetch runners for the run details panel: {err}");
-                            true
-                        } else {
-                            false
-                        }
+            async move { client.get_runners(None, Some(team_scope)).await },
+            |me, result: anyhow::Result<Vec<Runner>>, ctx| {
+                me.runners_loading = false;
+                match result {
+                    Ok(runners) => {
+                        me.runner_platforms = runner_display::platforms_by_uid(&runners);
                     }
-                };
-                if !applied {
-                    return;
+                    Err(err) => {
+                        log::warn!("Failed to fetch runners for the run details panel: {err}");
+                    }
                 }
                 ctx.notify();
             },
@@ -1944,7 +1924,7 @@ impl ConversationDetailsPanel {
         let platform = runner_display::resolve_run_platform(
             runner_id.as_deref(),
             env_model.default_runner_uid.as_deref(),
-            self.runner_platforms.entries(),
+            &self.runner_platforms,
         )?;
 
         let theme = appearance.theme();

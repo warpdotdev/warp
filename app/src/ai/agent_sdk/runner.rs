@@ -10,6 +10,7 @@ use warp_cli::runner::{
     CreateRunnerArgs, DeleteRunnerArgs, ListRunnersArgs, RunnerArchArg, RunnerCommand,
     RunnerMacosVersionArg, RunnerOsArg, RunnerSortByArg, UpdateRunnerArgs, validate_os_config,
 };
+use warp_cli::scope::ObjectScope;
 use warp_graphql::mutations::upsert_runner::{
     LinuxConfigInput, MacOsConfigInput, RunnerInput, RunnerInstanceShapeInput, UpsertRunnerInput,
 };
@@ -71,7 +72,14 @@ impl RunnerCommandRunner {
         args: ListRunnersArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let sort_by = args.sort_by.map(sort_by_to_gql);
+        let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
+        if !args.team_selection.is_team() {
+            ctx.spawn(
+                execute_list(factory, args, None, output_format),
+                |_, result, ctx| finish_command(result, ctx),
+            );
+            return;
+        }
         let refresh = super::common::refresh_workspace_metadata(ctx);
         ctx.spawn(refresh, move |_, result, ctx| {
             if result.is_err() {
@@ -79,26 +87,14 @@ impl RunnerCommandRunner {
                 return;
             }
             let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
+                Ok(team_scope) => Some(RequestTeamScope::from_scope(&team_scope)),
                 Err(error) => {
                     super::report_fatal_error(error, ctx);
                     return;
                 }
             };
-            let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
             ctx.spawn(
-                async move {
-                    let runners = factory.get_runners(sort_by, team_scope).await?;
-
-                    let infos: Vec<RunnerInfo> =
-                        runners.into_iter().map(RunnerInfo::from).collect();
-                    if args.json_output.force_json_output() {
-                        output::print_raw_json(serde_json::to_value(&infos)?, &args.json_output)?;
-                    } else {
-                        output::print_list(infos, output_format);
-                    }
-                    Ok(())
-                },
+                execute_list(factory, args, team_scope, output_format),
                 |_, result: Result<()>, ctx| finish_command(result, ctx),
             );
         });
@@ -133,21 +129,20 @@ impl RunnerCommandRunner {
                     return;
                 }
             };
-            let team_scope =
-                match super::common::resolve_team_scope(&args.scope.team_selection, ctx) {
-                    Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
-                    Err(error) => {
-                        super::report_fatal_error(error, ctx);
-                        return;
-                    }
-                };
+            let team_scope = match resolve_create_request_scope(&args.scope, ctx) {
+                Ok(team_scope) => team_scope,
+                Err(error) => {
+                    super::report_fatal_error(error, ctx);
+                    return;
+                }
+            };
 
             let factory = ServerApiProvider::as_ref(ctx).get_factory_client();
             let input = build_create_input(args, owner.into());
 
             ctx.spawn(
                 async move {
-                    let upserted = factory.create_runner(input, team_scope).await?;
+                    let upserted = factory.upsert_runner(input, team_scope).await?;
                     print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
                     Ok(())
                 },
@@ -170,6 +165,13 @@ impl RunnerCommandRunner {
             );
             return;
         }
+        if !args.team_selection.is_team() {
+            ctx.spawn(
+                execute_update(factory, args, None, output_format),
+                |_, result, ctx| finish_command(result, ctx),
+            );
+            return;
+        }
 
         let refresh = super::common::refresh_workspace_metadata(ctx);
         ctx.spawn(refresh, move |_, result, ctx| {
@@ -178,14 +180,14 @@ impl RunnerCommandRunner {
                 return;
             }
             let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
+                Ok(team_scope) => Some(RequestTeamScope::from_scope(&team_scope)),
                 Err(error) => {
                     super::report_fatal_error(error, ctx);
                     return;
                 }
             };
             ctx.spawn(
-                execute_update(factory, args, Some(team_scope), output_format),
+                execute_update(factory, args, team_scope, output_format),
                 |_, result, ctx| finish_command(result, ctx),
             );
         });
@@ -230,36 +232,51 @@ impl warpui::Entity for RunnerCommandRunner {
 }
 impl SingletonEntity for RunnerCommandRunner {}
 
+fn resolve_create_request_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> Result<Option<RequestTeamScope>> {
+    if !scope.is_team() {
+        return Ok(None);
+    }
+    let team_scope = super::common::resolve_object_scope(scope, ctx)?;
+    Ok(Some(RequestTeamScope::from_scope(&team_scope)))
+}
+
+async fn execute_list(
+    factory: Arc<dyn FactoryClient>,
+    args: ListRunnersArgs,
+    team_scope: Option<RequestTeamScope>,
+    output_format: OutputFormat,
+) -> Result<()> {
+    let runners = factory
+        .get_runners(args.sort_by.map(sort_by_to_gql), team_scope)
+        .await?;
+    let infos: Vec<RunnerInfo> = runners.into_iter().map(RunnerInfo::from).collect();
+    if args.json_output.force_json_output() {
+        output::print_raw_json(serde_json::to_value(&infos)?, &args.json_output)?;
+    } else {
+        output::print_list(infos, output_format);
+    }
+    Ok(())
+}
+
 async fn execute_update(
     factory: Arc<dyn FactoryClient>,
     args: UpdateRunnerArgs,
     team_scope: Option<RequestTeamScope>,
     output_format: OutputFormat,
 ) -> Result<()> {
-    let (uid, runner) = match args.id.as_deref() {
-        Some(uid) => {
-            let existing = factory.get_runner(uid.to_string()).await?;
-            let runner = build_update_input(&args, &existing.config)?;
-            (uid.to_string(), runner)
-        }
-        None => {
-            let runners = factory
-                .get_runners(
-                    None,
-                    team_scope.expect("name-based runner updates require a team scope"),
-                )
-                .await?;
-            let existing = resolve_runner(&runners, None, args.name.as_deref())?;
-            let runner = build_update_input(&args, &existing.config)?;
-            (existing.uid.inner().to_string(), runner)
-        }
-    };
+    let discovery_scope = if args.id.is_some() { None } else { team_scope };
+    let runners = factory.get_runners(None, discovery_scope).await?;
+    let existing = resolve_runner(&runners, args.id.as_deref(), args.name.as_deref())?;
+    let runner = build_update_input(&args, &existing.config)?;
     let input = UpsertRunnerInput {
-        uid: Some(cynic::Id::new(uid)),
+        uid: Some(existing.uid.clone()),
         owner: None,
         runner,
     };
-    let upserted = factory.update_runner(input).await?;
+    let upserted = factory.upsert_runner(input, None).await?;
     print_upsert_result(&upserted.runner, upserted.is_update, output_format)?;
     Ok(())
 }

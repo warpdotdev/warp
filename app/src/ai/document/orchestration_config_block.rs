@@ -44,14 +44,13 @@ use crate::ai::harness_availability::{
     AuthSecretFetchState, HarnessAvailabilityEvent, HarnessAvailabilityModel,
 };
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
-use crate::ai::runner_display::RunnerFetchCache;
 use crate::appearance::Appearance;
 use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
@@ -160,7 +159,10 @@ pub struct OrchestrationConfigBlockView {
     /// mode) suppresses the modal on restore while still firing for
     /// live-session enablement.
     user_has_interacted: bool,
-    runner_cache: RunnerFetchCache<Vec<(String, String)>>,
+    /// Runners fetched via `getRunners` for the Runner picker: (uid, name).
+    runners: Vec<(String, String)>,
+    /// True while the `getRunners` fetch is in flight.
+    runners_loading: bool,
 }
 
 impl OrchestrationConfigBlockView {
@@ -213,24 +215,12 @@ impl OrchestrationConfigBlockView {
             let ServerExperimentsEvent::ExperimentsUpdated = event;
             if !oc::runner_controls_enabled(ctx) {
                 me.pickers.runner_picker = None;
-                me.runner_cache.invalidate();
+                me.runners.clear();
+                me.runners_loading = false;
             } else {
                 me.ensure_runner_picker(ctx);
             }
             ctx.notify();
-        });
-        let window_id = ctx.window_id();
-        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |me, _, event, ctx| {
-            if matches!(
-                event,
-                UserWorkspacesEvent::WindowTeamChanged { window_id: changed_window_id }
-                    if *changed_window_id == window_id
-            ) {
-                me.runner_cache.invalidate();
-                me.ensure_runner_picker(ctx);
-                me.resync_runner_selection(ctx);
-                ctx.notify();
-            }
         });
 
         // Repopulate the model picker when available LLMs change (Oz
@@ -344,7 +334,8 @@ impl OrchestrationConfigBlockView {
             suppress_refresh: false,
             has_auto_opened_create_modal: false,
             user_has_interacted: false,
-            runner_cache: RunnerFetchCache::default(),
+            runners: Vec::new(),
+            runners_loading: false,
         };
         if view.is_approved {
             view.ensure_pickers(ctx);
@@ -695,7 +686,6 @@ impl OrchestrationConfigBlockView {
             return;
         }
         if self.pickers.runner_picker.is_some() {
-            self.fetch_runners(ctx);
             return;
         }
         let appearance = Appearance::as_ref(ctx);
@@ -710,8 +700,8 @@ impl OrchestrationConfigBlockView {
         };
         let runner_handle = oc::create_runner_picker(
             &initial_runner,
-            self.runner_cache.entries(),
-            self.runner_cache.is_loading(),
+            &self.runners,
+            self.runners_loading,
             &styles,
             ctx,
         );
@@ -723,12 +713,10 @@ impl OrchestrationConfigBlockView {
     /// Fetches available runners via `getRunners` (name-sorted server-side)
     /// and repopulates the Runner picker once they resolve.
     fn fetch_runners(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.runner_cache.is_loading() || !self.runner_cache.entries().is_empty() {
+        if self.runners_loading || !self.runners.is_empty() {
             return;
         }
-        let Some(generation) = self.runner_cache.begin_fetch() else {
-            return;
-        };
+        self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
         let team_scope = RequestTeamScope::from_scope(
             &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
@@ -736,31 +724,21 @@ impl OrchestrationConfigBlockView {
         ctx.spawn(
             async move {
                 client
-                    .get_runners(Some(RunnerSortBy::Name), team_scope)
+                    .get_runners(Some(RunnerSortBy::Name), Some(team_scope))
                     .await
             },
-            move |me, result, ctx| {
-                let applied = match result {
-                    Ok(runners) => me.runner_cache.complete_fetch(
-                        generation,
-                        runners
+            |me, result, ctx| {
+                me.runners_loading = false;
+                match result {
+                    Ok(runners) => {
+                        me.runners = runners
                             .into_iter()
                             .map(|r| (r.uid.inner().to_string(), r.config.name))
-                            .collect(),
-                    ),
-                    Err(err) => {
-                        if me.runner_cache.fail_fetch(generation) {
-                            log::warn!(
-                                "Failed to fetch runners for plan-card runner picker: {err}"
-                            );
-                            true
-                        } else {
-                            false
-                        }
+                            .collect();
                     }
-                };
-                if !applied {
-                    return;
+                    Err(err) => {
+                        log::warn!("Failed to fetch runners for plan-card runner picker: {err}");
+                    }
                 }
                 let current = match &me
                     .orchestration_edit_state
@@ -771,13 +749,7 @@ impl OrchestrationConfigBlockView {
                     RunAgentsExecutionMode::Local => String::new(),
                 };
                 if let Some(handle) = me.pickers.runner_picker.clone() {
-                    oc::populate_runner_picker(
-                        &handle,
-                        me.runner_cache.entries(),
-                        &current,
-                        false,
-                        ctx,
-                    );
+                    oc::populate_runner_picker(&handle, &me.runners, &current, false, ctx);
                 }
                 ctx.notify();
             },
@@ -798,13 +770,7 @@ impl OrchestrationConfigBlockView {
             RunAgentsExecutionMode::Local => String::new(),
         };
         if let Some(handle) = self.pickers.runner_picker.clone() {
-            oc::populate_runner_picker(
-                &handle,
-                self.runner_cache.entries(),
-                &current,
-                self.runner_cache.is_loading(),
-                ctx,
-            );
+            oc::populate_runner_picker(&handle, &self.runners, &current, self.runners_loading, ctx);
         }
     }
 }
