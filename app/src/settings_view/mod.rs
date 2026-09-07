@@ -1269,7 +1269,7 @@ impl SettingsView {
         });
 
         // Billing & Usage page (internally, this routes to the v1 or v2 version. Depending on FFs and current plan).
-        let billing_and_usage_handle = ctx.add_view(BillingAndUsageDispatchView::new);
+        let billing_and_usage_handle = ctx.add_typed_action_view(BillingAndUsageDispatchView::new);
         ctx.subscribe_to_view(&billing_and_usage_handle, |me, _, event, ctx| {
             me.handle_billing_and_usage_page_event(event, ctx);
         });
