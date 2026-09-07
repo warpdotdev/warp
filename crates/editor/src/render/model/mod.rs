@@ -3398,6 +3398,35 @@ impl RenderState {
         self.layout_pending_edit(laid_out_edit, hidden_ranges);
     }
 
+    #[cfg(target_os = "macos")]
+    fn layout_lazy_edit_delta(
+        &self,
+        delta: EditDelta,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        app: &AppContext,
+    ) {
+        let layout_cache = LayoutCache::new();
+        let layout_context = self.layout_context(&layout_cache, app);
+        let laid_out_edit = delta.layout_delta_sequential(
+            &layout_context,
+            self.document_path.as_deref(),
+            &self.layout_options,
+            hidden_ranges.clone(),
+            app,
+        );
+        self.layout_pending_edit(laid_out_edit, hidden_ranges);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn layout_lazy_edit_delta(
+        &self,
+        delta: EditDelta,
+        hidden_ranges: Option<RangeSet<CharOffset>>,
+        app: &AppContext,
+    ) {
+        self.layout_edit_delta(delta, hidden_ranges, app);
+    }
+
     /// Construct a throwaway layout cache. We only lay out modified text, so in effect,
     /// the entire RenderState is a cache.
     fn layout_context<'a>(
@@ -3431,7 +3460,7 @@ impl RenderState {
                         delta,
                         hidden_ranges,
                     } => {
-                        self.layout_edit_delta(delta, hidden_ranges, app);
+                        self.layout_lazy_edit_delta(delta, hidden_ranges, app);
                     }
                     PendingLayout::TemporaryBlocks(blocks) => {
                         self.layout_temporary_blocks(blocks, app);

@@ -176,6 +176,70 @@ fn command_range(
     })
 }
 
+#[test]
+fn test_lazy_model_initializes_rendered_mermaid_before_first_layout() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _flag = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let _editable_flag = FeatureFlag::EditableMarkdownMermaid.override_enabled(true);
+        let window = setup_editor_window(&mut app, true);
+        let model = app.add_model(|ctx| {
+            let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+            let mut model = NotebooksEditorModel::new_unbound_lazy(styles, ctx);
+            model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+            model.reset_with_markdown("```mermaid\ngraph TD\nA --> B\n```", ctx);
+            model
+        });
+        layout_model(&mut app, &model).await;
+
+        model.update(&mut app, |model, ctx| model.set_window_id(window, ctx));
+
+        let commands = command_models(&model, &mut app);
+        let mermaid = commands
+            .into_iter()
+            .exactly_one()
+            .expect("expected one Mermaid command model");
+        let expected_range = command_range(&mermaid, &mut app);
+        let render_state = app.read(|ctx| model.as_ref(ctx).render_state().clone());
+        render_state.update(&mut app, |render_state, ctx| {
+            render_state.set_viewport_size(
+                SizeInfo {
+                    viewport_size: Vector2F::new(800., 600.),
+                    needs_layout: false,
+                },
+                ctx,
+            );
+        });
+        let pending_edits_flushed =
+            app.read(|ctx| render_state.as_ref(ctx).try_layout_pending_edits(ctx));
+        assert!(pending_edits_flushed);
+
+        app.read(|ctx| {
+            let model = model.as_ref(ctx);
+            let render_state = model.render_state().as_ref(ctx);
+            let content = render_state.content();
+            let mut offset = CharOffset::zero();
+            let (mermaid_offset, mermaid_item) = content
+                .block_items()
+                .find_map(|item| {
+                    let item_offset = offset;
+                    offset += item.content_length();
+                    matches!(item, BlockItem::MermaidDiagram { .. }).then_some((item_offset, item))
+                })
+                .expect("first lazy layout should produce a Mermaid diagram");
+
+            assert_eq!(mermaid_offset, expected_range.start);
+            assert_eq!(
+                mermaid_item.content_length(),
+                expected_range.end - expected_range.start
+            );
+            assert_eq!(mermaid_item.lines(), 1.into());
+            assert!(mermaid_item.content_width().as_f32() > 0.);
+            assert!(mermaid_item.content_height().as_f32() > 0.);
+        });
+    });
+}
+
 /// Wait for text layout to finish.
 async fn layout_model(app: &mut App, model: &ModelHandle<NotebooksEditorModel>) {
     app.read(|ctx| model.as_ref(ctx).render_state.as_ref(ctx).layout_complete())

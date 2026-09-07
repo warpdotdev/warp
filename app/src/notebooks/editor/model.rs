@@ -108,6 +108,7 @@ pub struct NotebooksEditorModel {
     /// Context used to generate clickable file path links for notebooks.
     file_link_resolution_context: Option<FileLinkResolutionContext>,
     default_mermaid_display_mode: MarkdownDisplayMode,
+    lazy_layout: bool,
 }
 
 #[derive(Clone)]
@@ -239,6 +240,7 @@ impl NotebooksEditorModel {
             resize_tx,
             file_link_resolution_context: None,
             default_mermaid_display_mode: MarkdownDisplayMode::Raw,
+            lazy_layout,
         }
     }
 
@@ -282,8 +284,19 @@ impl NotebooksEditorModel {
     }
 
     /// Set the window this editor model is associated with. Should be called when the pane attaches.
-    pub fn set_window_id(&mut self, window_id: WindowId, _ctx: &mut ModelContext<Self>) {
+    pub fn set_window_id(&mut self, window_id: WindowId, ctx: &mut ModelContext<Self>) {
         self.rte_window_id = Some(window_id);
+        self.child_models.update(
+            self.interaction_state.clone(),
+            self.content.clone(),
+            self.selection_model.clone(),
+            window_id,
+            self.default_mermaid_display_mode,
+            ctx,
+        );
+        if self.sync_mermaid_render_offsets(ctx) && !self.lazy_layout {
+            self.rebuild_layout(ctx);
+        }
     }
 
     /// Get the context for the session and working directory associated with this editor, if any.
@@ -2181,9 +2194,13 @@ impl ChildModels {
             .cloned()
     }
 
-    /// Update the sub-model state with [`NotebookCommand`] models for every runnable command
-    /// in the buffer. This should be called after text layout completes, so that the offsets of
-    /// each block line up between the render and content models.
+    /// Update the sub-model state with [`NotebookCommand`] models for every runnable command in the
+    /// buffer.
+    ///
+    /// Synchronization after text layout keeps edited render and content offsets aligned. A lazy
+    /// model may also update before its first layout once it is bound to a window: buffer outlines
+    /// already have stable content offsets, and the child models provide the rendered Mermaid
+    /// offsets that first layout consumes.
     pub fn update<T: Entity>(
         &mut self,
         interaction_state: ModelHandle<InteractionStateModel>,
