@@ -23,7 +23,7 @@ use warpui::{
     ViewHandle,
 };
 
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{AIAgentActionId, AIAgentActionResultType, icons};
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel, RunAgentsExecutor,
@@ -50,6 +50,7 @@ use crate::ai::blocklist::telemetry::{
     BlocklistOrchestrationTelemetryEvent, OrchestrationEnteredEvent, OrchestrationEntrySource,
     RunAgentsCardDecision, run_agents_card_decision_event,
 };
+use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
 };
@@ -549,6 +550,28 @@ impl RunAgentsCardView {
                 }
             },
         );
+
+        // Re-render on a conversation status change so a cancel that lands
+        // while this call is still streaming (before it ever reaches the
+        // action model) promptly flips the card to its cancelled terminal
+        // state, instead of leaving "Configuring agents…" stuck until some
+        // unrelated event happens to trigger a re-render.
+        if let Some(conversation_id) = block_model.conversation_id(ctx) {
+            ctx.subscribe_to_model(
+                &BlocklistAIHistoryModel::handle(ctx),
+                move |_, _, event, ctx| {
+                    if let BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                        conversation_id: updated_conversation_id,
+                        ..
+                    } = event
+                        && *updated_conversation_id == conversation_id
+                    {
+                        ctx.notify();
+                    }
+                },
+            );
+        }
+
         // When auto_launched is true, execution is deferred to the
         // ActionBlockedOnUserConfirmation subscription above — the action
         // hasn't been queued in pending_actions yet at construction time.
@@ -1267,8 +1290,31 @@ impl View for RunAgentsCardView {
 
         // Still streaming: show "Configuring agents..." placeholder until
         // the action reaches Blocked status (i.e., streaming is complete
-        // and the action is queued for user confirmation).
+        // and the action is queued for user confirmation). The action only
+        // enters the action model once the tool-call stream finishes
+        // successfully (see `AfterStreamFinished` in controller.rs), so
+        // cancelling the conversation while this call is still streaming
+        // leaves `status` `None` forever. Detect that case here and render
+        // the cancelled terminal state instead of getting stuck on the
+        // placeholder (mirrors `ask_user_question_view::action_status`'s
+        // restore-as-cancelled check).
         if !matches!(status, Some(AIActionStatus::Blocked)) {
+            let conversation_id = self.block_model.conversation_id(app);
+            let conversation_status = conversation_id
+                .and_then(|id| BlocklistAIHistoryModel::as_ref(app).conversation_status(&id));
+            let has_unfinished_actions = conversation_id.is_some_and(|id| {
+                self.action_model
+                    .as_ref(app)
+                    .has_unfinished_actions_for_conversation(id)
+            });
+            if should_render_no_status_as_cancelled(conversation_status, has_unfinished_actions) {
+                return render_status_only_card(
+                    "Spawn agents cancelled".to_string(),
+                    appearance,
+                    StatusKind::Cancelled,
+                    app,
+                );
+            }
             return render_status_only_card(
                 "Configuring agents\u{2026}".to_string(),
                 appearance,
@@ -1601,6 +1647,36 @@ fn render_terminal_state(
 ) -> Box<dyn Element> {
     let (label, kind) = format_terminal_state(result);
     render_status_only_card(label, appearance, kind, app)
+}
+
+/// Decides whether the run_agents card's "no live action status" fallback
+/// should render the cancelled terminal state rather than the streaming
+/// "Configuring agents\u{2026}" placeholder.
+///
+/// The action only enters the action model once its tool-call stream
+/// finishes successfully (`queue_actions` in `controller.rs`'s
+/// `AfterStreamFinished` handling), so a user cancel while the call is
+/// still streaming never queues an action and `get_action_status` stays
+/// `None` forever. Treat that as cancelled only once the conversation has
+/// reached the explicit `ConversationStatus::Cancelled` status and nothing
+/// else is still pending/running for it — mirrors
+/// `ask_user_question_view::action_status`'s restore-as-cancelled check.
+///
+/// This deliberately requires an *explicit* cancelled status rather than
+/// merely "not `InProgress`": non-terminal statuses like `TransientError`
+/// (an automatic recovery is in flight) or `WaitingForEvents` (the agent is
+/// quiescently waiting on `wait_for_events`) are healthy, still-live states
+/// that must keep showing the streaming placeholder, not a false
+/// "cancelled" terminal card. `conversation_status` is `None` when the
+/// conversation could not be resolved (e.g. no conversation ID yet), in
+/// which case we keep showing the streaming placeholder rather than
+/// guessing.
+pub(crate) fn should_render_no_status_as_cancelled(
+    conversation_status: Option<&ConversationStatus>,
+    has_unfinished_actions_for_conversation: bool,
+) -> bool {
+    matches!(conversation_status, Some(ConversationStatus::Cancelled))
+        && !has_unfinished_actions_for_conversation
 }
 
 pub(crate) fn format_terminal_state(result: &RunAgentsResult) -> (String, StatusKind) {
