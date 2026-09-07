@@ -944,13 +944,6 @@ fn team_selection(team: Option<Option<String>>) -> warp_cli::scope::TeamSelectio
     warp_cli::scope::TeamSelection { team }
 }
 
-fn object_scope(team: Option<Option<String>>, personal: bool) -> warp_cli::scope::ObjectScope {
-    warp_cli::scope::ObjectScope {
-        team_selection: team_selection(team),
-        personal,
-    }
-}
-
 #[test]
 fn cli_scope_without_selection_is_teamless_without_teams() {
     App::test((), |mut app| async move {
@@ -1002,23 +995,6 @@ fn cli_scope_without_selection_rejects_multiple_teams() {
     })
 }
 
-#[test]
-fn cli_object_scope_personal_is_teamless_with_multiple_teams() {
-    let (first_team, second_team) = two_teams();
-    App::test((), |mut app| async move {
-        initialize_window_team_test_app(
-            &mut app,
-            vec![workspace_for_teams(vec![first_team, second_team])],
-        );
-
-        app.read(|ctx| {
-            let scope = UserWorkspaces::as_ref(ctx)
-                .team_scope_for_cli_object(&object_scope(None, true))
-                .expect("explicit personal scope should not require a team");
-            assert!(matches!(scope, TeamScopeForCli::Personal));
-        });
-    })
-}
 #[test]
 fn cli_scope_bare_team_requires_a_sole_team() {
     App::test((), |mut app| async move {

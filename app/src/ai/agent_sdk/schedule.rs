@@ -8,7 +8,7 @@ use warp_cli::schedule::{
     CreateScheduleArgs, DeleteScheduleArgs, GetScheduleArgs, PauseScheduleArgs, ScheduleCommand,
     ScheduleSubcommand, UnpauseScheduleArgs, UpdateScheduleArgs,
 };
-use warp_cli::scope::TeamSelection;
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warp_graphql::queries::get_scheduled_agent_history::ScheduledAgentHistory;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity};
@@ -22,7 +22,7 @@ use crate::ai::ambient_agents::scheduled::{
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _};
 use crate::server::ids::{ServerId, SyncId};
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::TeamScope;
+use crate::workspaces::user_workspaces::{TeamScope, TeamScopeForCli};
 
 /// Run a scheduled agent command.
 pub fn run(
@@ -50,7 +50,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 super::report_fatal_error(err, ctx);
                 return;
             }
-            let team_scope = match super::common::resolve_environment_team_scope(&args.scope, ctx) {
+            let team_scope = match resolve_schedule_team_scope(&args.scope, ctx) {
                 Ok(team_scope) => team_scope,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
@@ -115,14 +115,13 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                         }
                     };
 
-                let owner =
-                    match super::common::resolve_owner_for_team_scope(&team_scope, ctx) {
+                let owner = match super::common::resolve_owner_for_team_scope(&team_scope, ctx) {
                     Ok(owner) => owner,
                     Err(err) => {
                         super::report_fatal_error(err, ctx);
                         return;
                     }
-                    };
+                };
 
                 let cli_mcp_servers =
                     match super::mcp_config::build_mcp_servers_from_specs(&args.mcp_specs) {
@@ -199,6 +198,17 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
     });
 
     Ok(())
+}
+
+fn resolve_schedule_team_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    if scope.personal {
+        Ok(TeamScopeForCli::Personal)
+    } else {
+        super::common::resolve_team_scope(&scope.team_selection, ctx)
+    }
 }
 
 #[derive(Serialize)]
