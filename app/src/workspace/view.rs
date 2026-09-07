@@ -23134,10 +23134,6 @@ impl Workspace {
             context.set.insert(flags::OPEN_WINDOWS_AT_CUSTOM_SIZE_FLAG);
         }
 
-        if *window_settings.background_blur_texture {
-            context.set.insert(flags::WINDOW_BLUR_TEXTURE_FLAG);
-        }
-
         if *window_settings.left_panel_visibility_across_tabs {
             context
                 .set

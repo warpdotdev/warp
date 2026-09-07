@@ -114,7 +114,7 @@ impl warpui_core::platform::WindowManager for WindowManager {
         // No-op for headless.
     }
 
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
+    fn set_all_windows_background_backdrop(&self, _backdrop: platform::WindowBackdrop) {
         // No-op for headless.
     }
 

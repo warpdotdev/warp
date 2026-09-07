@@ -14,16 +14,16 @@ define_settings_group!(WindowSettings, settings: [
         toml_path: "appearance.window.override_blur",
         description: "The blur radius applied to the window background.",
     },
-    background_blur_texture: BackgroundBlurTexture {
-        type: bool,
-        default: false,
+    background_backdrop: BackgroundBackdrop {
+        type: warpui::platform::WindowBackdrop,
+        default: warpui::platform::WindowBackdrop::None,
         supported_platforms: SupportedPlatforms::WINDOWS,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::GUI,
         private: false,
         storage_key: "OverrideBlurTexture",
         toml_path: "appearance.window.override_blur_texture",
-        description: "Whether to apply a blur texture to the window background.",
+        description: "The system backdrop material applied to the window background.",
     }
     background_opacity: BackgroundOpacity {
         type: u8,

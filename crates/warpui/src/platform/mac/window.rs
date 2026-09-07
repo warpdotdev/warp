@@ -148,7 +148,7 @@ impl platform::WindowManager for WindowManager {
         Window::set_all_windows_background_blur_radius(blur_radius_pixels)
     }
 
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
+    fn set_all_windows_background_backdrop(&self, _backdrop: platform::WindowBackdrop) {
         // no-op on MacOS. This is only available on Windows.
     }
 
@@ -335,7 +335,7 @@ impl platform::WindowManager for IntegrationTestWindowManager {
         // no-op for tests
     }
 
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
+    fn set_all_windows_background_backdrop(&self, _backdrop: platform::WindowBackdrop) {
         // no-op for tests
     }
 

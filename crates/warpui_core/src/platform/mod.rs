@@ -53,6 +53,78 @@ lazy_static! {
     pub static ref KEYS_TO_IGNORE: HashSet<Keystroke> =
         HashSet::from([Keystroke::parse("cmdorctrl-v").unwrap()]);
 }
+/// The system backdrop material applied behind a window's transparent content.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema_gen", derive(schemars::JsonSchema))]
+pub enum WindowBackdrop {
+    #[default]
+    None,
+    Auto,
+    Mica,
+    Acrylic,
+    MicaAlt,
+}
+
+impl WindowBackdrop {
+    pub const ALL: [Self; 5] = [
+        Self::None,
+        Self::Auto,
+        Self::Mica,
+        Self::Acrylic,
+        Self::MicaAlt,
+    ];
+}
+
+impl<'de> Deserialize<'de> for WindowBackdrop {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct WindowBackdropVisitor;
+
+        impl serde::de::Visitor<'_> for WindowBackdropVisitor {
+            type Value = WindowBackdrop;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a window backdrop name or the legacy acrylic-enabled boolean")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(if value {
+                    WindowBackdrop::Acrylic
+                } else {
+                    WindowBackdrop::None
+                })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "none" => Ok(WindowBackdrop::None),
+                    "auto" => Ok(WindowBackdrop::Auto),
+                    "mica" => Ok(WindowBackdrop::Mica),
+                    "acrylic" => Ok(WindowBackdrop::Acrylic),
+                    "mica_alt" => Ok(WindowBackdrop::MicaAlt),
+                    _ => Err(E::unknown_variant(
+                        value,
+                        &["none", "auto", "mica", "acrylic", "mica_alt"],
+                    )),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(WindowBackdropVisitor)
+    }
+}
+
+#[cfg(feature = "settings_value")]
+impl settings_value::SettingsValue for WindowBackdrop {}
 
 /// Type of the callback function that provides the result of requesting
 /// desktop notification permissions.
@@ -94,7 +166,7 @@ pub struct WindowOptions {
     pub title: Option<String>,
     pub style: WindowStyle,
     pub background_blur_radius_pixels: Option<u8>,
-    pub background_blur_texture: bool,
+    pub background_backdrop: WindowBackdrop,
     pub gpu_power_preference: GPUPowerPreference,
     pub backend_preference: Option<GraphicsBackend>,
     pub on_gpu_device_info_reported: Box<OnGPUDeviceSelected>,
@@ -116,7 +188,7 @@ impl std::fmt::Debug for WindowOptions {
                 "background_blur_radius_pixels",
                 &self.background_blur_radius_pixels,
             )
-            .field("background_blur_texture", &self.background_blur_texture)
+            .field("background_backdrop", &self.background_backdrop)
             .field("gpu_power_preference", &self.gpu_power_preference)
             .field("backend_preference", &self.backend_preference)
             .field("window_instance", &self.window_instance)
@@ -602,8 +674,8 @@ pub trait WindowManager {
     /// Sets the background blur radius for all windows to the given `blur_radius_pixels` value.
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8);
 
-    /// [Windows only] Sets the background blur texture (Acrylic) for all windows.
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool);
+    /// [Windows only] Sets the system backdrop material for all windows.
+    fn set_all_windows_background_backdrop(&self, backdrop: WindowBackdrop);
 
     fn set_window_title(&self, window_id: WindowId, title: &str);
 
@@ -639,6 +711,10 @@ pub trait WindowManager {
 
     fn cancel_synthetic_drag(&self, _window_id: WindowId) {}
 }
+
+#[cfg(test)]
+#[path = "window_backdrop_tests.rs"]
+mod window_backdrop_tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SystemTheme {
