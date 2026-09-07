@@ -188,12 +188,7 @@ fn dispatch_command(
             }
             schedule::run(ctx, global_options, schedule_cmd)
         }
-        CliCommand::Secret(secret_cmd) => {
-            if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-                return Err(anyhow::anyhow!("invalid value 'secret'"));
-            }
-            secret::run(ctx, global_options, secret_cmd)
-        }
+        CliCommand::Secret(secret_cmd) => secret::run(ctx, global_options, secret_cmd),
         CliCommand::Federate(federate_cmd) => {
             if !FeatureFlag::OzIdentityFederation.is_enabled() {
                 return Err(anyhow::anyhow!("invalid value 'federate'"));

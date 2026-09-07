@@ -13,7 +13,6 @@ use warp_cli::secret::{
     AnthropicMethod, CodexMethod, CreateProvider, CreateSecretArgs, DeleteSecretArgs,
     ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
 };
-use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
 use warp_graphql::object::SpaceType;
 use warp_managed_secrets::client::SecretOwner;
@@ -67,10 +66,6 @@ pub fn run(
     global_options: GlobalOptions,
     command: SecretCommand,
 ) -> Result<()> {
-    if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-        return Err(anyhow::anyhow!("This feature is not enabled"));
-    }
-
     match command {
         SecretCommand::Create(args) => create_secret(ctx, args),
         SecretCommand::Delete(args) => delete_secret(ctx, args),

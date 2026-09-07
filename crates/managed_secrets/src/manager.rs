@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use vec1::vec1;
-use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::ManagedSecret;
 use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretValue;
 use warpui_core::{Entity, SingletonEntity};
@@ -49,10 +48,6 @@ impl ManagedSecretManager {
         let client = self.client.clone();
         let actor_provider = self.actor_provider.clone();
         async move {
-            if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-                return Err(anyhow::anyhow!("This feature is not enabled"));
-            }
-
             value.validate_field_sizes(&name)?;
 
             // We retrieve all upload keys on demand. These should potentially be fetched and stored
@@ -94,10 +89,6 @@ impl ManagedSecretManager {
     ) -> impl Future<Output = anyhow::Result<()>> + use<> {
         let client = self.client.clone();
         async move {
-            if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-                return Err(anyhow::anyhow!("This feature is not enabled"));
-            }
-
             client.delete_managed_secret(owner, name).await?;
             Ok(())
         }
@@ -113,10 +104,6 @@ impl ManagedSecretManager {
         let client = self.client.clone();
         let actor_provider = self.actor_provider.clone();
         async move {
-            if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-                return Err(anyhow::anyhow!("This feature is not enabled"));
-            }
-
             if let Some(v) = &value {
                 v.validate_field_sizes(&name)?;
             }
