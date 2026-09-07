@@ -23,7 +23,7 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::output::{self, TableFormat};
 use crate::ServerApiProvider;
-use crate::server::ids::{ApiKeyUid, ServerId};
+use crate::server::ids::ApiKeyUid;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::TeamScope;
 
@@ -198,8 +198,8 @@ impl ApiKeyCommandRunner {
                     }
                 };
 
-                let target = match resolve_api_key_identifier(&keys, &key_identifier) {
-                    Ok(Some(target)) => target,
+                let key = match resolve_api_key_identifier(&keys, &key_identifier) {
+                    Ok(Some(key)) => key,
                     Ok(None) => {
                         ctx.terminate_app(TerminationMode::ForceTerminate, None);
                         return;
@@ -221,7 +221,7 @@ impl ApiKeyCommandRunner {
                         return;
                     }
 
-                    let prompt = format!("Expire API key '{target}'?");
+                    let prompt = format!("Expire API key '{key}'?");
                     let should_expire = match Confirm::new(&prompt)
                         .with_default(false)
                         .with_help_message("This action takes effect immediately")
@@ -248,7 +248,7 @@ impl ApiKeyCommandRunner {
                     }
                 }
 
-                let uid = target.into_uid();
+                let uid = ApiKeyUid::from(key.uid);
                 let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
                 ctx.spawn(
                     async move {
@@ -356,9 +356,9 @@ impl TableFormat for ApiKeyInfo {
 fn resolve_api_key_identifier(
     keys: &[ApiKeyInfo],
     key_identifier: &str,
-) -> Result<Option<ApiKeyExpirationTarget>> {
+) -> Result<Option<ApiKeyInfo>> {
     if let Some(key) = keys.iter().find(|key| key.uid == key_identifier) {
-        return Ok(Some(ApiKeyExpirationTarget::Scoped(key.clone())));
+        return Ok(Some(key.clone()));
     }
 
     let mut matches = keys
@@ -369,14 +369,9 @@ fn resolve_api_key_identifier(
     matches.sort_by_key(|key| Reverse(key.created_at));
 
     if matches.is_empty() {
-        if ServerId::try_from(key_identifier).is_ok() {
-            return Ok(Some(ApiKeyExpirationTarget::DirectUid(
-                key_identifier.to_string(),
-            )));
-        }
         return Err(anyhow!("API key '{key_identifier}' not found"));
     } else if matches.len() == 1 {
-        return Ok(Some(ApiKeyExpirationTarget::Scoped(matches[0].clone())));
+        return Ok(Some(matches[0].clone()));
     }
 
     if io::stdin().is_terminal() {
@@ -386,7 +381,7 @@ fn resolve_api_key_identifier(
         )
         .prompt()
         {
-            Ok(key) => Ok(Some(ApiKeyExpirationTarget::Scoped(key))),
+            Ok(key) => Ok(Some(key)),
             Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => Ok(None),
             Err(err) => Err(err.into()),
         };
@@ -399,30 +394,6 @@ fn resolve_api_key_identifier(
     Err(anyhow!(
         "Multiple API keys match '{key_identifier}'; specify the key by UID"
     ))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ApiKeyExpirationTarget {
-    Scoped(ApiKeyInfo),
-    DirectUid(ApiKeyUid),
-}
-
-impl ApiKeyExpirationTarget {
-    fn into_uid(self) -> ApiKeyUid {
-        match self {
-            Self::Scoped(key) => key.uid,
-            Self::DirectUid(uid) => uid,
-        }
-    }
-}
-
-impl fmt::Display for ApiKeyExpirationTarget {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Scoped(key) => key.fmt(f),
-            Self::DirectUid(uid) => uid.fmt(f),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
