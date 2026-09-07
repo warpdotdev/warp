@@ -30,7 +30,7 @@ use crate::ai::agent_sdk::driver::attachments::{
     MAX_ATTACHMENT_COUNT_FOR_CLOUD_QUERY, process_attachment,
 };
 use crate::ai::ambient_agents::spawn::{
-    AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION, spawn_task_for_team,
+    AmbientAgentEvent, SessionJoinInfo, TASK_STATUS_POLLING_DURATION, spawn_task,
 };
 use crate::ai::ambient_agents::task::HarnessConfig;
 use crate::ai::ambient_agents::{
@@ -49,7 +49,7 @@ use crate::server::server_api::ai::{
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces};
 
 const MAX_LINE_WIDTH: usize = 90;
 const STREAM_RETRY_BACKOFF_STEPS: &[u64] = &[1, 2, 5, 10];
@@ -490,7 +490,7 @@ impl AmbientAgentRunner {
                     .model_id
                     .as_deref()
                     .map(|model_id| {
-                        super::common::validate_agent_mode_base_model_id_for_team_scope(
+                        super::common::validate_agent_mode_base_model_id_for_scope(
                             model_id,
                             &team_scope,
                             ctx,
@@ -535,7 +535,10 @@ impl AmbientAgentRunner {
                 mode,
                 config,
                 title: args.title,
-                team: Some(team_scope.team_uid().is_some()),
+                team: Some(match &team_scope {
+                    TeamScopeForCli::Personal => false,
+                    TeamScopeForCli::Team(_) => true,
+                }),
                 agent_identity_uid: args.agent_uid,
                 skill,
                 attachments,
@@ -554,7 +557,7 @@ impl AmbientAgentRunner {
             let ai_client_clone = ai_client.clone();
             let request_team_scope = RequestTeamScope::from_scope(&team_scope);
             let spawn_future = async move {
-                let mut stream = Box::pin(spawn_task_for_team(
+                let mut stream = Box::pin(spawn_task(
                     request,
                     request_team_scope,
                     ai_client_clone,

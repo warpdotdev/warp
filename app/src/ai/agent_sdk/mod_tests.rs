@@ -129,7 +129,7 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
             .read(|ctx| resolve_local_run_team_scope(&args, ctx))
             .unwrap()
             .expect("new local run should resolve a scope");
-        assert_eq!(team_scope.scope.team_uid(), Some(selected_team_uid));
+        assert_eq!(team_scope.team_uid(), Some(selected_team_uid));
 
         let mut ai_client = MockAIClient::new();
         ai_client

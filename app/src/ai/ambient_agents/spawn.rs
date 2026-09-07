@@ -102,24 +102,7 @@ enum RunPollMode {
 /// If `timeout` is `None`, there is no timeout.
 pub fn spawn_task(
     request: SpawnAgentRequest,
-    ai_client: Arc<dyn AIClient>,
-    timeout: Option<Duration>,
-) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
-    spawn_task_with_scope(request, None, ai_client, timeout)
-}
-
-pub fn spawn_task_for_team(
-    request: SpawnAgentRequest,
     team_scope: RequestTeamScope,
-    ai_client: Arc<dyn AIClient>,
-    timeout: Option<Duration>,
-) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
-    spawn_task_with_scope(request, Some(team_scope), ai_client, timeout)
-}
-
-fn spawn_task_with_scope(
-    request: SpawnAgentRequest,
-    team_scope: Option<RequestTeamScope>,
     ai_client: Arc<dyn AIClient>,
     timeout: Option<Duration>,
 ) -> impl Stream<Item = Result<AmbientAgentEvent, anyhow::Error>> {
@@ -127,11 +110,7 @@ fn spawn_task_with_scope(
     // See https://github.com/tokio-rs/async-stream/issues/63.
     async_stream::stream! {
         // First, spawn the ambient agent task.
-        let response = match team_scope {
-            Some(team_scope) => ai_client.spawn_agent_for_team(request, team_scope).await,
-            None => ai_client.spawn_agent(request).await,
-        };
-        let (task_id, run_id, at_capacity) = match response {
+        let (task_id, run_id, at_capacity) = match ai_client.spawn_agent(request, team_scope).await {
             Ok(response) => (response.task_id, response.run_id, response.at_capacity),
             Err(err) => {
                 yield Err(err);

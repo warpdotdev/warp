@@ -42,6 +42,33 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 }
 
 #[test]
+fn spawn_agent_request_serializes_explicit_personal_ownership() {
+    let request = SpawnAgentRequest {
+        prompt: Some("hello".to_string()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: Some(false),
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        value.get("team").and_then(|value| value.as_bool()),
+        Some(false)
+    );
+}
+
+#[test]
 fn spawn_agent_request_serializes_agent_uid_as_agent_identity_uid() {
     let request = SpawnAgentRequest {
         prompt: Some("hello".to_string()),

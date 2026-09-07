@@ -1743,31 +1743,19 @@ impl LLMPreferences {
         new_terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let selection = self.agent_mode_selection(source_terminal_view_id);
-        self.apply_agent_mode_selection(selection, new_terminal_view_id, ctx);
-    }
-
-    pub(crate) fn agent_mode_selection(&self, terminal_view_id: EntityId) -> Option<LLMId> {
-        self.base_llm_for_terminal_view
-            .get(&terminal_view_id)
+        let changed = match self
+            .base_llm_for_terminal_view
+            .get(&source_terminal_view_id)
             .cloned()
-    }
-
-    pub(crate) fn apply_agent_mode_selection(
-        &mut self,
-        selection: Option<LLMId>,
-        terminal_view_id: EntityId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let changed = match selection {
+        {
             Some(id) => {
                 self.base_llm_for_terminal_view
-                    .insert(terminal_view_id, id.clone())
+                    .insert(new_terminal_view_id, id.clone())
                     != Some(id)
             }
             None => self
                 .base_llm_for_terminal_view
-                .remove(&terminal_view_id)
+                .remove(&new_terminal_view_id)
                 .is_some(),
         };
 

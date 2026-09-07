@@ -96,7 +96,10 @@ impl TeamScope for TeamContext<'_> {
 /// The team a headless CLI invocation acts as, resolved from its command-line selection and
 /// memberships instead of from a window.
 #[cfg(not(target_family = "wasm"))]
-pub struct TeamScopeForCli(Option<ServerId>);
+pub enum TeamScopeForCli {
+    Personal,
+    Team(ServerId),
+}
 
 #[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}
@@ -104,7 +107,10 @@ impl sealed::Sealed for TeamScopeForCli {}
 #[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
-        self.0
+        match self {
+            TeamScopeForCli::Personal => None,
+            TeamScopeForCli::Team(team_uid) => Some(*team_uid),
+        }
     }
 }
 
@@ -228,7 +234,10 @@ impl UserWorkspaces {
         {
             return Err(NotATeamMemberError { team_uid }.into());
         }
-        Ok(TeamScopeForCli(team_uid))
+        Ok(match team_uid {
+            Some(team_uid) => TeamScopeForCli::Team(team_uid),
+            None => TeamScopeForCli::Personal,
+        })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -237,7 +246,7 @@ impl UserWorkspaces {
         object_scope: &ObjectScope,
     ) -> Result<TeamScopeForCli, TeamScopeForCliError> {
         if object_scope.personal {
-            Ok(TeamScopeForCli(None))
+            Ok(TeamScopeForCli::Personal)
         } else {
             self.team_scope_for_cli(&object_scope.team_selection)
         }

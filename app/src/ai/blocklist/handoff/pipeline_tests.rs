@@ -25,6 +25,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{ForkConversationResponse, MockAIClient, SpawnAgentResponse};
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000"
@@ -279,6 +280,7 @@ fn pending(
         },
         snapshot_disabled: true,
         orchestration_handoff: Some(true),
+        team_scope: RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into())),
     }
 }
 
@@ -299,6 +301,7 @@ fn request_for_prompt(
         },
         None,
         snapshot,
+        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into())),
     )
 }
 
@@ -324,6 +327,7 @@ fn empty_prompt_substitution_matrix_matches_gui_behavior() {
     let plan = request_for_prompt("/plan investigate", false, None);
     assert_eq!(plan.prompt.as_deref(), Some("investigate"));
     assert_eq!(plan.mode, UserQueryMode::Plan);
+    assert_eq!(plan.team, Some(true));
 }
 
 #[test]
@@ -779,8 +783,9 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
         let materialized = materialized.clone();
         let spawn_count = spawn_count.clone();
         let observed_request = observed_request.clone();
-        move |request| {
+        move |request, team_scope| {
             assert!(materialized.load(Ordering::SeqCst));
+            assert_eq!(team_scope.team_uid(), Some(7.into()));
             spawn_count.fetch_add(1, Ordering::SeqCst);
             *observed_request.lock().expect("request lock") = Some(request);
             Ok(SpawnAgentResponse {
@@ -856,7 +861,7 @@ async fn fresh_launch_skips_fork_and_materializes_before_spawn() {
     mock.expect_fork_conversation().times(0);
     mock.expect_spawn_agent().times(1).returning({
         let materialized = materialized.clone();
-        move |request| {
+        move |request, _| {
             assert!(materialized.load(Ordering::SeqCst));
             assert!(request.conversation_id.is_none());
             Ok(SpawnAgentResponse {
@@ -928,7 +933,7 @@ async fn cancellation_during_spawn_cancels_the_created_task() {
     mock.expect_fork_conversation().times(0);
     mock.expect_spawn_agent().times(1).returning({
         let cancel = cancel.clone();
-        move |_| {
+        move |_, _| {
             cancel
                 .lock()
                 .expect("cancel sender lock")
@@ -984,7 +989,7 @@ async fn snapshot_failure_degrades_to_spawn_without_token() {
     mock.expect_upload_local_handoff_snapshot()
         .times(1)
         .returning(|_| Err(anyhow::anyhow!("snapshot unavailable")));
-    mock.expect_spawn_agent().times(1).returning(|request| {
+    mock.expect_spawn_agent().times(1).returning(|request, _| {
         assert!(request.initial_snapshot_token.is_none());
         Ok(SpawnAgentResponse {
             task_id: task_id(),

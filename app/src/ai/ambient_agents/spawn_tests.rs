@@ -6,7 +6,7 @@ use session_sharing_protocol::common::SessionId;
 
 use super::{
     AmbientAgentEvent, MAX_STALE_POLLS_BEFORE_FAILURE, SessionJoinInfo, monitor_spawned_task,
-    spawn_task, spawn_task_for_team, submit_run_followup,
+    spawn_task, submit_run_followup,
 };
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
@@ -692,15 +692,17 @@ async fn followup_bounded_skip_for_server_stall() {
 fn run_id() -> crate::ai::ambient_agents::AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+}
 
 #[tokio::test]
-async fn scoped_spawn_uses_resolved_team_scope() {
+async fn spawn_uses_resolved_team_scope() {
     use futures::StreamExt;
 
     let team_uid = 7.into();
     let mut mock = MockAIClient::new();
-    mock.expect_spawn_agent().times(0);
-    mock.expect_spawn_agent_for_team()
+    mock.expect_spawn_agent()
         .times(1)
         .withf(move |request, team_scope| {
             request.team == Some(true) && team_scope.team_uid() == Some(team_uid)
@@ -735,12 +737,7 @@ async fn scoped_spawn_uses_resolved_team_scope() {
         orchestration_handoff: None,
     };
     let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
-    let mut stream = Box::pin(spawn_task_for_team(
-        request,
-        team_scope,
-        Arc::new(mock),
-        None,
-    ));
+    let mut stream = Box::pin(spawn_task(request, team_scope, Arc::new(mock), None));
 
     assert!(matches!(
         stream.next().await.expect("spawned event").expect("ok"),
@@ -783,7 +780,7 @@ async fn poll_retries_transient_429_errors() {
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -810,7 +807,7 @@ async fn poll_retries_transient_429_errors() {
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -824,7 +821,7 @@ async fn poll_retries_transient_429_errors() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -860,7 +857,7 @@ async fn poll_fails_on_permanent_http_error() {
 
     let mut mock = MockAIClient::new();
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -879,7 +876,7 @@ async fn poll_fails_on_permanent_http_error() {
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -893,7 +890,7 @@ async fn poll_fails_on_permanent_http_error() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -926,7 +923,7 @@ async fn poll_gives_up_after_max_transient_retries() {
     let mut mock = MockAIClient::new();
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -949,7 +946,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         mode: crate::ai::agent::UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -963,7 +960,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -995,7 +992,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
 
     let mut mock = MockAIClient::new();
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -1013,7 +1010,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -1027,7 +1024,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     let event = stream
         .next()
@@ -1128,7 +1125,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
 
     let call_count = Arc::new(AtomicUsize::new(0));
 
-    mock.expect_spawn_agent().returning(|_| {
+    mock.expect_spawn_agent().returning(|_, _| {
         Ok(SpawnAgentResponse {
             task_id: "550e8400-e29b-41d4-a716-446655440000".parse().unwrap(),
             run_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -1160,7 +1157,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(true),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -1174,7 +1171,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
 
     // First event should be TaskSpawned
     let event = stream

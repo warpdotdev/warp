@@ -5,7 +5,7 @@ use warpui::App;
 
 use super::{
     classify_agent_mode_base_model_id, parse_ambient_task_id, validate_agent_mode_base_model_id,
-    validate_agent_mode_base_model_id_for_team_scope,
+    validate_agent_mode_base_model_id_for_scope,
 };
 use crate::LaunchMode;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -189,19 +189,14 @@ fn model_validation_reads_the_selected_team_catalog() {
         app.read(|ctx| {
             let team_scope = TeamContextForOperation::new_for_test(team_uid);
             assert!(
-                validate_agent_mode_base_model_id_for_team_scope("team-model", &team_scope, ctx)
-                    .is_ok()
+                validate_agent_mode_base_model_id_for_scope("team-model", &team_scope, ctx).is_ok()
             );
             assert!(
-                validate_agent_mode_base_model_id_for_team_scope(
-                    "personal-model",
-                    &team_scope,
-                    ctx
-                )
-                .is_err()
+                validate_agent_mode_base_model_id_for_scope("personal-model", &team_scope, ctx)
+                    .is_err()
             );
             assert!(
-                validate_agent_mode_base_model_id_for_team_scope(
+                validate_agent_mode_base_model_id_for_scope(
                     "personal-model",
                     &TeamlessScopeForTest,
                     ctx
@@ -209,7 +204,7 @@ fn model_validation_reads_the_selected_team_catalog() {
                 .is_ok()
             );
             assert!(
-                validate_agent_mode_base_model_id_for_team_scope(
+                validate_agent_mode_base_model_id_for_scope(
                     "team-model",
                     &TeamlessScopeForTest,
                     ctx

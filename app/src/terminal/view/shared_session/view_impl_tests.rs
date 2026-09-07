@@ -34,6 +34,8 @@ use crate::pane_group::{BackingView, PaneConfigurationEvent};
 use crate::server::ids::ServerId;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::SpawnAgentRequest;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
@@ -41,6 +43,8 @@ use crate::terminal::view::shared_session::test_utils::terminal_view_for_viewer;
 use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 use crate::{FeatureFlag, assert_lines_approx_eq};
 
 #[test]
@@ -941,7 +945,7 @@ fn handoff_request_for_test() -> SpawnAgentRequest {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(false),
         agent_identity_uid: None,
         skill: None,
         attachments: Vec::new(),
@@ -1005,7 +1009,12 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                 .clone();
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 let (cancel, _) = oneshot::channel();
-                model.begin_local_to_cloud_handoff(handoff_request_for_test(), cancel, ctx);
+                model.begin_local_to_cloud_handoff(
+                    handoff_request_for_test(),
+                    RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                    cancel,
+                    ctx,
+                );
             });
 
             view.on_session_share_joined(

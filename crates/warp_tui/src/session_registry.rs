@@ -429,10 +429,11 @@ impl TuiSessions {
             TuiOrchestrationEvent::CreateLocalChildSession {
                 parent_session_id,
                 request,
+                model_id,
                 working_directory,
                 task_id,
                 conversation_name,
-                child_settings,
+                team_scope,
             } => {
                 let window_id = sessions
                     .as_ref(ctx)
@@ -455,10 +456,11 @@ impl TuiSessions {
                             session_id,
                             session_view,
                             request: (**request).clone(),
+                            model_id: model_id.clone(),
                             task_id: *task_id,
                             conversation_name: conversation_name.clone(),
-                            child_settings: child_settings.clone(),
                         },
+                        team_scope,
                         ctx,
                     );
                 });
@@ -467,6 +469,7 @@ impl TuiSessions {
                 parent_session_id,
                 request,
                 prepared,
+                team_scope,
             } => {
                 let child = Self::create_remote_child_session(&sessions, *parent_session_id, ctx);
                 orchestration_for_events.update(ctx, |orchestration, ctx| {
@@ -474,6 +477,7 @@ impl TuiSessions {
                         child,
                         (**request).clone(),
                         (**prepared).clone(),
+                        *team_scope,
                         ctx,
                     );
                 });

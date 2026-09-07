@@ -175,6 +175,7 @@ pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
 }
+
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
     match mode {
         UserQueryMode::Normal => "normal",
@@ -1285,11 +1286,6 @@ pub trait AIClient: 'static + Send + Sync {
     async fn spawn_agent(
         &self,
         request: SpawnAgentRequest,
-    ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error>;
-
-    async fn spawn_agent_for_team(
-        &self,
-        request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error>;
 
@@ -2371,16 +2367,9 @@ impl AIClient for ServerApi {
     async fn spawn_agent(
         &self,
         request: SpawnAgentRequest,
-    ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
-        let response: SpawnAgentResponse = self.post_public_api("agent/run", &request).await?;
-        Ok(response)
-    }
-
-    async fn spawn_agent_for_team(
-        &self,
-        request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
+        debug_assert_eq!(request.team, Some(team_scope.team_uid().is_some()));
         let response: SpawnAgentResponse = self
             .post_public_api_for_team("agent/run", &request, team_scope)
             .await?;

@@ -31,6 +31,7 @@ use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
 use crate::server::server_api::ai::{AgentConfigSnapshot, SpawnAgentRequest};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::PrivacySettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
@@ -227,6 +228,7 @@ pub enum CloudAgentStartupIssue {
 pub fn prepare_remote_child_launch(
     request: &StartAgentRequest,
     config: RemoteChildLaunchConfig,
+    team_scope: RequestTeamScope,
     ctx: &AppContext,
 ) -> Result<PreparedRemoteChildLaunch, PrepareRemoteChildLaunchError> {
     let orchestration_harness = config.orchestration_harness();
@@ -293,7 +295,7 @@ pub fn prepare_remote_child_launch(
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
-        team: None,
+        team: Some(team_scope.team_uid().is_some()),
         skill: None,
         attachments: Vec::new(),
         interactive: Some(true),

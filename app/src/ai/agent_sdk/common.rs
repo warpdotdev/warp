@@ -17,7 +17,7 @@ use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::llms::{LLMId, LLMInfo, LLMPreferences, is_model_allowed_for_scope};
+use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
@@ -166,27 +166,7 @@ pub(super) fn resolve_object_scope(
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 
-fn validate_custom_llm_for_team_scope(
-    model_id: &str,
-    llm_id: LLMId,
-    llm: &LLMInfo,
-    team_scope: &impl TeamScope,
-    llm_prefs: &LLMPreferences,
-    ctx: &AppContext,
-) -> anyhow::Result<LLMId> {
-    if is_model_allowed_for_scope(llm_prefs, llm, team_scope, ctx) {
-        return Ok(llm_id);
-    }
-    let scope = team_scope.team_uid().map_or_else(
-        || "your personal scope".to_string(),
-        |team_uid| format!("team {team_uid}"),
-    );
-    Err(anyhow::anyhow!(
-        "Model '{model_id}' is one of your own custom endpoints, which {scope} does not allow."
-    ))
-}
-
-pub(super) fn validate_agent_mode_base_model_id_for_team_scope(
+pub(super) fn validate_agent_mode_base_model_id_for_scope(
     model_id: &str,
     team_scope: &impl TeamScope,
     ctx: &AppContext,
@@ -204,7 +184,16 @@ pub(super) fn validate_agent_mode_base_model_id_for_team_scope(
     let Some(llm) = llm_prefs.custom_llm_info_for_id(&llm_id) else {
         return Ok(llm_id);
     };
-    validate_custom_llm_for_team_scope(model_id, llm_id, llm, team_scope, llm_prefs, ctx)
+    if is_model_allowed_for_scope(llm_prefs, llm, team_scope, ctx) {
+        return Ok(llm_id);
+    }
+    let scope = team_scope.team_uid().map_or_else(
+        || "your personal scope".to_string(),
+        |team_uid| format!("team {team_uid}"),
+    );
+    Err(anyhow::anyhow!(
+        "Model '{model_id}' is one of your own custom endpoints, which {scope} does not allow."
+    ))
 }
 
 fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {
@@ -212,6 +201,25 @@ fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {
         .get()
         .user_id()
         .ok_or_else(|| anyhow::anyhow!("User should be logged in"))
+}
+
+/// Resolve the owner of a new cloud object, based on the CLI `--team` and `--personal` flags.
+///
+/// With neither flag, a user on exactly one team gets a team object and a user on no team gets
+/// a personal one. A user on several teams is asked to choose rather than silently handed a
+/// personal object.
+pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Owner> {
+    if scope.personal {
+        return Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        });
+    }
+    match resolve_team_scope(&scope.team_selection, ctx)?.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        }),
+    }
 }
 
 pub(super) fn resolve_owner_for_team_scope(
@@ -224,16 +232,6 @@ pub(super) fn resolve_owner_for_team_scope(
             user_uid: current_user_uid(ctx)?,
         }),
     }
-}
-
-/// Resolve the owner of a new cloud object, based on the CLI `--team` and `--personal` flags.
-///
-/// With neither flag, a user on exactly one team gets a team object and a user on no team gets
-/// a personal one. A user on several teams is asked to choose rather than silently handed a
-/// personal object.
-pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Owner> {
-    let team_scope = resolve_object_scope(scope, ctx)?;
-    resolve_owner_for_team_scope(&team_scope, ctx)
 }
 
 /// Refresh workspace metadata before executing an operation.

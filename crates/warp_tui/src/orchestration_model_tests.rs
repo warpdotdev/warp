@@ -1,7 +1,7 @@
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, StartAgentExecutionMode,
+    OrchestrationEventStreamerEvent, RenderableAIError, ResolvedTeamScope, StartAgentExecutionMode,
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
     UserWorkspaces, register_tui_session_view_test_singletons,
 };
@@ -307,10 +307,8 @@ fn local_oz_child_session_indexes_run_id_immediately() {
             parent_run_id: Some("parent-run-1".to_string()),
         };
         app.update(|ctx| {
-            let child_settings = warp::tui_export::capture_child_agent_settings(
-                parent_session_id.surface_id(),
-                None,
-                ctx,
+            let team_scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
             );
             TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
                 orchestration.register_local_oz_child_session(
@@ -319,10 +317,11 @@ fn local_oz_child_session_indexes_run_id_immediately() {
                         session_id: child_session_id,
                         session_view: child_view,
                         request,
+                        model_id: None,
                         task_id,
                         conversation_name: "verify-child".to_string(),
-                        child_settings,
                     },
+                    &team_scope,
                     ctx,
                 );
             });

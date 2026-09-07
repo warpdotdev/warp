@@ -54,7 +54,6 @@ use crate::pane_group::{self, Direction, PaneGroup};
 use crate::persistence::{BlockCompleted, ModelEvent};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::server_api::ServerApiProvider;
-#[cfg(not(target_family = "wasm"))]
 use crate::server::team_scope::RequestTeamScope;
 use crate::session_management::SessionNavigationData;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
@@ -70,7 +69,8 @@ use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 #[cfg(not(target_family = "wasm"))]
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::TeamContextForOperation;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -1531,12 +1531,7 @@ fn dispatch_start_agent_conversation(
     request: StartAgentRequest,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    #[cfg(not(target_family = "wasm"))]
     let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-    #[cfg(not(target_family = "wasm"))]
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
-    #[cfg(not(target_family = "wasm"))]
-    let resolved_team_scope = ResolvedTeamScope::from_scope(&team_context);
     match request.execution_mode.clone() {
         #[cfg(not(target_family = "wasm"))]
         StartAgentExecutionMode::Local {
@@ -1548,8 +1543,7 @@ fn dispatch_start_agent_conversation(
                 parent_pane_id,
                 request,
                 model_id,
-                request_team_scope,
-                resolved_team_scope,
+                team_context,
                 ctx,
             );
         }
@@ -1565,8 +1559,7 @@ fn dispatch_start_agent_conversation(
                 request,
                 harness_type,
                 model_id,
-                request_team_scope,
-                resolved_team_scope,
+                team_context,
                 ctx,
             );
         }
@@ -1598,6 +1591,7 @@ fn dispatch_start_agent_conversation(
             runner_id,
             agent_identity_uid,
         } => {
+            let request_team_scope = RequestTeamScope::from_scope(&team_context);
             let working_dir = group
                 .terminal_view_from_pane_id(parent_pane_id, ctx)
                 .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
@@ -1620,6 +1614,7 @@ fn dispatch_start_agent_conversation(
                     runner_id,
                     agent_identity_uid,
                 },
+                request_team_scope,
                 ctx,
             );
         }
@@ -1646,8 +1641,7 @@ fn launch_local_no_harness_child(
     parent_pane_id: PaneId,
     request: StartAgentRequest,
     model_id: Option<String>,
-    request_team_scope: RequestTeamScope,
-    resolved_team_scope: ResolvedTeamScope,
+    team_context: TeamContextForOperation,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let request_id = request.id;
@@ -1660,6 +1654,7 @@ fn launch_local_no_harness_child(
     let host_source = group
         .terminal_view_from_pane_id(parent_pane_id, ctx)
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
+    let request_team_scope = RequestTeamScope::from_scope(&team_context);
 
     let launch = prepare_local_oz_child_launch(
         &request.name,
@@ -1697,7 +1692,7 @@ fn launch_local_no_harness_child(
                     ..
                 }) => {
                     apply_child_agent_model_override(
-                        &resolved_team_scope,
+                        &team_context,
                         terminal_view_id,
                         model_id.as_deref(),
                         ctx,
@@ -1775,8 +1770,7 @@ fn launch_local_harness_child(
     request: StartAgentRequest,
     harness_type: String,
     model_id: Option<String>,
-    request_team_scope: RequestTeamScope,
-    resolved_team_scope: ResolvedTeamScope,
+    team_context: TeamContextForOperation,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let startup_directory = group.startup_path_for_new_session(Some(terminal_pane_id), ctx);
@@ -1801,6 +1795,7 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
+    let request_team_scope = RequestTeamScope::from_scope(&team_context);
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1847,7 +1842,7 @@ fn launch_local_harness_child(
                         ..
                     }) => {
                         apply_child_agent_model_override(
-                            &resolved_team_scope,
+                            &team_context,
                             terminal_view_id,
                             model_id.as_deref(),
                             ctx,
@@ -1935,6 +1930,7 @@ fn launch_remote_child(
     parent_pane_id: PaneId,
     request: StartAgentRequest,
     config: RemoteChildLaunchConfig,
+    team_scope: RequestTeamScope,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<AIConversationId> {
     let request_id = request.id;
@@ -1984,7 +1980,7 @@ fn launch_remote_child(
         model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
     });
 
-    let prepared = match prepare_remote_child_launch(&request, config, ctx) {
+    let prepared = match prepare_remote_child_launch(&request, config, team_scope, ctx) {
         Ok(prepared) => prepared,
         Err(error) => {
             let error_message = error.user_message();
@@ -2015,7 +2011,7 @@ fn launch_remote_child(
         if let Some(ambient_agent_view_model) = terminal_view.ambient_agent_view_model() {
             ambient_agent_view_model.update(ctx, |model, ctx| {
                 model.set_conversation_id(Some(conversation_id));
-                model.spawn_agent_with_request(prepared.spawn_request, ctx);
+                model.spawn_agent_with_request(prepared.spawn_request, team_scope, ctx);
             });
         } else {
             report_error!("Remote StartAgent child pane missing ambient agent view model");

@@ -444,7 +444,7 @@ fn build_merged_config_and_task(
         .filter(|_| args.harness == Harness::Oz)
         .map(|model_id| match local_run_team_scope {
             Some(team_scope) => {
-                common::validate_agent_mode_base_model_id_for_team_scope(model_id, team_scope, ctx)
+                common::validate_agent_mode_base_model_id_for_scope(model_id, team_scope, ctx)
             }
             None => common::validate_agent_mode_base_model_id(model_id, ctx),
         })
@@ -633,19 +633,15 @@ impl warpui::Entity for AgentDriverRunner {
 
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
-struct LocalRunTeamScope {
-    scope: TeamScopeForCli,
-}
-
 fn resolve_local_run_team_scope(
     args: &RunAgentArgs,
     ctx: &AppContext,
-) -> anyhow::Result<Option<LocalRunTeamScope>> {
+) -> anyhow::Result<Option<TeamScopeForCli>> {
     if args.task_id.is_some() {
         return Ok(None);
     }
     let scope = common::resolve_team_scope(&args.team_selection, ctx)?;
-    Ok(Some(LocalRunTeamScope { scope }))
+    Ok(Some(scope))
 }
 
 impl AgentDriverRunner {
@@ -1048,7 +1044,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        local_run_team_scope: Option<LocalRunTeamScope>,
+        local_run_team_scope: Option<TeamScopeForCli>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1080,9 +1076,7 @@ impl AgentDriverRunner {
                     &args,
                     &resolved_skill,
                     &prompt_clone,
-                    local_run_team_scope
-                        .as_ref()
-                        .map(|team_scope| &team_scope.scope),
+                    local_run_team_scope.as_ref(),
                     ctx,
                 )?;
 
@@ -1202,12 +1196,11 @@ impl AgentDriverRunner {
         server_api: &Arc<dyn AIClient>,
         prompt: String,
         merged_config: AgentConfigSnapshot,
-        team_scope: LocalRunTeamScope,
+        team_scope: TeamScopeForCli,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
-        let LocalRunTeamScope { scope } = team_scope;
-        let request_team_scope = RequestTeamScope::from_scope(&scope);
-        driver_options.team_scope = Some(scope);
+        let request_team_scope = RequestTeamScope::from_scope(&team_scope);
+        driver_options.team_scope = Some(team_scope);
         let environment = merged_config.environment_id.clone();
         let task_config = if merged_config.is_empty() {
             None

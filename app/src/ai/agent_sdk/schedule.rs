@@ -141,7 +141,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 .model_id
                 .as_deref()
                 .map(|model_id| {
-                    super::common::validate_agent_mode_base_model_id_for_team_scope(
+                    super::common::validate_agent_mode_base_model_id_for_scope(
                         model_id,
                         &team_scope,
                         ctx,
