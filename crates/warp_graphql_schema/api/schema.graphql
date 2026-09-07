@@ -3042,6 +3042,7 @@ type RunnerConfig {
   arch: RunnerArch!
   mac: MacOSConfig
   linux: LinuxConfig
+  factoryUid: ID
 }
 
 type Runner {
