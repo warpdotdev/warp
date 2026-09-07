@@ -1,3 +1,4 @@
+use ai::agent::action::RunAgentsExecutionMode;
 use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
 use warpui::{
@@ -5,7 +6,11 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-use super::{resolve_default_environment_id, runner_controls_enabled};
+use super::{
+    OrchestrationConfigState, OrchestrationPickerHandles, apply_execution_mode_change,
+    resolve_default_environment_id, runner_controls_enabled,
+};
+use crate::ai::blocklist::inline_action::run_agents_card_view::RunAgentsCardViewAction;
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
     CloudEnvironmentCatalog,
@@ -128,6 +133,47 @@ fn runner_controls_require_both_feature_flag_and_experiment_arm() {
             });
             app.read(|ctx| assert!(runner_controls_enabled(ctx)));
         }
+    });
+}
+
+#[test]
+fn local_to_cloud_uses_window_scoped_environment_default() {
+    let team_a = ServerId::from(101);
+    let team_b = ServerId::from(202);
+    let team_a_id = SyncId::ServerId(ServerId::from(1));
+    let team_b_id = SyncId::ServerId(ServerId::from(2));
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        install_environment_catalog(
+            &mut app,
+            vec![
+                environment(team_a_id, "A Team A", Owner::Team { team_uid: team_a }),
+                environment(team_b_id, "B Team B", Owner::Team { team_uid: team_b }),
+            ],
+        );
+        CloudEnvironmentCatalog::handle(&app).update(&mut app, |catalog, ctx| {
+            catalog.persist_selection(team_a_id, ctx);
+        });
+        let (window_id, view) = add_environment_default_view(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.set_team_for_window(window_id, team_b, ctx);
+        });
+        let mut state = OrchestrationConfigState::from_run_agents_fields(
+            None,
+            Some("claude"),
+            &RunAgentsExecutionMode::Local,
+        );
+        let handles = OrchestrationPickerHandles::<RunAgentsCardViewAction>::default();
+
+        view.update(&mut app, |_view, ctx| {
+            apply_execution_mode_change(&mut state, &handles, true, None, ctx);
+        });
+
+        let RunAgentsExecutionMode::Remote { environment_id, .. } = state.execution_mode else {
+            panic!("expected Remote after mode change");
+        };
+        assert_eq!(environment_id, team_b_id.uid());
+        assert_ne!(environment_id, team_a_id.uid());
     });
 }
 
