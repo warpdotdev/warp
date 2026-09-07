@@ -24,6 +24,7 @@ use crate::search::mixer::{
 use crate::search::result_renderer::ItemHighlightState;
 use crate::search::workflows::fuzzy_match::FuzzyMatchWorkflowResult;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::themes::theme::Blend;
 use crate::ui_components::icons::Icon as UIIcon;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
@@ -147,16 +148,19 @@ impl SearchItem for WarpAISearchItem {
 pub struct WarpAIDataSource {
     ai_client: Arc<dyn AIClient>,
     ai_execution_context: Option<WarpAiExecutionContext>,
+    team_scope: RequestTeamScope,
 }
 
 impl WarpAIDataSource {
     pub fn new(
         ai_client: Arc<dyn AIClient>,
         ai_execution_context: Option<WarpAiExecutionContext>,
+        team_scope: RequestTeamScope,
     ) -> Self {
         Self {
             ai_client,
             ai_execution_context,
+            team_scope,
         }
     }
 }
@@ -191,10 +195,15 @@ impl AsyncDataSource for WarpAIDataSource {
         let query_text = query.text.clone();
         let ai_execution_context = self.ai_execution_context.clone();
         let ai_client = self.ai_client.clone();
+        let team_scope = self.team_scope;
 
         Box::pin(async move {
             let res = ai_client
-                .generate_commands_from_natural_language(query_text, ai_execution_context)
+                .generate_commands_from_natural_language(
+                    query_text,
+                    ai_execution_context,
+                    team_scope,
+                )
                 .await;
 
             match res {

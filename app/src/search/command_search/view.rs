@@ -49,6 +49,7 @@ use crate::search::search_bar::{SearchBar, SearchBarEvent, SearchBarState, Searc
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::AISettings;
 use crate::terminal::input::MenuPositioning;
@@ -223,6 +224,9 @@ impl CommandSearchView {
         ctx: &mut ViewContext<Self>,
     ) {
         let window_id = ctx.window_id();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         self.mixer.update(ctx, |mixer, ctx| {
             mixer.reset(ctx);
 
@@ -231,11 +235,11 @@ impl CommandSearchView {
             // will show up higher in the list (i.e.: further away from the input).
             if AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
                 mixer.add_sync_source(
-                    WarpAIDataSource::new(self.ai_client.clone(), None),
+                    WarpAIDataSource::new(self.ai_client.clone(), None, team_scope),
                     HashSet::from([QueryFilter::NaturalLanguage]),
                 );
                 mixer.add_async_source(
-                    WarpAIDataSource::new(self.ai_client.clone(), ai_execution_context),
+                    WarpAIDataSource::new(self.ai_client.clone(), ai_execution_context, team_scope),
                     HashSet::from([QueryFilter::NaturalLanguage]),
                     AddAsyncSourceOptions {
                         debounce_interval: Some(Duration::from_millis(50)),

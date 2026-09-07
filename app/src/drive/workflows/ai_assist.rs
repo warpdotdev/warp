@@ -10,6 +10,7 @@ use super::modal::{AiAssistState, WorkflowModal, WorkflowModalEvent};
 use crate::ai::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::send_telemetry_from_ctx;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryEvent;
 use crate::workflows::workflow::{Argument, Workflow};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -92,9 +93,16 @@ impl WorkflowModal {
         let ai_client = self.ai_client.clone();
         let content = self.content_editor.as_ref(ctx).buffer_text(ctx);
         let raw_request = content.trim().to_string();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
 
         ctx.spawn(
-            async move { ai_client.generate_metadata_for_command(raw_request).await },
+            async move {
+                ai_client
+                    .generate_metadata_for_command(raw_request, team_scope)
+                    .await
+            },
             move |modal, response, ctx| {
                 match response {
                     Ok(metadata) => {
