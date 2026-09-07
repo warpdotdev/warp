@@ -9,8 +9,32 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::workspaces::team::MembershipRole;
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
-use crate::workspaces::workspace::{ByoApiKeyPolicy, Workspace, WorkspaceUid};
+use crate::workspaces::workspace::{
+    ByoApiKeyPolicy, NativeWorkspacesPolicy, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
+    WorkspaceUid,
+};
+
+fn native_workspace_member(email: &str, role: MembershipRole) -> Workspace {
+    let uid = WorkspaceUid::from(crate::server::ids::ServerId::from(1_i64));
+    let mut workspace = Workspace::from_local_cache(uid, "Test Workspace".to_string(), None, None);
+    workspace.billing_metadata.tier.native_workspaces_policy =
+        Some(NativeWorkspacesPolicy { enabled: true });
+    workspace.members.push(WorkspaceMember {
+        uid: crate::auth::UserUid::new(email),
+        email: email.to_string(),
+        role,
+        is_disabled: false,
+        usage_info: WorkspaceMemberUsageInfo {
+            is_unlimited: false,
+            request_limit: 0,
+            requests_used_since_last_refresh: 0,
+            is_request_limit_prorated: false,
+        },
+    });
+    workspace
+}
 
 fn initialize_app(app: &mut App) {
     initialize_app_with_workspaces(app, vec![]);
@@ -53,6 +77,34 @@ fn apply_server_availability(app: &mut App, availability: AICreditAvailability) 
 
 fn determine_state(app: &mut App) -> PromptAlertState {
     app.read(|ctx| PromptAlertView::determine_state(&TeamlessScopeForTest, ctx))
+}
+
+#[test]
+fn native_workspace_admin_manages_the_workspace_limit() {
+    let workspace = native_workspace_member("admin@example.com", MembershipRole::Admin);
+
+    assert_eq!(
+        native_workspace_limit_cta(Some(&workspace), Some("admin@example.com")),
+        Some(vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(
+                "Manage limit",
+                AdminActions::admin_panel_link_for_workspace()
+            ),
+        ])
+    );
+}
+
+#[test]
+fn native_workspace_member_contacts_a_workspace_admin() {
+    let workspace = native_workspace_member("member@example.com", MembershipRole::User);
+
+    assert_eq!(
+        native_workspace_limit_cta(Some(&workspace), Some("member@example.com")),
+        Some(vec![FormattedTextFragment::plain_text(
+            ", contact a workspace admin"
+        )])
+    );
 }
 
 #[test]
