@@ -16,7 +16,7 @@ use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateMo
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, environment_matches_scope};
 use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
@@ -234,17 +234,6 @@ pub(super) fn resolve_owner_for_team_scope(
     }
 }
 
-pub(super) fn environment_matches_scope(
-    environment: &CloudAmbientAgentEnvironment,
-    team_scope: &(impl TeamScope + ?Sized),
-    include_user_owned_for_team_scope: bool,
-) -> bool {
-    let selected_team_uid = team_scope.team_uid();
-    match environment.permissions().owner {
-        Owner::User { .. } => selected_team_uid.is_none() || include_user_owned_for_team_scope,
-        Owner::Team { team_uid } => selected_team_uid == Some(team_uid),
-    }
-}
 /// Refresh workspace metadata before executing an operation.
 ///
 /// This ensures that team state is up-to-date before creating cloud objects or performing

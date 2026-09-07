@@ -24,7 +24,7 @@ use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, BaseImage, CloudAmbientAgentEnvironment,
-    CloudAmbientAgentEnvironmentModel, GithubRepo,
+    CloudAmbientAgentEnvironmentModel, GithubRepo, environment_matches_scope,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -218,7 +218,7 @@ impl EnvironmentCommandRunner {
                 .iter()
                 .filter(|environment| {
                     team_scope.as_ref().is_none_or(|team_scope| {
-                        super::common::environment_matches_scope(environment, team_scope, false)
+                        environment_matches_scope(environment, team_scope, false)
                     })
                 })
                 .map(|environment| {

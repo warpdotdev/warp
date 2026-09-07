@@ -5,13 +5,13 @@ use warp_cli::environment::EnvironmentCreateArgs;
 use warpui::App;
 
 use super::{
-    EnvironmentChoice, classify_agent_mode_base_model_id, environment_matches_scope,
-    parse_ambient_task_id, validate_agent_mode_base_model_id,
-    validate_agent_mode_base_model_id_for_scope,
+    EnvironmentChoice, classify_agent_mode_base_model_id, parse_ambient_task_id,
+    validate_agent_mode_base_model_id, validate_agent_mode_base_model_id_for_scope,
 };
 use crate::LaunchMode;
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
+    environment_matches_scope,
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::{
