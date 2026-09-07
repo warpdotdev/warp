@@ -126,16 +126,21 @@ impl ApiKeyCommandRunner {
                 super::report_fatal_error(error, ctx);
                 return;
             }
-            let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => team_scope,
-                Err(error) => {
-                    super::report_fatal_error(error, ctx);
-                    return;
-                }
+            let team_id = if args.team_selection.is_team() {
+                let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx)
+                {
+                    Ok(team_scope) => team_scope,
+                    Err(error) => {
+                        super::report_fatal_error(error, ctx);
+                        return;
+                    }
+                };
+                team_scope
+                    .team_uid()
+                    .map(|team_uid| cynic::Id::new(team_uid.uid()))
+            } else {
+                None
             };
-            let team_id = team_scope
-                .team_uid()
-                .map(|team_uid| cynic::Id::new(team_uid.uid()));
             let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
 
             ctx.spawn(
