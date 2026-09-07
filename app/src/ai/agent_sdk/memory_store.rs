@@ -105,24 +105,31 @@ impl MemoryStoreCommandRunner {
         args: ListMemoryStoresArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let server_api = ServerApiProvider::as_ref(ctx).get();
-        let team_scope = match super::common::request_team_scope_for_cli(&args.team_selection, ctx)
-        {
-            Ok(team_scope) => team_scope,
-            Err(err) => {
-                super::report_fatal_error(err, ctx);
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |_, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
                 return;
             }
-        };
+            let team_scope =
+                match super::common::request_team_scope_for_cli(&args.team_selection, ctx) {
+                    Ok(team_scope) => team_scope,
+                    Err(error) => {
+                        super::report_fatal_error(error, ctx);
+                        return;
+                    }
+                };
+            let server_api = ServerApiProvider::as_ref(ctx).get();
 
-        ctx.spawn(
-            async move {
-                let stores = server_api.list_memory_stores(team_scope).await?;
-                print_memory_stores(stores, output_format);
-                Ok(())
-            },
-            |_, result: Result<()>, ctx| finish_command(result, ctx),
-        );
+            ctx.spawn(
+                async move {
+                    let stores = server_api.list_memory_stores(team_scope).await?;
+                    print_memory_stores(stores, output_format);
+                    Ok(())
+                },
+                |_, result: Result<()>, ctx| finish_command(result, ctx),
+            );
+        });
     }
 
     fn list_memories(

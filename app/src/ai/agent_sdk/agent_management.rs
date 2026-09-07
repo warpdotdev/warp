@@ -90,6 +90,25 @@ impl AgentManagementRunner {
         output_format: OutputFormat,
         ctx: &mut ModelContext<Self>,
     ) -> anyhow::Result<()> {
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |runner, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            if let Err(error) = runner.list_after_refresh(args, output_format, ctx) {
+                super::report_fatal_error(error, ctx);
+            }
+        });
+        Ok(())
+    }
+
+    fn list_after_refresh(
+        &self,
+        args: AgentListArgs,
+        output_format: OutputFormat,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let team_scope = super::common::request_team_scope_for_cli(&args.team_selection, ctx)?;
         let future = async move {
@@ -131,6 +150,25 @@ impl AgentManagementRunner {
     }
 
     fn create(
+        &self,
+        args: AgentCreateArgs,
+        output_format: OutputFormat,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |runner, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            if let Err(error) = runner.create_after_refresh(args, output_format, ctx) {
+                super::report_fatal_error(error, ctx);
+            }
+        });
+        Ok(())
+    }
+
+    fn create_after_refresh(
         &self,
         args: AgentCreateArgs,
         output_format: OutputFormat,

@@ -56,6 +56,24 @@ fn parse_repo_spec(spec: &str) -> anyhow::Result<GithubRepo> {
 
 impl AgentConfigRunner {
     fn list(&self, args: ListAgentSkillsArgs, ctx: &mut ModelContext<Self>) -> anyhow::Result<()> {
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |runner, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            if let Err(error) = runner.list_after_refresh(args, ctx) {
+                super::report_fatal_error(error, ctx);
+            }
+        });
+        Ok(())
+    }
+
+    fn list_after_refresh(
+        &self,
+        args: ListAgentSkillsArgs,
+        ctx: &mut ModelContext<Self>,
+    ) -> anyhow::Result<()> {
         let team_scope = super::common::request_team_scope_for_cli(&args.team_selection, ctx)?;
         let repo = args.repo;
         // If a repo is specified, check auth first

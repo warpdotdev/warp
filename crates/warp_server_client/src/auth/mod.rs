@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_trait::async_trait;
+use cloud_objects::ids::ServerId;
 use cynic::{MutationBuilder, QueryBuilder};
 use firebase::FirebaseError;
 use instant::Duration;
@@ -164,7 +165,8 @@ pub trait AuthClient: Send + Sync {
     async fn expire_api_key(&self, key_uid: &ApiKeyUid) -> Result<ExpireApiKeyResult>;
 
     /// Fetches the list of named agent identities for the user's team.
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>>;
+    async fn list_agent_identities(&self, team_uid: Option<ServerId>)
+    -> Result<Vec<AgentIdentity>>;
 }
 
 /// Implements the [`AuthClient`] trait on top of a base client and auth session.
@@ -458,9 +460,14 @@ impl AuthClient for AuthClientImpl {
         Ok(response.expire_api_key)
     }
 
-    async fn list_agent_identities(&self) -> Result<Vec<AgentIdentity>> {
-        let response: AgentIdentitiesResponse =
-            self.base_client.get_public_api("agent/identities").await?;
+    async fn list_agent_identities(
+        &self,
+        team_uid: Option<ServerId>,
+    ) -> Result<Vec<AgentIdentity>> {
+        let response: AgentIdentitiesResponse = self
+            .base_client
+            .get_public_api_for_team("agent/identities", team_uid)
+            .await?;
         Ok(response.agents)
     }
 }
