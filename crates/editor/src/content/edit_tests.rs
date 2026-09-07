@@ -6,11 +6,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rangemap::RangeSet;
-use string_offset::CharOffset;
+use string_offset::{ByteOffset, CharOffset};
 use warp_core::features::FeatureFlag;
 use warpui_core::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui_core::fonts::{Properties, Style, Weight};
 use warpui_core::image_cache::ImageType;
+use warpui_core::text::point::Point;
 use warpui_core::text_layout::{LayoutCache, StyleAndFont, TextStyle};
 use warpui_core::{App, SingletonEntity};
 
@@ -21,8 +22,9 @@ use super::{
 };
 use crate::content::buffer::{StyledBufferBlock, StyledBufferRun, StyledTextBlock};
 use crate::content::edit::{
-    EditDelta, ParsedUrl, TemporaryBlock, highlight_urls, layout_mermaid_block_for_test,
-    resolve_asset_source, resolve_asset_source_relative_to_directory,
+    EditDelta, ParsedUrl, PreciseDelta, TemporaryBlock, highlight_urls,
+    layout_mermaid_block_for_test, resolve_asset_source,
+    resolve_asset_source_relative_to_directory,
 };
 use crate::content::mermaid_diagram::{mermaid_asset_source, mermaid_diagram_layout};
 use crate::content::text::{BufferBlockStyle, CodeBlockType, TextStylesWithMetadata};
@@ -304,6 +306,26 @@ fn test_layout_delta_never_takes_ownership_of_new_lines_with_multiple_owners() {
             assert!(Arc::ptr_eq(&editor_a_delta.new_lines, &editor_b_delta.new_lines));
         });
     })
+}
+
+#[test]
+fn test_edit_delta_clone_shares_precise_delta_allocation() {
+    let delta = EditDelta {
+        precise_deltas: Arc::new(vec![PreciseDelta {
+            replaced_range: CharOffset::from(1)..CharOffset::from(2),
+            replaced_points: Point::new(1, 0)..Point::new(1, 1),
+            replaced_byte_range: ByteOffset::from(1)..ByteOffset::from(2),
+            new_byte_length: 1,
+            new_end_point: Point::new(1, 1),
+            resolved_range: CharOffset::from(1)..CharOffset::from(2),
+        }]),
+        ..Default::default()
+    };
+
+    let cloned = delta.clone();
+
+    assert_eq!(delta.precise_deltas, cloned.precise_deltas);
+    assert!(Arc::ptr_eq(&delta.precise_deltas, &cloned.precise_deltas));
 }
 
 #[test]
