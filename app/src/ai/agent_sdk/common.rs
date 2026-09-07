@@ -157,12 +157,12 @@ pub(super) fn resolve_team_scope(
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 
-pub(super) fn resolve_environment_team_scope(
-    scope: &ObjectScope,
+pub(super) fn resolve_object_scope(
+    object_scope: &ObjectScope,
     ctx: &AppContext,
 ) -> anyhow::Result<TeamScopeForCli> {
     UserWorkspaces::as_ref(ctx)
-        .team_scope_for_cli_object(scope)
+        .team_scope_for_cli_object(object_scope)
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
 

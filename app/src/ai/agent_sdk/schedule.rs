@@ -51,7 +51,7 @@ fn create(ctx: &mut AppContext, args: CreateScheduleArgs) -> anyhow::Result<()> 
                 super::report_fatal_error(err, ctx);
                 return;
             }
-            let team_scope = match super::common::resolve_environment_team_scope(&args.scope, ctx) {
+            let team_scope = match super::common::resolve_object_scope(&args.scope, ctx) {
                 Ok(team_scope) => team_scope,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
