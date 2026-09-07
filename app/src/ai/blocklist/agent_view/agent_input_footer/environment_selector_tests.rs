@@ -3,7 +3,7 @@ use std::sync::Arc;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity as _};
 
-use super::{EnvironmentSelector, EnvironmentSelectorTarget};
+use super::{AmbientAgentViewModel, EnvironmentSelector, EnvironmentSelectorTarget};
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, CloudAmbientAgentEnvironment, CloudAmbientAgentEnvironmentModel,
@@ -11,12 +11,13 @@ use crate::ai::cloud_environments::{
 };
 use crate::appearance::Appearance;
 use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::CloudModel;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{CloudObjectMetadata, CloudObjectPermissions, Owner};
 use crate::server::ids::{ServerId, SyncId};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::terminal::input::{HandoffComposeState, MenuPositioning};
 use crate::test_util::settings::initialize_settings_for_tests;
+use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 fn environment(id: SyncId, name: &str, owner: Owner) -> CloudAmbientAgentEnvironment {
@@ -52,7 +53,27 @@ fn initialize_app(app: &mut App, environments: Vec<CloudAmbientAgentEnvironment>
     app.add_singleton_model(CloudEnvironmentCatalog::new);
 }
 
-fn add_selector(
+fn initialize_cloud_pane_app(app: &mut App, environments: Vec<CloudAmbientAgentEnvironment>) {
+    initialize_app_for_terminal_view(app);
+    let cloud_model = CloudModel::handle(app);
+    cloud_model.update(app, |model, ctx| {
+        for environment in environments {
+            model.create_object(environment.id, environment, ctx);
+        }
+        ctx.emit(CloudModelEvent::InitialLoadCompleted);
+    });
+}
+
+fn add_selector_for_target(
+    app: &mut App,
+    target: EnvironmentSelectorTarget,
+) -> (warpui::WindowId, warpui::ViewHandle<EnvironmentSelector>) {
+    app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+        EnvironmentSelector::new(Arc::new(MenuPositioning::AboveInputBox), target, ctx)
+    })
+}
+
+fn add_handoff_selector(
     app: &mut App,
 ) -> (
     warpui::WindowId,
@@ -63,15 +84,25 @@ fn add_selector(
     state.update(app, |state, ctx| {
         state.activate(HandoffEntryPoint::Ampersand, ctx);
     });
-    let state_for_view = state.clone();
-    let (window_id, selector) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
-        EnvironmentSelector::new(
-            Arc::new(MenuPositioning::AboveInputBox),
-            EnvironmentSelectorTarget::Handoff(state_for_view),
-            ctx,
-        )
-    });
+    let (window_id, selector) =
+        add_selector_for_target(app, EnvironmentSelectorTarget::Handoff(state.clone()));
     (window_id, selector, state)
+}
+
+fn add_cloud_pane_selector(
+    app: &mut App,
+) -> (
+    warpui::WindowId,
+    warpui::ViewHandle<EnvironmentSelector>,
+    warpui::ModelHandle<AmbientAgentViewModel>,
+) {
+    let terminal = add_window_with_terminal(app, None);
+    let terminal_view_id = terminal.id();
+    let model = app
+        .add_model(|ctx| AmbientAgentViewModel::new(terminal_view_id, terminal.downgrade(), ctx));
+    let (window_id, selector) =
+        add_selector_for_target(app, EnvironmentSelectorTarget::CloudPane(model.clone()));
+    (window_id, selector, model)
 }
 
 fn visible_ids(app: &mut App, selector: &warpui::ViewHandle<EnvironmentSelector>) -> Vec<SyncId> {
@@ -106,7 +137,7 @@ fn selector_includes_personal_and_current_team_environments() {
                 ),
             ],
         );
-        let (window_id, selector, _) = add_selector(&mut app);
+        let (window_id, selector, _) = add_handoff_selector(&mut app);
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
             workspaces.set_team_for_window(window_id, team_a, ctx);
         });
@@ -119,6 +150,70 @@ fn selector_includes_personal_and_current_team_environments() {
             app.read(|ctx| CloudEnvironmentCatalog::as_ref(ctx).environments().len()),
             3,
             "window filtering must not mutate the shared catalog"
+        );
+    });
+}
+
+#[test]
+fn cloud_pane_team_switch_clears_an_invisible_selection_and_redefaults() {
+    let team_a = ServerId::from(101);
+    let team_b = ServerId::from(202);
+    let team_a_id = SyncId::ServerId(ServerId::from(2));
+    let team_b_id = SyncId::ServerId(ServerId::from(3));
+    App::test((), |mut app| async move {
+        initialize_cloud_pane_app(
+            &mut app,
+            vec![
+                environment(team_a_id, "Team A", Owner::Team { team_uid: team_a }),
+                environment(team_b_id, "Team B", Owner::Team { team_uid: team_b }),
+            ],
+        );
+        let (window_id, selector, model) = add_cloud_pane_selector(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.set_team_for_window(window_id, team_a, ctx);
+        });
+        model.update(&mut app, |model, ctx| {
+            model.set_environment_id(Some(team_a_id), ctx);
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_id, team_b, ctx);
+        });
+
+        assert_eq!(visible_ids(&mut app, &selector), [team_b_id]);
+        assert_eq!(
+            model.read(&app, |model, _| model.selected_environment_id().copied()),
+            Some(team_b_id)
+        );
+    });
+}
+
+#[test]
+fn cloud_pane_ignores_an_out_of_scope_persisted_default() {
+    let team_a = ServerId::from(101);
+    let team_b = ServerId::from(202);
+    let team_a_id = SyncId::ServerId(ServerId::from(2));
+    let team_b_id = SyncId::ServerId(ServerId::from(3));
+    App::test((), |mut app| async move {
+        initialize_cloud_pane_app(
+            &mut app,
+            vec![
+                environment(team_a_id, "Team A", Owner::Team { team_uid: team_a }),
+                environment(team_b_id, "Team B", Owner::Team { team_uid: team_b }),
+            ],
+        );
+        CloudEnvironmentCatalog::handle(&app).update(&mut app, |catalog, ctx| {
+            catalog.persist_selection(team_b_id, ctx);
+        });
+        let (window_id, selector, model) = add_cloud_pane_selector(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.set_team_for_window(window_id, team_a, ctx);
+        });
+
+        assert_eq!(visible_ids(&mut app, &selector), [team_a_id]);
+        assert_eq!(
+            model.read(&app, |model, _| model.selected_environment_id().copied()),
+            Some(team_a_id)
         );
     });
 }
@@ -145,8 +240,8 @@ fn selectors_in_different_windows_keep_independent_team_scopes() {
                 ),
             ],
         );
-        let (window_a, selector_a, _) = add_selector(&mut app);
-        let (window_b, selector_b, _) = add_selector(&mut app);
+        let (window_a, selector_a, _) = add_handoff_selector(&mut app);
+        let (window_b, selector_b, _) = add_handoff_selector(&mut app);
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
             workspaces.set_team_for_window(window_a, team_a, ctx);
             workspaces.set_team_for_window(window_b, team_b, ctx);
@@ -177,7 +272,7 @@ fn team_switch_clears_an_invisible_selection_and_redefaults() {
                 environment(team_b_id, "Team B", Owner::Team { team_uid: team_b }),
             ],
         );
-        let (window_id, _, state) = add_selector(&mut app);
+        let (window_id, _, state) = add_handoff_selector(&mut app);
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
             workspaces.set_team_for_window(window_id, team_a, ctx);
         });
@@ -213,7 +308,7 @@ fn out_of_scope_persisted_environment_is_ignored_for_default() {
         CloudEnvironmentCatalog::handle(&app).update(&mut app, |catalog, ctx| {
             catalog.persist_selection(team_b_id, ctx);
         });
-        let (window_id, _, state) = add_selector(&mut app);
+        let (window_id, _, state) = add_handoff_selector(&mut app);
         UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
             workspaces.set_team_for_window(window_id, team_a, ctx);
         });
