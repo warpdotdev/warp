@@ -1609,17 +1609,17 @@ impl CodeEditorModel {
                 // If the edit is from an external source, we need to 1) materialize hidden range offsets for rendering the edit
                 // 2) if the edit overlaps with a hidden range, re-calculate what the new hidden range should be.
                 if is_from_external_source {
-                    let edit_range = &delta.old_offset;
                     should_recalculate_hidden_lines =
                         self.hidden_lines.update(ctx, |hidden_lines, ctx| {
                             if !hidden_lines.has_offsets_for_version(*buffer_version) {
                                 hidden_lines.materialize_hidden_range_offsets(*buffer_version, ctx);
                             }
-
-                            hidden_lines.range_intersects_with_hidden_range_at_version(
-                                edit_range,
-                                *buffer_version,
-                            )
+                            delta.render_old_offsets().any(|edit_range| {
+                                hidden_lines.range_intersects_with_hidden_range_at_version(
+                                    edit_range,
+                                    *buffer_version,
+                                )
+                            })
                         });
                 }
 
