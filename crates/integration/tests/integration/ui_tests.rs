@@ -15,6 +15,7 @@ integration_tests! {
     test_execute_multiple_cursor_command,
     test_home_key_should_not_appear_in_input,
     test_change_font_size,
+    test_kiro_cli_rich_input_shows_kiro_branding,
     test_long_running_block_height_updated,
     test_instant_prompt_bootstrap,
     test_unescaped_prompt_bootstraps,

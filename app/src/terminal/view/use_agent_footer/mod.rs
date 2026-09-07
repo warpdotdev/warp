@@ -128,6 +128,7 @@ fn rich_input_submit_strategy(agent: CLIAgent) -> RichInputSubmitStrategy {
         CLIAgent::OhMyPi => RichInputSubmitStrategy::BracketedPaste,
         CLIAgent::Copilot => RichInputSubmitStrategy::BracketedPasteDelayedEnter,
         CLIAgent::Claude
+        | CLIAgent::Kiro
         | CLIAgent::OpenCode
         | CLIAgent::Gemini
         | CLIAgent::Auggie
