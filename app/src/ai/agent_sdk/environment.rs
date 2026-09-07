@@ -9,7 +9,7 @@ use serde::Serialize;
 use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
-use warp_cli::scope::{ObjectScope, TeamSelection};
+use warp_cli::scope::ObjectScope;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::list_warp_dev_images::{
     ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
@@ -64,10 +64,8 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| EnvironmentCommandRunner);
     match command {
-        EnvironmentCommand::List { team_selection } => {
-            runner.update(ctx, |runner, ctx| {
-                runner.list(global_options, team_selection, ctx)
-            });
+        EnvironmentCommand::List { scope } => {
+            runner.update(ctx, |runner, ctx| runner.list(global_options, scope, ctx));
             Ok(())
         }
         EnvironmentCommand::Create {
@@ -190,7 +188,7 @@ impl EnvironmentCommandRunner {
     fn list(
         &self,
         global_options: GlobalOptions,
-        team_selection: TeamSelection,
+        scope: ObjectScope,
         ctx: &mut ModelContext<Self>,
     ) {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
@@ -202,12 +200,16 @@ impl EnvironmentCommandRunner {
                 super::report_fatal_error(err, ctx);
                 return;
             }
-            let team_scope = match super::common::resolve_team_scope(&team_selection, ctx) {
-                Ok(team_scope) => team_scope,
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                    return;
+            let team_scope = if scope.is_team() || scope.personal {
+                match super::common::resolve_object_scope(&scope, ctx) {
+                    Ok(team_scope) => Some(team_scope),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
                 }
+            } else {
+                None
             };
 
             let environments = CloudAmbientAgentEnvironment::get_all(ctx);
@@ -215,7 +217,9 @@ impl EnvironmentCommandRunner {
             let environment_infos: Vec<_> = environments
                 .iter()
                 .filter(|environment| {
-                    super::common::environment_is_visible_to_scope(environment, &team_scope)
+                    team_scope.as_ref().is_none_or(|team_scope| {
+                        super::common::environment_matches_scope(environment, team_scope, false)
+                    })
                 })
                 .map(|environment| {
                     let name = environment.model().string_model.name.clone();

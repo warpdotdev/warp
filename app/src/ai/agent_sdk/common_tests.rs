@@ -5,7 +5,7 @@ use warp_cli::environment::EnvironmentCreateArgs;
 use warpui::App;
 
 use super::{
-    EnvironmentChoice, classify_agent_mode_base_model_id, environment_is_visible_to_scope,
+    EnvironmentChoice, classify_agent_mode_base_model_id, environment_matches_scope,
     parse_ambient_task_id, validate_agent_mode_base_model_id,
     validate_agent_mode_base_model_id_for_scope,
 };
@@ -60,7 +60,7 @@ fn environment_with_owner(
 }
 
 #[test]
-fn environment_scope_includes_personal_and_matching_team_environments() {
+fn environment_matching_respects_user_owned_policy() {
     let selected_team_uid = ServerId::from(123);
     let other_team_uid = ServerId::from(456);
     let selected_scope = TeamContextForOperation::new_for_test(selected_team_uid);
@@ -84,20 +84,48 @@ fn environment_scope_includes_personal_and_matching_team_environments() {
         },
     );
 
-    assert!(environment_is_visible_to_scope(
+    assert!(environment_matches_scope(
         &personal_environment,
-        &selected_scope
+        &selected_scope,
+        true
     ));
-    assert!(environment_is_visible_to_scope(
+    assert!(environment_matches_scope(
         &selected_team_environment,
-        &selected_scope
+        &selected_scope,
+        true
     ));
-    assert!(!environment_is_visible_to_scope(
+    assert!(!environment_matches_scope(
         &other_team_environment,
-        &selected_scope
+        &selected_scope,
+        true
+    ));
+
+    assert!(environment_matches_scope(
+        &personal_environment,
+        &TeamlessScopeForTest,
+        false
+    ));
+    assert!(!environment_matches_scope(
+        &selected_team_environment,
+        &TeamlessScopeForTest,
+        false
+    ));
+    assert!(!environment_matches_scope(
+        &personal_environment,
+        &selected_scope,
+        false
+    ));
+    assert!(environment_matches_scope(
+        &selected_team_environment,
+        &selected_scope,
+        false
+    ));
+    assert!(!environment_matches_scope(
+        &other_team_environment,
+        &selected_scope,
+        false
     ));
 }
-
 #[test]
 fn explicit_environment_id_remains_resource_authoritative() {
     App::test((), |mut app| async move {

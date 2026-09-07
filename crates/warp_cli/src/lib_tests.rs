@@ -2305,7 +2305,7 @@ fn environment_image_list_parses() {
 
     assert!(matches!(image_cmd, ImageCommand::List));
 }
-fn parse_environment_list(args: &[&str]) -> crate::scope::TeamSelection {
+fn parse_environment_list(args: &[&str]) -> crate::scope::ObjectScope {
     let full_args = std::iter::once("warp")
         .chain(["environment", "list"])
         .chain(args.iter().copied());
@@ -2314,33 +2314,37 @@ fn parse_environment_list(args: &[&str]) -> crate::scope::TeamSelection {
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
         panic!("Expected `warp environment list` command");
     };
-    let CliCommand::Environment(EnvironmentCommand::List { team_selection }) = boxed_cmd.as_ref()
-    else {
+    let CliCommand::Environment(EnvironmentCommand::List { scope }) = boxed_cmd.as_ref() else {
         panic!("Expected `warp environment list` command");
     };
-
-    team_selection.clone()
+    scope.clone()
 }
 
 #[test]
-fn environment_list_defaults_to_implicit_team_selection() {
-    let team_selection = parse_environment_list(&[]);
+fn environment_list_parses_scope_filters() {
+    let all = parse_environment_list(&[]);
+    let sole_team = parse_environment_list(&["--team"]);
+    let explicit_team = parse_environment_list(&["--team=123"]);
+    let personal = parse_environment_list(&["--personal"]);
 
-    assert_eq!(team_selection.team, None);
+    assert_eq!(all.team_selection.team, None);
+    assert!(!all.personal);
+    assert_eq!(sole_team.team_selection.team, Some(None));
+    assert!(!sole_team.personal);
+    assert_eq!(
+        explicit_team.team_selection.team,
+        Some(Some("123".to_string()))
+    );
+    assert!(!explicit_team.personal);
+    assert_eq!(personal.team_selection.team, None);
+    assert!(personal.personal);
 }
 
 #[test]
-fn environment_list_accepts_bare_team_selection() {
-    let team_selection = parse_environment_list(&["--team"]);
-
-    assert_eq!(team_selection.team, Some(None));
-}
-
-#[test]
-fn environment_list_accepts_explicit_team_selection() {
-    let team_selection = parse_environment_list(&["--team=123"]);
-
-    assert_eq!(team_selection.team, Some(Some("123".to_string())));
+fn environment_list_rejects_team_and_personal_selection() {
+    assert!(
+        Args::try_parse_from(["warp", "environment", "list", "--team=123", "--personal",]).is_err()
+    );
 }
 
 #[test]

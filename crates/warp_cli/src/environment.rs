@@ -1,6 +1,6 @@
 use clap::{ArgAction, ArgGroup, Args, Subcommand};
 
-use crate::scope::{ObjectScope, TeamSelection};
+use crate::scope::ObjectScope;
 
 /// Maximum length for environment descriptions.
 const MAX_DESCRIPTION_LENGTH: usize = 240;
@@ -26,7 +26,7 @@ pub enum EnvironmentCommand {
     /// List cloud environments.
     List {
         #[command(flatten)]
-        team_selection: TeamSelection,
+        scope: ObjectScope,
     },
     /// Manage base images for cloud environments.
     #[command(subcommand)]
