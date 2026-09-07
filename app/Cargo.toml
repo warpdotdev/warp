@@ -617,7 +617,6 @@ default = [
     "list_skills",
     "ask_user_question",
     "bundled_skills",
-    "ambient_agents_rtc",
     "cloud_mode",
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
@@ -969,7 +968,6 @@ agent_tips = []
 agent_toolbar_editor = ["agent_view"]
 cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]
-ambient_agents_rtc = []
 team_api_keys = []
 named_agents = []
 classic_completions = []

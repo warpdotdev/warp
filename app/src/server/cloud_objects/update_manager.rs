@@ -13,7 +13,6 @@ use futures::stream::AbortHandle;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
-use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_graphql::mcp_gallery_template::MCPGalleryTemplate;
 use warp_graphql::object_permissions::AccessLevel;
@@ -1286,9 +1285,7 @@ impl UpdateManager {
                 self.handle_team_memberships_changed(ctx);
             }
             ObjectUpdateMessage::AmbientTaskUpdated { task_id, timestamp } => {
-                if FeatureFlag::AmbientAgentsRTC.is_enabled() {
-                    self.handle_ambient_task_changed(task_id, timestamp, ctx);
-                }
+                self.handle_ambient_task_changed(task_id, timestamp, ctx);
             }
         }
     }
