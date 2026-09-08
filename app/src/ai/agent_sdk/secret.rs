@@ -16,8 +16,8 @@ use warp_cli::secret::{
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
 use warp_graphql::object::SpaceType;
+use warp_managed_secrets::ManagedSecretValue;
 use warp_managed_secrets::client::SecretOwner;
-use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -25,7 +25,10 @@ use super::output::{self, TableFormat};
 use crate::auth::UserUid;
 use crate::cloud_object::Owner;
 use crate::server::ids::ServerId;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
+use crate::server::team_scope::RequestTeamScope;
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspaces::user_workspaces::TeamScopeForCli;
 
 #[derive(Serialize)]
 struct SecretInfo {
@@ -59,6 +62,15 @@ impl TableFormat for SecretInfo {
             Cell::new(format_approx_duration_from_now_utc(self.updated_at)),
         ]
     }
+}
+
+fn resolve_secret_owner_and_request_scope(
+    scope: &ObjectScope,
+    ctx: &AppContext,
+) -> Result<(Owner, RequestTeamScope)> {
+    let team_scope = super::common::resolve_object_scope(scope, ctx)?;
+    let owner = super::common::resolve_owner_for_team_scope(&team_scope, ctx)?;
+    Ok((owner, RequestTeamScope::from_scope(&team_scope)))
 }
 
 /// Run secret-related commands.
@@ -230,8 +242,8 @@ fn create_secret_with_input(
                 return;
             }
 
-            let owner = match super::common::resolve_owner(&scope, ctx) {
-                Ok(owner) => owner,
+            let (owner, request_scope) = match resolve_secret_owner_and_request_scope(&scope, ctx) {
+                Ok(resolved) => resolved,
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
                     return;
@@ -259,6 +271,7 @@ fn create_secret_with_input(
             };
 
             let create_future = manager.create_secret(
+                request_scope,
                 secret_owner,
                 name.clone(),
                 managed_value,
@@ -294,13 +307,14 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner = match super::common::resolve_owner(&scope, ctx) {
-                Ok(owner) => owner,
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                    return;
-                }
-            };
+            let (owner, request_scope) =
+                match resolve_secret_owner_and_request_scope(&scope, ctx) {
+                    Ok(resolved) => resolved,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
 
             let secret_owner = match owner {
                 Owner::User { .. } => SecretOwner::CurrentUser,
@@ -350,7 +364,8 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
                 }
             }
 
-            let delete_future = manager.delete_secret(secret_owner, name.clone());
+            let delete_future =
+                manager.delete_secret(request_scope, secret_owner, name.clone());
             ctx.spawn(delete_future, move |_, result, ctx| match result {
                 Ok(()) => {
                     println!("Secret '{name}' deleted");
@@ -378,13 +393,14 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
                 return;
             }
 
-            let owner = match super::common::resolve_owner(&args.scope, ctx) {
-                Ok(owner) => owner,
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                    return;
-                }
-            };
+            let (owner, request_scope) =
+                match resolve_secret_owner_and_request_scope(&args.scope, ctx) {
+                    Ok(resolved) => resolved,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
 
             // Read the secret value if either --value or --value-file is provided.
             let secret_value = if args.value || args.value_args.value_file.is_some() {
@@ -414,7 +430,7 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 
             if let Some(secret_value) = secret_value {
                 // Look up the existing secret's type so we use the correct ManagedSecretValue variant.
-                let list_future = manager.list_secrets();
+                let list_future = manager.list_secrets(request_scope);
                 ctx.spawn(list_future, move |manager, list_result, ctx| {
                     let secrets = match list_result {
                         Ok(secrets) => secrets,
@@ -444,6 +460,7 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
                             }
                         };
                     let update_future = manager.update_secret(
+                        request_scope,
                         secret_owner,
                         args.name.clone(),
                         Some(managed_secret_value),
@@ -462,6 +479,7 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
             } else {
                 // Description-only update; no encryption needed.
                 let update_future = manager.update_secret(
+                    request_scope,
                     secret_owner,
                     args.name.clone(),
                     None,
@@ -490,35 +508,39 @@ fn list_secrets(
     _args: ListSecretsArgs,
 ) -> Result<()> {
     ManagedSecretManager::handle(ctx).update(ctx, |manager, ctx| {
-        ctx.spawn(manager.list_secrets(), move |_, result, ctx| match result {
-            Ok(secrets) => {
-                let secret_infos = secrets.into_iter().map(|secret| {
-                    let owner = match secret.owner.type_ {
-                        SpaceType::User => Owner::User {
-                            user_uid: UserUid::new(secret.owner.uid.inner()),
-                        },
-                        SpaceType::Team => Owner::Team {
-                            team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
-                        },
-                    };
+        let request_scope = RequestTeamScope::from_scope(&TeamScopeForCli::Personal);
+        ctx.spawn(
+            manager.list_secrets(request_scope),
+            move |_, result, ctx| match result {
+                Ok(secrets) => {
+                    let secret_infos = secrets.into_iter().map(|secret| {
+                        let owner = match secret.owner.type_ {
+                            SpaceType::User => Owner::User {
+                                user_uid: UserUid::new(secret.owner.uid.inner()),
+                            },
+                            SpaceType::Team => Owner::Team {
+                                team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
+                            },
+                        };
 
-                    SecretInfo {
-                        name: secret.name,
-                        scope: super::common::format_owner(&owner).to_string(),
-                        secret_type: secret.type_,
-                        created_at: secret.created_at.utc(),
-                        updated_at: secret.updated_at.utc(),
-                    }
-                });
+                        SecretInfo {
+                            name: secret.name,
+                            scope: super::common::format_owner(&owner).to_string(),
+                            secret_type: secret.type_,
+                            created_at: secret.created_at.utc(),
+                            updated_at: secret.updated_at.utc(),
+                        }
+                    });
 
-                output::print_list(secret_infos, output_format);
+                    output::print_list(secret_infos, output_format);
 
-                ctx.terminate_app(TerminationMode::ForceTerminate, None);
-            }
-            Err(err) => {
-                super::report_fatal_error(err, ctx);
-            }
-        });
+                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                }
+                Err(err) => {
+                    super::report_fatal_error(err, ctx);
+                }
+            },
+        );
     });
     Ok(())
 }

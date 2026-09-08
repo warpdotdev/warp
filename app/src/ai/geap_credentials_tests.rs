@@ -3,13 +3,13 @@ use std::time::{Duration, SystemTime};
 
 use ai::api_keys::ApiKeyManager;
 use settings::{PrivatePreferences, PublicPreferences};
-use warp_managed_secrets::ManagedSecretManager;
 use warpui::{AddSingletonModel, App};
 use warpui_extras::user_preferences;
 
 use super::*;
 use crate::features::FeatureFlag;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::workspaces::team::{Team, TeamVisibility};
