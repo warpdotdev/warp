@@ -16,9 +16,14 @@ use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::TeamContextForOperation;
+use crate::workspaces::user_workspaces::team_workspace_settings::TeamlessScopeForTest;
 
 fn request_team_scope() -> RequestTeamScope {
     RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+}
+
+fn teamless_request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
 }
 
 fn config(harness_type: &str) -> RemoteChildLaunchConfig {
@@ -107,7 +112,12 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                 prepared.spawn_request.agent_identity_uid.as_deref(),
                 Some("researcher-agent")
             );
-            assert_eq!(prepared.spawn_request.team, Some(true));
+            assert_eq!(
+                prepared.spawn_request.team, None,
+                "orchestration remote-child launches must omit `team` so the server \
+                 resolves ownership from `parent_run_id` instead of forcing personal \
+                 ownership (see REMOTE-3150)"
+            );
             let config = prepared.spawn_request.config.unwrap();
             assert_eq!(config.environment_id.as_deref(), Some("env-1"));
             assert_eq!(config.runner_id.as_deref(), Some("runner-1"));
@@ -116,6 +126,53 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
             assert_eq!(config.computer_use_enabled, Some(true));
         });
     });
+}
+
+#[test]
+fn remote_child_launch_omits_team_regardless_of_team_scope() {
+    // REMOTE-3150: the public API gives an explicit `team` flag precedence over
+    // `parent_run_id`, so a serialized `team: false` forces personal ownership and
+    // rejects the launch when the orchestrator is a team-owned service account.
+    // Orchestration remote-child requests always carry `parent_run_id` (checked by
+    // `prepare_remote_child_launch`), so `team` must stay `None` whether or not the
+    // caller itself is team-scoped.
+    for team_scope in [request_team_scope(), teamless_request_team_scope()] {
+        App::test((), |mut app| async move {
+            crate::test_util::terminal::initialize_app_for_terminal_view(&mut app);
+            let request = StartAgentRequest {
+                id: Default::default(),
+                name: "child".to_string(),
+                prompt: "Run".to_string(),
+                execution_mode: StartAgentExecutionMode::Remote {
+                    environment_id: String::new(),
+                    skill_references: Vec::new(),
+                    model_id: String::new(),
+                    computer_use_enabled: false,
+                    worker_host: String::new(),
+                    harness_type: String::new(),
+                    title: String::new(),
+                    auth_secret_name: None,
+                    runner_id: String::new(),
+                    agent_identity_uid: None,
+                },
+                lifecycle_subscription: None,
+                parent_conversation_id: crate::ai::agent::conversation::AIConversationId::new(),
+                parent_run_id: Some("parent-run".to_string()),
+            };
+            app.read(|ctx| {
+                let prepared =
+                    prepare_remote_child_launch(&request, config(""), team_scope, ctx).unwrap();
+                assert_eq!(
+                    prepared.spawn_request.team, None,
+                    "expected `team` to be omitted for an orchestration remote-child launch"
+                );
+                assert_eq!(
+                    prepared.spawn_request.parent_run_id.as_deref(),
+                    Some("parent-run")
+                );
+            });
+        });
+    }
 }
 
 #[test]

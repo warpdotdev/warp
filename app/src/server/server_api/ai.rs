@@ -2400,7 +2400,18 @@ impl AIClient for ServerApi {
         request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
-        debug_assert_eq!(request.team, Some(team_scope.team_uid().is_some()));
+        // Orchestration remote-child requests always carry `parent_run_id` and
+        // deliberately omit `team` so the server resolves ownership from the parent run
+        // instead of the explicit (and, for service-account callers, personal-ownership-
+        // forcing) `team` flag; see `orchestration::remote_child::prepare_remote_child_launch`.
+        // Every other caller must still keep `team` in lockstep with `team_scope`.
+        debug_assert!(
+            request.team == Some(team_scope.team_uid().is_some())
+                || (request.team.is_none() && request.parent_run_id.is_some()),
+            "spawn_agent request.team ({:?}) inconsistent with team_scope for parent_run_id {:?}",
+            request.team,
+            request.parent_run_id,
+        );
         let response: SpawnAgentResponse = self
             .post_public_api_for_team("agent/run", &request, team_scope)
             .await?;

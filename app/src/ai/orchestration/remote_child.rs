@@ -225,10 +225,14 @@ pub enum CloudAgentStartupIssue {
 }
 
 /// Builds the public API request for one remote child without owning frontend lifecycle state.
+///
+/// `team_scope` is accepted (and not read here) so the signature mirrors the caller's other
+/// team-scoped launch APIs and so the team header can still be sent alongside this request;
+/// see the comment on `team` below for why the JSON body itself must omit it.
 pub fn prepare_remote_child_launch(
     request: &StartAgentRequest,
     config: RemoteChildLaunchConfig,
-    team_scope: RequestTeamScope,
+    _team_scope: RequestTeamScope,
     ctx: &AppContext,
 ) -> Result<PreparedRemoteChildLaunch, PrepareRemoteChildLaunchError> {
     let orchestration_harness = config.orchestration_harness();
@@ -295,7 +299,14 @@ pub fn prepare_remote_child_launch(
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
-        team: Some(team_scope.team_uid().is_some()),
+        // Orchestration launches always carry `parent_run_id` (checked above), so leave
+        // `team` unset rather than asserting personal ownership here. The public API gives
+        // an explicit `team: false` precedence over `parent_run_id`, which would force
+        // personal ownership and reject the launch for service-account-run (team-owned)
+        // orchestrators. Omitting the field lets the server resolve ownership from the
+        // parent run instead. The `X-Warp-Team-Uid` header, sent separately by the caller
+        // from its own team scope, still authorizes the request for the team.
+        team: None,
         skill: None,
         attachments: Vec::new(),
         interactive: Some(true),
