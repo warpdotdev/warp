@@ -33,6 +33,26 @@ fn mouse_moved_event(position: Vector2F) -> Event {
     }
 }
 
+/// Polls `condition` via short real sleeps until it returns `true`, panicking with `message` if
+/// `timeout` elapses first. Used in place of a fixed-delay wait so a test advances as soon as
+/// the awaited state actually changes.
+async fn poll_until(mut condition: impl FnMut() -> bool, timeout: Duration, message: &str) {
+    let start = Instant::now();
+    while !condition() {
+        assert!(start.elapsed() < timeout, "{message}");
+        Timer::after(Duration::from_millis(2)).await;
+    }
+}
+
+/// Polls in small increments until at least `min_elapsed` real time has passed since
+/// `reference`. Used to synthesize a real gap between dispatches for a timing guard under test
+/// (`BACK_TO_BACK_SYNTHETIC_WINDOW`) without a single blind sleep.
+async fn wait_until_elapsed(reference: Instant, min_elapsed: Duration) {
+    while reference.elapsed() < min_elapsed {
+        Timer::after(Duration::from_millis(1)).await;
+    }
+}
+
 #[derive(Default)]
 struct View {
     // Maps identifier to number of mouse down events
@@ -457,9 +477,18 @@ fn test_hoverable_element_hover_handling_with_hover_in_delay() {
             );
         });
 
-        // Wait 1s for the delay to complete, then verify that we got a hover event from the
-        // top-right Hoverable
-        Timer::after(Duration::from_secs(1)).await;
+        // Wait for the delay to complete, then verify that we got a hover event from the
+        // top-right Hoverable.
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight) > 0
+                })
+            },
+            Duration::from_secs(2),
+            "the hover-in delay should have fired within 2s",
+        )
+        .await;
         view.read(app, |view, _| {
             assert_eq!(
                 1,
@@ -563,7 +592,16 @@ fn test_hoverable_element_hover_handling_with_hover_out_delay() {
             );
         });
 
-        Timer::after(Duration::from_millis(1000)).await;
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    view.num_hover_out_events(&ElementIdentifier::HoverableElementTopRight) > 0
+                })
+            },
+            Duration::from_secs(2),
+            "the hover-out delay should have fired within 2s",
+        )
+        .await;
         view.read(app, |view, _| {
             assert_eq!(
                 1,
@@ -650,7 +688,16 @@ fn test_hoverable_element_hover_handling_with_hover_in_out_delay() {
         // The other hover-in and hover-out events should have been dropped
         // due to the mouse moving in and out of the hoverable during the
         // delay period.
-        Timer::after(Duration::from_millis(1000)).await;
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight) > 0
+                })
+            },
+            Duration::from_secs(2),
+            "the hover-in delay should have fired within 2s",
+        )
+        .await;
         view.read(app, |view, _| {
             assert_eq!(
                 1,
@@ -707,6 +754,7 @@ fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_supp
         // longer than the guard's window.
 
         // Frame 1: enters the bottom-left hoverable.
+        let frame_1_at = Instant::now();
         app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(10., 90.)),
@@ -714,10 +762,11 @@ fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_supp
                 presenter.clone(),
             );
         });
-        Timer::after(Duration::from_millis(10)).await;
 
         // Frame 2: leaves the bottom-left hoverable (still a synthetic move, still no real mouse
         // movement).
+        wait_until_elapsed(frame_1_at, Duration::from_millis(10)).await;
+        let frame_2_at = Instant::now();
         app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(100., 100.)),
@@ -725,9 +774,10 @@ fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_supp
                 presenter.clone(),
             );
         });
-        Timer::after(Duration::from_millis(10)).await;
 
         // Frame 3: enters the top-right hoverable.
+        wait_until_elapsed(frame_2_at, Duration::from_millis(10)).await;
+        let frame_3_at = Instant::now();
         app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(90., 10.)),
@@ -735,9 +785,9 @@ fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_supp
                 presenter.clone(),
             );
         });
-        Timer::after(Duration::from_millis(10)).await;
 
         // Frame 4: leaves the top-right hoverable.
+        wait_until_elapsed(frame_3_at, Duration::from_millis(10)).await;
         app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(100., 100.)),
