@@ -206,10 +206,8 @@ impl ClaudeHarness {
         let config_root = claude_config_dir().context("Failed to resolve Claude config dir")?;
         write_envelope(&remote.envelope, &config_root)
             .context("Failed to rehydrate Claude transcript for wake")?;
-        if let Err(error) = write_session_index_entry(remote.session_id, &working_dir, &config_root)
-        {
-            log::warn!("Failed to update Claude sessions-index.json for wake: {error:#}");
-        }
+        write_session_index_entry(remote.session_id, &working_dir, &config_root)
+            .context("Failed to update Claude sessions-index.json for wake")?;
 
         let state_dir = parent_bridge_root()?.join(remote.session_id.to_string());
         ensure_parent_bridge_state_dir(&state_dir)?;
