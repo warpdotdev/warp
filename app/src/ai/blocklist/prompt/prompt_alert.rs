@@ -19,6 +19,7 @@ use crate::server::ids::ServerId;
 use crate::settings_view::{AdminActions, SettingsSection};
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::Workspace;
 
@@ -39,29 +40,37 @@ const UPGRADE_TEXT: &str = "Upgrade";
 const COMPARE_PLANS_TEXT: &str = "Compare plans";
 const CONTACT_SUPPORT_TEXT: &str = "Contact support";
 const NON_ADMIN_CONTACT_ADMIN_TEXT: &str = ", contact a team admin";
-const NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT: &str = ", contact a workspace admin";
+const NON_ADMIN_CONTACT_ANY_ADMIN_TEXT: &str = ", contact an admin";
 const NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT: &str = ", ask a team admin to enable overages";
 const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
     ", ask a team admin to increase overages";
 
-fn native_workspace_limit_cta(
+/// Enterprise plans manage credit limits from the admin panel rather than upgrading, so
+/// admins (workspace or team level) get a link there and everyone else is told to ask one.
+fn enterprise_limit_cta(
     workspace: Option<&Workspace>,
+    team: Option<&Team>,
     user_email: Option<&str>,
 ) -> Option<Vec<FormattedTextFragment>> {
-    let workspace = workspace.filter(|workspace| workspace.is_native_workspaces_enabled())?;
-    if user_email.is_some_and(|email| workspace.is_native_workspaces_admin(email)) {
-        Some(vec![
-            FormattedTextFragment::plain_text("  "),
-            FormattedTextFragment::hyperlink(
-                MANAGE_LIMIT_TEXT,
-                AdminActions::admin_panel_link_for_workspace(),
-            ),
-        ])
+    let workspace = workspace.filter(|workspace| {
+        workspace.billing_metadata.is_enterprise_plan() || workspace.is_native_workspaces_enabled()
+    })?;
+    let user_email = user_email.unwrap_or_default();
+    let admin_panel_link = if workspace.is_workspace_admin(user_email) {
+        Some(AdminActions::admin_panel_link_for_workspace())
     } else {
-        Some(vec![FormattedTextFragment::plain_text(
-            NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT,
-        )])
-    }
+        team.filter(|team| team.has_admin_permissions(user_email))
+            .map(|team| AdminActions::admin_panel_link_for_team(team.uid))
+    };
+    Some(match admin_panel_link {
+        Some(link) => vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
+        ],
+        None => vec![FormattedTextFragment::plain_text(
+            NON_ADMIN_CONTACT_ANY_ADMIN_TEXT,
+        )],
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,7 +393,13 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::RequestLimitReached => {
-                if let Some(team) = current_team {
+                if let Some(cta) = enterprise_limit_cta(
+                    UserWorkspaces::as_ref(app).current_workspace(),
+                    current_team,
+                    user_email.as_deref(),
+                ) {
+                    text_fragments.extend(cta);
+                } else if let Some(team) = current_team {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
@@ -404,11 +419,6 @@ impl PromptAlertView {
                             "mailto:support@warp.dev".to_owned(),
                         ));
                     }
-                } else if let Some(cta) = native_workspace_limit_cta(
-                    UserWorkspaces::as_ref(app).current_workspace(),
-                    user_email.as_deref(),
-                ) {
-                    text_fragments.extend(cta);
                 } else {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     let user_id = auth_state.user_id().unwrap_or_default();
