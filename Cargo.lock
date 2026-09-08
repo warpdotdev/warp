@@ -2476,6 +2476,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "tracing",
+ "walkdir",
  "warp_core",
  "warp_errors",
 ]

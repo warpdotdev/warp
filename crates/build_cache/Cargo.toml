@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 async-io.workspace = true
 command.workspace = true
+futures.workspace = true
 futures-lite.workspace = true
 hex.workspace = true
 instant.workspace = true
@@ -24,6 +25,4 @@ thiserror.workspace = true
 tracing.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
-
-[dev-dependencies]
-futures.workspace = true
+walkdir.workspace = true
