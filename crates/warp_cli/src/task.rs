@@ -7,10 +7,11 @@ use crate::json_filter::JsonOutput;
 use crate::scope::TeamSelection;
 
 /// Task-related subcommands.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Subcommand)]
 pub enum TaskCommand {
     /// List ambient agent tasks.
-    List(Box<ListTasksArgs>),
+    List(ListTasksArgs),
     /// Get status of a specific ambient agent task.
     Get(TaskGetArgs),
     /// Retrieve the conversation for a specific run or conversation.

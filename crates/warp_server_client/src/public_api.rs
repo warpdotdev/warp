@@ -32,6 +32,14 @@ impl BaseClient {
     /// Unlike [`get_public_api`], this does not attempt JSON deserialization on the
     /// response body, allowing the caller to decode it however they need.
     pub async fn get_public_api_response(&self, path: &str) -> Result<http_client::Response> {
+        self.get_public_api_response_with_headers(path, &[]).await
+    }
+
+    async fn get_public_api_response_with_headers(
+        &self,
+        path: &str,
+        additional_headers: &[(String, String)],
+    ) -> Result<http_client::Response> {
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -46,6 +54,9 @@ impl BaseClient {
             .await?
         {
             request = request.header(name, value);
+        }
+        for (name, value) in additional_headers {
+            request = request.header(name.clone(), value.clone());
         }
 
         let response = request
@@ -81,7 +92,20 @@ impl BaseClient {
     where
         R: DeserializeOwned,
     {
-        let response = self.get_public_api_response(path).await?;
+        self.get_public_api_with_headers(path, &[]).await
+    }
+
+    pub async fn get_public_api_with_headers<R>(
+        &self,
+        path: &str,
+        additional_headers: &[(String, String)],
+    ) -> Result<R>
+    where
+        R: DeserializeOwned,
+    {
+        let response = self
+            .get_public_api_response_with_headers(path, additional_headers)
+            .await?;
         let response_url = response.url().clone();
         response
             .json::<R>()

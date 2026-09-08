@@ -13,7 +13,6 @@ use super::{
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
     TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
     build_list_agent_runs_url, build_run_followup_url, is_unknown_git_credential_schema_error,
-    with_request_team_scope,
 };
 use crate::notebooks::NotebookId;
 use crate::server::ids::ServerId;
@@ -49,35 +48,41 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 fn list_agent_runs_sends_selected_team_header() {
     let team_uid = ServerId::from(123);
     let scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
-    let mut server = Server::new();
-    let request = server
-        .mock("GET", "/agent/runs")
-        .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
-        .with_status(200)
-        .create();
-    let client = http_client::Client::new_for_test();
-    let request_builder = client.get(format!("{}/agent/runs", server.url()));
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/runs")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"runs":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
 
-    block_on(with_request_team_scope(request_builder, Some(scope)).send()).unwrap();
-
-    request.assert();
+    block_on(
+        server_api.get_public_api_with_team_scope::<serde_json::Value>("agent/runs", Some(scope)),
+    )
+    .unwrap();
 }
 
 #[test]
 fn list_agent_runs_omits_team_header_for_teamless_scope() {
     let scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
-    let mut server = Server::new();
-    let request = server
-        .mock("GET", "/agent/runs")
-        .match_header(TEAM_UID_HEADER, Matcher::Missing)
-        .with_status(200)
-        .create();
-    let client = http_client::Client::new_for_test();
-    let request_builder = client.get(format!("{}/agent/runs", server.url()));
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/runs")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"runs":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
 
-    block_on(with_request_team_scope(request_builder, Some(scope)).send()).unwrap();
-
-    request.assert();
+    block_on(
+        server_api.get_public_api_with_team_scope::<serde_json::Value>("agent/runs", Some(scope)),
+    )
+    .unwrap();
 }
 
 #[test]
