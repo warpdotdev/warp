@@ -399,6 +399,7 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
                 workspaces.switch_window_to_team(window_id, team_b_uid, ctx);
             });
         });
+        let model_updates_before_dispatch = model_updates.load(Ordering::SeqCst);
 
         pane_group.update(&mut app, |_, ctx| {
             terminal_view.update(ctx, |_, ctx| {
@@ -425,7 +426,7 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
         );
 
         assert_eventually!(
-            200 => model_updates.load(Ordering::SeqCst) >= 1,
+            200 => model_updates.load(Ordering::SeqCst) > model_updates_before_dispatch,
             "the child model override was not applied through the captured team scope"
         );
     });
