@@ -24,6 +24,7 @@ marks as overridable.
 - When the issue includes screenshots, videos, logs, stack traces, or command output, use them as primary evidence and ask follow-up questions only for missing details that cannot be inferred from that evidence.
 - Before asking any follow-up questions, check the Warp documentation and the repository's existing feature set to determine whether the desired behavior the reporter is describing is already supported. If an existing feature, setting, or workflow satisfies the request, recommend it to the reporter instead of treating the issue as a bug or feature gap.
 - If the report is about billing (pricing, plans, subscriptions, payments, refunds, invoices, AI request quotas, charges) or about appeals (account suspensions, bans, takedowns, abuse decisions, or other account-status disputes), do not attempt to triage it as an actionable bug or feature request. Instead, notify the reporter that these requests must go through Warp's support channels (https://docs.warp.dev/support-and-community/troubleshooting-and-support/sending-us-feedback) and direct them there for resolution. Apply the relevant `area:billing` or `area:auth` label as appropriate so the issue is still routed correctly.
+- Classify issues into at least one primary type (`bug`, `feature`, `security`, `documentation`). Explicitly bias towards tagging regressions ("broke in recent version", "worked in previous build"), panics/crashes, and security reports with `priority:high`.
 
 ## Follow-up question limit
 
@@ -31,7 +32,19 @@ Ask **at most 2 follow-up questions** per triage response. Each question must be
 
 ## Label taxonomy
 
-The label taxonomy for this repository is managed in `.github/issue-triage/config.json`. Prefer labels from that configuration, especially the `area:*`, `os:*`, `repro:*`, `accessibility`, `needs-info`, `duplicate`, and primary issue-type labels. Do not invent new labels unless the prompt explicitly allows it.
+The label taxonomy for this repository is managed in `.github/issue-triage/config.json`. Prefer labels from that configuration, especially the `area:*`, `os:*`, `repro:*`, `accessibility`, `needs-info`, `duplicate`, `priority:high`, and primary issue-type labels (`bug`, `feature`, `security`, `documentation`). Do not invent new labels unless the prompt explicitly allows it.
+
+### Primary issue types
+
+Every issue should be classified with at least one primary type label:
+- `bug`: Something isn't working.
+- `feature`: This issue is a feature request, not a bug report.
+- `security`: Security vulnerability or report.
+- `documentation`: Improvements or additions to documentation.
+
+### Priority
+
+- `priority:high`: High-priority regression, crash, data loss, or security issue. Tag issues with `priority:high` when there is evidence of a regression ("broke in recent version", "worked in previous build"), panic or crash, data loss, or a security vulnerability.
 
 Evaluate `ready-to-implement` during triage instead of relying on issue-template defaults. For bug reports, apply `ready-to-implement` only when the issue is reproducible from the provided evidence or straightforward local verification and the likely fix appears narrow enough to implement without a product spec, design mocks, or substantial investigation. If the bug is not reproducible, lacks a clear fix path, requires product/design decisions, or needs deeper technical discovery, omit `ready-to-implement` and prefer `needs-info`, `ready-to-spec`, `needs-mocks`, or the appropriate `repro:*` label.
 

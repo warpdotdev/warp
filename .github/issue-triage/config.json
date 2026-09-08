@@ -4,6 +4,10 @@
       "color": "d73a4a",
       "description": "Something isn't working."
     },
+    "feature": {
+      "color": "f47f64",
+      "description": "This issue is a feature request, not a bug report."
+    },
     "enhancement": {
       "color": "a2eeef",
       "description": "New feature or request."
@@ -11,6 +15,10 @@
     "documentation": {
       "color": "0075ca",
       "description": "Improvements or additions to documentation."
+    },
+    "security": {
+      "color": "e11d48",
+      "description": "Security vulnerability or report."
     },
     "duplicate": {
       "color": "cfd3d7",
@@ -35,6 +43,10 @@
     "ready-to-implement": {
       "color": "0e8a16",
       "description": "The issue is ready for implementation work."
+    },
+    "priority:high": {
+      "color": "b60205",
+      "description": "High-priority regression, crash, data loss, or security issue."
     },
     "repro:high": {
       "color": "b60205",
