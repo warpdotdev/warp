@@ -86,6 +86,57 @@ fn test_large_temporary_diff_uses_deferred_paragraphs() {
 }
 
 #[test]
+fn test_large_multiline_code_block_bounds_retained_layout_during_processing() {
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let layout = TextLayout::new(
+                ctx.font_cache().text_layout_system(),
+                &TEST_STYLES,
+                f32::MAX,
+            );
+
+            let line_count = MAX_LAYOUT_TASKS_PER_PARALLEL_CHUNK * 3;
+            let style = BufferBlockStyle::CodeBlock {
+                code_block_type: CodeBlockType::default(),
+            };
+            let block: Vec<StyledBufferRun> = (0..line_count)
+                .map(|i| StyledBufferRun {
+                    run: format!("unique code line {i}\n"),
+                    text_styles: TextStylesWithMetadata::default(),
+                    block_style: style.clone(),
+                })
+                .collect();
+            let content_length = block
+                .iter()
+                .map(|run| CharOffset::from(run.run.chars().count()))
+                .fold(CharOffset::zero(), |acc, len| acc + len);
+            let text_block = StyledTextBlock {
+                block,
+                style,
+                content_length,
+            };
+
+            let (block_item, _) = LayoutTask::Text(&text_block)
+                .run(&layout, BlockLocation::Middle, false)
+                .expect("large multiline code block should lay out");
+
+            let BlockItem::RunnableCodeBlock {
+                paragraph_block, ..
+            } = block_item
+            else {
+                panic!("expected a runnable code block");
+            };
+            assert_eq!(paragraph_block.paragraphs().len(), line_count);
+            assert!(paragraph_block.paragraphs().all(Paragraph::is_deferred));
+            for (index, paragraph) in paragraph_block.paragraphs().enumerate() {
+                let (glyphs, carets) = paragraph.retained_payload_counts();
+                assert_eq!(glyphs, 0, "paragraph {index} retained glyphs");
+                assert!(carets <= 2, "paragraph {index} retained {carets} carets");
+            }
+        });
+    })
+}
+#[test]
 fn test_highlight_urls() {
     let mut test_styled_buffer_runs = vec![
         StyledBufferRun {
