@@ -139,8 +139,7 @@ impl AxisConfiguration {
     /// applying immediately. For a manually-managed child, the delta is clamped against the
     /// controller's target (not its lagging displayed position, for the same reason
     /// [`Self::scroll_data_for_bounds`] does) and accumulated into a controller on the shared
-    /// handle; the incremental amount is applied to the child lazily, as further events are
-    /// dispatched (see `ScrollableState::dispatch_event`).
+    /// handle; the incremental amount is applied to the child lazily.
     fn scroll_to_animated(
         &self,
         child: &mut dyn NewScrollableElement,

@@ -579,6 +579,35 @@ fn render(presenter: &mut Presenter, view_id: EntityId, ctx: &mut AppContext) {
     presenter.build_scene(vec2f(1000., 1000.), 1., None, ctx);
 }
 
+/// Polls `condition` via short real sleeps until it returns `true`, panicking with `message` if
+/// `timeout` elapses first. Used in place of a fixed-delay wait so a test advances as soon as
+/// the awaited state actually changes.
+async fn poll_until(mut condition: impl FnMut() -> bool, timeout: Duration, message: &str) {
+    let start = Instant::now();
+    while !condition() {
+        assert!(start.elapsed() < timeout, "{message}");
+        crate::r#async::Timer::after(Duration::from_millis(2)).await;
+    }
+}
+
+/// Polls `value` via short real sleeps until it differs from `previous`, returning the new
+/// value. Panics if `timeout` elapses first. Used to synchronize on the next real paint frame
+/// rather than guessing a fixed interval between samples.
+async fn poll_for_change(mut value: impl FnMut() -> f32, previous: f32, timeout: Duration) -> f32 {
+    let start = Instant::now();
+    loop {
+        let current = value();
+        if current != previous {
+            return current;
+        }
+        assert!(
+            start.elapsed() < timeout,
+            "expected the observed value to change within {timeout:?}"
+        );
+        crate::r#async::Timer::after(Duration::from_millis(1)).await;
+    }
+}
+
 #[test]
 fn clipped_scrollable_selection_apis_use_viewport_coordinates() {
     let probe = SelectableProbeState::default();
@@ -1598,10 +1627,22 @@ fn manual_axis_wheel_scroll_eventually_matches_immediate_scroll_distance() {
         // is only advanced lazily, as further events are dispatched to the scrollable.
         view.read(app, |view, _| assert_eq!(view.scroll_top, 0.));
 
-        // Wait past the animation's duration (up to 200ms at the slow end of the inverse-delta
-        // ramp), then dispatch another event (standing in for the synthetic MouseMoved the app
-        // replays after each scheduled repaint) to drain it.
-        crate::r#async::Timer::after(Duration::from_millis(300)).await;
+        // Wait for the animation to actually settle, then dispatch another event (standing in
+        // for the synthetic MouseMoved the app replays after each scheduled repaint) to drain
+        // the remaining increment.
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    let Some(ScrollBehavior::Manual(handle)) = view.vertical_axis.as_ref() else {
+                        panic!("invalid test config");
+                    };
+                    !handle.lock().unwrap().is_animating_smooth_scroll()
+                })
+            },
+            Duration::from_secs(1),
+            "manual axis animation should settle within 1s",
+        )
+        .await;
         app.update(|ctx| {
             ctx.simulate_window_event(
                 Event::MouseMoved {
@@ -1844,8 +1885,18 @@ fn dual_axis_notches_animate_each_axis_independently_to_completion() {
         });
 
         // Once both tweens finish, each axis lands exactly on its own target, independent of
-        // the other. 300ms comfortably exceeds the 200ms slow end of the inverse-delta ramp.
-        crate::r#async::Timer::after(Duration::from_millis(300)).await;
+        // the other.
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    let (horizontal, vertical) = get_scroll_handles(view);
+                    !horizontal.is_animating() && !vertical.is_animating()
+                })
+            },
+            Duration::from_secs(1),
+            "both axes should settle within 1s",
+        )
+        .await;
         app.update(|ctx| render(&mut presenter.borrow_mut(), view_id, ctx));
 
         view.read(app, |view, _| {
@@ -1863,15 +1914,18 @@ fn dual_axis_notches_animate_each_axis_independently_to_completion() {
     })
 }
 
-/// A single-axis element that records how many times it's painted, in an `Rc<Cell<usize>>`
-/// shared with the test. Only scrollable on the horizontal axis; the vertical axis in the
-/// mixed-axis test below is handled externally by a `Clipped` `AxisConfiguration`.
-struct MixedAxisPaintCountingChild {
+/// A single-axis element that records the Y origin it was last painted at, in an
+/// `Rc<Cell<f32>>` shared with the test -- the paint-time consequence of a `Clipped` axis's
+/// offset, so the test can observe whether a real paint happened rather than just whether the
+/// (purely time-based) controller state has advanced. Only scrollable on the horizontal axis;
+/// the vertical axis in the mixed-axis test below is handled externally by a `Clipped`
+/// `AxisConfiguration`.
+struct MixedAxisOriginRecordingChild {
     size: Vector2F,
-    paint_count: Rc<Cell<usize>>,
+    last_painted_origin_y: Rc<Cell<f32>>,
 }
 
-impl Element for MixedAxisPaintCountingChild {
+impl Element for MixedAxisOriginRecordingChild {
     fn layout(
         &mut self,
         _constraint: SizeConstraint,
@@ -1883,8 +1937,8 @@ impl Element for MixedAxisPaintCountingChild {
 
     fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
 
-    fn paint(&mut self, _origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {
-        self.paint_count.set(self.paint_count.get() + 1);
+    fn paint(&mut self, origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {
+        self.last_painted_origin_y.set(origin.y());
     }
 
     fn size(&self) -> Option<Vector2F> {
@@ -1905,7 +1959,7 @@ impl Element for MixedAxisPaintCountingChild {
     }
 }
 
-impl NewScrollableElement for MixedAxisPaintCountingChild {
+impl NewScrollableElement for MixedAxisOriginRecordingChild {
     fn axis(&self) -> ScrollableAxis {
         ScrollableAxis::Horizontal
     }
@@ -1926,16 +1980,16 @@ impl NewScrollableElement for MixedAxisPaintCountingChild {
     fn scroll(&mut self, _delta: Pixels, _axis: Axis, _ctx: &mut EventContext) {}
 }
 
-struct MixedAxisPaintCountingView {
+struct MixedAxisOriginRecordingView {
     vertical_handle: ClippedScrollStateHandle,
-    paint_count: Rc<Cell<usize>>,
+    last_painted_origin_y: Rc<Cell<f32>>,
 }
 
-impl Entity for MixedAxisPaintCountingView {
+impl Entity for MixedAxisOriginRecordingView {
     type Event = ();
 }
 
-impl View for MixedAxisPaintCountingView {
+impl View for MixedAxisOriginRecordingView {
     fn render(&self, _: &AppContext) -> Box<dyn Element> {
         let axis_config = DualAxisConfig::Manual {
             horizontal: AxisConfiguration::Manual(Default::default()),
@@ -1944,9 +1998,9 @@ impl View for MixedAxisPaintCountingView {
                 max_size: None,
                 stretch_child: false,
             }),
-            child: Box::new(MixedAxisPaintCountingChild {
+            child: Box::new(MixedAxisOriginRecordingChild {
                 size: vec2f(SCROLLABLE_VIEWPORT_SIZE, 500.),
-                paint_count: self.paint_count.clone(),
+                last_painted_origin_y: self.last_painted_origin_y.clone(),
             })
             .finish_scrollable(),
         };
@@ -1959,58 +2013,56 @@ impl View for MixedAxisPaintCountingView {
     }
 
     fn ui_name() -> &'static str {
-        "MixedAxisPaintCountingView"
+        "MixedAxisOriginRecordingView"
     }
 }
 
-impl TypedActionView for MixedAxisPaintCountingView {
+impl TypedActionView for MixedAxisOriginRecordingView {
     type Action = ();
 }
 
-/// Regression test for a `Clipped` axis nested inside a mixed `DualAxisConfig::Manual` (one axis
-/// `Manual`, the other `Clipped`) never scheduling its own next frame: `paint_child`'s repaint
-/// gate checked `AxisConfiguration::is_animating_smooth_scroll`, which always returned `false`
-/// for a `Clipped` arm, so an animating `Clipped` axis there never called `ctx.repaint_after` and
-/// the animation stalled after the first paint with nothing else to drive it forward.
+/// Regression test: a `Clipped` axis nested inside a mixed `DualAxisConfig::Manual` must keep
+/// scheduling its own repaints while animating.
 #[test]
-fn mixed_axis_clipped_animation_keeps_self_scheduling_frames() {
+fn mixed_axis_clipped_animation_reaches_its_target_with_no_external_trigger() {
     let _flag = FeatureFlag::SmoothScrolling.override_enabled(true);
 
     App::test((), |mut app| async move {
         let app = &mut app;
-        let paint_count = Rc::new(Cell::new(0usize));
+        let last_painted_origin_y = Rc::new(Cell::new(0.0f32));
         let vertical_handle = ClippedScrollStateHandle::default();
         // Seed an in-flight vertical (Clipped) animation directly, isolating the paint-scheduling
         // defect from wheel-dispatch plumbing.
         vertical_handle.animate_scroll_by(200.0.into_pixels(), Instant::now());
 
         let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, {
-            let paint_count = paint_count.clone();
+            let last_painted_origin_y = last_painted_origin_y.clone();
             let vertical_handle = vertical_handle.clone();
-            move |_| MixedAxisPaintCountingView {
+            move |_| MixedAxisOriginRecordingView {
                 vertical_handle,
-                paint_count,
+                last_painted_origin_y,
             }
         });
 
         let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
         let view_id = app.root_view_id(window_id).unwrap();
         app.update(|ctx| render(&mut presenter.borrow_mut(), view_id, ctx));
-        let paints_after_first_frame = paint_count.get();
-        assert!(
-            paints_after_first_frame >= 1,
-            "sanity check: at least one paint should have occurred by now"
+        let origin_after_first_frame = last_painted_origin_y.get();
+        assert_ne!(
+            origin_after_first_frame, -200.,
+            "sanity check: the animation should not already be settled on the very first frame"
         );
 
-        // Real time passes, comfortably longer than the animation's duration, with nothing else
-        // touching the window: no dispatched events, no manual re-render.
-        crate::r#async::Timer::after(Duration::from_millis(300)).await;
-
-        assert!(
-            paint_count.get() > paints_after_first_frame,
-            "a Clipped axis nested in a mixed DualAxisConfig::Manual must keep requesting its \
-             own repaints while animating, the same as a Clipped axis painted on its own does"
-        );
+        // Real time passes, with nothing else touching the window: no dispatched events, no
+        // manual re-render. If the Clipped axis isn't self-scheduling its own repaints, the
+        // painted origin will never move from its first-frame value.
+        poll_until(
+            || last_painted_origin_y.get() == -200.0,
+            Duration::from_secs(1),
+            "a Clipped axis nested in a mixed DualAxisConfig::Manual should have advanced past \
+             its first painted frame and reached its exact target on its own",
+        )
+        .await;
 
         app.update(|ctx| {
             ctx.windows()
@@ -2191,11 +2243,13 @@ fn long_rapid_same_direction_burst_through_wheel_dispatch_clamps_without_losing_
         });
 
         // Once every tween fully settles, the displayed position matches the clamped target
-        // exactly -- no movement was silently swallowed by the burst. Read `scroll_start()`
-        // first: it's what settles any expired contribution into the committed baseline (as it
-        // would be during a real paint), so `is_animating()` reflects the post-settle state.
-        // 300ms comfortably exceeds the 200ms slow end of the inverse-delta duration ramp.
-        crate::r#async::Timer::after(Duration::from_millis(300)).await;
+        // exactly -- no movement was silently swallowed by the burst.
+        poll_until(
+            || view.read(app, |view, _| !vertical_handle(view).is_animating()),
+            Duration::from_secs(1),
+            "burst animation should settle within 1s",
+        )
+        .await;
         view.read(app, |view, _| {
             let handle = vertical_handle(view);
             assert_eq!(handle.scroll_start().as_f32(), 250.);
@@ -2518,17 +2572,23 @@ fn hover_tracks_the_displayed_offset_at_intermediate_animation_frames() {
             );
         });
 
-        // Sample at several points strictly *during* the animation (not settled). Each time,
-        // compare hover state against the offset that was actually used for the *last paint*
-        // (recorded by `PaintOffsetRecorder`), not a freshly-polled `scroll_start()` -- polling
-        // the controller independently always reads a slightly more-advanced position than
-        // whatever was last rendered, since painting is discrete (repaint-timer-driven) while
-        // the controller's position is a continuous function of wall-clock time. Comparing
+        // Sample every real paint frame strictly *during* the animation (not settled), until it
+        // settles. Compare hover state against the offset that was actually used for the *last
+        // paint* (recorded by `PaintOffsetRecorder`), not a freshly-polled `scroll_start()` --
+        // polling the controller independently always reads a slightly more-advanced position
+        // than whatever was last rendered, since painting is discrete (repaint-timer-driven)
+        // while the controller's position is a continuous function of wall-clock time. Comparing
         // against the true poll would conflate that expected, harmless skew with a real bug.
-        for _ in 0..10 {
-            crate::r#async::Timer::after(Duration::from_millis(25)).await;
+        let mut last_seen_offset = last_painted_origin_y.get();
+        while handle.is_animating() {
+            last_seen_offset = poll_for_change(
+                || last_painted_origin_y.get(),
+                last_seen_offset,
+                Duration::from_millis(500),
+            )
+            .await;
 
-            let painted_offset = -last_painted_origin_y.get();
+            let painted_offset = -last_seen_offset;
             let expected_row = hover_tracking_expected_row(painted_offset);
             let hovered_rows = hover_tracking_hovered_rows(&row_states);
 
@@ -2635,10 +2695,16 @@ fn hover_background_baked_in_at_construction_tracks_the_displayed_offset() {
             );
         });
 
-        for _ in 0..10 {
-            crate::r#async::Timer::after(Duration::from_millis(25)).await;
+        let mut last_seen_offset = last_painted_origin_y.get();
+        while handle.is_animating() {
+            last_seen_offset = poll_for_change(
+                || last_painted_origin_y.get(),
+                last_seen_offset,
+                Duration::from_millis(500),
+            )
+            .await;
 
-            let painted_offset = -last_painted_origin_y.get();
+            let painted_offset = -last_seen_offset;
             let expected_row = hover_tracking_expected_row(painted_offset);
             let baked_in = baked_in_hovered_rows();
             let raw_flags = hover_tracking_hovered_rows(&row_states);

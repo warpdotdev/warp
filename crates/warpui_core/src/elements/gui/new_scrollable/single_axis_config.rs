@@ -392,10 +392,9 @@ impl SingleAxisConfig {
         delta: Vector2F,
         app: &AppContext,
     ) -> bool {
-        // Use the controller's target rather than its displayed (possibly lagging) position:
-        // once a rapid sequence of notches has already targeted the boundary, checking the
-        // lagging displayed position would keep reporting the axis as scrollable, so further
-        // same-direction notches would never propagate to a parent.
+        // Use the controller's target rather than its displayed (possibly lagging) position,
+        // for the same reason `AxisConfiguration::scroll_data_for_bounds` (dual_axis_config.rs)
+        // does.
         let scroll_data = match self {
             Self::Clipped { handle, child } => ScrollData {
                 scroll_start: handle.scroll_target(),
