@@ -633,6 +633,7 @@ default = [
     "inline_slash_commands",
     "inline_history_menu",
     "inline_model_selector",
+    "restore_prompt_on_inline_model_selector_search",
     "oz_launch_modal",
     "open_warp_launch_modal",
     "orchestration_launch_modal",
