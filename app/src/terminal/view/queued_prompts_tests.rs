@@ -38,7 +38,7 @@ use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_te
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
 fn request_team_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+    crate::server::team_scope::request_team_scope(&TeamlessScopeForTest)
 }
 
 fn user_query(text: &str) -> QueuedQuery {

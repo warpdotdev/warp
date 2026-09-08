@@ -21,7 +21,7 @@ use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(team_uid))
 }
 
 #[test]
@@ -125,9 +125,12 @@ fn list_agents_omits_team_header_for_personal_scope() {
     };
     let server_api = ServerApi::new_for_test();
 
-    let agents =
-        block_on(server_api.list_agents(RequestTeamScope::from_scope(&TeamlessScopeForTest)))
-            .unwrap();
+    let agents = block_on(
+        server_api.list_agents(crate::server::team_scope::request_team_scope(
+            &TeamlessScopeForTest,
+        )),
+    )
+    .unwrap();
 
     assert!(agents.is_empty());
 }
@@ -159,7 +162,9 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
 #[test]
 fn list_agent_runs_sends_selected_team_header() {
     let team_uid = ServerId::from(123);
-    let scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let scope = crate::server::team_scope::request_team_scope(
+        &TeamContextForOperation::new_for_test(team_uid),
+    );
     let _request = {
         let mut server = warp_core::channel::ChannelState::mock_server();
         server
@@ -179,7 +184,7 @@ fn list_agent_runs_sends_selected_team_header() {
 
 #[test]
 fn list_agent_runs_omits_team_header_for_teamless_scope() {
-    let scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+    let scope = crate::server::team_scope::request_team_scope(&TeamlessScopeForTest);
     let _request = {
         let mut server = warp_core::channel::ChannelState::mock_server();
         server

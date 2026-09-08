@@ -18,7 +18,7 @@ use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn request_team_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
 fn config(harness_type: &str) -> RemoteChildLaunchConfig {

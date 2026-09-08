@@ -160,11 +160,11 @@ use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguag
 use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::server::ids::ServerId;
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
-    server::ids::ServerId,
     workspaces::{gql_convert::PLACEHOLDER_WORKSPACE_UID, workspace::WorkspaceUid},
 };
 
@@ -1651,11 +1651,13 @@ impl ServerApi {
     where
         R: serde::de::DeserializeOwned,
     {
+        let team_uid = request_team_scope
+            .as_ref()
+            .and_then(RequestTeamScope::team_uid)
+            .map(ServerId::try_from)
+            .transpose()?;
         self.base_client
-            .get_public_api_for_team(
-                path,
-                request_team_scope.and_then(RequestTeamScope::team_uid),
-            )
+            .get_public_api_for_team(path, team_uid)
             .await
     }
 

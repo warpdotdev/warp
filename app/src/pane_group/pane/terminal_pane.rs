@@ -1591,7 +1591,7 @@ fn dispatch_start_agent_conversation(
             runner_id,
             agent_identity_uid,
         } => {
-            let request_team_scope = RequestTeamScope::from_scope(&team_context);
+            let request_team_scope = crate::server::team_scope::request_team_scope(&team_context);
             let working_dir = group
                 .terminal_view_from_pane_id(parent_pane_id, ctx)
                 .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
@@ -1654,7 +1654,7 @@ fn launch_local_no_harness_child(
     let host_source = group
         .terminal_view_from_pane_id(parent_pane_id, ctx)
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    let request_team_scope = crate::server::team_scope::request_team_scope(&team_context);
 
     let launch = prepare_local_oz_child_launch(
         &request.name,
@@ -1795,7 +1795,7 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    let request_team_scope = crate::server::team_scope::request_team_scope(&team_context);
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1980,7 +1980,7 @@ fn launch_remote_child(
         model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
     });
 
-    let prepared = match prepare_remote_child_launch(&request, config, team_scope, ctx) {
+    let prepared = match prepare_remote_child_launch(&request, config, team_scope.clone(), ctx) {
         Ok(prepared) => prepared,
         Err(error) => {
             let error_message = error.user_message();

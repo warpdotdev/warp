@@ -89,7 +89,7 @@ fn write_fake_cli(bin_dir: &std::path::Path, name: &str) {
 }
 
 fn teamless_request_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+    crate::server::team_scope::request_team_scope(&TeamlessScopeForTest)
 }
 #[test]
 fn normalize_local_child_harness_accepts_supported_aliases() {
@@ -341,12 +341,13 @@ async fn prepare_local_claude_child_propagates_scope_and_merges_model_env_var() 
     );
     let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
     let team_uid = ServerId::from(7);
+    let expected_team_uid = team_uid.uid();
 
     let mut ai_client = MockAIClient::new();
     ai_client
         .expect_create_agent_task()
         .times(1)
-        .withf(move |_, _, _, _, scope| scope.team_uid() == Some(team_uid))
+        .withf(move |_, _, _, _, scope| scope.team_uid() == Some(expected_team_uid.as_str()))
         .returning(|_, _, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
 
     let prepared = prepare_local_harness_child_launch(
@@ -358,7 +359,9 @@ async fn prepare_local_claude_child_propagates_scope_and_merges_model_env_var() 
         Some(ShellType::Zsh),
         Some(working_dir),
         Arc::new(ai_client),
-        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid)),
+        crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(
+            team_uid,
+        )),
     )
     .await
     .unwrap();

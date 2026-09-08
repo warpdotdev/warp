@@ -113,14 +113,18 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
 #[test]
 fn team_uid_header_value_includes_only_resolved_team_scope() {
     let team_uid = 7.into();
-    let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let team_scope = crate::server::team_scope::request_team_scope(
+        &TeamContextForOperation::new_for_test(team_uid),
+    );
 
     assert_eq!(
         ServerApi::team_uid_header_value(team_scope),
         Some(team_uid.uid().to_string())
     );
     assert_eq!(
-        ServerApi::team_uid_header_value(RequestTeamScope::from_scope(&TeamlessScopeForTest)),
+        ServerApi::team_uid_header_value(crate::server::team_scope::request_team_scope(
+            &TeamlessScopeForTest
+        )),
         None
     );
 }

@@ -87,7 +87,7 @@ impl RunnerCommandRunner {
                 return;
             }
             let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => Some(RequestTeamScope::from_scope(&team_scope)),
+                Ok(team_scope) => Some(crate::server::team_scope::request_team_scope(&team_scope)),
                 Err(error) => {
                     super::report_fatal_error(error, ctx);
                     return;
@@ -180,7 +180,7 @@ impl RunnerCommandRunner {
                 return;
             }
             let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => Some(RequestTeamScope::from_scope(&team_scope)),
+                Ok(team_scope) => Some(crate::server::team_scope::request_team_scope(&team_scope)),
                 Err(error) => {
                     super::report_fatal_error(error, ctx);
                     return;
@@ -240,7 +240,9 @@ fn resolve_create_request_scope(
         return Ok(None);
     }
     let team_scope = super::common::resolve_object_scope(scope, ctx)?;
-    Ok(Some(RequestTeamScope::from_scope(&team_scope)))
+    Ok(Some(crate::server::team_scope::request_team_scope(
+        &team_scope,
+    )))
 }
 
 async fn execute_list(

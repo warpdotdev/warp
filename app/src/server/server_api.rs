@@ -593,9 +593,7 @@ impl ServerApi {
     }
 
     fn team_uid_header_value(team_scope: RequestTeamScope) -> Option<String> {
-        team_scope
-            .team_uid()
-            .map(|team_uid| team_uid.uid().to_string())
+        team_scope.team_uid().map(ToOwned::to_owned)
     }
 
     /// Opens an SSE stream to the agent event-push endpoint.
@@ -1152,7 +1150,7 @@ impl ServerApi {
             ChannelState::server_root_url()
         ));
         if let Some(team_uid) = team_scope.team_uid() {
-            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
         }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
@@ -1184,7 +1182,7 @@ impl ServerApi {
             request_builder = request_builder.bearer_auth(token);
         }
         if let Some(team_uid) = team_scope.team_uid() {
-            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
         }
         let response = request_builder
             .json(request)
@@ -1225,7 +1223,7 @@ impl ServerApi {
             request_builder = request_builder.bearer_auth(token);
         }
         if let Some(team_uid) = team_scope.team_uid() {
-            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
         }
         let response = request_builder
             .json(request)
@@ -1249,7 +1247,7 @@ impl ServerApi {
             ChannelState::server_root_url()
         ));
         if let Some(team_uid) = team_scope.team_uid() {
-            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
         }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)
@@ -1279,7 +1277,7 @@ impl ServerApi {
             .http_client()
             .post(format!("{}/ai/transcribe", ChannelState::server_root_url()));
         if let Some(team_uid) = team_scope.team_uid() {
-            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid.uid());
+            request_builder = request_builder.header(TEAM_UID_HEADER, team_uid);
         }
         let response = if let Some(token) = auth_token.as_bearer_token() {
             request_builder.bearer_auth(token)

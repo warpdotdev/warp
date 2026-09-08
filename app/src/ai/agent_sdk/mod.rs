@@ -73,7 +73,6 @@ use crate::send_telemetry_sync_from_app_ctx;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential};
-use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
 use crate::workspaces::user_workspaces::TeamScopeForCli;
@@ -1211,7 +1210,7 @@ impl AgentDriverRunner {
         team_scope: TeamScopeForCli,
         driver_options: &mut AgentDriverOptions,
     ) -> Result<(), AgentDriverError> {
-        let request_team_scope = RequestTeamScope::from_scope(&team_scope);
+        let request_team_scope = crate::server::team_scope::request_team_scope(&team_scope);
         driver_options.team_scope = Some(team_scope);
         let environment = merged_config.environment_id.clone();
         let task_config = if merged_config.is_empty() {

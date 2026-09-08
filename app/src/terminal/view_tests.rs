@@ -55,7 +55,6 @@ use crate::pane_group::pane::PaneStack;
 use crate::pane_group::{BackingView, TerminalPaneId};
 use crate::server::ids::{ClientId, SyncId};
 use crate::server::server_api::ai::SpawnAgentRequest;
-use crate::server::team_scope::RequestTeamScope;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{AISettings, AppEditorSettings, RightClickBehavior, WarpPromptSeparator};
 use crate::terminal::alt_screen::should_intercept_mouse;
@@ -3451,7 +3450,7 @@ fn cloud_mode_dispatched_agent_inserts_queued_user_query() {
                             snapshot_disabled: None,
                             orchestration_handoff: None,
                         },
-                        RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                        crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
                         ctx,
                     );
                 });

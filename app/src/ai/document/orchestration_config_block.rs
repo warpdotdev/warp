@@ -47,7 +47,6 @@ use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
-use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
@@ -720,7 +719,7 @@ impl OrchestrationConfigBlockView {
         }
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
-        let team_scope = RequestTeamScope::from_scope(
+        let team_scope = crate::server::team_scope::request_team_scope(
             &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
         );
         ctx.spawn(

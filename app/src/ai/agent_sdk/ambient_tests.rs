@@ -63,11 +63,11 @@ fn empty_args() -> ListTasksArgs {
 }
 
 fn request_team_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+    crate::server::team_scope::request_team_scope(&TeamlessScopeForTest)
 }
 
 fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(team_uid))
 }
 
 #[test]
@@ -282,13 +282,17 @@ async fn raw_json_run_listing_supplies_cli_scope() {
 #[tokio::test]
 async fn jq_run_listing_supplies_selected_cli_scope_to_raw_request() {
     let team_uid = ServerId::from(123);
+    let expected_team_uid = team_uid.uid();
     let mut mock = MockAIClient::new();
     mock.expect_list_agent_runs_raw()
         .withf(move |limit, filter, request_team_scope| {
             *limit == 10
                 && filter.creator_uid.is_none()
                 && filter.states.is_none()
-                && request_team_scope.and_then(RequestTeamScope::team_uid) == Some(team_uid)
+                && request_team_scope
+                    .as_ref()
+                    .and_then(RequestTeamScope::team_uid)
+                    == Some(expected_team_uid.as_str())
         })
         .times(1)
         .returning(|_, _, _| Ok(serde_json::json!({ "runs": [] })));
@@ -380,8 +384,8 @@ fn run_list_scope_uses_team_loaded_by_workspace_refresh() {
                     team: Some(Some(team_uid.to_string())),
                 })
                 .expect("the selected team resolves from refreshed metadata");
-            let request_scope = RequestTeamScope::from_scope(&scope);
-            assert_eq!(request_scope.team_uid(), Some(team_uid));
+            let request_scope = crate::server::team_scope::request_team_scope(&scope);
+            assert_eq!(request_scope.team_uid(), Some(team_uid.uid().as_str()));
         });
     });
 }

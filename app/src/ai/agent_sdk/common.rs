@@ -162,7 +162,7 @@ pub(super) fn request_team_scope_for_cli(
     ctx: &AppContext,
 ) -> anyhow::Result<RequestTeamScope> {
     let team_scope = resolve_team_scope(team_selection, ctx)?;
-    Ok(RequestTeamScope::from_scope(&team_scope))
+    Ok(crate::server::team_scope::request_team_scope(&team_scope))
 }
 
 pub(super) fn resolve_object_scope(

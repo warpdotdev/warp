@@ -16,7 +16,7 @@ fn attachment() -> AttachmentInput {
 }
 
 fn team_request_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
 fn add_model(app: &mut App) -> warpui::ModelHandle<AmbientAgentViewModel> {
@@ -187,7 +187,7 @@ fn duplicate_handoff_completion_is_ignored() {
             let (cancel, _) = oneshot::channel();
             model.begin_local_to_cloud_handoff(
                 retry_request("initial request"),
-                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
                 cancel,
                 ctx,
             );
@@ -239,7 +239,7 @@ fn handoff_cancellation_is_signalled_and_late_failure_is_ignored() {
         model.update(&mut app, |model, ctx| {
             model.begin_local_to_cloud_handoff(
                 retry_request("queued prompt"),
-                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
                 cancel,
                 ctx,
             );

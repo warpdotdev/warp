@@ -344,7 +344,7 @@ impl ResponseStream {
             error_event_emitted: false,
             deferred_retry_pending: false,
             current_request_id: Some(Uuid::new_v4()),
-            team_scope: RequestTeamScope::from_scope(&TeamlessScopeForTest),
+            team_scope: crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
         }
     }
 
@@ -359,7 +359,13 @@ impl ResponseStream {
         let start_time = Local::now();
 
         let request_id = Uuid::new_v4();
-        Self::spawn_request(request_id, params.clone(), team_scope, cancellation_rx, ctx);
+        Self::spawn_request(
+            request_id,
+            params.clone(),
+            team_scope.clone(),
+            cancellation_rx,
+            ctx,
+        );
         Self {
             id: ResponseStreamId(Uuid::new_v4().to_string()),
             params,
@@ -450,7 +456,7 @@ impl ResponseStream {
         Self::spawn_request(
             request_id,
             self.params.clone(),
-            self.team_scope,
+            self.team_scope.clone(),
             cancellation_rx,
             ctx,
         );
