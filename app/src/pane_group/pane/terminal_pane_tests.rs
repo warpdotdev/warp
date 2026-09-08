@@ -1,9 +1,9 @@
-//! Tests for [`inherit_share_for_local_child`]. These verify the pure
-//! branching independent of the PaneGroup dispatch code.
+//! Tests for terminal-pane child-agent dispatch helpers.
 
 use uuid::Uuid;
 
 use super::*;
+use crate::workspaces::user_workspaces::TeamContextForOperation;
 
 fn new_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
@@ -15,6 +15,32 @@ fn user_source(task_id: Option<&str>) -> SharedSessionSource {
 
 fn ambient_source(task_id: Option<&str>) -> SharedSessionSource {
     SharedSessionSource::ambient_agent(task_id.map(str::to_owned))
+}
+#[test]
+fn local_child_scopes_come_from_the_start_agent_request() {
+    let captured_scope =
+        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()));
+    let later_window_scope =
+        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(8.into()));
+    let request = StartAgentRequest {
+        id: Default::default(),
+        name: "child".to_string(),
+        prompt: "work".to_string(),
+        execution_mode: StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id: None,
+        },
+        lifecycle_subscription: None,
+        parent_conversation_id: AIConversationId::new(),
+        parent_run_id: Some("parent-run".to_string()),
+        request_team_scope: captured_scope,
+    };
+
+    let (task_scope, policy_scope) = local_child_team_scopes(&request);
+
+    assert_eq!(task_scope, captured_scope);
+    assert_eq!(RequestTeamScope::from_scope(&policy_scope), captured_scope);
+    assert_ne!(task_scope, later_window_scope);
 }
 
 #[test]

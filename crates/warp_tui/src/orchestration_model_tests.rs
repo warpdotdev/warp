@@ -194,12 +194,10 @@ fn add_relayed_executor(
         ctx.subscribe_to_model(&executor, move |_, event, ctx| {
             orchestration.update(ctx, |orchestration, ctx| match event {
                 StartAgentExecutorEvent::CreateAgent(request) => {
-                    let team_context = UserWorkspaces::teamless_context_for_operation_for_test();
                     orchestration.dispatch_create_agent(
                         parent_session_id,
                         (**request).clone(),
                         None,
-                        &team_context,
                         ctx,
                     );
                 }
@@ -338,15 +336,8 @@ fn remote_dispatch_uses_captured_scope_and_auth_secret() {
         });
 
         app.update(|ctx| {
-            let ambient_team_context = UserWorkspaces::teamless_context_for_operation_for_test();
             TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
-                model.dispatch_create_agent(
-                    parent_session_id,
-                    request,
-                    None,
-                    &ambient_team_context,
-                    ctx,
-                );
+                model.dispatch_create_agent(parent_session_id, request, None, ctx);
             });
         });
 
@@ -357,6 +348,51 @@ fn remote_dispatch_uses_captured_scope_and_auth_secret() {
     });
 }
 
+#[test]
+fn local_dispatch_uses_captured_scope_after_window_team_change() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let team_a = 7.into();
+        let team_b = 8.into();
+        app.update(|ctx| {
+            set_tui_workspace_teams_for_test(
+                vec![
+                    (team_a, "team-a".to_string()),
+                    (team_b, "team-b".to_string()),
+                ],
+                ctx,
+            );
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.set_team_for_window(fixture.window_id, team_a, ctx);
+            });
+        });
+        let captured_scope = app.read(|ctx| {
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
+            )
+        });
+        let mut request = remote_request(AIConversationId::new());
+        request.execution_mode = StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id: Some("auto".to_string()),
+        };
+        request.request_team_scope = captured_scope;
+
+        let later_window_scope = app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(fixture.window_id, team_b, ctx);
+            });
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
+            )
+        });
+        let (task_scope, policy_scope) = super::local_child_team_scopes(&request);
+
+        assert_eq!(task_scope, captured_scope);
+        assert_eq!(RequestTeamScope::from_scope(&policy_scope), captured_scope);
+        assert_ne!(task_scope, later_window_scope);
+    });
+}
 /// Regression for QUALITY-1902 (the TUI counterpart of QUALITY-1897):
 /// `register_local_oz_child_session` must index the run id through
 /// `assign_run_id_for_conversation`, not a bare `set_task_id`, so the SSE

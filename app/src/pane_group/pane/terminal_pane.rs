@@ -69,8 +69,7 @@ use crate::view_components::ToastFlavor;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{PaneViewLocator, WorkspaceRegistry};
 #[cfg(not(target_family = "wasm"))]
-use crate::workspaces::user_workspaces::TeamContextForOperation;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::ResolvedTeamScope;
 #[cfg(not(target_family = "wasm"))]
 use crate::{
     pane_group::child_agent::{
@@ -1523,6 +1522,14 @@ fn handle_terminal_view_event(
 /// Dispatches a StartAgent request to the appropriate per-mode helper.
 /// Each helper echoes the child conversation id back via
 /// [`BlocklistAIHistoryModel::record_new_conversation_request_complete`].
+#[cfg(not(target_family = "wasm"))]
+fn local_child_team_scopes(request: &StartAgentRequest) -> (RequestTeamScope, ResolvedTeamScope) {
+    let request_scope = request.request_team_scope;
+    (
+        request_scope,
+        ResolvedTeamScope::from_request_scope(request_scope),
+    )
+}
 #[cfg_attr(target_family = "wasm", allow(unused_variables))]
 fn dispatch_start_agent_conversation(
     group: &mut PaneGroup,
@@ -1531,21 +1538,13 @@ fn dispatch_start_agent_conversation(
     request: StartAgentRequest,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
-    let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     match request.execution_mode.clone() {
         #[cfg(not(target_family = "wasm"))]
         StartAgentExecutionMode::Local {
             harness_type: None,
             model_id,
         } => {
-            launch_local_no_harness_child(
-                group,
-                parent_pane_id,
-                request,
-                model_id,
-                team_context,
-                ctx,
-            );
+            launch_local_no_harness_child(group, parent_pane_id, request, model_id, ctx);
         }
         #[cfg(not(target_family = "wasm"))]
         StartAgentExecutionMode::Local {
@@ -1559,7 +1558,6 @@ fn dispatch_start_agent_conversation(
                 request,
                 harness_type,
                 model_id,
-                team_context,
                 ctx,
             );
         }
@@ -1641,7 +1639,6 @@ fn launch_local_no_harness_child(
     parent_pane_id: PaneId,
     request: StartAgentRequest,
     model_id: Option<String>,
-    team_context: TeamContextForOperation,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let request_id = request.id;
@@ -1654,7 +1651,7 @@ fn launch_local_no_harness_child(
     let host_source = group
         .terminal_view_from_pane_id(parent_pane_id, ctx)
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    let (request_team_scope, team_scope) = local_child_team_scopes(&request);
 
     let launch = prepare_local_oz_child_launch(
         &request.name,
@@ -1692,7 +1689,7 @@ fn launch_local_no_harness_child(
                     ..
                 }) => {
                     apply_child_agent_model_override(
-                        &team_context,
+                        &team_scope,
                         terminal_view_id,
                         model_id.as_deref(),
                         ctx,
@@ -1770,7 +1767,6 @@ fn launch_local_harness_child(
     request: StartAgentRequest,
     harness_type: String,
     model_id: Option<String>,
-    team_context: TeamContextForOperation,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let startup_directory = group.startup_path_for_new_session(Some(terminal_pane_id), ctx);
@@ -1795,7 +1791,7 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    let (request_team_scope, team_scope) = local_child_team_scopes(&request);
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1842,7 +1838,7 @@ fn launch_local_harness_child(
                         ..
                     }) => {
                         apply_child_agent_model_override(
-                            &team_context,
+                            &team_scope,
                             terminal_view_id,
                             model_id.as_deref(),
                             ctx,

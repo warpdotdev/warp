@@ -232,6 +232,65 @@ fn delayed_dispatch_keeps_auth_secret_and_team_scope_together() {
 }
 
 #[test]
+fn delayed_local_dispatch_keeps_the_captured_team_scope() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        let plan_id = AIDocumentModel::handle(&app).update(&mut app, |model, ctx| {
+            model.create_document("Plan", "# Plan", state.conversation_id, None, ctx)
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let action = remote_run_agents_action("oz");
+        let action_id = action.id.clone();
+        let AIAgentActionType::RunAgents(mut request) = action.action else {
+            panic!("expected run_agents action");
+        };
+        request.execution_mode = RunAgentsExecutionMode::Local;
+        let team_a_scope = request_scope_for_team(7);
+
+        state.executor.update(&mut app, |executor, ctx| {
+            let _receiver = executor.dispatch_prepared_run_agents(
+                action_id,
+                request,
+                state.conversation_id,
+                team_a_scope,
+                ctx,
+            );
+        });
+        captured.read(&app, |captured, _| {
+            assert!(captured.0.is_empty());
+        });
+
+        AIDocumentModel::handle(&app).update(&mut app, |model, ctx| {
+            model.create_document_from_notebook(
+                plan_id,
+                SyncId::ServerId(123.into()),
+                "Plan",
+                "# Plan",
+                state.conversation_id,
+                None,
+                ctx,
+            );
+        });
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+
+        captured.read(&app, |captured, _| {
+            let [request] = captured.0.as_slice() else {
+                panic!("expected one child request");
+            };
+            assert_eq!(request.request_team_scope, team_a_scope);
+            assert!(matches!(
+                request.execution_mode,
+                StartAgentExecutionMode::Local {
+                    harness_type: None,
+                    ..
+                }
+            ));
+        });
+    });
+}
+#[test]
 fn should_autoexecute_duplicate_launched_agent_denial() {
     App::test((), |mut app| async move {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::App);

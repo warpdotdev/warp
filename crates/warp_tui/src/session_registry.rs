@@ -326,14 +326,12 @@ impl TuiSessions {
                 TuiTerminalSessionEvent::StartAgentConversation {
                     request,
                     working_directory,
-                    team_context,
                 } => {
                     orchestration.update(ctx, |orchestration, ctx| {
                         orchestration.dispatch_create_agent(
                             id,
                             (**request).clone(),
                             working_directory.clone(),
-                            team_context,
                             ctx,
                         );
                     });

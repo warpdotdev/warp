@@ -30,6 +30,7 @@ use crate::ai::llms::LLMInfo;
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider, ModelsByFeature};
 use crate::auth::AuthStateProvider;
 use crate::server::ids::ServerId;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::{AISettings, AgentModeCommandExecutionPredicate};
 use crate::workspaces::gql_convert::ToAgentModeCommandExecutionPredicates;
 use crate::workspaces::team::Team;
@@ -118,6 +119,10 @@ pub struct ResolvedTeamScope(Option<ServerId>);
 
 impl ResolvedTeamScope {
     pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
+        Self(scope.team_uid())
+    }
+    /// Rehydrates a captured request scope for local policy and model reads.
+    pub fn from_request_scope(scope: RequestTeamScope) -> Self {
         Self(scope.team_uid())
     }
 

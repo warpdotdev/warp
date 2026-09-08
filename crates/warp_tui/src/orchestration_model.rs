@@ -22,13 +22,13 @@ use warp::tui_export::{
     CloudConversationData, ConversationStatus, Harness, LoadedSubtreeRollup,
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent, PreparedRemoteChildLaunch,
     RemoteChildLaunchConfig, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
-    ServerApiProvider, StartAgentExecutionMode, StartAgentRequest, TeamContextForOperation,
-    aggregated_orchestrator_status, apply_child_agent_model_override,
-    child_conversations_in_pill_order, classify_cloud_agent_startup_error,
-    descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
-    finish_local_oz_child_conversation, inherit_child_agent_settings, loaded_subtree_rollup,
-    orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
-    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
+    ServerApiProvider, StartAgentExecutionMode, StartAgentRequest, aggregated_orchestrator_status,
+    apply_child_agent_model_override, child_conversations_in_pill_order,
+    classify_cloud_agent_startup_error, descendant_conversation_ids_in_spawn_order,
+    descendant_conversations_in_pill_order, finish_local_oz_child_conversation,
+    inherit_child_agent_settings, loaded_subtree_rollup, orchestration_root_conversation_id,
+    oz_run_url, prepare_local_oz_child_launch, prepare_remote_child_launch,
+    register_agent_event_consumer, unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -166,6 +166,13 @@ impl Entity for TuiOrchestrationModel {
 }
 
 impl SingletonEntity for TuiOrchestrationModel {}
+fn local_child_team_scopes(request: &StartAgentRequest) -> (RequestTeamScope, ResolvedTeamScope) {
+    let request_scope = request.request_team_scope;
+    (
+        request_scope,
+        ResolvedTeamScope::from_request_scope(request_scope),
+    )
+}
 
 impl TuiOrchestrationModel {
     /// Registers the singleton before sessions are created and wired to it.
@@ -496,7 +503,6 @@ impl TuiOrchestrationModel {
         parent_session_id: TuiSessionId,
         request: StartAgentRequest,
         working_directory: Option<PathBuf>,
-        team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
         match request.execution_mode.clone() {
@@ -508,7 +514,6 @@ impl TuiOrchestrationModel {
                 request,
                 model_id,
                 working_directory,
-                team_context,
                 ctx,
             ),
             StartAgentExecutionMode::Local {
@@ -774,11 +779,9 @@ impl TuiOrchestrationModel {
         request: StartAgentRequest,
         model_id: Option<String>,
         working_directory: Option<PathBuf>,
-        team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        let request_team_scope = RequestTeamScope::from_scope(team_context);
-        let team_scope = ResolvedTeamScope::from_scope(team_context);
+        let (request_team_scope, team_scope) = local_child_team_scopes(&request);
         let launch = prepare_local_oz_child_launch(
             &request.name,
             &request.prompt,
