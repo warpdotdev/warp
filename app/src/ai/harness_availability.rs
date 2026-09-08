@@ -7,8 +7,8 @@ use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
+use warp_managed_secrets::ManagedSecretValue;
 use warp_managed_secrets::client::SecretOwner;
-use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use crate::ai::harness_display;
@@ -19,6 +19,8 @@ use crate::server::retry_strategies::{
     OUT_OF_BAND_REQUEST_RETRY_STRATEGY, is_transient_graphql_or_http_error,
 };
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const CACHE_KEY: &str = "AvailableHarnesses";
@@ -226,11 +228,15 @@ impl HarnessAvailabilityModel {
         self.auth_secret_retry_after.remove(&harness);
 
         let api = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         ctx.spawn_with_retry_on_error_when(
             move || {
                 let api = api.clone();
                 let agent_harness = agent_harness.clone();
-                async move { api.list_harness_auth_secrets(agent_harness).await }
+                async move {
+                    api.list_harness_auth_secrets(&request_scope, agent_harness)
+                        .await
+                }
             },
             OUT_OF_BAND_REQUEST_RETRY_STRATEGY,
             is_transient_graphql_or_http_error,
@@ -290,7 +296,11 @@ impl HarnessAvailabilityModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let manager = ManagedSecretManager::handle(ctx);
-        let create_future = manager.as_ref(ctx).create_secret(owner, name, value, None);
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
+        let create_future =
+            manager
+                .as_ref(ctx)
+                .create_secret(request_scope, owner, name, value, None);
         ctx.spawn(create_future, move |me, result, ctx| match result {
             Ok(secret) => {
                 let entry = AuthSecretEntry {
@@ -327,9 +337,11 @@ impl HarnessAvailabilityModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let manager = ManagedSecretManager::handle(ctx);
-        let delete_future = manager
-            .as_ref(ctx)
-            .delete_secret(owner.clone(), name.clone());
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
+        let delete_future =
+            manager
+                .as_ref(ctx)
+                .delete_secret(request_scope, owner.clone(), name.clone());
         ctx.spawn(delete_future, move |me, result, ctx| match result {
             Ok(()) => {
                 if let Some(AuthSecretFetchState::Loaded(entries)) =

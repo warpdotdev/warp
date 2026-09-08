@@ -18,8 +18,8 @@ use crate::envelope::UploadKey;
 use crate::gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken};
 
 /// Singleton model for working with Warp-managed secrets.
-pub struct ManagedSecretManager {
-    client: Arc<dyn ManagedSecretsClient>,
+pub struct ManagedSecretManager<RequestScope> {
+    client: Arc<dyn ManagedSecretsClient<RequestScope = RequestScope>>,
     actor_provider: Arc<dyn ActorProvider>,
 }
 
@@ -27,9 +27,12 @@ pub trait ActorProvider: Send + Sync + 'static {
     fn actor_uid(&self) -> Option<String>;
 }
 
-impl ManagedSecretManager {
+impl<RequestScope> ManagedSecretManager<RequestScope>
+where
+    RequestScope: Send + Sync + 'static,
+{
     pub fn new(
-        client: Arc<dyn ManagedSecretsClient>,
+        client: Arc<dyn ManagedSecretsClient<RequestScope = RequestScope>>,
         actor_provider: Arc<dyn ActorProvider>,
     ) -> Self {
         crate::envelope::init();
@@ -41,11 +44,12 @@ impl ManagedSecretManager {
 
     pub fn create_secret(
         &self,
+        request_scope: RequestScope,
         owner: SecretOwner,
         name: String,
         value: ManagedSecretValue,
         description: Option<String>,
-    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<RequestScope> {
         let client = self.client.clone();
         let actor_provider = self.actor_provider.clone();
         async move {
@@ -57,7 +61,7 @@ impl ManagedSecretManager {
 
             // We retrieve all upload keys on demand. These should potentially be fetched and stored
             // ahead of time instead.
-            let configs = client.get_managed_secret_configs().await?;
+            let configs = client.get_managed_secret_configs(&request_scope).await?;
 
             let Some(actor) = actor_provider.actor_uid() else {
                 return Err(anyhow::anyhow!("No authenticated user"));
@@ -76,6 +80,7 @@ impl ManagedSecretManager {
 
             let managed_secret = client
                 .create_managed_secret(
+                    &request_scope,
                     owner,
                     name,
                     value.secret_type(),
@@ -89,27 +94,31 @@ impl ManagedSecretManager {
 
     pub fn delete_secret(
         &self,
+        request_scope: RequestScope,
         owner: SecretOwner,
         name: String,
-    ) -> impl Future<Output = anyhow::Result<()>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<()>> + use<RequestScope> {
         let client = self.client.clone();
         async move {
             if !FeatureFlag::WarpManagedSecrets.is_enabled() {
                 return Err(anyhow::anyhow!("This feature is not enabled"));
             }
 
-            client.delete_managed_secret(owner, name).await?;
+            client
+                .delete_managed_secret(&request_scope, owner, name)
+                .await?;
             Ok(())
         }
     }
 
     pub fn update_secret(
         &self,
+        request_scope: RequestScope,
         owner: SecretOwner,
         name: String,
         value: Option<ManagedSecretValue>,
         description: Option<String>,
-    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<ManagedSecret>> + use<RequestScope> {
         let client = self.client.clone();
         let actor_provider = self.actor_provider.clone();
         async move {
@@ -124,7 +133,7 @@ impl ManagedSecretManager {
             let encrypted_value = if let Some(value) = value {
                 // We retrieve all upload keys on demand. These should potentially be fetched and stored
                 // ahead of time instead.
-                let configs = client.get_managed_secret_configs().await?;
+                let configs = client.get_managed_secret_configs(&request_scope).await?;
 
                 let Some(actor) = actor_provider.actor_uid() else {
                     return Err(anyhow::anyhow!("No authenticated user"));
@@ -146,17 +155,34 @@ impl ManagedSecretManager {
             };
 
             let managed_secret = client
-                .update_managed_secret(owner, name, encrypted_value, description)
+                .update_managed_secret(&request_scope, owner, name, encrypted_value, description)
                 .await?;
             Ok(managed_secret)
         }
     }
 
     /// List all managed secrets accessible to the current user.
-    pub fn list_secrets(&self) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
+    pub fn list_secrets(
+        &self,
+        request_scope: RequestScope,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<RequestScope> {
         let client = self.client.clone();
         async move {
-            let secrets = client.list_secrets().await?;
+            let secrets = client.list_secrets(&request_scope).await?;
+            Ok(secrets)
+        }
+    }
+
+    pub fn list_harness_auth_secrets(
+        &self,
+        request_scope: RequestScope,
+        harness: warp_graphql::ai::AgentHarness,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<RequestScope> {
+        let client = self.client.clone();
+        async move {
+            let secrets = client
+                .list_harness_auth_secrets(&request_scope, harness)
+                .await?;
             Ok(secrets)
         }
     }
@@ -167,13 +193,17 @@ impl ManagedSecretManager {
     pub fn get_task_secrets(
         &self,
         task_id: String,
-    ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<HashMap<String, ManagedSecretValue>>> + use<RequestScope>
+    {
         // Define and invoke an inner async function to simplify tracing instrumentation.
         #[tracing::instrument(name = "get_task_secrets", skip_all, err, fields(tags.cloud_agent = true))]
-        async fn inner(
-            client: Arc<dyn ManagedSecretsClient>,
+        async fn inner<RequestScope>(
+            client: Arc<dyn ManagedSecretsClient<RequestScope = RequestScope>>,
             task_id: String,
-        ) -> anyhow::Result<HashMap<String, ManagedSecretValue>> {
+        ) -> anyhow::Result<HashMap<String, ManagedSecretValue>>
+        where
+            RequestScope: Send + Sync + 'static,
+        {
             // We only need the workload token for the duration of the request.
             let workload_token =
                 warp_isolation_platform::issue_workload_token(Some(Duration::from_mins(5))).await?;
@@ -228,7 +258,7 @@ impl ManagedSecretManager {
     pub fn issue_task_identity_token(
         &self,
         options: IdentityTokenOptions,
-    ) -> impl Future<Output = anyhow::Result<TaskIdentityToken>> + use<> {
+    ) -> impl Future<Output = anyhow::Result<TaskIdentityToken>> + use<RequestScope> {
         let client = self.client.clone();
         async move { client.issue_task_identity_token(options).await }
     }
@@ -242,7 +272,7 @@ impl ManagedSecretManager {
         requested_duration: Duration,
     ) -> impl Future<
         Output = Result<GcpWorkloadIdentityFederationToken, GcpWorkloadIdentityFederationError>,
-    > + use<> {
+    > + use<RequestScope> {
         let client = self.client.clone();
         async move {
             match token_type.as_str() {
@@ -289,8 +319,14 @@ fn owner_public_key<'a>(
     }
 }
 
-impl Entity for ManagedSecretManager {
+impl<RequestScope> Entity for ManagedSecretManager<RequestScope>
+where
+    RequestScope: Send + Sync + 'static,
+{
     type Event = ();
 }
 
-impl SingletonEntity for ManagedSecretManager {}
+impl<RequestScope> SingletonEntity for ManagedSecretManager<RequestScope> where
+    RequestScope: Send + Sync + 'static
+{
+}

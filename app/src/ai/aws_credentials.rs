@@ -12,10 +12,10 @@ use parking_lot::FairMutex;
 use tokio::sync::Mutex;
 use vec1::vec1;
 use warp_errors::report_error;
-use warp_managed_secrets::ManagedSecretManager;
 use warp_managed_secrets::client::IdentityTokenOptions;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::settings::{AISettings, AISettingsChangedEvent};
 use crate::terminal::event::{AfterBlockCompletedEvent, BlockType};
 use crate::terminal::model::terminal_model::TerminalModel;

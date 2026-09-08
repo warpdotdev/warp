@@ -252,6 +252,13 @@ impl BaseClient {
     pub fn set_ambient_agent_task_id(&self, task_id: Option<String>) {
         *self.ambient_agent_task_id.write() = task_id;
     }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_ambient_workload_token_for_test(&self, token: String) {
+        *self.ambient_workload_token.lock() = Some(warp_isolation_platform::WorkloadToken {
+            token,
+            expires_at: None,
+        });
+    }
 
     /// Returns an ambient agent workload token when the current runtime can issue one.
     pub async fn get_or_create_ambient_workload_token(&self) -> Result<Option<String>> {
