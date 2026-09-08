@@ -4,14 +4,14 @@ use std::path::PathBuf;
 use anyhow::anyhow;
 use cfg_if::cfg_if;
 
+use super::DirEntryOrFragment;
 use super::node::{ChildrenPath, MerkleNode, NodeLens, NodeMask};
 use super::serialized_tree::SerializedMerkleTree;
-use super::DirEntryOrFragment;
+use crate::index::Entry;
+use crate::index::full_source_code_embedding::Error;
 use crate::index::full_source_code_embedding::fragment_metadata::{
     LeafToFragmentMetadata, LeafToFragmentMetadataUpdates,
 };
-use crate::index::full_source_code_embedding::Error;
-use crate::index::Entry;
 
 pub(super) enum UpdateFileResult {
     Deleted,

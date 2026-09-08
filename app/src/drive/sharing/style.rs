@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::color::ColorU;
 use warpui::elements::{CornerRadius, Radius};
 use warpui::fonts::Weight;

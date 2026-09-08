@@ -5,20 +5,20 @@ use std::time::Duration;
 use command::blocking::Command;
 use warp::features::FeatureFlag;
 use warp::integration_testing::code_review::{
-    assert_code_review_anchor, assert_code_review_line_text, assert_code_review_loaded,
-    assert_code_review_scroll_region, scroll_code_review_to_deleted_range,
+    ScrollRegion, assert_code_review_anchor, assert_code_review_line_text,
+    assert_code_review_loaded, assert_code_review_scroll_region, assert_min_hidden_sections,
+    expand_first_hidden_section_and_assert_full_reveal, scroll_code_review_to_deleted_range,
     scroll_code_review_to_footer, scroll_code_review_to_header, scroll_code_review_to_line,
-    ScrollRegion,
 };
 use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for_tab;
 use warp::integration_testing::view_getters::{single_terminal_view_for_tab, workspace_view};
 use warp::workspace::WorkspaceAction;
 use warpui_core::integration::{AssertionCallback, TestStep};
-use warpui_core::{async_assert, App, WindowId};
+use warpui_core::{App, WindowId, async_assert};
 
 use super::new_builder;
-use crate::util::write_all_rc_files_for_test;
 use crate::Builder;
+use crate::util::write_all_rc_files_for_test;
 
 const TEST_FILE_NAME: &str = "scroll_target.txt";
 const TARGET_LINE_NUMBER: usize = 70;
@@ -649,4 +649,62 @@ pub fn test_code_review_scroll_preserved_second_file() -> Builder {
                     None,
                 )),
         )
+}
+
+// --- Hidden-section double-click expansion (GH11622) ---
+// The fixture modifies lines 10-80 and 200-300 of a 400-line file, leaving
+// large unchanged stretches that the diff editor collapses into hidden
+// sections. Fully expanding a section (the action a bar double-click performs,
+// via ExpansionType::Both over the section's full range) reveals the whole
+// section in one transition and removes it from the hidden set, whereas a
+// chunked gutter reveal would only shrink it. The expansion is size-agnostic,
+// so this also covers the small-section case (product invariant #8).
+
+pub fn test_code_review_double_click_fully_expands_hidden_section() -> Builder {
+    new_builder()
+        .use_tmp_filesystem_for_test_root_directory()
+        .with_setup(|utils| {
+            let test_dir = utils.test_dir();
+            let repo_dir = test_dir.join("repo");
+            fs::create_dir_all(&repo_dir).expect("should create repo subdirectory");
+            let repo_dir_string = repo_dir
+                .to_str()
+                .expect("repo directory should be valid utf-8");
+
+            write_all_rc_files_for_test(&test_dir, format!("cd {repo_dir_string}"));
+
+            fs::write(repo_dir.join(TEST_FILE_NAME), initial_committed_contents())
+                .expect("should write initial committed contents");
+            run_git(&repo_dir, &["init", "-b", "main"]);
+            run_git(&repo_dir, &["config", "user.email", "test@example.com"]);
+            run_git(&repo_dir, &["config", "user.name", "Warp Integration Test"]);
+            run_git(&repo_dir, &["add", TEST_FILE_NAME]);
+            run_git(&repo_dir, &["commit", "-m", "Initial commit"]);
+
+            fs::write(repo_dir.join(TEST_FILE_NAME), initial_diff_contents())
+                .expect("should write initial diff contents");
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(
+            TestStep::new("Wait for the terminal to detect the git repository")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_repo_detected()),
+        )
+        .with_step(
+            TestStep::new("Open the code review panel")
+                .with_action(|app, window_id, _| open_code_review_panel(app, window_id)),
+        )
+        .with_step(
+            TestStep::new("Wait for the code review panel to load file diffs")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_code_review_loaded()),
+        )
+        .with_step(
+            TestStep::new("Wait for the diff to collapse unchanged context into hidden sections")
+                .set_timeout(Duration::from_secs(20))
+                .add_assertion(assert_min_hidden_sections(TEST_FILE_NAME, 1)),
+        )
+        .with_step(expand_first_hidden_section_and_assert_full_reveal(
+            TEST_FILE_NAME,
+        ))
 }

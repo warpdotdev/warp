@@ -42,6 +42,11 @@ fn snapshot_protos_serialize_activation_conditions() {
             BundledSkillActivation::RequiresMcp(McpIntegration::Figma),
         ),
         (
+            "tui-migrate-setup".to_string(),
+            daemon_skill("tui-migrate-setup", "# local migration"),
+            BundledSkillActivation::TuiOnly,
+        ),
+        (
             "file-present-skill".to_string(),
             daemon_skill("file-present-skill", "# file"),
             BundledSkillActivation::RequiresFile(present_file),
@@ -57,6 +62,7 @@ fn snapshot_protos_serialize_activation_conditions() {
 
     // `RequiresFile` is evaluated daemon-side: the missing-file skill is
     // dropped, the present-file skill ships as unconditionally active.
+    // TUI-only migration is local-client behavior and is also dropped.
     let mut ids: Vec<&str> = protos
         .iter()
         .map(|proto| bundled_metadata(proto).id.as_str())

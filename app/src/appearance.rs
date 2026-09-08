@@ -7,7 +7,7 @@ mod macos_app_icon {
     pub use objc2::rc::autoreleasepool;
     pub use objc2::{AnyThread, MainThreadMarker};
     pub use objc2_app_kit::{NSApplication, NSImage, NSWorkspace, NSWorkspaceIconCreationOptions};
-    pub use objc2_foundation::{ns_string, NSBundle, NSString};
+    pub use objc2_foundation::{NSBundle, NSString, ns_string};
     pub use warp_core::channel::{Channel, ChannelState};
 
     pub use crate::settings::app_icon::{AppIcon, AppIconSettings, AppIconSettingsChangedEvent};
@@ -17,12 +17,12 @@ use anyhow::anyhow;
 use macos_app_icon::*;
 pub use warp_core::ui::appearance::{Appearance, AppearanceEvent};
 
+use crate::ASSETS;
 use crate::settings::{
-    active_theme_kind, FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings,
-    ThemeSettings,
+    FontSettings, FontSettingsChangedEvent, MonospaceFontSize, Settings, ThemeSettings,
+    active_theme_kind,
 };
 use crate::themes::theme::{ThemeKind, WarpTheme};
-use crate::ASSETS;
 
 /// Manages the state of the app-wide Appearance settings, it is responsible
 /// for 1) listening to settings changes and update the underlying Appearance

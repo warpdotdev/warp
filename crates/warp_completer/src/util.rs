@@ -1,7 +1,7 @@
-use crate::completer::{describe_given_token, CompletionContext};
+use crate::completer::{CompletionContext, describe_given_token};
 use crate::meta::{HasSpan as _, Span, SpannedItem};
-use crate::parsers::simple::all_parsed_commands;
 use crate::parsers::LiteCommand;
+use crate::parsers::simple::all_parsed_commands;
 use crate::{ParsedCommandsSnapshot, ParsedTokenData, ParsedTokensSnapshot};
 
 /// Parse the current commands in the editor's buffer and get descriptions

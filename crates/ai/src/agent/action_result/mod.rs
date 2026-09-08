@@ -8,6 +8,7 @@ use chrono::{DateTime, Local};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use warp_core::command::ExitCode;
+use warp_multi_agent_api::StoredScreenshotRef;
 use warp_multi_agent_api::apply_file_diffs_result::success::UpdatedFileContent;
 use warp_terminal::model::BlockId;
 
@@ -92,9 +93,6 @@ pub enum AIAgentActionResultType {
     /// The result of fetching a conversation's tasks.
     FetchConversation(FetchConversationResult),
 
-    /// The result of starting a child agent.
-    StartAgent(StartAgentResult),
-
     /// The result of sending a message to another agent.
     SendMessageToAgent(SendMessageToAgentResult),
 
@@ -111,12 +109,16 @@ pub enum AIAgentActionResultType {
     /// resume.
     WaitForEvents(WaitForEventsResult),
 }
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ReadFilesFailedFile {
+    pub path: String,
+    pub message: String,
+}
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum StartAgentVersion {
-    #[default]
-    V1,
-    V2,
+impl Display for ReadFilesFailedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.path, self.message)
+    }
 }
 
 impl AIAgentActionResultType {
@@ -174,7 +176,6 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::StartRecording(result) => result.fmt(f),
             AIAgentActionResultType::StopRecording(result) => result.fmt(f),
             AIAgentActionResultType::FetchConversation(result) => result.fmt(f),
-            AIAgentActionResultType::StartAgent(result) => result.fmt(f),
             AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
             AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
@@ -185,6 +186,63 @@ impl Display for AIAgentActionResultType {
             }
         }
     }
+}
+
+/// Evidence, collected by the client while an agent monitors a long-running
+/// command, that the command is still doing work.
+///
+/// A command that redirects its output to a file, suppresses it entirely, or
+/// computes silently is indistinguishable from a hung one when judged from the
+/// terminal grid alone. Process-tree activity gives the agent something to look
+/// at besides the grid before deciding to cancel.
+///
+/// Best-effort: built only when the sampler actually took a reading, so every
+/// value carried here is a real measurement, including zeros. When nothing was
+/// collected, no `LrcActivity` exists at all — there is no in-band "signals
+/// unavailable" marker.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcActivity {
+    /// Time since the process tree last showed activity — CPU accrual, I/O
+    /// writes, or a change in the set of live processes.
+    ///
+    /// This is derived from a fixed-rate sampler rather than from the interval
+    /// between agent polls, so it stays accurate no matter how far apart the
+    /// agent's reads are.
+    pub since_last_activity: Option<Duration>,
+
+    /// Present whenever the process tree was actually inspected, including when
+    /// every reading in it is zero: an exited tree is a real answer. Optional
+    /// only for restoring conversations recorded by other client versions;
+    /// reports built by this client always populate it.
+    pub process: Option<LrcProcessActivity>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LrcProcessActivity {
+    /// CPU time consumed across the command's process tree since the previous
+    /// snapshot.
+    pub cpu_time_delta: Duration,
+
+    /// Coarse aggregate state of the process tree.
+    pub state: LrcProcessState,
+
+    pub live_process_count: u32,
+
+    /// Bytes written by the process tree since the previous snapshot, where the
+    /// OS reports it.
+    pub io_write_bytes_delta: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Eq, PartialEq)]
+pub enum LrcProcessState {
+    Running,
+    Sleeping,
+    /// Blocked in uninterruptible I/O, which is real progress rather than a hang.
+    DiskWait,
+    Stopped,
+    Zombie,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -203,6 +261,7 @@ pub enum RequestCommandOutputResult {
         grid_contents: String,
         cursor: String,
         is_alt_screen_active: bool,
+        activity: Option<LrcActivity>,
     },
     /// A running command canceled via ctrl-c
     /// would have Completed result with exit code 130.
@@ -272,6 +331,7 @@ pub enum WriteToLongRunningShellCommandResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     CommandFinished {
         block_id: BlockId,
@@ -417,7 +477,10 @@ impl From<&FileContext> for FileLocations {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ReadFilesResult {
-    Success { files: Vec<FileContext> },
+    Success {
+        files: Vec<FileContext>,
+        failed_files: Vec<ReadFilesFailedFile>,
+    },
     Error(String),
     Cancelled,
 }
@@ -425,8 +488,15 @@ pub enum ReadFilesResult {
 impl Display for ReadFilesResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ReadFilesResult::Success { files } => {
-                write!(f, "Read files: {}", files.iter().format(", "))
+            ReadFilesResult::Success {
+                files,
+                failed_files,
+            } => {
+                write!(f, "Read files: {}", files.iter().format(", "))?;
+                if !failed_files.is_empty() {
+                    write!(f, " (failed: {})", failed_files.iter().format(", "))?;
+                }
+                Ok(())
             }
             ReadFilesResult::Error(error) => write!(f, "Read files error: {error}"),
             ReadFilesResult::Cancelled => write!(f, "Read files cancelled"),
@@ -578,6 +648,7 @@ pub enum ReadShellCommandOutputResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     Cancelled,
     Error(ShellCommandError),
@@ -772,7 +843,6 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::StartRecording(_) => "The result of starting a recording",
             AIAgentActionResultType::StopRecording(_) => "The result of stopping a recording",
             AIAgentActionResultType::FetchConversation(_) => "The fetched conversation tasks",
-            AIAgentActionResultType::StartAgent(_) => "The result of starting a child agent",
             AIAgentActionResultType::SendMessageToAgent(_) => "The result of sending a message",
             AIAgentActionResultType::TransferShellCommandControlToUser(_) => {
                 "The result of transferring shell command control to user"
@@ -810,22 +880,25 @@ impl AIAgentActionResultType {
                 ReadShellCommandOutputResult::CommandFinished { .. }
                 | ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. },
             )
-            | Self::UseComputer(UseComputerResult::Success(_))
+            | Self::UseComputer(UseComputerResult::Success { .. })
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
             | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
             | Self::StartRecording(StartRecordingResult::Success(_))
-            | Self::StopRecording(StopRecordingResult::Success(_))
+            | Self::StopRecording(
+                StopRecordingResult::Success(_) | StopRecordingResult::Discarded,
+            )
             | Self::OpenCodeReview
             | Self::ReadSkill(ReadSkillResult::Success { .. })
             | Self::FetchConversation(FetchConversationResult::Success { .. })
-            | Self::StartAgent(StartAgentResult::Success { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Success { .. })
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Snapshot { .. }
                 | TransferShellCommandControlToUserResult::CommandFinished { .. },
             ) => true,
             Self::AskUserQuestion(AskUserQuestionResult::Success { .. }) => true,
-            Self::RunAgents(RunAgentsResult::Launched { .. }) => true,
+            Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
+                .iter()
+                .any(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Launched { .. })),
             Self::WaitForEvents(WaitForEventsResult::Completed) => true,
             _ => false,
         }
@@ -852,7 +925,6 @@ impl AIAgentActionResultType {
             | Self::StartRecording(StartRecordingResult::Error(_))
             | Self::StopRecording(StopRecordingResult::Error(_))
             | Self::FetchConversation(FetchConversationResult::Error(_))
-            | Self::StartAgent(StartAgentResult::Error { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Error(_))
             | Self::AskUserQuestion(AskUserQuestionResult::Error(_))
             | Self::TransferShellCommandControlToUser(
@@ -861,6 +933,9 @@ impl AIAgentActionResultType {
             | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. }) => {
                 true
             }
+            Self::RunAgents(RunAgentsResult::Launched { agents, .. }) => agents
+                .iter()
+                .all(|agent| matches!(agent.kind, RunAgentsAgentOutcomeKind::Failed { .. })),
             _ => false,
         }
     }
@@ -901,7 +976,6 @@ impl AIAgentActionResultType {
             )
             | Self::ReadSkill(ReadSkillResult::Cancelled)
             | Self::FetchConversation(FetchConversationResult::Cancelled)
-            | Self::StartAgent(StartAgentResult::Cancelled { .. })
             | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             // SkippedByAutoApprove is intentionally excluded: the agent should continue.
             | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
@@ -1133,16 +1207,57 @@ impl Display for ReadSkillResult {
 }
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseComputerResult {
-    /// Computer use succeeded, with one result per requested action.
-    Success(computer_use::ActionResult),
+    /// Computer use succeeded. Mirrors the wire `Success` message.
+    Success {
+        screenshot: Option<ScreenshotSource>,
+        cursor_position: Option<computer_use::Vector2I>,
+        /// The on-screen windows, refreshed after the actions ran, so the caller always has a
+        /// fresh list to target next. Empty on platforms without window enumeration.
+        windows: Vec<computer_use::WindowInfo>,
+        /// Metadata about the captured window, populated only when a window target was
+        /// screenshotted, so window-local coordinates map onto the screenshot image.
+        captured_window: Option<computer_use::CapturedWindow>,
+    },
     Error(String),
     Cancelled,
+}
+
+/// Where a computer-use screenshot's bytes live, mirroring the wire's
+/// `RawImage.source` oneof.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenshotSource {
+    /// The bytes are inline on the client.
+    Inline(computer_use::Screenshot),
+    /// The bytes live in Warp-managed object storage and must be fetched via a
+    /// signed URL.
+    Stored {
+        stored_ref: StoredScreenshotRef,
+        /// MIME type of the stored image (e.g. "image/png").
+        mime_type: String,
+        /// The width of the stored image, in pixels.
+        width: i32,
+        /// The height of the stored image, in pixels.
+        height: i32,
+    },
+}
+
+impl UseComputerResult {
+    /// Builds a success result from a locally captured action result, whose
+    /// screenshot bytes (if any) are inline.
+    pub fn success(result: computer_use::ActionResult) -> Self {
+        Self::Success {
+            screenshot: result.screenshot.map(ScreenshotSource::Inline),
+            cursor_position: result.cursor_position,
+            windows: result.windows,
+            captured_window: result.captured_window,
+        }
+    }
 }
 
 impl Display for UseComputerResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UseComputerResult::Success(_) => write!(f, "Use computer completed"),
+            UseComputerResult::Success { .. } => write!(f, "Use computer completed"),
             UseComputerResult::Error(error) => write!(f, "Use computer error: {error}"),
             UseComputerResult::Cancelled => write!(f, "Use computer cancelled"),
         }
@@ -1253,6 +1368,10 @@ pub enum StopRecordingResult {
     Success(RecordingStopped),
     Error(String),
     Cancelled,
+    /// The agent opted not to persist the recording (`should_persist=false`), so
+    /// it was discarded without uploading. Distinct from `Cancelled` so the
+    /// agent's turn continues.
+    Discarded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1276,6 +1395,7 @@ impl Display for StopRecordingResult {
             ),
             StopRecordingResult::Error(error) => write!(f, "Stop recording error: {error}"),
             StopRecordingResult::Cancelled => write!(f, "Stop recording cancelled"),
+            StopRecordingResult::Discarded => write!(f, "Recording discarded"),
         }
     }
 }
@@ -1297,50 +1417,6 @@ impl Display for FetchConversationResult {
                 write!(f, "Fetch conversation error: {error}")
             }
             FetchConversationResult::Cancelled => write!(f, "Fetch conversation cancelled"),
-        }
-    }
-}
-
-// TODO(QUALITY-788): Delete legacy start_agent/start_agent_v2 result support once
-// old preview orchestration history no longer needs parse/display/result compatibility.
-// Linear issue: QUALITY-788.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StartAgentResult {
-    Success {
-        agent_id: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Error {
-        error: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Cancelled {
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-}
-
-impl StartAgentResult {
-    /// Returns which start-agent tool schema version produced this result.
-    pub fn version(&self) -> StartAgentVersion {
-        match self {
-            StartAgentResult::Success { version, .. }
-            | StartAgentResult::Error { version, .. }
-            | StartAgentResult::Cancelled { version } => *version,
-        }
-    }
-}
-
-impl Display for StartAgentResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StartAgentResult::Success { agent_id, .. } => {
-                write!(f, "Started agent with id {agent_id}")
-            }
-            StartAgentResult::Error { error, .. } => write!(f, "Start agent error: {error}"),
-            StartAgentResult::Cancelled { .. } => write!(f, "Start agent cancelled"),
         }
     }
 }
@@ -1381,6 +1457,9 @@ pub enum RunAgentsLaunchedExecutionMode {
         environment_id: String,
         worker_host: String,
         computer_use_enabled: bool,
+        /// Resolved runner UID the batch committed to; empty when none.
+        #[serde(default)]
+        runner_id: String,
     },
 }
 
@@ -1391,6 +1470,11 @@ pub enum RunAgentsLaunchedExecutionMode {
 pub struct RunAgentsAgentOutcome {
     pub name: String,
     pub kind: RunAgentsAgentOutcomeKind,
+    /// The model that was actually used for this child agent. Set from the
+    /// per-agent `model_id` override when present; otherwise from the
+    /// batch-level resolved model. Empty when the server did not populate it.
+    #[serde(default)]
+    pub resolved_model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1449,6 +1533,7 @@ pub enum TransferShellCommandControlToUserResult {
         cursor: String,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        activity: Option<LrcActivity>,
     },
     CommandFinished {
         block_id: BlockId,

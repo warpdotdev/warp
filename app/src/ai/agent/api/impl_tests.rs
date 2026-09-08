@@ -1,5 +1,5 @@
-use warp_core::features::FeatureFlag;
 use warp_core::HostId;
+use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
 use super::{
@@ -33,6 +33,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         mcp_context: None,
         planning_enabled: true,
         should_redact_secrets: false,
+        member_byo_credentials_allowed: false,
         api_keys: None,
         custom_model_providers: None,
         custom_model_routers: None,
@@ -115,8 +116,6 @@ fn supported_tools_include_orchestration_tools_when_orchestration_enabled() {
 
     assert!(supported_tools.contains(&api::ToolType::RunAgents));
     assert!(supported_tools.contains(&api::ToolType::SendMessageToAgent));
-    assert!(!supported_tools.contains(&api::ToolType::StartAgent));
-    assert!(!supported_tools.contains(&api::ToolType::StartAgentV2));
 }
 
 #[test]
@@ -126,8 +125,6 @@ fn supported_tools_omit_orchestration_tools_when_orchestration_disabled() {
 
     assert!(!supported_tools.contains(&api::ToolType::RunAgents));
     assert!(!supported_tools.contains(&api::ToolType::SendMessageToAgent));
-    assert!(!supported_tools.contains(&api::ToolType::StartAgent));
-    assert!(!supported_tools.contains(&api::ToolType::StartAgentV2));
 }
 #[test]
 fn supported_tools_omits_ask_user_question_when_disabled() {

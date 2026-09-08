@@ -3,8 +3,8 @@ use warpui::{App, SingletonEntity};
 
 use super::Prompt;
 use crate::auth::AuthStateProvider;
-use crate::context_chips::prompt::{PromptConfiguration, PromptSelection};
 use crate::context_chips::ContextChipKind;
+use crate::context_chips::prompt::{PromptConfiguration, PromptSelection};
 use crate::settings::WarpPromptSeparator;
 use crate::terminal::session_settings::SessionSettings;
 use crate::test_util::settings::initialize_settings_for_tests;

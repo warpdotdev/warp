@@ -35,15 +35,21 @@ fn records_provider_skill_files_and_project_rules() {
             .any(|content| content
                 == &StandingQueryContent::directory(standardized(&skills_provider)))
     );
-    assert!(results
-        .project_skills()
-        .any(|content| { content == &StandingQueryContent::file(standardized(&skill_file)) }));
-    assert!(results
-        .project_rules()
-        .any(|content| content == &StandingQueryContent::file(standardized(&root_rule))));
-    assert!(results
-        .project_rules()
-        .any(|content| { content == &StandingQueryContent::file(standardized(&nested_rule)) }));
+    assert!(
+        results
+            .project_skills()
+            .any(|content| { content == &StandingQueryContent::file(standardized(&skill_file)) })
+    );
+    assert!(
+        results
+            .project_rules()
+            .any(|content| content == &StandingQueryContent::file(standardized(&root_rule)))
+    );
+    assert!(
+        results
+            .project_rules()
+            .any(|content| { content == &StandingQueryContent::file(standardized(&nested_rule)) })
+    );
 }
 
 #[test]
@@ -65,9 +71,11 @@ fn replacing_removed_direct_skill_child_can_reupsert_provider_for_hydration() {
     assert_eq!(delta.removed_project_skills, vec![skill]);
     assert_eq!(delta.upserted_project_skills, vec![provider.clone()]);
     assert!(results.project_skills().any(|content| content == &provider));
-    assert!(!results
-        .project_skills()
-        .any(|content| content.path == standardized(&skill_path)));
+    assert!(
+        !results
+            .project_skills()
+            .any(|content| content.path == standardized(&skill_path))
+    );
 }
 
 #[test]

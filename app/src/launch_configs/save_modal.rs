@@ -19,7 +19,7 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-use crate::app_state::{get_app_state, AppState};
+use crate::app_state::{AppState, get_app_state};
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
@@ -29,7 +29,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::user_config::launch_configs_dir;
 #[cfg(feature = "local_fs")]
-use crate::user_config::{util::file_name_to_human_readable_name, WarpConfig};
+use crate::user_config::{WarpConfig, util::file_name_to_human_readable_name};
 use crate::util::bindings::keybinding_name_to_display_string;
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
@@ -242,19 +242,19 @@ impl LaunchConfigSaveModal {
         use crate::util::file::external_editor::EditorSettings;
         use crate::util::openable_file_type::resolve_file_target;
 
-        if let SaveState::Success = &self.save_state {
-            if let Some(file_name) = &self.file_name {
-                let file_path = launch_configs_dir().join(file_name);
-                // Resolve target and emit event - workspace will handle all cases
-                let settings = EditorSettings::as_ref(ctx);
-                let target = resolve_file_target(&file_path, settings, None);
-                ctx.emit(LaunchConfigModalEvent::OpenFileWithTarget {
-                    path: file_path,
-                    target,
-                    line_col: None,
-                });
-                send_telemetry_from_ctx!(TelemetryEvent::OpenLaunchConfigFile, ctx);
-            }
+        if let SaveState::Success = &self.save_state
+            && let Some(file_name) = &self.file_name
+        {
+            let file_path = launch_configs_dir().join(file_name);
+            // Resolve target and emit event - workspace will handle all cases
+            let settings = EditorSettings::as_ref(ctx);
+            let target = resolve_file_target(&file_path, settings, None);
+            ctx.emit(LaunchConfigModalEvent::OpenFileWithTarget {
+                path: file_path,
+                target,
+                line_col: None,
+            });
+            send_telemetry_from_ctx!(TelemetryEvent::OpenLaunchConfigFile, ctx);
         }
     }
 
@@ -329,11 +329,7 @@ impl LaunchConfigSaveModal {
                 ..Default::default()
             });
 
-        if disabled {
-            button.disabled()
-        } else {
-            button
-        }
+        if disabled { button.disabled() } else { button }
     }
 
     fn render_save_config_button(

@@ -11,8 +11,8 @@ use warpui_core::geometry::vector::vec2f;
 
 use self::color::CustomDetails;
 use super::color::blend::Blend;
-use super::color::contrast::{pick_best_foreground_color, MinimumAllowedContrast};
-use super::color::{coloru_with_opacity, hex_color, mid_coloru, ContrastingColor, Opacity, OPAQUE};
+use super::color::contrast::{MinimumAllowedContrast, pick_best_foreground_color};
+use super::color::{ContrastingColor, OPAQUE, Opacity, coloru_with_opacity, hex_color, mid_coloru};
 use crate::paths::themes_dir;
 // Import relative_luminance from contrast module for brightness calculation
 use crate::ui::color::contrast::relative_luminance;

@@ -93,8 +93,8 @@ fn custom_theme_relative_parent_dir_path_is_not_portable() {
 }
 
 #[test]
-fn custom_theme_absolute_parent_dir_path_under_theme_root_storage_helper_preserves_path_and_rejects_portability(
-) {
+fn custom_theme_absolute_parent_dir_path_under_theme_root_storage_helper_preserves_path_and_rejects_portability()
+ {
     let root = PathBuf::from("/Users/example/.warp/themes");
     let path = root.join("../outside.yml");
 

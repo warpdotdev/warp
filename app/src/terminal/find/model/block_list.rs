@@ -7,8 +7,9 @@ use itertools::Itertools;
 use warpui::units::Lines;
 use warpui::{AppContext, EntityId};
 
-use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
 use super::FindOptions;
+use super::rich_content::{FindableRichContentHandle, RichContentMatchId};
+use crate::terminal::GridType;
 use crate::terminal::model::block::Block;
 use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, RichContentItem, TotalIndex,
@@ -16,7 +17,6 @@ use crate::terminal::model::blocks::{
 use crate::terminal::model::find::{FindConfig, RegexDFAs};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
-use crate::terminal::GridType;
 use crate::view_components::find::FindDirection;
 
 /// Runs a find operation on the blocklist using the given `options` and returns a
@@ -67,12 +67,12 @@ pub(super) fn run_find_on_block_list(
         // In both cases we want the most recent block updated last, which means the sort direction
         // here should always be MostRecentLast
         for block_index in blocks_to_include_in_results {
-            let agent_view_state = block_list.agent_view_state();
+            let transcript_scope = block_list.transcript_scope();
             if let Some(block) = block_list
                 .block_at(*block_index)
-                .filter(|block| !block.is_empty(agent_view_state))
+                .filter(|block| !block.is_empty(transcript_scope))
             {
-                if block.height(agent_view_state) == Lines::zero() {
+                if block.height(transcript_scope) == Lines::zero() {
                     // This should not happen in practice, because `blocks_to_include_in_results`
                     // is set by selecting blocks, which are presumably visible.
                     continue;
@@ -641,11 +641,7 @@ fn update_matches_for_filtered_block<'a>(
 ) {
     let Some(displayed_rows) = block.displayed_output_row_ranges() else {
         matches.for_each(|find_match| {
-            if let BlockListMatch::CommandBlock(BlockGridMatch {
-                ref mut is_filtered,
-                ..
-            }) = find_match
-            {
+            if let BlockListMatch::CommandBlock(BlockGridMatch { is_filtered, .. }) = find_match {
                 *is_filtered = false;
             }
         });

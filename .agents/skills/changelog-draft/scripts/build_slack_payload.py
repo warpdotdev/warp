@@ -20,6 +20,7 @@ SECTION_ORDER = (
     ("improvements", "Improvements"),
     ("bugFixes", "Bug Fixes"),
     ("images", "Image"),
+    ("tui_updates", "TUI Updates"),
     # Keep the existing label stable for compatibility with recent Slack posts.
     ("oz_updates", "oz_updates"),
 )

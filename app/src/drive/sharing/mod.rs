@@ -13,8 +13,9 @@ use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::server::ids::ServerId;
 use crate::server::server_api::object::GuestIdentifier;
-use crate::terminal::shared_session::join_link;
 use crate::terminal::TerminalView;
+use crate::terminal::shared_session::join_link;
+use crate::terminal::shared_session::manager::Manager;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfiles;
@@ -53,7 +54,21 @@ impl ShareableObject {
             ShareableObject::WarpDriveObject(id) => CloudModel::as_ref(app)
                 .get_by_uid(&id.uid())
                 .and_then(|object| object.object_link()),
-            ShareableObject::Session { session_id, .. } => Some(join_link(session_id)),
+            ShareableObject::Session {
+                handle, session_id, ..
+            } => {
+                let handle = handle.upgrade(app)?;
+                let shared_session_status = handle
+                    .as_ref(app)
+                    .model
+                    .lock()
+                    .shared_session_status()
+                    .clone();
+                let link_session_id = Manager::as_ref(app)
+                    .session_id_for_link(&handle.id(), &shared_session_status)?;
+
+                (link_session_id == *session_id).then(|| join_link(session_id))
+            }
             ShareableObject::AIConversation(id) => {
                 // Use the unified helper that checks both loaded conversation and historical metadata
                 BlocklistAIHistoryModel::as_ref(app)

@@ -1,6 +1,6 @@
 //! Unit tests for format_command_text in requested_command.rs
 
-use super::format_command_text;
+use super::{format_command_text, mcp_blocked_title_text, mcp_viewing_detail_title_text};
 
 #[test]
 fn single_line_without_newline_is_unchanged_ascii() {
@@ -69,4 +69,52 @@ fn newline_then_multibyte_results_in_ellipsis_only() {
     // Sanity: output remains valid UTF-8
     let reconstructed: String = output.chars().collect();
     assert_eq!(reconstructed, output);
+}
+
+#[test]
+fn mcp_blocked_title_surfaces_tool_and_server_when_known() {
+    assert_eq!(
+        mcp_blocked_title_text("create_issue", Some("github")),
+        "OK if I call MCP tool create_issue on server github"
+    );
+}
+
+#[test]
+fn mcp_blocked_title_falls_back_to_tool_name_when_server_unknown() {
+    assert_eq!(
+        mcp_blocked_title_text("create_issue", None),
+        "OK if I call MCP tool create_issue"
+    );
+}
+
+#[test]
+fn mcp_blocked_title_falls_back_to_generic_message_when_tool_name_empty() {
+    assert_eq!(
+        mcp_blocked_title_text("", Some("github")),
+        "OK if I call this MCP tool?"
+    );
+    assert_eq!(
+        mcp_blocked_title_text("", None),
+        "OK if I call this MCP tool?"
+    );
+}
+
+#[test]
+fn mcp_viewing_detail_title_surfaces_tool_and_server_when_known() {
+    assert_eq!(
+        mcp_viewing_detail_title_text("create_issue", Some("github")),
+        "Viewing MCP tool create_issue on github"
+    );
+    assert_eq!(
+        mcp_viewing_detail_title_text("create_issue", None),
+        "Viewing MCP tool create_issue"
+    );
+}
+
+#[test]
+fn mcp_viewing_detail_title_falls_back_to_generic_message_when_tool_name_empty() {
+    assert_eq!(
+        mcp_viewing_detail_title_text("", Some("github")),
+        "Viewing MCP tool call detail"
+    );
 }

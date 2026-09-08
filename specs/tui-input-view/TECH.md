@@ -5,6 +5,14 @@ Commit ref: `724c54771e2a06766257bc20f0053c6737a7d1b8`
 > This spec documents the **as-built** Milestone 1 implementation. Where the
 > original plan diverged during implementation, this reflects what actually
 > landed.
+>
+> **Partially superseded** by `specs/tui-editor-element/TECH.md`: the rendering
+> internals described below (`TuiInputElement`, the view-held `scroll_offset`,
+> the pure row/cursor helpers, and the "two char-cell layout call sites" risk)
+> were replaced by the shared `TuiEditorElement` + `DisplayLattice` core, with
+> scroll/drag state moved model-side. The keybinding table and the
+> `CodeEditorModel::new_tui` / char-cell `RenderState` foundations remain
+> accurate.
 
 ## Context
 
@@ -51,13 +59,13 @@ pub struct CharCellState {
 }
 ```
 
-`char_widths` deliberately stores only each character's display width (0/1/2), **not** the buffer text. The render-state query methods are `&self` with no `AppContext` and `RenderState` does not hold the `Buffer`, so the per-char data layout needs must live here; storing widths (1 byte/char of derived metadata, like `line_starts`) instead of a `Vec<char>` avoids duplicating the text. The view builds row strings from the live buffer text directly, so it never needs this copy.
+`char_widths` deliberately stores only display-width metadata, **not** the buffer text. It remains indexed one byte per character so existing `CharOffset` geometry stays intact, but widths are derived in one pass over extended grapheme clusters: the cluster's terminal width is stored on its first character and zero on the remaining characters. The render-state query methods are `&self` with no `AppContext` and `RenderState` does not hold the `Buffer`, so this derived data must live here. The view builds row strings from the live buffer text directly, and selection geometry reads retained widths through `DisplayLattice`, so layout never re-segments the text.
 
 Construction and APIs:
 - `RenderState::new_internal` gains a `layout_mode` parameter; existing pixel constructors pass `LayoutMode::Pixels`.
-- New `RenderState::new_tui(terminal_width, styles, ctx)` constructs a `CharCell` `RenderState`. Callers supply a stub `RichTextStyles` (the field is never read for char-cell layout).
+- New `RenderState::new_tui(terminal_width, styles, hidden_lines, ctx)` constructs a `CharCell` `RenderState`. Callers supply a stub `RichTextStyles` (the field is never read for char-cell layout) and the owning editor's `HiddenLinesModel`.
 - `RenderState::char_cell() -> Option<&CharCellState>` is the single gateway to char-cell state. It returns `Some` only in `CharCell` mode, so the char-cell ops below are simply unreachable in pixel mode (no implicit "CharCell-only" runtime contract on `RenderState`). On `CharCellState`: `terminal_width()` / `set_terminal_width(u16)` (interior-mutable, so the element can push width during its layout pass with only a shared `&AppContext`) and `update_text(&str)` (rebuilds `line_starts` + per-char `char_widths` from the buffer text, O(n) char scan).
-- Public per-line primitives are the single source of truth for the wrapping rule, shared by both the editor conversions and the `warp_tui` view, and all operate on a line's per-char display widths (`&[u8]`): `char_cell_display_width(char)` (terminal cell width via `unicode-width`, used to build the width slices), `char_cell_line_row_starts(widths, terminal_width)` (char indices where each visual row begins), and `char_cell_line_gap_position(widths, terminal_width, char_in_line)` (`(row, display_col)` of a cursor gap).
+- Shared char-cell primitives are the single source of truth for the wrapping rule and operate on a line's per-char display widths (`&[u8]`): the private `char_cell_display_widths(text)` segments with `unicode-segmentation` and measures each cluster with `unicode-width`, `char_cell_line_row_starts(widths, terminal_width)` returns char indices where each visual row begins, and `char_cell_line_gap_position(widths, terminal_width, char_in_line)` returns the `(row, display_col)` of a cursor gap.
 
 Layout behaviour in `CharCell` mode:
 - `handle_layout_action`'s `BufferEdit` arm is a no-op — the async font-shaping channel and `LayoutCache` are bypassed entirely.
@@ -193,7 +201,7 @@ TuiInputView : TuiView + TypedActionView
 
 **Two char-cell layout call sites**: the view builds row strings/cursor with its own helpers (`build_visual_rows_with_offsets`, `char_cell_cursor_pos`, kill-range helpers) while line-count/scroll use the `RenderState` char-cell path — but both now delegate to the same shared per-line primitives (`char_cell_line_row_starts` / `char_cell_line_gap_position`), so they apply one wrapping rule. The round-trip and view tests guard the overlap; a future cleanup could route row-string building through the editor API too.
 
-**Unicode display width**: cell widths come from `unicode-width` (Unicode East Asian Width). Widths are summed per `char`, so multi-`char` grapheme clusters (e.g. ZWJ emoji sequences) can mismeasure; full grapheme-cluster segmentation is a future refinement.
+**Unicode display width**: widths come from `unicode-width` over extended grapheme clusters segmented by `unicode-segmentation`, matching the units ratatui paints. The width table remains indexed per character; offsets inside one cluster therefore share a terminal position.
 
 **Shift+Enter terminal support**: crossterm only delivers `Shift+Enter` distinctly in terminals supporting the Kitty keyboard protocol; elsewhere it arrives as bare `Enter`. The `Ctrl+J` fallback always inserts a newline.
 

@@ -5,7 +5,7 @@ use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::standardized_path::StandardizedPath;
 use warpui_core::App;
 
-use crate::repositories::{stub_git_repository, DetectedRepositories, RepoDetectionSource};
+use crate::repositories::{DetectedRepositories, RepoDetectionSource, stub_git_repository};
 use crate::watcher::DirectoryWatcher;
 
 #[test]
@@ -106,11 +106,12 @@ fn test_detect_possible_local_git_repo_nested_repo_created_after_parent_registra
 
             // Verify parent is registered
             repo_handle.read(&app, |repo, _ctx| {
-                assert!(repo
-                    .get_root_for_path(&LocalOrRemotePath::Local(
+                assert!(
+                    repo.get_root_for_path(&LocalOrRemotePath::Local(
                         parent_canonical_path.to_local_path().unwrap(),
                     ))
-                    .is_some());
+                    .is_some()
+                );
             });
 
             // Now simulate creating a nested git repo in the projects/nested_project directory.
@@ -135,17 +136,19 @@ fn test_detect_possible_local_git_repo_nested_repo_created_after_parent_registra
                 StandardizedPath::from_local_canonicalized(&nested_project).unwrap();
             repo_handle.read(&app, |repo, _ctx| {
                 // Parent should still be registered
-                assert!(repo
-                    .get_root_for_path(&LocalOrRemotePath::Local(
+                assert!(
+                    repo.get_root_for_path(&LocalOrRemotePath::Local(
                         parent_canonical_path.to_local_path().unwrap(),
                     ))
-                    .is_some());
+                    .is_some()
+                );
                 // Nested project should now also be registered as its own repo
-                assert!(repo
-                    .get_root_for_path(&LocalOrRemotePath::Local(
+                assert!(
+                    repo.get_root_for_path(&LocalOrRemotePath::Local(
                         nested_canonical_path.to_local_path().unwrap(),
                     ))
-                    .is_some());
+                    .is_some()
+                );
             });
 
             // Check a subdirectory of the nested repo. This path must exist for canonicalization to succeed.

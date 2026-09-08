@@ -6,12 +6,12 @@ use parking_lot::Mutex;
 use url::{Origin, ParseError, Url};
 
 use super::Channel;
+use crate::AppId;
 use crate::channel::config::{
     ChannelConfig, IapConfig, McpOAuthProviderConfig, OzConfig, RudderStackDestination,
     WarpServerConfig,
 };
 use crate::features::FeatureFlag;
-use crate::AppId;
 
 lazy_static! {
     static ref CHANNEL_STATE: Mutex<ChannelState> = Mutex::new(ChannelState::init());

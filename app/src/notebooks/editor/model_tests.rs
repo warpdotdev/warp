@@ -7,7 +7,7 @@ use futures::prelude::*;
 use itertools::Itertools;
 use markdown_parser::markdown_parser::RUNNABLE_BLOCK_MARKDOWN_LANG;
 use markdown_parser::{
-    parse_markdown, CodeBlockText, FormattedText, FormattedTextFragment, FormattedTextLine,
+    CodeBlockText, FormattedText, FormattedTextFragment, FormattedTextLine, parse_markdown,
 };
 use pathfinder_geometry::vector::Vector2F;
 use string_offset::CharOffset;
@@ -19,10 +19,10 @@ use warp_editor::model::{CoreEditorModel, RichTextEditorModel};
 use warp_editor::render::model::viewport::SizeInfo;
 use warp_editor::render::model::{BlockItem, RenderEvent};
 use warp_editor::selection::{TextDirection, TextUnit};
+use warpui::r#async::{FutureId, Timer, block_on};
 use warpui::elements::ListIndentLevel;
 use warpui::platform::WindowStyle;
 use warpui::presenter::ChildView;
-use warpui::r#async::{block_on, FutureId, Timer};
 use warpui::text::word_boundaries::WordBoundariesPolicy;
 use warpui::{
     AddSingletonModel, App, AppContext, Element, Entity, ModelHandle, SingletonEntity,
@@ -85,6 +85,19 @@ fn model_from_markdown(
     app: &mut App,
     should_initialize_cloud_model: bool,
 ) -> ModelHandle<NotebooksEditorModel> {
+    let window = setup_editor_window(app, should_initialize_cloud_model);
+    app.add_model(|ctx| {
+        let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
+        let mut model = NotebooksEditorModel::new(styles, window, ctx);
+        model.reset_with_markdown(markdown, ctx);
+
+        model
+    })
+}
+
+/// Register the singletons and host window that a [`NotebooksEditorModel`] depends on, returning
+/// the window a model should bind to.
+fn setup_editor_window(app: &mut App, should_initialize_cloud_model: bool) -> warpui::WindowId {
     let global_resources = GlobalResourceHandles::mock(app);
     app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
     app.add_singleton_model(|_| ActiveSession::default());
@@ -119,13 +132,7 @@ fn model_from_markdown(
         });
         TestView { editor }
     });
-    app.add_model(|ctx| {
-        let styles = rich_text_styles(Appearance::as_ref(ctx), FontSettings::as_ref(ctx));
-        let mut model = NotebooksEditorModel::new(styles, window, ctx);
-        model.reset_with_markdown(markdown, ctx);
-
-        model
-    })
+    window
 }
 
 fn initialize_deps(app: &mut App) {
@@ -1298,10 +1305,12 @@ fn test_move_to_start_of_first_line() {
             editor.cursor_at(3.into(), ctx);
 
             editor.move_to_line_start(ctx);
-            assert!(editor
-                .buffer_selection_model()
-                .as_ref(ctx)
-                .first_selection_is_single_cursor());
+            assert!(
+                editor
+                    .buffer_selection_model()
+                    .as_ref(ctx)
+                    .first_selection_is_single_cursor()
+            );
             assert_eq!(
                 editor
                     .buffer_selection_model()
@@ -1323,10 +1332,12 @@ fn test_move_up_on_first_line() {
             editor.cursor_at(3.into(), ctx);
 
             editor.move_up(ctx);
-            assert!(editor
-                .buffer_selection_model()
-                .as_ref(ctx)
-                .first_selection_is_single_cursor());
+            assert!(
+                editor
+                    .buffer_selection_model()
+                    .as_ref(ctx)
+                    .first_selection_is_single_cursor()
+            );
             assert_eq!(
                 editor
                     .buffer_selection_model()
@@ -1349,10 +1360,12 @@ fn test_move_down_on_last_line() {
             editor.cursor_at(14.into(), ctx);
 
             editor.move_down(ctx);
-            assert!(editor
-                .buffer_selection_model()
-                .as_ref(ctx)
-                .first_selection_is_single_cursor());
+            assert!(
+                editor
+                    .buffer_selection_model()
+                    .as_ref(ctx)
+                    .first_selection_is_single_cursor()
+            );
             assert_eq!(
                 editor
                     .buffer_selection_model()
@@ -2631,14 +2644,18 @@ fn test_cut_mermaid_code_block_uses_fenced_markdown_plain_text() {
             assert_eq!(model.debug_buffer(ctx), "<text>Text<ul0>List<text>");
             let clipboard = ctx.clipboard().read();
             assert_eq!(clipboard.plain_text, "```mermaid\ngraph TD\nA --> B\n```");
-            assert!(clipboard
-                .html
-                .as_deref()
-                .is_some_and(|html| html.contains("language-mermaid")));
-            assert!(clipboard
-                .html
-                .as_deref()
-                .is_some_and(|html| html.contains("data:image/svg+xml;base64,")));
+            assert!(
+                clipboard
+                    .html
+                    .as_deref()
+                    .is_some_and(|html| html.contains("language-mermaid"))
+            );
+            assert!(
+                clipboard
+                    .html
+                    .as_deref()
+                    .is_some_and(|html| html.contains("data:image/svg+xml;base64,"))
+            );
             assert!(clipboard.images.is_none());
         });
     });
@@ -2665,14 +2682,18 @@ fn test_copy_mermaid_code_block_adds_html_without_image_clipboard_data() {
 
             let clipboard = ctx.clipboard().read();
             assert_eq!(clipboard.plain_text, "```mermaid\ngraph TD\nA --> B\n```");
-            assert!(clipboard
-                .html
-                .as_deref()
-                .is_some_and(|html| html.contains("language-mermaid")));
-            assert!(clipboard
-                .html
-                .as_deref()
-                .is_some_and(|html| html.contains("data:image/svg+xml;base64,")));
+            assert!(
+                clipboard
+                    .html
+                    .as_deref()
+                    .is_some_and(|html| html.contains("language-mermaid"))
+            );
+            assert!(
+                clipboard
+                    .html
+                    .as_deref()
+                    .is_some_and(|html| html.contains("data:image/svg+xml;base64,"))
+            );
             assert!(clipboard.images.is_none());
         })
     });
@@ -2700,10 +2721,12 @@ fn test_copy_selection_with_markdown_image_omits_image_clipboard_data() {
 
             let clipboard = ctx.clipboard().read();
             assert!(clipboard.plain_text.contains("![Alt text](diagram.png)"));
-            assert!(clipboard
-                .html
-                .as_deref()
-                .is_some_and(|html| html.contains("<img")));
+            assert!(
+                clipboard
+                    .html
+                    .as_deref()
+                    .is_some_and(|html| html.contains("<img"))
+            );
             assert!(clipboard.images.is_none());
         })
     });
@@ -2800,6 +2823,34 @@ fn test_default_mermaid_display_mode_renders_initial_mermaid_blocks() {
         assert!(is_mermaid_diagram);
     });
 }
+
+#[test]
+fn test_rendered_mermaid_offsets_ignore_shell_commands() {
+    App::test((), |mut app| async move {
+        initialize_deps(&mut app);
+        let _enabled = FeatureFlag::MarkdownMermaid.override_enabled(true);
+        let markdown = "```\necho two\n```\n\n```mermaid\ngraph TD\n  C-->D\n```";
+
+        let model_handle = model_from_markdown(markdown, &mut app, true);
+        model_handle.update(&mut app, |model, ctx| {
+            model.set_default_mermaid_display_mode(MarkdownDisplayMode::Rendered, ctx);
+        });
+        layout_model(&mut app, &model_handle).await;
+        layout_model(&mut app, &model_handle).await;
+
+        assert_eq!(command_models(&model_handle, &mut app).len(), 2);
+        let mermaid_offset_count = model_handle.read(&app, |model, ctx| {
+            model
+                .render_state
+                .as_ref(ctx)
+                .layout_options()
+                .mermaid_render_offsets
+                .len()
+        });
+        assert_eq!(mermaid_offset_count, 1);
+    });
+}
+
 #[test]
 fn test_dont_invalidate_command_selection() {
     App::test((), |mut app| async move {

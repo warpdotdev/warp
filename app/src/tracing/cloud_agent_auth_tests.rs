@@ -143,13 +143,15 @@ fn rejected_refreshed_token_preserves_previous_token() {
     .unwrap();
     let wrong_run_token = jwt_with_payload(serde_json::json!({ "run_id": "wrong-run-id" }));
 
-    assert!(token_store
-        .replace_refreshed(
-            wrong_run_token,
-            Utc::now() + TimeDelta::try_minutes(5).unwrap(),
-            Some("expected-run-id"),
-        )
-        .is_err());
+    assert!(
+        token_store
+            .replace_refreshed(
+                wrong_run_token,
+                Utc::now() + TimeDelta::try_minutes(5).unwrap(),
+                Some("expected-run-id"),
+            )
+            .is_err()
+    );
     assert_eq!(
         token_store.valid_authorization_header().unwrap(),
         "Bearer current-test-token"

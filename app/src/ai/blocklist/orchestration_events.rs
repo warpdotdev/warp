@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use warp_multi_agent_api as api;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -69,11 +70,40 @@ pub enum OrchestrationEventServiceEvent {
     EventsReady { conversation_id: AIConversationId },
 }
 
+/// Thread-safe handle that commits a conversation's ambient run as exiting from any thread,
+/// without needing model access — including from an idle-timeout's background timer thread, at
+/// the exact moment it decides to fire, before anything (including the timer's own completion
+/// signal) can make that decision observable elsewhere (QUALITY-1801). This is the only writer
+/// of the exiting flag; queued-event cleanup (`drop_pending_events_for_exiting_conversation`)
+/// runs later, once model access is available, and never needs to touch it.
+///
+/// Gated to `not(target_family = "wasm")`: nothing compiled into a wasm build ever needs to
+/// commit off the model thread this way, so an unguarded `pub` item here would be dead code
+/// under the wasm lint's `-D warnings`.
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone)]
+pub struct ExitCommitHandle(Arc<Mutex<HashSet<AIConversationId>>>);
+
+#[cfg(not(target_family = "wasm"))]
+impl ExitCommitHandle {
+    /// Commits `conversation_id` as exiting. Safe to call from any thread, including
+    /// concurrently with a model-thread read of `is_conversation_exiting`.
+    pub fn commit(&self, conversation_id: AIConversationId) {
+        if let Ok(mut exiting) = self.0.lock() {
+            exiting.insert(conversation_id);
+        }
+    }
+}
+
 /// Synchronous state manager for orchestration event queuing, delivery tracking, and readiness detection.
 pub struct OrchestrationEventService {
     pending_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     awaiting_server_echo_events: HashMap<AIConversationId, Vec<PendingEvent>>,
     conversation_statuses: HashMap<AIConversationId, ConversationStatus>,
+    /// Conversations whose ambient run has begun a terminal exit with no further idle window
+    /// to cancel it (see [`ExitCommitHandle`]). Shared and mutex-guarded, rather than a
+    /// plain `HashSet`, so `ExitCommitHandle` can commit this state from a non-model thread.
+    exiting_conversations: Arc<Mutex<HashSet<AIConversationId>>>,
 }
 
 impl OrchestrationEventService {
@@ -90,7 +120,43 @@ impl OrchestrationEventService {
             pending_events: HashMap::new(),
             awaiting_server_echo_events: HashMap::new(),
             conversation_statuses: HashMap::new(),
+            exiting_conversations: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Vends a thread-safe handle that can commit conversations as exiting from any thread. See
+    /// [`ExitCommitHandle`].
+    #[cfg(not(target_family = "wasm"))]
+    pub fn exit_commit_handle(&self) -> ExitCommitHandle {
+        ExitCommitHandle(Arc::clone(&self.exiting_conversations))
+    }
+
+    /// Drops any orchestration events still queued for `conversation_id`, since its ambient
+    /// run's exit is now being finalized and they arrived too late to ever be delivered
+    /// (QUALITY-1801). Assumes [`ExitCommitHandle::commit`] already committed the exiting flag
+    /// for this conversation — by the time this runs, on the model thread, it always has — so
+    /// this only does the part that needs model access: the flag itself is not touched here.
+    #[cfg(not(target_family = "wasm"))]
+    pub fn drop_pending_events_for_exiting_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+    ) {
+        if let Some(dropped) = self.pending_events.remove(&conversation_id)
+            && !dropped.is_empty()
+        {
+            log::warn!(
+                "Dropping {} orchestration event(s) for conversation {conversation_id:?}: \
+                 its ambient run began terminal exit before they could be delivered",
+                dropped.len()
+            );
+        }
+    }
+
+    /// True once [`ExitCommitHandle::commit`] has been called for `conversation_id`.
+    pub fn is_conversation_exiting(&self, conversation_id: AIConversationId) -> bool {
+        self.exiting_conversations
+            .lock()
+            .is_ok_and(|exiting| exiting.contains(&conversation_id))
     }
 
     pub fn handle_history_event(
@@ -132,6 +198,9 @@ impl OrchestrationEventService {
                 self.pending_events.remove(conversation_id);
                 self.awaiting_server_echo_events.remove(conversation_id);
                 self.conversation_statuses.remove(conversation_id);
+                if let Ok(mut exiting) = self.exiting_conversations.lock() {
+                    exiting.remove(conversation_id);
+                }
             }
             _ => {}
         }

@@ -117,6 +117,8 @@ struct CellExtra {
     /// base character and zerowidth characters).
     cell_with_zero_width: Option<String>,
     end_of_prompt: Option<EndOfPromptMarker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hyperlink_id: Option<super::HyperlinkId>,
 }
 
 /// Content and attributes of a single cell in the terminal grid.
@@ -208,8 +210,43 @@ impl Cell {
     /// a row from flat scrollback storage, where the stored content was
     /// already capped on the way in) should pass `false` to suppress
     /// that redundant warning.
+    ///
+    /// Returns whether the character was appended. A return value of
+    /// `false` means that the grapheme was already at the size cap and the
+    /// cell was not changed.
     #[inline]
-    pub fn push_zerowidth(&mut self, c: char, log_long_grapheme_warnings: bool) {
+    pub fn push_zerowidth(&mut self, c: char, log_long_grapheme_warnings: bool) -> bool {
+        if let Some(zerowidth) = self
+            .extra
+            .as_deref_mut()
+            .and_then(|extra| extra.cell_with_zero_width.as_mut())
+        {
+            let old_len = zerowidth.len();
+            let new_len = old_len + c.len_utf8();
+            if new_len > MAX_GRAPHEME_BYTES {
+                // The accumulated grapheme cluster would exceed our
+                // per-cell cap, which is in turn well below the
+                // scrollback chunk size.  Silently drop additional
+                // zero-width characters: logging every dropped
+                // character would produce a flood of spam for
+                // pathological streams.
+                return false;
+            }
+            zerowidth.push(c);
+            // Log exactly once, on the push that first takes this cell
+            // across the soft threshold.  This surfaces unusually-large
+            // graphemes in logs without producing per-character spam.
+            if log_long_grapheme_warnings
+                && old_len < WARN_GRAPHEME_BYTES
+                && new_len >= WARN_GRAPHEME_BYTES
+            {
+                log::warn!(
+                    "cell grapheme has accumulated {new_len} bytes of zero-width content (base char {:?}); further zero-width pushes beyond {MAX_GRAPHEME_BYTES} bytes will be dropped",
+                    self.c,
+                );
+            }
+            return true;
+        }
         // If we're adding a zero-width character to this cell, but it has not
         // had any content set yet, set the content to a space.  This preserves
         // its visual appearance, but clearly marks the cell as having been
@@ -219,40 +256,34 @@ impl Cell {
         }
 
         let extra = self.extra.get_or_insert_with(Box::default);
-        match &mut extra.cell_with_zero_width {
-            Some(zerowidth) => {
-                let old_len = zerowidth.len();
-                let new_len = old_len + c.len_utf8();
-                if new_len > MAX_GRAPHEME_BYTES {
-                    // The accumulated grapheme cluster would exceed our
-                    // per-cell cap, which is in turn well below the
-                    // scrollback chunk size.  Silently drop additional
-                    // zero-width characters: logging every dropped
-                    // character would produce a flood of spam for
-                    // pathological streams.
-                    return;
-                }
-                zerowidth.push(c);
-                // Log exactly once, on the push that first takes this cell
-                // across the soft threshold.  This surfaces unusually-large
-                // graphemes in logs without producing per-character spam.
-                if log_long_grapheme_warnings
-                    && old_len < WARN_GRAPHEME_BYTES
-                    && new_len >= WARN_GRAPHEME_BYTES
-                {
-                    log::warn!(
-                        "cell grapheme has accumulated {new_len} bytes of zero-width content (base char {:?}); further zero-width pushes beyond {MAX_GRAPHEME_BYTES} bytes will be dropped",
-                        self.c,
-                    );
-                }
-            }
-            None => {
-                // First zero-width push seeds the string with the base
-                // character.  The base character is always a single `char`,
-                // so it cannot by itself exceed the cap.
-                extra.cell_with_zero_width = Some(format!("{}{}", self.c, c));
-            }
+        // The first zero-width push seeds the string with the base
+        // character.  The base character is always a single `char`, so it
+        // cannot by itself exceed the cap.
+        extra.cell_with_zero_width = Some(format!("{}{}", self.c, c));
+        true
+    }
+
+    /// Removes and returns the most recently appended zero-width character.
+    #[inline]
+    pub fn pop_zerowidth(&mut self) -> Option<char> {
+        let base_char_len = self.c.len_utf8();
+        let extra = self.extra.as_deref_mut()?;
+        let content = extra.cell_with_zero_width.as_mut()?;
+        if content.len() <= base_char_len {
+            return None;
         }
+
+        let popped = content.pop();
+        if content.len() == base_char_len {
+            extra.cell_with_zero_width = None;
+        }
+        let extra_is_empty = extra.cell_with_zero_width.is_none()
+            && extra.end_of_prompt.is_none()
+            && extra.hyperlink_id.is_none();
+        if extra_is_empty {
+            self.extra = None;
+        }
+        popped
     }
 
     /// Returns whether cell is the end of prompt content (contains `EndOfPromptMarker`).
@@ -276,16 +307,35 @@ impl Cell {
         });
     }
 
-    /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker if present.
+    /// Returns this cell's OSC 8 hyperlink id, if any. Resolve through the
+    /// owning grid's `HyperlinkRegistry` to recover the URI.
+    #[inline]
+    pub fn hyperlink_id(&self) -> Option<super::HyperlinkId> {
+        self.extra.as_ref()?.hyperlink_id
+    }
+
+    #[inline]
+    pub fn set_hyperlink_id(&mut self, id: Option<super::HyperlinkId>) {
+        if id.is_some() {
+            self.extra.get_or_insert_with(Default::default).hyperlink_id = id;
+        } else if let Some(extra) = self.extra.as_deref_mut() {
+            extra.hyperlink_id = None;
+        }
+    }
+
+    /// Free all dynamically allocated cell storage. Preserves EndOfPromptMarker
+    /// if present. NOTE: this does NOT preserve `hyperlink_id` — that field is
+    /// content-bound and is cleared whenever the cell's content is reset
+    /// (erase/clear/reset_state).
     #[inline]
     pub fn drop_extra(&mut self) {
-        if let Some(extra) = self.extra.take() {
-            if let Some(end_of_prompt_marker) = extra.end_of_prompt {
-                // If we had a end of prompt marker, we preserve it (re-insert into extras).
-                self.mark_end_of_prompt(end_of_prompt_marker.has_extra_trailing_newline);
-            }
-            // If `end_of_prompt` is None, `extra` is dropped here and not put back.
+        if let Some(extra) = self.extra.take()
+            && let Some(end_of_prompt_marker) = extra.end_of_prompt
+        {
+            // If we had a end of prompt marker, we preserve it (re-insert into extras).
+            self.mark_end_of_prompt(end_of_prompt_marker.has_extra_trailing_newline);
         }
+        // If `end_of_prompt` is None, `extra` is dropped here and not put back.
     }
 }
 

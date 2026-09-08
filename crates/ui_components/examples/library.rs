@@ -550,10 +550,11 @@ impl RootView {
     }
 
     fn render_lightbox(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
-        let current_image_native_size = self
+        let current_image_state = self
             .lightbox_images
             .get(self.lightbox_current_index)
-            .and_then(|img| native_size_for_image(img, app));
+            .map(|img| image_state_for_image(img, app))
+            .unwrap_or(lightbox::CurrentImageState::Loading);
 
         self.lightbox.render(
             appearance,
@@ -563,7 +564,7 @@ impl RootView {
                 on_dismiss: Arc::new(|ctx, _app| {
                     ctx.dispatch_typed_action(Action::CloseLightbox);
                 }),
-                current_image_native_size,
+                current_image_state,
                 options: lightbox::Options {
                     dismiss_keystroke: Some(warpui_core::keymap::Keystroke {
                         key: "escape".to_string(),
@@ -583,10 +584,11 @@ impl RootView {
     }
 
     fn render_async_lightbox(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
-        let current_image_native_size = self
+        let current_image_state = self
             .async_lightbox_images
             .get(self.async_lightbox_current_index)
-            .and_then(|img| native_size_for_image(img, app));
+            .map(|img| image_state_for_image(img, app))
+            .unwrap_or(lightbox::CurrentImageState::Loading);
 
         self.async_lightbox.render(
             appearance,
@@ -596,7 +598,7 @@ impl RootView {
                 on_dismiss: Arc::new(|ctx, _app| {
                     ctx.dispatch_typed_action(Action::CloseLightbox);
                 }),
-                current_image_native_size,
+                current_image_state,
                 options: lightbox::Options {
                     dismiss_keystroke: Some(warpui_core::keymap::Keystroke {
                         key: "escape".to_string(),
@@ -724,20 +726,25 @@ struct ButtonRow {
     icon: button::Button,
 }
 
-/// Queries the `AssetCache` for the native pixel dimensions of a lightbox image.
-/// Returns `Some` when the image bytes have been fully loaded and decoded.
-fn native_size_for_image(image: &LightboxImage, app: &AppContext) -> Option<Vector2F> {
+/// Queries the `AssetCache` for the load state of a lightbox image's bytes.
+fn image_state_for_image(image: &LightboxImage, app: &AppContext) -> lightbox::CurrentImageState {
     match &image.source {
         LightboxImageSource::Resolved { asset_source } => {
             let asset_cache = AssetCache::as_ref(app);
             match asset_cache.load_asset::<ImageType>(asset_source.clone()) {
                 AssetState::Loaded { data } => data
                     .image_size()
-                    .map(|size| Vector2F::new(size.x() as f32, size.y() as f32)),
-                _ => None,
+                    .map(|size| lightbox::CurrentImageState::Loaded {
+                        native_size: Vector2F::new(size.x() as f32, size.y() as f32),
+                    })
+                    .unwrap_or(lightbox::CurrentImageState::Failed),
+                AssetState::FailedToLoad(_) => lightbox::CurrentImageState::Failed,
+                AssetState::Loading { .. } | AssetState::Evicted => {
+                    lightbox::CurrentImageState::Loading
+                }
             }
         }
-        LightboxImageSource::Loading => None,
+        LightboxImageSource::Loading => lightbox::CurrentImageState::Loading,
     }
 }
 

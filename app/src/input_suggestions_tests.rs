@@ -7,14 +7,14 @@ use warp_completer::completer::{
 };
 use warp_completer::meta::Span;
 use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
 use warpui::App;
+use warpui::platform::WindowStyle;
 
 use super::{HistoryInputSuggestion, InputSuggestions, TabCompletionsPreselectOption};
 use crate::ai::blocklist::AIQueryHistory;
-use crate::input_suggestions::{filter_tab_suggestions, HistoryOrder};
-use crate::terminal::model::session::SessionId;
+use crate::input_suggestions::{HistoryOrder, filter_tab_suggestions};
 use crate::terminal::HistoryEntry;
+use crate::terminal::model::session::SessionId;
 
 fn prefix_matched_suggestion(name: &str) -> MatchedSuggestion {
     let suggestion = Suggestion::with_same_display_and_replacement(

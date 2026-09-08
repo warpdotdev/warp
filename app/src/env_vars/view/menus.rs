@@ -5,9 +5,9 @@ use warpui::{SingletonEntity, ViewContext, ViewHandle};
 
 use super::env_var_collection::{EnvVarCollectionAction, EnvVarCollectionView, VariableRowIndex};
 use crate::cloud_object::{CloudObject, GenericStringObjectFormat, Space};
+use crate::drive::CloudObjectTypeAndId;
 use crate::drive::drive_helpers::has_feature_gated_anonymous_user_reached_env_var_limit;
 use crate::drive::export::ExportManager;
-use crate::drive::CloudObjectTypeAndId;
 use crate::env_vars::active_env_var_collection_data::TrashStatus;
 use crate::external_secrets::SecretManager;
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
@@ -15,7 +15,7 @@ use crate::pane_group::PaneEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::{
-    keybinding_name_to_display_string, trigger_to_keystroke, CustomAction,
+    CustomAction, keybinding_name_to_display_string, trigger_to_keystroke,
 };
 use crate::{AppContext, CloudModel, FeatureFlag};
 

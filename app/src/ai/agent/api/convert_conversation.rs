@@ -10,9 +10,8 @@ use std::time::{Duration, SystemTime};
 
 use ai::agent::action_result::{
     AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RecordingStarted, RecordingStopped, RequestComputerUseResult, SendMessageToAgentResult,
-    StartAgentResult, StartAgentVersion, StartRecordingResult, StopRecordingResult,
-    UseComputerResult,
+    RecordingStarted, RecordingStopped, RequestComputerUseResult, ScreenshotSource,
+    SendMessageToAgentResult, StartRecordingResult, StopRecordingResult, UseComputerResult,
 };
 use ai::skills::{ParsedSkill, SkillPathOrigin};
 use chrono::{DateTime, Local, TimeZone};
@@ -22,11 +21,11 @@ use warp_multi_agent_api as api;
 use warp_multi_agent_api::ask_user_question_result::answer_item::Answer as AskUserQuestionAnswer;
 
 use crate::ai::agent::api::convert_from::{
-    convert_user_query_mode, ConversionParams, ConvertAPIMessageToClientOutputMessage,
-    MaybeAIAgentOutputMessage,
+    ConversionParams, ConvertAPIMessageToClientOutputMessage, MaybeAIAgentOutputMessage,
+    convert_user_query_mode,
 };
 use crate::ai::agent::conversation::{
-    update_todo_list_from_todo_op, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIConversation, AIConversationId, ServerAIConversationMetadata, update_todo_list_from_todo_op,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::todos::AIAgentTodoList;
@@ -37,12 +36,12 @@ use crate::ai::agent::{
     DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
     FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
     ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
-    PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult, ReadFilesResult,
-    ReadMCPResourceResult, ReadShellCommandOutputResult, RequestCommandOutputResult,
-    RequestFileEditsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId,
-    Shared, ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
-    SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
-    UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
+    PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
+    ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
+    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
+    SearchCodebaseResult, ServerOutputId, Shared, ShellCommandCompletedTrigger, ShellCommandError,
+    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
+    UpdatedFileContext, UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -243,8 +242,8 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             };
 
             // Convert binary data to base64
-            use base64::engine::general_purpose;
             use base64::Engine;
+            use base64::engine::general_purpose;
             let data = general_purpose::STANDARD.encode(&image.data);
 
             result.push(AIAgentContext::Image(ImageContext {
@@ -429,16 +428,12 @@ impl ConvertToExchanges for &api::Task {
                             });
                             true
                         }
-                        api::message::system_query::Type::FetchReviewComments(fetch) => {
-                            current_inputs.push(AIAgentInput::FetchReviewComments {
-                                repo_path: fetch.repo_path.clone(),
-                                context: convert_input_context(query.context.as_ref()),
-                            });
-                            true
-                        }
                         // TriggerSuggestPrompt is not rendered as user input, so we don't want to include it as an input in the exchange.
                         // ResumeConversation is actually added to the task's messages as a plain UserQuery, so we don't expect to encounter it in the task's messages.
+                        // FetchReviewComments backed the removed /pr-comments slash command; the
+                        // proto variant is retained for back-compat but is no longer rendered.
                         api::message::system_query::Type::ResumeConversation(_)
+                        | api::message::system_query::Type::FetchReviewComments(_)
                         | api::message::system_query::Type::GeneratePassiveSuggestions(_)
                         // TODO: Implement this for real. ZB adding this to bump proto version for unrelated API changes.
                         | api::message::system_query::Type::SummarizeConversation(_)
@@ -469,8 +464,8 @@ impl ConvertToExchanges for &api::Task {
                     false
                 }
                 api::message::Message::InvokeSkill(invoke_skill) => {
-                    if let Some(api_skill) = invoke_skill.skill.clone() {
-                        if let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
+                    if let Some(api_skill) = invoke_skill.skill.clone()
+                        && let Ok(parsed_skill) = ParsedSkill::try_from_api_with_origin(
                             api_skill,
                             &SkillPathOrigin::RestoredDisplayOnly,
                         ) {
@@ -491,7 +486,6 @@ impl ConvertToExchanges for &api::Task {
                             };
                             current_inputs.push(input);
                         };
-                    };
 
                     true
                 }
@@ -528,8 +522,8 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::OrchestrationConfigSnapshot(_) => false,
             };
 
-            if !added_message_as_exchange_input {
-                if let Ok(MaybeAIAgentOutputMessage::Message(output_msg)) = (*api_message)
+            if !added_message_as_exchange_input
+                && let Ok(MaybeAIAgentOutputMessage::Message(output_msg)) = (*api_message)
                     .clone()
                     .to_client_output_message(ConversionParams {
                         current_todo_list: todo_lists.last(),
@@ -538,9 +532,8 @@ impl ConvertToExchanges for &api::Task {
                         task_id: &TaskId::new(api_message.task_id.clone()),
                         skill_path_origin: &SkillPathOrigin::Unavailable,
                     })
-                {
-                    current_outputs.push(output_msg);
-                }
+            {
+                current_outputs.push(output_msg);
             }
         }
 
@@ -612,6 +605,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                     grid_contents: snapshot.output.clone(),
                     cursor: snapshot.cursor.clone(),
                     is_alt_screen_active: snapshot.is_alt_screen_active,
+                    activity: snapshot.activity.as_ref().map(Into::into),
                 },
                 Some(api::run_shell_command_result::Result::PermissionDenied(
                     api::PermissionDenied { .. },
@@ -641,6 +635,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                         cursor: snapshot.cursor.clone(),
                         is_alt_screen_active: snapshot.is_alt_screen_active,
                         is_preempted: snapshot.is_preempted,
+                        activity: snapshot.activity.as_ref().map(Into::into),
                     },
                     Some(api::write_to_long_running_shell_command_result::Result::CommandFinished(
                         finished,
@@ -674,8 +669,19 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|file| FileContext::from(file.clone()))
                         .collect();
+                    let failed_files = success
+                        .failed_reads
+                        .iter()
+                        .map(|failed_file| ReadFilesFailedFile {
+                            path: failed_file.path.clone(),
+                            message: failed_file.message.clone(),
+                        })
+                        .collect();
 
-                    ReadFilesResult::Success { files }
+                    ReadFilesResult::Success {
+                        files,
+                        failed_files,
+                    }
                 }
                 Some(api::read_files_result::Result::TextFilesSuccess(success)) => {
                     let files = success
@@ -683,7 +689,18 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|file| FileContext::from(file.clone()))
                         .collect();
-                    ReadFilesResult::Success { files }
+                    let failed_files = success
+                        .failed_reads
+                        .iter()
+                        .map(|failed_file| ReadFilesFailedFile {
+                            path: failed_file.path.clone(),
+                            message: failed_file.message.clone(),
+                        })
+                        .collect();
+                    ReadFilesResult::Success {
+                        files,
+                        failed_files,
+                    }
                 }
                 Some(api::read_files_result::Result::Error(error)) => {
                     ReadFilesResult::Error(error.message.clone())
@@ -1261,6 +1278,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                     cursor: snapshot.cursor.clone(),
                     is_alt_screen_active: snapshot.is_alt_screen_active,
                     is_preempted: snapshot.is_preempted,
+                    activity: snapshot.activity.as_ref().map(Into::into),
                 },
                 Some(api::read_shell_command_output_result::Result::Error(
                     api::ShellCommandError {
@@ -1291,6 +1309,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                     cursor: snapshot.cursor.clone(),
                     is_alt_screen_active: snapshot.is_alt_screen_active,
                     is_preempted: snapshot.is_preempted,
+                    activity: snapshot.activity.as_ref().map(Into::into),
                 },
                 Some(
                     api::transfer_shell_command_control_to_user_result::Result::CommandFinished(finished),
@@ -1352,15 +1371,32 @@ pub(crate) fn convert_tool_call_result_to_input(
                 match &result.result {
                     Some(api::use_computer_result::Result::Success(success)) => {
                         let screenshot = success.screenshot.as_ref().map(|s| {
-                            // The original dimensions are not preserved through the API, so we use
-                            // the current dimensions for both.
-                            computer_use::Screenshot {
-                                width: s.width as usize,
-                                height: s.height as usize,
-                                original_width: s.width as usize,
-                                original_height: s.height as usize,
-                                data: s.data.clone(),
-                                mime_type: s.mime_type.clone().into(),
+                            // The original dimensions are not preserved through the API, so
+                            // we use the current dimensions for both.
+                            let inline = |data| {
+                                ScreenshotSource::Inline(computer_use::Screenshot {
+                                    width: s.width as usize,
+                                    height: s.height as usize,
+                                    original_width: s.width as usize,
+                                    original_height: s.height as usize,
+                                    data,
+                                    mime_type: s.mime_type.clone().into(),
+                                })
+                            };
+                            match &s.source {
+                                Some(api::raw_image::Source::Data(data)) => inline(data.clone()),
+                                // A screenshot whose bytes were offloaded to object storage
+                                // arrives with the `StoredRef` source variant; the ref is
+                                // carried for on-demand fetching.
+                                Some(api::raw_image::Source::StoredRef(stored_ref)) => {
+                                    ScreenshotSource::Stored {
+                                        stored_ref: stored_ref.clone(),
+                                        mime_type: s.mime_type.clone(),
+                                        width: s.width,
+                                        height: s.height,
+                                    }
+                                }
+                                None => inline(Vec::new()),
                             }
                         });
                         let cursor_position = success
@@ -1382,12 +1418,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 height_px: c.height_px,
                             }
                         });
-                        UseComputerResult::Success(computer_use::ActionResult {
+                        UseComputerResult::Success {
                             screenshot,
                             cursor_position,
                             windows,
                             captured_window,
-                        })
+                        }
                     }
                     Some(api::use_computer_result::Result::Error(error)) => {
                         UseComputerResult::Error(error.message.clone())
@@ -1422,7 +1458,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                                 height: initial_screenshot.height as usize,
                                 original_width: screen_dimensions.width_px as usize,
                                 original_height: screen_dimensions.height_px as usize,
-                                data: initial_screenshot.data.clone(),
+                                // Initial screenshots are never offloaded, so any non-inline
+                                // source defensively converts to an empty image.
+                                data: match &initial_screenshot.source {
+                                    Some(api::raw_image::Source::Data(data)) => data.clone(),
+                                    Some(api::raw_image::Source::StoredRef(_)) | None => Vec::new(),
+                                },
                                 mime_type: initial_screenshot.mime_type.clone().into(),
                             },
                             platform,
@@ -1484,58 +1525,6 @@ pub(crate) fn convert_tool_call_result_to_input(
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
         Some(ToolCallResultType::Subagent(_)) => None,
-        Some(ToolCallResultType::StartAgent(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V1,
-                    }
-                }
-                Some(api::start_agent_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V1,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V1,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
-        Some(ToolCallResultType::StartAgentV2(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_v2_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V2,
-                    }
-                }
-                Some(api::start_agent_v2_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V2,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V2,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
         Some(ToolCallResultType::AskUserQuestion(result)) => {
             let ask_result = match &result.result {
                 Some(warp_multi_agent_api::ask_user_question_result::Result::Success(success)) => {
@@ -1604,6 +1593,7 @@ pub(crate) fn convert_tool_call_result_to_input(
             };
             let run_agents_result = match &result.outcome {
                 Some(api::run_agents_result::Outcome::Launched(launched)) => {
+                    #[allow(deprecated)]
                     let execution_mode = match &launched.resolved_execution_mode {
                         Some(api::run_agents_result::launched::ResolvedExecutionMode::Remote(
                             remote,
@@ -1611,6 +1601,7 @@ pub(crate) fn convert_tool_call_result_to_input(
                             environment_id: remote.environment_id.clone(),
                             worker_host: remote.worker_host.clone(),
                             computer_use_enabled: remote.computer_use_enabled,
+                            runner_id: remote.runner_id.clone(),
                         },
                         Some(api::run_agents_result::launched::ResolvedExecutionMode::Local(_))
                         | None => RunAgentsLaunchedExecutionMode::Local,
@@ -1620,6 +1611,8 @@ pub(crate) fn convert_tool_call_result_to_input(
                         .iter()
                         .map(|outcome| RunAgentsAgentOutcome {
                             name: outcome.name.clone(),
+                            // Proto field is model_id (renamed from resolved_model_id).
+                            resolved_model_id: outcome.model_id.clone(),
                             kind: match &outcome.result {
                                 Some(api::run_agents_result::agent_outcome::Result::Launched(
                                     launched_agent,
@@ -1637,13 +1630,17 @@ pub(crate) fn convert_tool_call_result_to_input(
                             },
                         })
                         .collect();
+                    #[allow(deprecated)]
+                    let model_id = launched.resolved_model_id.clone();
+                    #[allow(deprecated)]
+                    let harness_type =
+                        crate::ai::agent::api::convert_from::convert_run_agents_harness(
+                            launched.resolved_harness.as_ref(),
+                        )
+                        .unwrap_or_default();
                     RunAgentsResult::Launched {
-                        model_id: launched.resolved_model_id.clone(),
-                        harness_type:
-                            crate::ai::agent::api::convert_from::convert_run_agents_harness(
-                                launched.resolved_harness.as_ref(),
-                            )
-                            .unwrap_or_default(),
+                        model_id,
+                        harness_type,
                         execution_mode,
                         agents,
                     }
@@ -1724,6 +1721,9 @@ pub(crate) fn convert_tool_call_result_to_input(
                 }
                 Some(api::stop_recording_result::Result::Error(error)) => {
                     StopRecordingResult::Error(error.message.clone())
+                }
+                Some(api::stop_recording_result::Result::Discarded(_)) => {
+                    StopRecordingResult::Discarded
                 }
                 None => StopRecordingResult::Cancelled,
             };
@@ -1872,16 +1872,6 @@ fn create_cancelled_result_for_tool_call(
             return None;
         }
         ToolType::Subagent(_) => return None,
-        ToolType::StartAgent(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V1,
-            })
-        }
-        ToolType::StartAgentV2(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V2,
-            })
-        }
         ToolType::AskUserQuestion(_) => {
             AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
         }

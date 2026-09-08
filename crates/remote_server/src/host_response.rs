@@ -22,7 +22,7 @@
 //! `host_response_tests.rs` forces every new request variant to be
 //! classified one way or the other.
 
-use crate::proto::{server_message, ServerMessage};
+use crate::proto::{ServerMessage, server_message};
 
 /// Interprets a per-operation response with the standard
 /// `Success | Error | (unset)` result shape. A missing `result` is an error

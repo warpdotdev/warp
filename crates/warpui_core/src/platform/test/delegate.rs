@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::Mutex;
 use pathfinder_geometry::rect::{RectF, RectI};
-use pathfinder_geometry::vector::{vec2f, vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f, vec2i};
 
 use crate::accessibility::AccessibilityContent;
 use crate::clipboard::InMemoryClipboard;
@@ -24,7 +24,7 @@ use crate::platform::{
 use crate::text_layout::TextAlignment;
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId,
+    ApplicationBundleInfo, DisplayId, DisplayIdx, OptionalPlatformWindow, Scene, WindowId, geometry,
 };
 
 pub struct AppDelegate {
@@ -65,6 +65,7 @@ impl IntegrationTestDelegate {
 #[derive(Default)]
 pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
+    last_shown_and_focused_window: Mutex<Option<WindowId>>,
 }
 
 impl WindowManager {
@@ -113,8 +114,12 @@ impl platform::WindowManager for WindowManager {
         None
     }
 
-    fn show_window_and_focus_app(&self, _window_id: WindowId, _behavior: WindowFocusBehavior) {
-        // no-op for tests
+    fn show_window_and_focus_app(&self, window_id: WindowId, _behavior: WindowFocusBehavior) {
+        *self.last_shown_and_focused_window.lock() = Some(window_id);
+    }
+
+    fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        *self.last_shown_and_focused_window.lock()
     }
 
     fn hide_app(&self) {
@@ -188,8 +193,8 @@ impl platform::Delegate for AppDelegate {
         *self.cursor_shape.lock() = cursor;
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op for tests
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {
@@ -303,8 +308,8 @@ impl platform::Delegate for IntegrationTestDelegate {
         *self.cursor_shape.lock() = cursor;
     }
 
-    fn open_url(&self, _: &str) {
-        // no-op for tests
+    fn open_url(&self, _: &str) -> bool {
+        true
     }
 
     fn close_ime_async(&self, _window_id: WindowId) {

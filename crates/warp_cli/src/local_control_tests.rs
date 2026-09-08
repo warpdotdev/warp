@@ -14,8 +14,6 @@ fn parses_typed_create_and_setting_list_params() {
         "create",
         "--type",
         "agent",
-        "--shell",
-        "zsh",
         "--session",
         "session_1",
     ])
@@ -24,8 +22,11 @@ fn parses_typed_create_and_setting_list_params() {
         panic!("expected tab create command");
     };
     assert_eq!(args.tab_type, Some(CliTabType::Agent));
-    assert_eq!(args.shell.as_deref(), Some("zsh"));
     assert_eq!(args.target.session.as_deref(), Some("session_1"));
+
+    let err = ControlArgs::try_parse_from(["warpctrl", "tab", "create", "--shell", "zsh"])
+        .expect_err("shell is not an accepted tab create flag");
+    assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
 
     let args =
         ControlArgs::try_parse_from(["warpctrl", "setting", "list", "--namespace", "editor"])

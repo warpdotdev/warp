@@ -1,12 +1,13 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
+use warp_errors::report_error;
 use warpui::elements::{Highlight, Text};
 use warpui::{AppContext, SingletonEntity};
 
 use crate::appearance::Appearance;
 use crate::cloud_object::CloudObject;
-use crate::notebooks::manager::NotebookManager;
 use crate::notebooks::CloudNotebook;
+use crate::notebooks::manager::NotebookManager;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::server::ids::SyncId;
 
@@ -132,7 +133,7 @@ impl FuzzyMatchNotebookResult {
             // This branch should never be executed because a notebooks search result should
             // always have some match with the query, otherwise it should not appear as a
             // result.
-            log::error!("Notebook has neither a name nor content match result.");
+            report_error!("Notebook has neither a name nor content match result.");
             OrderedFloat(f64::MIN)
         } else {
             OrderedFloat(weighted_sum)

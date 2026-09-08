@@ -17,6 +17,7 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
               costCents
               expiration
               grantType
+              scope
               reason
               userFacingMessage
               requestCreditsGranted
@@ -41,6 +42,7 @@ query GetRequestLimitInfo($requestContext: RequestContext!) {
           costCents
           expiration
           grantType
+          scope
           reason
           userFacingMessage
           requestCreditsGranted

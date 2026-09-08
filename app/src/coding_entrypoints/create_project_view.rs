@@ -11,11 +11,11 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use crate::TelemetryEvent;
 use crate::ai::blocklist::telemetry_banner::should_collect_ai_ugc_telemetry;
 use crate::appearance::Appearance;
 use crate::coding_entrypoints::glowing_editor::{GlowingEditor, GlowingEditorEvent};
 use crate::settings::PrivacySettings;
-use crate::TelemetryEvent;
 
 const ICON_MARGIN_LEFT: f32 = 12.;
 const ICON_MARGIN_RIGHT: f32 = 8.;

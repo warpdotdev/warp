@@ -9,6 +9,7 @@ license.workspace = true
 test-util = []
 
 [dependencies]
+warp_errors.workspace = true
 log.workspace = true
 
 [dev-dependencies]

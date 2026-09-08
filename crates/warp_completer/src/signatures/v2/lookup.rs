@@ -2,8 +2,8 @@
 //! untokenized input.
 use itertools::Itertools;
 
-use super::registry::CommandRegistry;
 use super::Command;
+use super::registry::CommandRegistry;
 
 /// Returns the highest-precedence matching `Command` signature object for the given `input`, if
 /// any, along with the index of the token in `input` matched to the returned `Command`.

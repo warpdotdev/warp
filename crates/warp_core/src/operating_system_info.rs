@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 use serde::Serialize;
 use serde_with::SerializeDisplay;
 #[cfg(target_family = "wasm")]
-use warpui_core::platform::wasm;
-#[cfg(target_family = "wasm")]
 use warpui_core::platform::OperatingSystem;
+#[cfg(target_family = "wasm")]
+use warpui_core::platform::wasm;
 
 static OS_INFO: OnceLock<Result<OperatingSystemInfo, OperatingSystemInfoError>> = OnceLock::new();
 

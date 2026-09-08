@@ -1,18 +1,23 @@
+use std::future::Future;
 use std::result::Result as StdResult;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
+use futures::future::Either;
 use settings::Setting as _;
 #[cfg(target_family = "wasm")]
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
+use warp_errors::{report_error, report_if_error};
 use warp_graphql::mutations::create_anonymous_user::{
     AnonymousUserType, CreateAnonymousUserResult,
 };
+use warp_server_auth::API_KEY_PREFIX;
 use warp_server_auth::user::persistence::PersistedUser;
+use warpui::r#async::Timer;
 use warpui::clipboard::ClipboardContent;
 use warpui::{Entity, ModelContext, SingletonEntity, UpdateModel};
 
@@ -22,9 +27,9 @@ use super::credentials::{Credentials, FirebaseToken, LoginToken};
 use super::user::User;
 use super::user_properties::UserProperties;
 use super::{AuthStateProvider, UserUid};
+use crate::ai::AIRequestUsageModel;
 use crate::ai::llms::LLMPreferences;
 use crate::ai::persisted_workspace::PersistedWorkspace;
-use crate::ai::AIRequestUsageModel;
 use crate::autoupdate::AutoupdateState;
 use crate::persistence::ModelEvent;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -35,17 +40,17 @@ use crate::server::server_api::auth::{
 };
 use crate::server::server_api::{ServerApi, ServerApiProvider};
 use crate::server::telemetry::AnonymousUserSignupEntrypoint;
+use crate::settings::PrivacySettings;
 use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::initializer::SettingsInitializer;
-use crate::settings::PrivacySettings;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::shared_session::manager::Manager as SharedSessionManager;
 #[cfg(target_family = "wasm")]
 use crate::uri::browser_url_handler::{parse_current_url, update_browser_url};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::{
-    persistence, report_error, report_if_error, send_telemetry_from_ctx,
-    send_telemetry_sync_from_ctx, GlobalResourceHandlesProvider, TelemetryEvent,
+    GlobalResourceHandlesProvider, TelemetryEvent, persistence, send_telemetry_from_ctx,
+    send_telemetry_sync_from_ctx,
 };
 
 #[derive(Debug)]
@@ -85,6 +90,46 @@ pub enum AuthManagerEvent {
 pub type LoginGatedFeature = &'static str;
 
 type URLConstructorCallback = Box<dyn FnOnce(Option<&str>) -> String>;
+const DEVICE_CODE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const DEVICE_CODE_REQUEST_ATTEMPTS: usize = 2;
+
+async fn request_device_code_with_timeout<F, Fut>(
+    mut request: F,
+    timeout: Duration,
+    attempts: usize,
+) -> StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<
+        Output = StdResult<oauth2::StandardDeviceAuthorizationResponse, UserAuthenticationError>,
+    >,
+{
+    assert!(
+        attempts > 0,
+        "device code request requires at least one attempt"
+    );
+
+    for attempt in 1..=attempts {
+        let request = request();
+        let timeout = Timer::after(timeout);
+        futures::pin_mut!(request);
+        futures::pin_mut!(timeout);
+
+        match futures::future::select(request, timeout).await {
+            Either::Left((result, _)) => return result,
+            Either::Right(_) if attempt < attempts => {
+                log::info!(
+                    "Device authorization code request timed out; retrying ({attempt}/{attempts})"
+                );
+            }
+            Either::Right(_) => {
+                return Err(UserAuthenticationError::DeviceCodeRequestTimedOut { attempts });
+            }
+        }
+    }
+
+    unreachable!("attempt count is asserted to be nonzero")
+}
 
 /// AuthManager is a singleton model which manages the currently logged-in user's state.
 /// If you need to access the state, use `AuthStateProvider`.
@@ -114,7 +159,7 @@ impl AuthManager {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, all(feature = "tui", feature = "test-util")))]
     pub fn new_for_test(ctx: &mut ModelContext<Self>) -> Self {
         use crate::server::server_api::ServerApiProvider;
 
@@ -260,6 +305,28 @@ impl AuthManager {
             Self::on_user_fetched,
         );
     }
+    /// Validates a startup API key without exposing it through shared auth state.
+    ///
+    /// [`Self::on_user_fetched`] promotes the returned user and credentials only
+    /// after the server accepts the key. A failed request leaves the client
+    /// fully logged out.
+    pub fn authenticate_api_key(&self, api_key: String, ctx: &mut ModelContext<Self>) {
+        log::info!("Authenticating via pending API key");
+        let api_key = if api_key.starts_with(API_KEY_PREFIX) {
+            api_key
+        } else {
+            format!("{API_KEY_PREFIX}{api_key}")
+        };
+        let auth_client = self.auth_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                auth_client
+                    .fetch_user(LoginToken::ApiKey(api_key), false)
+                    .await
+            },
+            Self::on_user_fetched,
+        );
+    }
 
     /// Authenticate asynchronously using the OAuth2 device authorization flow.
     ///
@@ -273,7 +340,14 @@ impl AuthManager {
         let auth_client = self.auth_client.clone();
         // Request a device code the user can enter in their browser.
         ctx.spawn(
-            async move { auth_client.request_device_code().await },
+            async move {
+                request_device_code_with_timeout(
+                    || auth_client.request_device_code(),
+                    DEVICE_CODE_REQUEST_TIMEOUT,
+                    DEVICE_CODE_REQUEST_ATTEMPTS,
+                )
+                .await
+            },
             Self::on_device_code_received,
         );
     }
@@ -337,7 +411,7 @@ impl AuthManager {
                     llms,
                 } = user_output.into();
 
-                self.set_and_persist(Some(user.clone()), Some(credentials), ctx);
+                self.complete_authentication(user.clone(), credentials, ctx);
 
                 self.set_needs_reauth(false, ctx);
 
@@ -393,9 +467,9 @@ impl AuthManager {
 
                 if !user.is_user_anonymous() {
                     GeneralSettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(settings
-                            .did_non_anonymous_user_log_in
-                            .set_value(true, ctx));
+                        report_if_error!(
+                            settings.did_non_anonymous_user_log_in.set_value(true, ctx)
+                        );
                     });
                 }
 
@@ -414,17 +488,19 @@ impl AuthManager {
                 // Reconstruct the database if it was removed.
                 // Do nothing if the database was not removed.
                 persistence::reconstruct(&global_resource_handles.model_event_sender);
-                if let Some(model_event_sender) = &global_resource_handles.model_event_sender {
-                    if let Err(e) =
+                if let Some(model_event_sender) = &global_resource_handles.model_event_sender
+                    && let Err(e) =
                         model_event_sender.send(ModelEvent::UpsertCurrentUserInformation {
                             user_information: PersistedCurrentUserInformation {
                                 email: self.auth_state.user_email().unwrap_or_default(),
                             },
                         })
-                    {
-                        log::error!("Error persisting user information to database: {e:?}");
-                    };
-                }
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Error persisting user information to database")
+                    );
+                };
 
                 // Fetch the user's privacy settings from the server if any or update the server settings.
                 let privacy_settings_handle = PrivacySettings::handle(ctx);
@@ -501,6 +577,7 @@ impl AuthManager {
                         self.set_needs_reauth(true, ctx);
                     }
                     UserAuthenticationError::UserAccountDisabled(_) => {}
+                    UserAuthenticationError::DeviceCodeRequestTimedOut { .. } => {}
                     UserAuthenticationError::Unexpected(_) => {}
                     UserAuthenticationError::InvalidStateParameter => {}
                     UserAuthenticationError::MissingStateParameter => {}
@@ -514,6 +591,14 @@ impl AuthManager {
     /// Sets the user and credentials in auth state and persists to secure storage.
     /// Persistence depends on the credential type - currently, we only persist
     /// state if authenticated via a Firebase token.
+    fn complete_authentication(
+        &self,
+        user: User,
+        credentials: Credentials,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.set_and_persist(Some(user), Some(credentials), ctx);
+    }
     fn set_and_persist(
         &self,
         user: Option<User>,
@@ -729,9 +814,9 @@ impl AuthManager {
                         ctx.open_url(&url);
                     }
                     Err(e) => {
-                        report_error!(anyhow!(
-                        "Failed to fetch custom token for authenticating anonymous user in browser: {e:?}"
-                    ))
+                        report_error!(anyhow::Error::new(e).context(
+                            "Failed to fetch custom token for authenticating anonymous user in browser"
+                        ))
                 }
                 };
             },

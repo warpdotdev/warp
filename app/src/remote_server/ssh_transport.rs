@@ -14,7 +14,7 @@ use remote_server::auth::RemoteServerAuthContext;
 use remote_server::client::RemoteServerClient;
 use remote_server::manager::RemoteServerExitStatus;
 use remote_server::setup::{
-    parse_uname_output, remote_server_daemon_dir, PreinstallCheckResult, RemotePlatform,
+    PreinstallCheckResult, RemotePlatform, parse_uname_output, remote_server_daemon_dir,
 };
 use remote_server::ssh::ssh_args;
 use remote_server::transport::{Connection, ControlPath, Error, InstallOutcome, RemoteTransport};

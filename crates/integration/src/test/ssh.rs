@@ -7,7 +7,7 @@ use warp::integration_testing::subshell::{
     enter_ssh_command, enter_ssh_password, setup_gcloud_sdk, wait_for_password_prompt,
 };
 use warp::integration_testing::terminal::util::{
-    current_shell_starter_and_version, nonce, ExactLine, ExpectedExitStatus,
+    ExactLine, ExpectedExitStatus, current_shell_starter_and_version, nonce,
 };
 use warp::integration_testing::terminal::{
     assert_active_block_output_for_single_terminal_in_tab,

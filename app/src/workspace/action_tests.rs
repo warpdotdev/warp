@@ -2,11 +2,11 @@ use warpui::EntityId;
 
 use super::WorkspaceAction;
 use crate::pane_group::TerminalPaneId;
+use crate::workspace::PaneViewLocator;
 use crate::workspace::tab_settings::{
     VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo, VerticalTabsTabItemMode,
     VerticalTabsViewMode,
 };
-use crate::workspace::PaneViewLocator;
 
 #[test]
 fn vertical_tabs_view_mode_change_does_not_save_workspace_state() {
@@ -28,14 +28,14 @@ fn settings_popup_toggle_does_not_save_workspace_state() {
 
 #[test]
 fn display_granularity_change_does_not_save_workspace_state() {
-    assert!(!WorkspaceAction::SetVerticalTabsDisplayGranularity(
-        VerticalTabsDisplayGranularity::Panes
-    )
-    .should_save_app_state_on_action());
-    assert!(!WorkspaceAction::SetVerticalTabsDisplayGranularity(
-        VerticalTabsDisplayGranularity::Tabs
-    )
-    .should_save_app_state_on_action());
+    assert!(
+        !WorkspaceAction::SetVerticalTabsDisplayGranularity(VerticalTabsDisplayGranularity::Panes)
+            .should_save_app_state_on_action()
+    );
+    assert!(
+        !WorkspaceAction::SetVerticalTabsDisplayGranularity(VerticalTabsDisplayGranularity::Tabs)
+            .should_save_app_state_on_action()
+    );
 }
 
 #[test]
@@ -56,10 +56,10 @@ fn primary_info_change_does_not_save_workspace_state() {
         !WorkspaceAction::SetVerticalTabsPrimaryInfo(VerticalTabsPrimaryInfo::Command)
             .should_save_app_state_on_action()
     );
-    assert!(!WorkspaceAction::SetVerticalTabsPrimaryInfo(
-        VerticalTabsPrimaryInfo::WorkingDirectory
-    )
-    .should_save_app_state_on_action());
+    assert!(
+        !WorkspaceAction::SetVerticalTabsPrimaryInfo(VerticalTabsPrimaryInfo::WorkingDirectory)
+            .should_save_app_state_on_action()
+    );
     assert!(
         !WorkspaceAction::SetVerticalTabsPrimaryInfo(VerticalTabsPrimaryInfo::Branch)
             .should_save_app_state_on_action()

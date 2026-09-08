@@ -46,6 +46,9 @@ impl TemplatableMCPServerInfo {
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
+    pub fn is_authenticated_transport(&self) -> bool {
+        self.is_authenticated_transport
+    }
 
     pub fn peer(&self) -> rmcp::Peer<rmcp::RoleClient> {
         self.service.clone()

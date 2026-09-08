@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use alt_screen::{run_find_on_alt_screen, AltScreenFindRun};
+use alt_screen::{AltScreenFindRun, run_find_on_alt_screen};
 pub use async_find::{AsyncFindController, AsyncFindStatus};
 use block_list::run_find_on_block_list;
 pub use block_list::{BlockGridMatch, BlockListFindRun, BlockListMatch};
@@ -23,10 +23,10 @@ use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHa
 use crate::settings::InputModeSettings;
 use crate::terminal::block_list_element::GridType;
 use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::model::TerminalModel;
 use crate::terminal::model::grid::grid_handler::GridHandler;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model::TerminalModel;
 use crate::terminal::settings::TerminalSettings;
 use crate::view_components::find::{FindDirection, FindEvent, FindModel};
 
@@ -75,7 +75,9 @@ impl<'a> BlockFindRenderData<'a> {
         command_grid: Option<&GridHandler>,
         output_grid: Option<&GridHandler>,
     ) -> Self {
-        // Convert command grid matches.
+        // Convert command grid matches. Highlights are rendered in *original*
+        // grid coordinates (the renderer maps them to displayed positions
+        // itself), matching the sync path.
         let command_matches = command_grid
             .and_then(|grid| {
                 controller
@@ -83,13 +85,15 @@ impl<'a> BlockFindRenderData<'a> {
                     .map(|matches| {
                         matches
                             .iter()
-                            .filter_map(|m| m.to_range(grid))
+                            .filter_map(|m| m.to_original_range(grid))
                             .collect::<Vec<_>>()
                     })
             })
             .unwrap_or_default();
 
-        // Convert output grid matches.
+        // Convert output grid matches, skipping any hidden by an active block
+        // filter so highlights match the (filtered) visible content. Uses
+        // original coordinates (see command_matches above).
         let output_matches = output_grid
             .and_then(|grid| {
                 controller
@@ -97,22 +101,23 @@ impl<'a> BlockFindRenderData<'a> {
                     .map(|matches| {
                         matches
                             .iter()
-                            .filter_map(|m| m.to_range(grid))
+                            .filter(|m| !m.is_filtered)
+                            .filter_map(|m| m.to_original_range(grid))
                             .collect::<Vec<_>>()
                     })
             })
             .unwrap_or_default();
 
-        // Get focused match ranges.
+        // Get focused match ranges (also in original coordinates).
         let focused_match = controller.focused_terminal_match();
         let focused_command_range = focused_match
             .as_ref()
             .filter(|m| m.block_index == block_index && m.grid_type == GridType::PromptAndCommand)
-            .and_then(|m| command_grid.and_then(|grid| m.range.to_range(grid)));
+            .and_then(|m| command_grid.and_then(|grid| m.range.to_original_range(grid)));
         let focused_output_range = focused_match
             .as_ref()
             .filter(|m| m.block_index == block_index && m.grid_type == GridType::Output)
-            .and_then(|m| output_grid.and_then(|grid| m.range.to_range(grid)));
+            .and_then(|m| output_grid.and_then(|grid| m.range.to_original_range(grid)));
 
         Self::Async {
             command_matches,
@@ -602,8 +607,13 @@ impl TerminalFindModel {
         block_index: BlockIndex,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Async find handles block invalidation differently via invalidate_block().
-        if self.async_find_controller.is_some() {
+        // On the async path, recompute which matches are hidden by the
+        // (already-applied) block filter and treat filtered rows as if they do
+        // not exist for search — mirroring the sync path below. This keeps the
+        // match count, focus traversal, and highlights consistent with sync.
+        if let Some(controller) = self.async_find_controller.as_mut() {
+            controller.recompute_filtered_for_block(block_index);
+            ctx.emit(FindEvent::RanFind);
             return;
         }
 

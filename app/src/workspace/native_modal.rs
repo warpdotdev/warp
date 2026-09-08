@@ -14,7 +14,7 @@ use warpui::{
 
 use crate::appearance::Appearance;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 
 pub(super) fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -144,9 +144,11 @@ impl View for NativeModal {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(NativeModalAction::ToggleDontShowAgain))
             .finish();
 
-        let mut dialog_column_contents = vec![Container::new(dont_show_again_checkbox)
-            .with_padding_bottom(20.)
-            .finish()];
+        let mut dialog_column_contents = vec![
+            Container::new(dont_show_again_checkbox)
+                .with_padding_bottom(20.)
+                .finish(),
+        ];
 
         for (i, modal_button) in alert_dialog.button_data.iter().enumerate() {
             let button = Align::new(

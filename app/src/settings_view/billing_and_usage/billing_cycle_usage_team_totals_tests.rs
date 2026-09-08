@@ -1,4 +1,4 @@
-use super::{build_team_total_card_summaries, TeamTotalCardSummary};
+use super::{TeamTotalCardSummary, build_team_total_card_summaries};
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
     AiCreditsUsageSource, BillingCycleUsageEntry, UsageVisibility, UsageVisibilityGranularity,
@@ -18,6 +18,7 @@ fn entry(
         usage_source,
         credits_used,
         cost_cents,
+        attributed_team_uid: None,
     }
 }
 

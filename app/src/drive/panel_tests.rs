@@ -1,14 +1,14 @@
 use warp_core::ui::appearance::Appearance;
-use warpui::platform::WindowStyle;
 use warpui::App;
+use warpui::platform::WindowStyle;
 
 use super::DrivePanel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
+use crate::auth::auth_manager::AuthManager;
+use crate::cloud_object::Space;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
-use crate::cloud_object::Space;
 use crate::drive::index::DriveIndexSection;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
@@ -21,7 +21,7 @@ use crate::terminal::shared_session::permissions_manager::SessionPermissionsMana
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{ObjectActions, ASSETS};
+use crate::{ASSETS, ObjectActions};
 
 fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);

@@ -57,7 +57,7 @@ impl StringModel for TemplatableMCPServer {
         QueueItem::UpdateTemplatableMCPServer {
             model: object.model().clone().into(),
             id: object.id,
-            revision: revision_ts.or_else(|| object.metadata.revision.clone()),
+            revision: revision_ts.or(object.metadata.revision),
         }
     }
 

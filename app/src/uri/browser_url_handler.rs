@@ -1,4 +1,5 @@
 use url::Url;
+use warp_errors::report_error;
 
 use super::web_intent_parser::WebIntent;
 
@@ -23,7 +24,7 @@ pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
                     Some(unwrapped_url.as_str()),
                 )
                 .unwrap_or_else(|_| {
-                    log::error!("Failed to replace browser state");
+                    report_error!("Failed to replace browser state");
                     crate::platform::wasm::emit_event(
                         crate::platform::wasm::WarpEvent::ErrorLogged {
                             error: String::from("Failed to replace browser state"),
@@ -31,10 +32,10 @@ pub fn update_browser_url(url: Option<Url>, force_redirect: bool) {
                     );
                 });
         } else {
-            log::error!("Failed to get gloo history while trying to update browser url");
+            report_error!("Failed to get gloo history while trying to update browser url");
         }
     } else {
-        log::error!("Failed to get new url to update browser with");
+        report_error!("Failed to get new url to update browser with");
     }
 }
 
@@ -74,7 +75,7 @@ fn get_base_app_url() -> Option<Url> {
         new_url.set_query(None);
         return Some(new_url);
     }
-    log::error!("Failed to get the base url");
+    report_error!("Failed to get the base url");
     None
 }
 

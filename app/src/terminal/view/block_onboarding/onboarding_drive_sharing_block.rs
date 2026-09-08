@@ -26,10 +26,10 @@ impl OnboardingDriveSharingBlock {
     pub fn new(object_id: CloudObjectTypeAndId, ctx: &mut ViewContext<Self>) -> Self {
         // Re-render if the object in the block is renamed.
         ctx.subscribe_to_model(&CloudModel::handle(ctx), |me, _, event, ctx| {
-            if let CloudModelEvent::ObjectUpdated { type_and_id, .. } = event {
-                if &me.object_id == type_and_id {
-                    ctx.notify();
-                }
+            if let CloudModelEvent::ObjectUpdated { type_and_id, .. } = event
+                && &me.object_id == type_and_id
+            {
+                ctx.notify();
             }
         });
 

@@ -48,6 +48,9 @@ pub struct Mouse {
     /// cursor, so the global cursor position cannot be used to locate clicks. We track the
     /// intended position here and use it as the location for button and move events.
     virtual_position: CGPoint,
+    /// The owner (client conversation id) of the background session, tagged onto window
+    /// activations so teardown can be scoped to this session. `None` when unowned.
+    session_owner: Option<String>,
 }
 
 impl Mouse {
@@ -56,6 +59,7 @@ impl Mouse {
             held_buttons: HeldButtons::default(),
             target,
             virtual_position: CGPoint { x: 0.0, y: 0.0 },
+            session_owner: None,
         }
     }
 
@@ -63,6 +67,11 @@ impl Mouse {
     /// drive the HID tap for some actions and a specific process for others.
     pub fn set_target(&mut self, target: PostTarget) {
         self.target = target;
+    }
+
+    /// Sets the owner tagged onto background-window activations triggered by this mouse.
+    pub fn set_session_owner(&mut self, owner: Option<String>) {
+        self.session_owner = owner;
     }
 
     pub async fn move_to(&mut self, target: Vector2I) -> Result<(), String> {
@@ -245,7 +254,7 @@ impl Mouse {
             // idempotent per window and does not raise the window or steal the user's frontmost
             // focus.
             if is_down || is_move {
-                super::activation::ensure_activated(pid, &info);
+                super::activation::ensure_activated(pid, &info, self.session_owner.as_deref());
             }
             post_window_mouse_event(
                 pid,

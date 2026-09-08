@@ -156,6 +156,7 @@ integration_tests! {
     test_code_review_scroll_preserved_header_range,
     #[ignore = "Flaking on CI - KC looking into 3/31/26"]
     test_code_review_scroll_preserved_footer_range,
+    test_code_review_double_click_fully_expands_hidden_section,
     test_pane_group_state_single_pane,
     test_pane_group_state_multi_pane,
     test_pane_group_state_close_pane,
@@ -211,6 +212,14 @@ integration_tests! {
     test_secret_case_sensitivity,
     test_secrets_are_always_redacted_in_ai_inputs,
 
+    // OSC 8 hyperlink tests (GH6393)
+    test_osc8_open_close_renders_visible_text,
+    test_osc8_copy_block_yields_visible_text_only,
+    test_osc8_open_link_action_opens_url,
+    test_osc8_file_scheme_opens_url,
+    test_osc8_no_regression_on_url_autodetect,
+
+    test_cycle_active_tab_color_with_keybinding,
     test_active_session_follows_focus,
     test_tab_context_menu_copies_metadata,
     test_vertical_tab_context_menu_copies_metadata,
@@ -258,6 +267,8 @@ integration_tests! {
     test_latest_buffer_operations,
 
     test_pass_control_sequences_to_long_running_block,
+    test_execution_profiles_load_from_settings_file,
+    test_execution_profile_model_persists_and_hot_reloads_settings_file,
     test_settings_file_migration_from_native_store,
     test_settings_file_hot_reload_applies_new_values,
 
@@ -265,6 +276,18 @@ integration_tests! {
     test_settings_error_banner_on_startup_with_invalid_value,
     test_settings_error_banner_on_reload_with_invalid_toml,
     test_settings_error_banner_on_reload_with_invalid_value,
+
+    // Settings sidebar navigation and search.
+    test_settings_mouse_navigation_through_umbrella,
+    test_settings_keyboard_navigation_down_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_up_into_collapsed_umbrella,
+    test_settings_keyboard_navigation_after_manual_collapse,
+    test_settings_search_filters_top_level_pages,
+    test_settings_search_filters_subpages,
+    test_settings_search_subpage_still_renders_content,
+    test_settings_search_clear_restores_umbrella_state,
+    test_settings_search_preserved_on_sidebar_click,
+    test_settings_agent_mcp_servers_renders_standalone_page,
 
     test_copy_selection_within_ai_block,
     #[ignore = "Affected by agent_view feature flag UI changes"]
@@ -306,6 +329,7 @@ integration_tests! {
     #[ignore = "Affected by agent_view feature flag UI changes"]
     test_selection_last_to_ai_lines,
     test_restored_ai_block_renders_mermaid_and_local_images,
+    test_cancelled_run_agents_card_renders_cancelled_state,
 
     // Middle-click-paste is only implemented for Linux right now.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -324,6 +348,10 @@ integration_tests! {
     test_file_tree_non_openable_files,
     test_file_tree_nested_file_opening,
 
+    // Copy current path command-palette action
+    test_copy_current_path_copies_terminal_pwd,
+    test_copy_current_path_copies_code_editor_file_path,
+
     // Go to Line tests
     test_goto_line_dialog_open_close,
     test_goto_line_jumps_to_line,
@@ -334,6 +362,7 @@ integration_tests! {
 
     // AI document tests
     test_copy_ai_document_as_markdown_from_overflow_menu,
+    test_restored_ai_document_populates_code_block_after_first_layout,
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,

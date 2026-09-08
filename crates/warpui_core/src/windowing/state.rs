@@ -7,8 +7,8 @@ use super::WindowCallbacks;
 use crate::platform::{self, FullscreenState, TerminationMode, WindowFocusBehavior};
 use crate::scene::{CornerRadius, Radius};
 use crate::{
-    geometry, windowing, DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow,
-    SingletonEntity, WindowId,
+    DisplayId, DisplayIdx, Entity, ModelContext, OptionalPlatformWindow, SingletonEntity, WindowId,
+    geometry, windowing,
 };
 
 /// Description of the current stage in the lifecycle of the app.
@@ -153,6 +153,14 @@ impl WindowManager {
         self.platform.active_window_id()
     }
 
+    /// Test-only helper: returns the window most recently passed to
+    /// `show_window_and_focus_app`. Only the `test` platform tracks this; other platforms
+    /// report focus via `active_window` instead.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        self.platform.last_window_shown_and_focused_for_test()
+    }
+
     // Get the rect of the current active screen. We need the bound instead of just
     // the size of the screen because Mac has a global coordination system containing
     // all user's screens. So the active screen may not have a origin of (0, 0).
@@ -196,6 +204,21 @@ impl WindowManager {
             8.
         };
         CornerRadius::with_all(Radius::Pixels(radius))
+    }
+
+    /// Like [`Self::window_corner_radius`], but square when the given window is fullscreen: a
+    /// fullscreen window occupies the entire screen, and rounding its corners leaves transparent
+    /// notches at the screen corners that square content behind can poke through.
+    pub fn window_corner_radius_for_window(&self, window_id: WindowId) -> CornerRadius {
+        let is_fullscreen = self
+            .platform_window(window_id)
+            .map(|window| window.fullscreen_state() == FullscreenState::Fullscreen)
+            .unwrap_or(false);
+        if is_fullscreen {
+            CornerRadius::with_all(Radius::Pixels(0.))
+        } else {
+            self.window_corner_radius()
+        }
     }
 
     pub(crate) fn open_window(

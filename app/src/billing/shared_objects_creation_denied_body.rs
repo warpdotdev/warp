@@ -93,23 +93,41 @@ impl View for SharedObjectsCreationDeniedBody {
 
         let sub_header = match self.object_type {
             Some(object_type) => {
-                match (self.is_delinquent_due_to_payment_issue, self.has_admin_permissions, self.customer_type) {
+                match (
+                    self.is_delinquent_due_to_payment_issue,
+                    self.has_admin_permissions,
+                    self.customer_type,
+                ) {
                     (true, true, _) => {
                         if is_stripe_paid_plan {
-                            format!("Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease update your payment information to restore access.")
+                            format!(
+                                "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease update your payment information to restore access."
+                            )
                         } else {
-                            format!("Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact support@warp.dev to restore access.")
+                            format!(
+                                "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact support@warp.dev to restore access."
+                            )
                         }
-                    },
-                    (true, false, _) => format!("Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact a team admin to restore access."),
+                    }
+                    (true, false, _) => format!(
+                        "Shared {object_type}s have been restricted due to a subscription payment issue.\n\nPlease contact a team admin to restore access."
+                    ),
                     (false, true, CustomerType::Prosumer) => {
-                        format!("Warp's Pro plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, upgrade to the Build plan.")
+                        format!(
+                            "Warp's Pro plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, upgrade to the Build plan."
+                        )
                     }
                     (false, false, CustomerType::Prosumer) => {
-                        format!("Warp's Pro plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, contact a team admin to upgrade to the Build plan.")
+                        format!(
+                            "Warp's Pro plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, contact a team admin to upgrade to the Build plan."
+                        )
                     }
-                    (false, true, _) => format!("Warp's free plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, upgrade to a paid plan."),
-                    (false, false, _) => format!("Warp's free plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, contact a team admin to upgrade to a paid plan."),
+                    (false, true, _) => format!(
+                        "Warp's free plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, upgrade to a paid plan."
+                    ),
+                    (false, false, _) => format!(
+                        "Warp's free plan comes with a limited number of shared {object_type}s.\n\nFor access to unlimited shared {object_type}s, contact a team admin to upgrade to a paid plan."
+                    ),
                 }
             }
             _ => match (

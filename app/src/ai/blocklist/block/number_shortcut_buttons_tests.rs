@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Fill};

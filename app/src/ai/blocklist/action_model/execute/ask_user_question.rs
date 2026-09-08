@@ -1,6 +1,6 @@
 use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -44,7 +44,7 @@ impl AskUserQuestionExecutor {
         &mut self,
         input: ExecuteActionInput,
         ctx: &mut ModelContext<Self>,
-    ) -> impl Into<AnyActionExecution> {
+    ) -> impl Into<AnyActionExecution> + use<> {
         let questions = match &input.action.action {
             AIAgentActionType::AskUserQuestion { questions } => questions,
             _ => {

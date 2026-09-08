@@ -1,20 +1,19 @@
 pub mod ai_agent_tasks;
-pub mod blockgrid;
 pub mod settings;
 pub mod terminal;
 mod virtual_fs;
 
-pub use blockgrid::mock_blockgrid;
 pub use terminal::add_window_with_terminal;
 pub use virtual_fs::{Stub, VirtualFS};
+pub use warp_terminal::test_util::mock_blockgrid;
 
 macro_rules! assert_eventually {
-    ($cond:expr, $($arg:tt)+) => {
+    ($cond:expr_2021, $($arg:tt)+) => {
         $crate::test_util::assert_eventually!(20 => $cond, $($arg)+);
     };
     // Run the condition up to ticks times, yielding to the executor in between.  If it does
     // not become true, this panics with the provided format string + args.
-    ($ticks:literal => $cond:expr, $($arg:tt)+) => {{
+    ($ticks:literal => $cond:expr_2021, $($arg:tt)+) => {{
         let mut pass = false;
         for _ in 0..$ticks {
             if $cond {

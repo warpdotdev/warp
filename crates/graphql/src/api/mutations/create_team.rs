@@ -16,14 +16,17 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
           uid
           email
           role
+          isDisabled
         }
         teams {
           uid
           name
+          inviteLink
           members {
             uid
             email
             role
+            isDisabled
           }
         }
         billingMetadata {
@@ -93,10 +96,10 @@ mutation CreateTeam($input: CreateTeamInput!, $request_context: RequestContext!)
           }
         }
         hasBillingHistory
-        inviteCode
         pendingEmailInvites {
           email
           expired
+          teamUid
         }
         inviteLinkDomainRestrictions {
           uid

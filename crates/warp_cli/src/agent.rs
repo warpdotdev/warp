@@ -1,6 +1,8 @@
 use std::fmt;
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use clap::builder::PossibleValue;
 use clap::{Args, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +12,7 @@ use crate::environment::EnvironmentCreateArgs;
 use crate::json_filter::JsonOutput;
 use crate::mcp::MCPSpec;
 use crate::model::ModelArgs;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 use crate::share::ShareArgs;
 use crate::skill::SkillSpec;
 
@@ -36,6 +38,94 @@ impl fmt::Display for OutputFormat {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = self.to_possible_value().expect("no values are skipped");
         f.write_str(value.get_name())
+    }
+}
+
+/// Source-control provider for a repository checkout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RepositoryForge {
+    #[serde(rename = "GITHUB")]
+    GitHub,
+    #[serde(rename = "GITLAB")]
+    GitLab,
+    #[serde(rename = "AZURE_DEVOPS")]
+    AzureDevOps,
+}
+/// Server-supplied repository HEAD used to prepare an agent run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RepositoryHeadRef {
+    CommitSha(String),
+    Branch(String),
+}
+
+impl RepositoryHeadRef {
+    pub fn value(&self) -> &str {
+        match self {
+            Self::CommitSha(value) | Self::Branch(value) => value,
+        }
+    }
+}
+
+/// Server-supplied override for an environment repository's initial HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryHeadOverride {
+    pub code_forge: RepositoryForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub head: RepositoryHeadRef,
+}
+
+impl RepositoryHeadOverride {
+    pub fn identity(&self) -> (RepositoryForge, &str, &str) {
+        (
+            self.code_forge,
+            self.repo_owner.as_str(),
+            self.repo_name.as_str(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.repo_owner.is_empty() {
+            return Err("repo_owner must not be empty".to_string());
+        }
+        if self.repo_name.is_empty() {
+            return Err("repo_name must not be empty".to_string());
+        }
+        match &self.head {
+            RepositoryHeadRef::CommitSha(commit_sha) => {
+                if commit_sha.len() != 40
+                    || !commit_sha
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+                {
+                    return Err(
+                        "commit SHA must be an exact 40-character lowercase hexadecimal SHA"
+                            .to_string(),
+                    );
+                }
+            }
+            RepositoryHeadRef::Branch(branch) => {
+                if branch.is_empty() || branch.trim() != branch {
+                    return Err(
+                        "branch must not be empty or contain surrounding whitespace".to_string()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for RepositoryHeadOverride {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let head_override = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid repository head override JSON: {error}"))?;
+        head_override.validate()?;
+        Ok(head_override)
     }
 }
 
@@ -125,33 +215,62 @@ impl HiddenComputerUseArgs {
         }
     }
 }
+const HARNESS_VALUE_VARIANTS: [Harness; 5] = [
+    Harness::Oz,
+    Harness::Claude,
+    Harness::OpenCode,
+    Harness::Gemini,
+    Harness::Codex,
+];
+
 /// The execution harness for an agent run.
-#[derive(Debug, Copy, Clone, ValueEnum, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Harness {
     /// Use Warp's built-in MAA infrastructure (default).
     #[default]
-    #[value(name = "oz")]
     Oz,
     /// Delegate to the `claude` CLI.
-    #[value(name = "claude", alias = "claude-code")]
     Claude,
     /// Delegate to the `opencode` CLI.
-    #[value(name = "opencode", alias = "open-code")]
     OpenCode,
     /// Delegate to the `gemini` CLI.
-    #[value(name = "gemini")]
     Gemini,
     /// Delegate to the `codex` CLI.
-    #[value(name = "codex")]
     Codex,
     /// A harness produced by a newer client/server that this client doesn't
     /// recognize. Surfaced via deserialization fallbacks (e.g. unknown GraphQL
     /// enum values, unknown `harness_type` strings); never selectable from the
     /// CLI or harness dropdown.
     #[serde(other)]
-    #[value(skip)]
     Unknown,
+}
+
+impl ValueEnum for Harness {
+    fn value_variants<'a>() -> &'a [Self] {
+        &HARNESS_VALUE_VARIANTS
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        let mut pv = match self {
+            Harness::Oz => {
+                PossibleValue::new("oz").help("Use Warp's built-in MAA infrastructure (default)")
+            }
+            Harness::Claude => PossibleValue::new("claude")
+                .alias("claude-code")
+                .help("Delegate to the `claude` CLI"),
+            Harness::OpenCode => PossibleValue::new("opencode")
+                .alias("open-code")
+                .help("Delegate to the `opencode` CLI"),
+            Harness::Gemini => PossibleValue::new("gemini").help("Delegate to the `gemini` CLI"),
+            Harness::Codex => PossibleValue::new("codex").help("Delegate to the `codex` CLI"),
+            Harness::Unknown => return None,
+        };
+        if !self.should_display_in_help_text() {
+            pv = pv.hide(true);
+        }
+        Some(pv)
+    }
 }
 
 impl Harness {
@@ -167,9 +286,26 @@ impl Harness {
         }
     }
 
+    /// Whether this harness is surfaced to users in CLI `--help` for cloud runs
+    /// (`oz agent run-cloud --harness`). Only the harnesses that are generally
+    /// available for cloud runs are shown; gemini and opencode aren't available
+    /// yet, so they're hidden from help. Update this when a harness becomes GA
+    /// for cloud.
+    ///
+    /// This is the single source of truth for the `ValueEnum` help text; the
+    /// per-variant `#[value(hide = ...)]` attributes are no longer used. It does
+    /// not affect runtime acceptance — the server decides which harnesses are
+    /// actually runnable.
+    pub fn should_display_in_help_text(self) -> bool {
+        match self {
+            Self::Oz | Self::Claude | Self::Codex => true,
+            Self::OpenCode | Self::Gemini | Self::Unknown => false,
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::Oz => "Oz",
+            Self::Oz => "Warp Agent",
             Self::Claude => "Claude Code",
             Self::OpenCode => "OpenCode",
             Self::Gemini => "Gemini CLI",
@@ -234,9 +370,9 @@ pub enum AgentProfileCommand {
 /// Agent-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentCommand {
-    /// Run a new Oz agent.
+    /// Run a new Warp Agent.
     Run(RunAgentArgs),
-    /// Dispatch an Oz agent that runs remotely.
+    /// Dispatch a cloud agent.
     RunCloud(RunCloudArgs),
     /// Manage agent profiles.
     #[command(subcommand)]
@@ -284,6 +420,8 @@ impl AgentCommand {
 pub struct RunAgentArgs {
     #[command(flatten)]
     pub prompt_arg: PromptArg,
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 
     #[command(flatten)]
     pub model: ModelArgs,
@@ -355,6 +493,29 @@ pub struct RunAgentArgs {
     )]
     pub idle_on_complete: Option<humantime::Duration>,
 
+    /// Keep the agent's session open after the conversation ends in a terminal error, so a human
+    /// can attach to the failed run and debug in it. The agent process is the shared-session
+    /// sharer, so without this the session dies with the process.
+    ///
+    /// An idle window, not a fixed one: a follow-up cancels the pending exit.
+    ///
+    /// Deliberately separate from `--idle-on-complete`, which covers the success/blocked/cancelled
+    /// lifecycle. Neither flag is a fallback for the other.
+    ///
+    /// Cloud workers set this through `OZ_IDLE_ON_FAIL` rather than the flag, so that a pinned
+    /// CLI predating this option ignores it instead of rejecting an unknown argument.
+    ///
+    /// You can optionally provide a duration (e.g. `--idle-on-fail 10m`).
+    #[arg(
+        long = "idle-on-fail",
+        value_name = "DURATION",
+        env = "OZ_IDLE_ON_FAIL",
+        num_args = 0..=1,
+        default_missing_value = "15m",
+        hide = true
+    )]
+    pub idle_on_fail: Option<humantime::Duration>,
+
     #[command(flatten)]
     pub snapshot: SnapshotArgs,
     /// Identifier for the task that spawned this agent, used to report progress.
@@ -401,7 +562,7 @@ pub struct RunAgentArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
+    /// "oz" (default) uses Warp Agent.
     /// "claude" delegates to the `claude` CLI.
     #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
     pub harness: Harness,
@@ -423,6 +584,20 @@ pub struct RunAgentArgs {
 
     #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
     pub configure_git_credentials_with_github: bool,
+
+    /// Repository HEAD override supplied by the server for this task.
+    #[arg(
+        long = "repository-head-override-json",
+        value_name = "JSON",
+        action = clap::ArgAction::Append,
+        requires = "task_id",
+        hide = true
+    )]
+    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+
+    /// Remove the origin remote from environment repositories after setup.
+    #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]
+    pub remove_repository_origins: bool,
 }
 
 impl RunAgentArgs {
@@ -489,6 +664,23 @@ pub struct RunCloudArgs {
     #[arg(long = "name", short = 'n')]
     pub name: Option<String>,
 
+    /// Title for this agent task and its conversation.
+    ///
+    /// Unlike `--name`, which sets the agent configuration name, `--title`
+    /// controls the task and conversation title shown for the run. When
+    /// spawning a factory sibling, pass the child task title here.
+    #[arg(long = "title", value_name = "TITLE")]
+    pub title: Option<String>,
+
+    /// Run ID of the parent run that is spawning this run.
+    ///
+    /// Setting this makes the new run an orchestration child of the given
+    /// parent: it inherits the parent's lineage (depth, root run) and scope,
+    /// is attributed to the ORCHESTRATION source, and is tracked on the parent
+    /// run. Pass the current run ID when a factory foreman spawns a sibling.
+    #[arg(long = "parent-run-id", value_name = "RUN_ID")]
+    pub parent_run_id: Option<String>,
+
     /// MCP servers to start before executing the agent.
     ///
     /// Can be specified as:
@@ -554,17 +746,49 @@ pub struct RunCloudArgs {
 
     /// Execution harness for the agent run.
     ///
-    /// "oz" (default) uses Warp's built-in agent infrastructure.
-    /// "claude" delegates to the `claude` CLI.
-    #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz, hide = true)]
+    /// "oz" (the default) runs on Warp's built-in agent infrastructure. Other
+    /// values delegate the run to an external agent CLI; see the possible
+    /// values below.
+    #[arg(long = "harness", value_name = "HARNESS", default_value_t = Harness::Oz)]
     pub harness: Harness,
 
-    /// Name of a managed secret for Claude Code harness authentication.
+    /// Name of a managed secret used to authenticate the Claude Code harness.
     ///
-    /// Resolved server-side and injected into the agent container.
-    /// Only valid when --harness is set to "claude".
-    #[arg(long = "claude-auth-secret", value_name = "NAME", hide = true)]
+    /// Only valid with `--harness claude`. The secret is resolved server-side
+    /// and injected into the agent container.
+    ///
+    /// If you don't have one yet, create it with
+    /// `oz secret create claude api-key <NAME>` (run
+    /// `oz secret create claude --help` for other credential types), then pass
+    /// that <NAME> here.
+    #[arg(long = "claude-auth-secret", value_name = "NAME")]
     pub claude_auth_secret: Option<String>,
+
+    /// Name of a managed secret used to authenticate the Codex harness.
+    ///
+    /// Only valid with `--harness codex`. The secret is resolved server-side
+    /// and injected into the agent container.
+    ///
+    /// If you don't have one yet, create it with
+    /// `oz secret create codex api-key <NAME>`, then pass that <NAME> here.
+    #[arg(long = "codex-auth-secret", value_name = "NAME")]
+    pub codex_auth_secret: Option<String>,
+}
+
+impl RunCloudArgs {
+    /// Validates that the harness auth-secret flags are only supplied alongside
+    /// their matching `--harness`. Returns a user-facing error message when a
+    /// secret is provided for the wrong harness. Checked on run so a mismatched
+    /// invocation fails fast with a clear message.
+    pub fn validate_auth_secrets(&self) -> Result<(), String> {
+        if self.claude_auth_secret.is_some() && self.harness != Harness::Claude {
+            return Err("--claude-auth-secret is only valid with --harness claude.".to_string());
+        }
+        if self.codex_auth_secret.is_some() && self.harness != Harness::Codex {
+            return Err("--codex-auth-secret is only valid with --harness codex.".to_string());
+        }
+        Ok(())
+    }
 }
 
 /// Sort field for named agents.
@@ -579,6 +803,8 @@ pub enum AgentSortByArg {
 /// Arguments for listing named agents.
 #[derive(Debug, Clone, Args)]
 pub struct AgentListArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Sort field. Only supported for pretty, text, and ndjson output.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<AgentSortByArg>,
@@ -606,6 +832,8 @@ pub struct AgentGetArgs {
 /// Arguments for creating a named agent.
 #[derive(Debug, Clone, Args)]
 pub struct AgentCreateArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Name of the agent.
     #[arg(long = "name", short = 'n')]
     pub name: String,
@@ -613,6 +841,10 @@ pub struct AgentCreateArgs {
     /// Description of the agent.
     #[arg(long = "description")]
     pub description: Option<String>,
+
+    /// Base prompt for runs of this agent.
+    #[arg(long = "prompt", value_name = "TEXT")]
+    pub prompt: Option<String>,
 
     /// Attach a secret to the agent. Repeat the flag for multiple secrets.
     #[arg(long = "secret", value_name = "NAME")]
@@ -724,6 +956,14 @@ pub struct AgentUpdateArgs {
     #[arg(long = "remove-environment", conflicts_with = "environment")]
     pub remove_environment: bool,
 
+    /// Replacement base prompt for runs executed by this agent.
+    #[arg(long = "prompt", value_name = "TEXT", conflicts_with = "remove_prompt")]
+    pub prompt: Option<String>,
+
+    /// Remove the agent base prompt.
+    #[arg(long = "remove-prompt", conflicts_with = "prompt")]
+    pub remove_prompt: bool,
+
     /// JSON formatting configuration.
     #[command(flatten)]
     pub json_output: JsonOutput,
@@ -739,6 +979,8 @@ pub struct AgentDeleteArgs {
 /// Arguments for listing available agent skills.
 #[derive(Debug, Clone, Args)]
 pub struct ListAgentSkillsArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// List skills from a specific GitHub repository.
     ///
     /// Format: `owner/repo` or `https://github.com/owner/repo`

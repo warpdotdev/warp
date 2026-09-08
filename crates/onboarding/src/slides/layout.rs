@@ -1,4 +1,4 @@
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warpui_core::assets::asset_cache::AssetSource;
 use warpui_core::elements::{
     Align, CacheOption, Clipped, ConstrainedBox, Container, CrossAxisAlignment, Empty, Expanded,

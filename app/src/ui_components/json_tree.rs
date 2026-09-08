@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use pathfinder_color::ColorU;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
     ConstrainedBox, CrossAxisAlignment, Empty, Flex, Hoverable, MainAxisSize, MouseState,
     MouseStateHandle, ParentElement, SavePosition, Shrinkable, Text,
@@ -261,7 +261,7 @@ pub fn render_json_tree(
     on_copy_json: Arc<CopyJsonFn>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    let font_family = appearance.ui_font_family();
+    let font_family = appearance.monospace_font_family();
     let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
 
     // Optional section label.
@@ -529,13 +529,14 @@ fn render_long_string_row(
 
     let mut row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        .with_cross_axis_alignment(CrossAxisAlignment::Start);
 
     // Indent spacer.
     row.add_child(indent_spacer(depth));
 
+    let mut chevron_and_key = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
     // Chevron in the standard left position.
-    row.add_child(
+    chevron_and_key.add_child(
         ConstrainedBox::new(
             icon.to_warpui_icon(warp_core::ui::theme::Fill::Solid(colors.annotation))
                 .finish(),
@@ -551,8 +552,9 @@ fn render_long_string_row(
             .with_color(colors.key)
             .soft_wrap(false)
             .finish();
-        row.add_child(key_text);
+        chevron_and_key.add_child(key_text);
     }
+    row.add_child(chevron_and_key.finish());
 
     // String value: preview when collapsed, full text when expanded.
     let string_element: Box<dyn Element> = if is_expanded {

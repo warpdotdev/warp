@@ -1,4 +1,4 @@
-use super::{sort_user_items_in_place, SortKey, SortOrder, UserSortingCriteria};
+use super::{SortKey, SortOrder, UserSortingCriteria, sort_user_items_in_place};
 
 #[test]
 pub fn test_default_sorting_pins_current_user_first_then_display_name_asc() {

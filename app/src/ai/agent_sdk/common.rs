@@ -9,22 +9,28 @@ use futures::TryFutureExt;
 use inquire::{InquireError, Select};
 use warp_cli::agent::Harness;
 use warp_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
+use warp_cli::scope::{ObjectScope, TeamSelection};
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, GetSingletonModelHandle, SingletonEntity as _, UpdateModel};
 
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
-use crate::ai::llms::{LLMId, LLMPreferences};
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, environment_matches_scope};
+use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
+use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::cloud_object::{CloudObject, CloudObjectLookup as _, Owner};
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
-use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::team_workspace_settings::{
+    NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
+};
+use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope, UserWorkspaces};
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -33,19 +39,39 @@ pub fn validate_agent_mode_base_model_id(
     model_id: &str,
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
+    let team_uid = UserWorkspaces::as_ref(ctx).inherited_or_default_team_uid(None);
     let llm_prefs = LLMPreferences::as_ref(ctx);
-
-    let llm_id: LLMId = model_id.into();
     let valid_ids = llm_prefs
-        .get_base_llm_choices_for_agent_mode(ctx)
+        .get_base_llm_choices_for_agent_mode_for_team_uid(team_uid, ctx)
         .map(|info| info.id.clone())
         .collect::<Vec<_>>();
 
+    classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable_for_team_uid(team_uid),
+    )
+}
+
+/// Classifies a user-supplied agent-mode model id against the available model
+/// list, distinguishing "the model list fetch failed (so the list is empty or
+/// stale)" from "the id is genuinely not in a valid list".
+fn classify_agent_mode_base_model_id(
+    model_id: &str,
+    valid_ids: &[LLMId],
+    list_unavailable: bool,
+) -> anyhow::Result<LLMId> {
+    let llm_id: LLMId = model_id.into();
     if valid_ids.contains(&llm_id) {
         Ok(llm_id)
+    } else if list_unavailable {
+        Err(anyhow::anyhow!(
+            "Could not retrieve the agent-mode model list from the server \
+             (the request failed or returned no models). Try again later."
+        ))
     } else {
         let suggestions = valid_ids
-            .into_iter()
+            .iter()
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(", ");
@@ -76,38 +102,144 @@ pub(super) fn set_ambient_task_context_from_run_id(
     Ok(task_id)
 }
 
-/// Resolve the owner of a new cloud object. This resolution is based on the CLI `--team` and `--personal` flags.
-///
-/// If `team_flag` is true, attempts to get the current team UID (errors if not on a team).
-/// If `user_flag` is true, gets the current user's UID.
-/// Otherwise, defaults to team if available, falling back to user.
-pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyhow::Result<Owner> {
-    if team_flag {
-        let team_id = UserWorkspaces::as_ref(ctx)
-            .current_team_uid()
-            .ok_or_else(|| anyhow::anyhow!("User is not on a team"))?;
-        return Ok(Owner::Team { team_uid: team_id });
+pub(super) fn describe_sole_team_error(error: SoleTeamError, ctx: &AppContext) -> anyhow::Error {
+    match error {
+        SoleTeamError::NoTeam => anyhow::anyhow!("You are not on a team"),
+        SoleTeamError::MoreThanOneTeam { team_uids } => anyhow::anyhow!(
+            "You are on {} teams. Re-run with one of:\n\n{}",
+            team_uids.len(),
+            describe_team_choices(&team_uids, ctx)
+        ),
     }
+}
 
-    if user_flag {
-        let user_id = AuthStateProvider::as_ref(ctx)
-            .get()
-            .user_id()
-            .ok_or_else(|| anyhow::anyhow!("User should be logged in"))?;
-        return Ok(Owner::User { user_uid: user_id });
+/// One `--team=<UID>` line per team, so the flag to copy starts each line and the name that
+/// identifies it follows. Sorted by name to keep the list stable across runs.
+fn describe_team_choices(team_uids: &[ServerId], ctx: &AppContext) -> String {
+    let workspaces = UserWorkspaces::as_ref(ctx);
+    let mut choices: Vec<(String, ServerId)> = team_uids
+        .iter()
+        .map(|uid| {
+            let name = workspaces
+                .team_from_uid(*uid)
+                .map(|team| team.name.clone())
+                .unwrap_or_default();
+            (name, *uid)
+        })
+        .collect();
+    choices.sort_by_key(|(name, _)| name.to_lowercase());
+
+    choices
+        .iter()
+        .map(|(name, uid)| format!("  --team={uid}   {name}").trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn describe_team_resolution_error(error: TeamScopeForCliError, ctx: &AppContext) -> anyhow::Error {
+    match error {
+        TeamScopeForCliError::InvalidTeamUid { team_uid, message } => {
+            anyhow::anyhow!("Invalid --team '{team_uid}': {message}")
+        }
+        TeamScopeForCliError::NoSoleTeam(error) => describe_sole_team_error(error, ctx),
+        TeamScopeForCliError::NotAMember(NotATeamMemberError { team_uid }) => {
+            anyhow::anyhow!("You are not on team {team_uid}")
+        }
     }
+}
 
-    // Default: try team first, fall back to user
-    if let Some(team_uid) = UserWorkspaces::as_ref(ctx).current_team_uid() {
-        return Ok(Owner::Team { team_uid });
+/// The team a CLI command's policy reads are scoped to.
+pub(super) fn resolve_team_scope(
+    team_selection: &TeamSelection,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    UserWorkspaces::as_ref(ctx)
+        .team_scope_for_cli(team_selection)
+        .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+pub(super) fn request_team_scope_for_cli(
+    team_selection: &TeamSelection,
+    ctx: &AppContext,
+) -> anyhow::Result<RequestTeamScope> {
+    let team_scope = resolve_team_scope(team_selection, ctx)?;
+    Ok(RequestTeamScope::from_scope(&team_scope))
+}
+
+pub(super) fn resolve_object_scope(
+    object_scope: &ObjectScope,
+    ctx: &AppContext,
+) -> anyhow::Result<TeamScopeForCli> {
+    UserWorkspaces::as_ref(ctx)
+        .team_scope_for_cli_object(object_scope)
+        .map_err(|err| describe_team_resolution_error(err, ctx))
+}
+
+pub(super) fn validate_agent_mode_base_model_id_for_scope(
+    model_id: &str,
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    let llm_prefs = LLMPreferences::as_ref(ctx);
+    let valid_ids = llm_prefs
+        .get_base_llm_choices_for_agent_mode(team_scope, ctx)
+        .map(|info| info.id.clone())
+        .collect::<Vec<_>>();
+    let llm_id = classify_agent_mode_base_model_id(
+        model_id,
+        &valid_ids,
+        llm_prefs.agent_mode_models_unavailable(team_scope),
+    )?;
+    let Some(llm) = llm_prefs.custom_llm_info_for_id(&llm_id) else {
+        return Ok(llm_id);
+    };
+    if is_model_allowed_for_scope(llm_prefs, llm, team_scope, ctx) {
+        return Ok(llm_id);
     }
+    let scope = team_scope.team_uid().map_or_else(
+        || "your personal scope".to_string(),
+        |team_uid| format!("team {team_uid}"),
+    );
+    Err(anyhow::anyhow!(
+        "Model '{model_id}' is one of your own custom endpoints, which {scope} does not allow."
+    ))
+}
 
-    log::warn!("Tried to default to creating team object, team could not be found.");
-    let user_id = AuthStateProvider::as_ref(ctx)
+fn current_user_uid(ctx: &AppContext) -> anyhow::Result<UserUid> {
+    AuthStateProvider::as_ref(ctx)
         .get()
         .user_id()
-        .ok_or_else(|| anyhow::anyhow!("User should be logged in"))?;
-    Ok(Owner::User { user_uid: user_id })
+        .ok_or_else(|| anyhow::anyhow!("User should be logged in"))
+}
+
+/// Resolve the owner of a new cloud object, based on the CLI `--team` and `--personal` flags.
+///
+/// With neither flag, a user on exactly one team gets a team object and a user on no team gets
+/// a personal one. A user on several teams is asked to choose rather than silently handed a
+/// personal object.
+pub fn resolve_owner(scope: &ObjectScope, ctx: &AppContext) -> anyhow::Result<Owner> {
+    if scope.personal {
+        return Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        });
+    }
+    match resolve_team_scope(&scope.team_selection, ctx)?.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        }),
+    }
+}
+
+pub(super) fn resolve_owner_for_team_scope(
+    team_scope: &impl TeamScope,
+    ctx: &AppContext,
+) -> anyhow::Result<Owner> {
+    match team_scope.team_uid() {
+        Some(team_uid) => Ok(Owner::Team { team_uid }),
+        None => Ok(Owner::User {
+            user_uid: current_user_uid(ctx)?,
+        }),
+    }
 }
 
 /// Refresh workspace metadata before executing an operation.
@@ -116,7 +248,7 @@ pub fn resolve_owner(team_flag: bool, user_flag: bool, ctx: &AppContext) -> anyh
 /// other operations that depend on team membership.
 pub fn refresh_workspace_metadata<C>(
     ctx: &mut C,
-) -> impl Future<Output = anyhow::Result<()>> + Send + 'static
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<C>
 where
     C: GetSingletonModelHandle + UpdateModel,
 {
@@ -137,7 +269,7 @@ where
 /// Refresh Warp Drive before executing an operation.
 pub fn refresh_warp_drive(
     ctx: &AppContext,
-) -> impl Future<Output = anyhow::Result<()>> + Send + 'static {
+) -> impl Future<Output = anyhow::Result<()>> + Send + 'static + use<> {
     UpdateManager::as_ref(ctx)
         .initial_load_complete()
         .with_timeout(WARP_DRIVE_SYNC_TIMEOUT)
@@ -212,10 +344,11 @@ pub enum EnvironmentChoice {
 }
 
 impl EnvironmentChoice {
-    /// Resolve the environment to use when creating an agent integration.
+    /// Resolve the environment to use when creating an agent operation.
     /// Warp Drive *must* have been synced first.
     pub fn resolve_for_create(
         args: EnvironmentCreateArgs,
+        team_scope: &(impl TeamScope + ?Sized),
         ctx: &AppContext,
     ) -> Result<Self, ResolveConfigurationError> {
         if args.no_environment {
@@ -227,6 +360,7 @@ impl EnvironmentChoice {
             let mut synced_environments: Vec<(ServerId, &CloudAmbientAgentEnvironment)> =
                 all_environments
                     .iter()
+                    .filter(|env| environment_matches_scope(env, team_scope, true))
                     .filter_map(|env| {
                         if let SyncId::ServerId(server_id) = env.sync_id() {
                             Some((server_id, env))

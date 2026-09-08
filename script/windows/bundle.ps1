@@ -8,6 +8,8 @@ Param (
 
     [Alias('check-only')]
     [Switch]$CHECK_ONLY,
+    [ValidateSet('app', 'tui', 'cli')]
+    [String]$ARTIFACT = 'app',
 
     [ValidateSet('local', 'dev', 'preview', 'stable', 'oss')]
     [String]$CHANNEL = 'dev',
@@ -24,6 +26,7 @@ Param (
 
     [ValidateSet('x64', 'arm64')]
     [String]$ARCH = '',
+    [Switch]$REQUIRE_SIGNATURES = $False,
 
     # A signtool command for Inno Setup to sign the setup engine and uninstaller.
     # Uses $f as the file placeholder, e.g.:
@@ -57,14 +60,59 @@ if ($ARCH -eq 'arm64') {
     $PLATFORM_TARGET = 'x86_64-pc-windows-msvc'
 }
 
+# Windows-on-ARM64 hosts can run x64 binaries via built-in emulation, but x64
+# hosts cannot run arm64 binaries at all, so only that direction is unsafe.
+# Resolve it once so the settings-schema default below (which assumes the
+# just-built binary is executable) can fail clearly instead of the process
+# simply failing to start.
+#
+# PROCESSOR_ARCHITECTURE reports the architecture of the running process, not
+# the host: an x64 PowerShell process running under WOW64 on a Windows-on-ARM
+# machine reports AMD64 even though the host is natively ARM64.
+# PROCESSOR_ARCHITEW6432 carries the true native host architecture in that
+# case, so prefer it when present.
+$NATIVE_PROCESSOR_ARCHITECTURE = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+} else {
+    $env:PROCESSOR_ARCHITECTURE
+}
+$HOST_ARCH = if ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'AMD64') {
+    'x64'
+} elseif ($NATIVE_PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+    'arm64'
+} else {
+    throw "Unsupported host architecture: $NATIVE_PROCESSOR_ARCHITECTURE"
+}
+$CAN_EXECUTE_ARCH = -not ($ARCH -eq 'arm64' -and $HOST_ARCH -eq 'x64')
+
 $ErrorActionPreference = 'Stop'
 
-$WORKSPACE_ROOT_DIR = $(Get-Location).Path
+function Assert-ValidSignature {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+        'PSUseCompatibleCommands',
+        '',
+        Justification = 'Release signature validation only runs on Windows.'
+    )]
+    param([string] $Path)
+
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ("$($signature.Status)" -ne 'Valid') {
+        throw "File does not have a valid Authenticode signature: $Path ($($signature.Status))"
+    }
+}
+
+$WORKSPACE_ROOT_DIR = $PWD.Path
 $CARGO_TARGET_DIR = $WORKSPACE_ROOT_DIR + '\target'
 $WINDOWS_INSTALLER_DIR = $WORKSPACE_ROOT_DIR + '\script\windows'
+$IS_TUI = $ARTIFACT -eq 'tui'
+$IS_CLI = $ARTIFACT -eq 'cli'
 
 if ($DEBUG_BUILD) {
     $CARGO_PROFILE = 'dev'
+} elseif (($IS_TUI -or $IS_CLI) -and (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev'))) {
+    $CARGO_PROFILE = 'rclida'
+} elseif ($IS_TUI -or $IS_CLI) {
+    $CARGO_PROFILE = 'rcli'
 } elseif (("$CHANNEL" -eq 'local') -or ("$CHANNEL" -eq 'dev')) {
     # For dev bundles, we want to enable debug assertions to
     # catch violations that would otherwise silently pass in
@@ -115,15 +163,73 @@ if ("$CHANNEL" -eq 'local') {
     $FEATURES = 'release_bundle,gui'
 }
 
-# All channels ship the v3 classifier and v2 heuristic.
-$FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
+if ($IS_TUI) {
+    $WARP_BIN = switch ($CHANNEL) {
+        'local' { 'warp-tui' }
+        'oss' { 'warp-tui-oss' }
+        Default { "warp-tui-$CHANNEL" }
+    }
+    $BINARY_NAME = "$WARP_BIN.exe"
+    $APP_NAME = switch ($CHANNEL) {
+        'local' { 'WarpAgentCLI' }
+        'dev' { 'WarpAgentCLIDev' }
+        'preview' { 'WarpAgentCLIPreview' }
+        'stable' { 'WarpAgentCLI' }
+        'oss' { 'WarpAgentCLIOss' }
+    }
+    $CLI_NAME = switch ($CHANNEL) {
+        'local' { 'warp' }
+        'dev' { 'warp-dev' }
+        'preview' { 'warp-preview' }
+        'stable' { 'warp' }
+        'oss' { 'warp-oss' }
+    }
+    $INSTALL_DIR_NAME = switch ($CHANNEL) {
+        'local' { 'tui-local' }
+        'dev' { 'tui-dev' }
+        'preview' { 'tui-preview' }
+        'stable' { 'tui' }
+        'oss' { 'tui-oss' }
+    }
+    $FEATURES = 'release_bundle,standalone,voice_input'
+    if ("$CHANNEL" -ne 'oss') {
+        $FEATURES = "$FEATURES,crash_reporting"
+    }
+} elseif ($IS_CLI) {
+    # The CLI ships the same channel binary target as the app (no separate bin), so keep
+    # $WARP_BIN and the channel-scoped $FEATURES set above (crash_reporting, preview_channel,
+    # agent_mode_debug, etc.) but swap the app's `gui` feature for `standalone`, mirroring the
+    # macOS and Linux `--artifact cli` builds. Filtering (rather than overwriting) $FEATURES is
+    # required so per-channel additions above -- e.g. preview_channel, required by the `preview`
+    # cargo target -- survive into the CLI build.
+    $BINARY_NAME = "$WARP_BIN.exe"
+    $FEATURES = (($FEATURES -split ',') | Where-Object { $_ -ne 'gui' }) -join ','
+    $FEATURES = "$FEATURES,standalone"
+} else {
+    # All app channels ship the v3 classifier and v2 heuristic.
+    $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
+}
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
 $BUNDLE_ID = "dev.warp.$APP_NAME"
 $INSTALLER_OUTPUT_DIR = "$WINDOWS_INSTALLER_DIR\Output"
 $INSTALLER_NAME = "$($APP_NAME)$($FILE_ENDING)"
 $INSTALLER_PATH = "$($INSTALLER_OUTPUT_DIR)\$($INSTALLER_NAME).exe"
-$PDB_PATH = "$CARGO_TARGET_OUTPUT_DIR\$WARP_BIN.pdb"
+$PDB_BASENAME = if ($IS_TUI) {
+    # rustc normalizes hyphens to underscores in crate names, and MSVC uses
+    # that normalized crate name for the PDB even though Cargo exposes the
+    # executable under its original hyphenated target name.
+    $WARP_BIN.Replace('-', '_')
+} else {
+    $WARP_BIN
+}
+$PDB_PATH = "$CARGO_TARGET_OUTPUT_DIR\$PDB_BASENAME.pdb"
+$CARGO_PACKAGE = if ($IS_TUI) { 'warp_tui' } else { 'warp' }
+$INSTALLER_SCRIPT = if ($IS_TUI) {
+    "$WINDOWS_INSTALLER_DIR\tui-installer.iss"
+} else {
+    "$WINDOWS_INSTALLER_DIR\windows-installer.iss"
+}
 
 # The CARGO_FULL_PROFILE environment variable is read by the `cargo` build
 # script (`app/build.rs`) to determine where to place `conpty.dll`.
@@ -137,7 +243,7 @@ if ($DEBUG_BUILD) {
 # then exit.  We use this script to invoke `cargo check` to ensure that we are
 # using the same feature flags and profile that we would be using in production.
 if ($CHECK_ONLY) {
-    cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
+    cargo check -p $CARGO_PACKAGE --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
     if (-Not $?) {
         Write-Error "Failed to verify Warp $WARP_BIN compilation with profile $CARGO_PROFILE"
         exit 1
@@ -149,7 +255,7 @@ if (-Not $SKIP_BUILD_BINARY) {
     Write-Output "Building Warp for channel $CHANNEL and bundle id $BUNDLE_ID"
     $env:CARGO_BIN_NAME = $CHANNEL
     $env:WARP_APP_NAME = $APP_NAME
-    cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
+    cargo build -p $CARGO_PACKAGE --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
     if (-Not $?) {
         Write-Error "Failed to build Warp $WARP_BIN binary with profile $CARGO_PROFILE"
         exit 1
@@ -170,6 +276,7 @@ if ($SKIP_BUILD_INSTALLER) {
         Write-Output '::echo::on'
         "target_profile_dir=$CARGO_TARGET_OUTPUT_DIR" >> "$env:GITHUB_OUTPUT"
         "binary_path=$BINARY_PATH" >> "$env:GITHUB_OUTPUT"
+        "pdb_file_path=$PDB_PATH" >> "$env:GITHUB_OUTPUT"
         Write-Output '::echo::off'
     }
     exit 0
@@ -178,17 +285,67 @@ if ($SKIP_BUILD_INSTALLER) {
 Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 
 # Prepare bundled resources
+if ($env:SKIP_SETTINGS_SCHEMA -ne '1' -and -not $env:SETTINGS_SCHEMA_EXECUTABLE -and -not $env:SETTINGS_SCHEMA_SOURCE) {
+    if ($IS_TUI -or $IS_CLI) {
+        Write-Error 'TUI and CLI bundles require SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif ($SKIP_BUILD_BINARY) {
+        Write-Error '-skip_build_binary requires SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE.'
+        exit 1
+    } elseif (-not $CAN_EXECUTE_ARCH) {
+        Write-Error "Cannot execute the just-built $ARCH binary on this $HOST_ARCH host to generate a settings schema; pass SETTINGS_SCHEMA_SOURCE or SETTINGS_SCHEMA_EXECUTABLE."
+        exit 1
+    }
+    $env:SETTINGS_SCHEMA_EXECUTABLE = $BINARY_PATH
+}
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output 'Preparing bundled resources...'
-& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
+& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL"
 if (-Not $?) {
     Write-Error 'Failed to prepare bundled resources'
     exit 1
 }
+if ($IS_TUI -or $IS_CLI) {
+    # Both the TUI and CLI ship the ConPTY/OpenConsole payload and MSVC redistributable DLLs
+    # alongside the binary (see the packaging step in create_release.yml for the CLI, and the
+    # Inno Setup script for the TUI). Verify the files exist, and -- when requested -- are
+    # signed, before the CLI branch below hands off to the workflow's own packaging step,
+    # which otherwise has no way to detect a missing or unsigned sidecar file.
+    $WINDOWS_ASSETS_DIR = "$WORKSPACE_ROOT_DIR\app\assets\windows\$ARCH"
+    $requiredPayloadFiles = @(
+        $BINARY_PATH,
+        (Join-Path $WINDOWS_ASSETS_DIR 'conpty.dll'),
+        (Join-Path $WINDOWS_ASSETS_DIR 'OpenConsole.exe'),
+        (Join-Path $WINDOWS_ASSETS_DIR 'vcruntime140.dll'),
+        (Join-Path $WINDOWS_ASSETS_DIR 'vcruntime140_1.dll'),
+        (Join-Path $WINDOWS_ASSETS_DIR 'msvcp140.dll')
+    )
+    foreach ($requiredFile in $requiredPayloadFiles) {
+        if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+            throw "Required Warp Agent CLI payload file does not exist: $requiredFile"
+        }
+        if ($REQUIRE_SIGNATURES) {
+            Assert-ValidSignature -Path $requiredFile
+        }
+    }
+}
+if ($IS_CLI) {
+    # The CLI ships as a bare binary plus its resources dir, mirroring the macOS and Linux
+    # `--artifact cli` builds; it has no installer to build, so stop here rather than
+    # falling through to the Inno Setup section below.
+    if ($env:GITHUB_ACTIONS -eq 'true') {
+        Write-Output '::echo::on'
+        "binary_path=$BINARY_PATH" >> "$env:GITHUB_OUTPUT"
+        "pdb_file_path=$PDB_PATH" >> "$env:GITHUB_OUTPUT"
+        "bundled_resources_dir=$BUNDLED_RESOURCES_DIR" >> "$env:GITHUB_OUTPUT"
+        Write-Output '::echo::off'
+    }
+    exit 0
+}
 
 Write-Output 'Building Warp installer'
 $ISCC_ARGS = @(
-    "$WINDOWS_INSTALLER_DIR\windows-installer.iss",
+    "$INSTALLER_SCRIPT",
     "/DReleaseChannel=$CHANNEL",
     "/DMyAppExeName=$BINARY_NAME",
     "/DTargetProfileDir=$CARGO_TARGET_OUTPUT_DIR",
@@ -197,6 +354,13 @@ $ISCC_ARGS = @(
     "/DArch=$ARCH",
     "/DOutputName=$INSTALLER_NAME"
 )
+if ($IS_TUI) {
+    $ISCC_ARGS += @(
+        "/DWindowsAssetsDir=$WINDOWS_ASSETS_DIR",
+        "/DCLIName=$CLI_NAME",
+        "/DInstallDirName=$INSTALL_DIR_NAME"
+    )
+}
 # Also accept the sign tool command via env var
 if (-not $SIGN_TOOL_CMD -and $env:SIGN_TOOL_CMD) {
     $SIGN_TOOL_CMD = $env:SIGN_TOOL_CMD
@@ -219,4 +383,8 @@ if ($env:GITHUB_ACTIONS -eq 'true') {
     "installer_path=$INSTALLER_PATH" >> "$env:GITHUB_OUTPUT"
     "pdb_file_path=$PDB_PATH" >> "$env:GITHUB_OUTPUT"
     Write-Output '::echo::off'
+}
+
+if ($IS_TUI) {
+    Write-Output "Application installer: $INSTALLER_PATH"
 }

@@ -171,10 +171,10 @@ impl Checkbox {
         )
         .with_corner_radius(styles.border_radius.unwrap_or_default());
 
-        if !state.is_mouse_over_element() {
-            if let Some(background) = styles.background {
-                checkbox = checkbox.with_background(background);
-            }
+        if !state.is_mouse_over_element()
+            && let Some(background) = styles.background
+        {
+            checkbox = checkbox.with_background(background);
         }
 
         if let Some(border_width) = border_width {

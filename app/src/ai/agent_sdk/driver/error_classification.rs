@@ -1,7 +1,7 @@
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 
-use super::terminal::ShareSessionError;
 use super::AgentDriverError;
+use super::terminal::ShareSessionError;
 use crate::ai::blocklist::local_agent_task_sync_model::classify_renderable_error;
 use crate::server::server_api::ai::TaskStatusUpdate;
 
@@ -137,6 +137,19 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
+        AgentDriverError::MCPUnresolvedSecrets {
+            server_name,
+            secret_names,
+        } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!(
+                    "MCP server '{server_name}' references secret(s) that are not available to this run: {}. Check that each secret exists and is attached to this agent or run.",
+                    secret_names.join(", ")
+                ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
         AgentDriverError::ProfileError(name) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -170,6 +183,16 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 format!(
                     "Environment setup failed: {msg}. Check your repository URLs and setup commands."
                 ),
+                PlatformErrorCode::EnvironmentSetupFailed,
+            ),
+        ),
+        // The shell died while an environment setup command was running
+        // (e.g. the command ran `exit`). This is a user-side environment
+        // configuration problem, so classify as FAILED.
+        AgentDriverError::SetupCommandExitedShell { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                error.to_string(),
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
@@ -250,6 +273,13 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::InternalError,
             ),
         ),
+        AgentDriverError::TaskMetadataFetchFailed(err) => (
+            AgentTaskState::Error,
+            TaskStatusUpdate::with_error_code(
+                format!("Failed to fetch task metadata: {err}"),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
         AgentDriverError::AwsBedrockCredentialsFailed(msg) => (
             AgentTaskState::Failed,
             TaskStatusUpdate::with_error_code(
@@ -326,13 +356,12 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 PlatformErrorCode::EnvironmentSetupFailed,
             ),
         ),
-        AgentDriverError::HarnessAuthCheckFailed { harness, detail } => {
+        AgentDriverError::HarnessAuthCheckFailed { harness, .. } => {
             let message = format!(
                 "Harness '{harness}' authentication check failed: login credentials \
                  are invalid or expired. Verify that the authentication secret \
                  configured for this harness is correct."
             );
-            log::error!("Preflight detail for {harness}: {detail}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(
@@ -352,7 +381,6 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                  This usually means the API key is invalid, out of credits, or the \
                  account is misconfigured."
             );
-            log::error!("Runtime failure for {harness}: pattern={pattern}, excerpt={excerpt}");
             (
                 AgentTaskState::Failed,
                 TaskStatusUpdate::with_error_code(
@@ -361,6 +389,37 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
                 ),
             )
         }
+
+        // The harness didn't respond to any graceful exit attempt and had to
+        // be forcibly killed. This is a Warp/CLI interaction gap rather than
+        // something the user misconfigured, but the run's own outcome was
+        // already decided before shutdown, so classify like other harness
+        // command-failure variants (FAILED) rather than an internal ERROR.
+        AgentDriverError::HarnessExitTimedOut { harness } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::with_error_code(
+                format!("Harness '{harness}' did not exit gracefully and was forcibly terminated."),
+                PlatformErrorCode::InternalError,
+            ),
+        ),
+
+        // The sandbox deadline is either a fixed limit (free plan) the user can
+        // remove by upgrading, or a configurable limit (paid plan) they can adjust.
+        // Either way, it's a task outcome: the user's work didn't fit in the allowed
+        // time, so report as FAILED with no error code.
+        AgentDriverError::SandboxDeadlineReached { .. } => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::message(error.to_string()),
+        ),
+
+        // SIGTERM reaches the client from externally-originating shutdowns —
+        // server-initiated instance teardown, container-runtime stops, self-hosted
+        // worker termination — and the client cannot distinguish which initiated
+        // it. Not a Warp-side defect the user can act on, so report FAILED.
+        AgentDriverError::TerminatedBySignal => (
+            AgentTaskState::Failed,
+            TaskStatusUpdate::message(error.to_string()),
+        ),
     }
 }
 

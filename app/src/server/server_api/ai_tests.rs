@@ -1,17 +1,136 @@
 use chrono::{TimeZone, Utc};
 use futures::executor::block_on;
-use warp_server_client::base_client::CLOUD_AGENT_ID_HEADER;
+use itertools::Itertools;
+use mockito::{Matcher, Server};
+use warp_server_client::base_client::{CLOUD_AGENT_ID_HEADER, TEAM_UID_HEADER};
 
 use super::super::ServerApi;
 use super::{
-    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
-    AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
-    ArtifactDownloadResponse, ArtifactType, ConnectedSelfHostedWorker, ExecutionLocation,
-    ForkConversationResponse, ListConnectedSelfHostedWorkersResponse, ListRunsResponse,
+    AIClient, AgentMessageHeader, AgentRunEvent, AgentSource, AmbientAgentTaskState, Artifact,
+    ArtifactDownloadResponse, ArtifactType, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
+    ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UserQueryMode, CONNECTED_SELF_HOSTED_WORKERS_PATH,
+    TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
+    build_list_agent_runs_url, build_run_followup_url, is_unknown_git_credential_schema_error,
 };
 use crate::notebooks::NotebookId;
+use crate::server::ids::ServerId;
+use crate::server::server_api::presigned_upload::upload_to_target;
+use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
+
+fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
+}
+
+#[test]
+fn list_agents_sends_selected_team_header() {
+    let team_uid = ServerId::from(7);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let agents = block_on(server_api.list_agents(request_scope_for_team(team_uid))).unwrap();
+
+    assert!(agents.is_empty());
+}
+
+#[test]
+fn create_agent_sends_selected_team_header() {
+    let team_uid = ServerId::from(8);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("POST", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(
+                r#"{"uid":"agent-1","name":"catalog-agent","description":null,"available":true,"created_at":"2026-09-04T00:00:00Z","secrets":[],"skills":[],"base_model":null,"environment_id":null}"#,
+            )
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+    let request = CreateAgentRequest {
+        name: "catalog-agent".to_string(),
+        description: None,
+        prompt: None,
+        secrets: vec![],
+        skills: vec![],
+        base_model: None,
+        environment_id: None,
+    };
+
+    let agent =
+        block_on(server_api.create_agent(request, request_scope_for_team(team_uid))).unwrap();
+
+    assert_eq!(agent.uid, "agent-1");
+}
+
+#[test]
+fn list_skills_sends_selected_team_header() {
+    let team_uid = ServerId::from(9);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let skills = block_on(server_api.list_skills(None, request_scope_for_team(team_uid))).unwrap();
+
+    assert!(skills.is_empty());
+}
+
+#[test]
+fn list_memory_stores_sends_selected_team_header() {
+    let team_uid = ServerId::from(10);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/memory_stores")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"memory_stores":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let stores = block_on(server_api.list_memory_stores(request_scope_for_team(team_uid))).unwrap();
+
+    assert!(stores.is_empty());
+}
+
+#[test]
+fn list_agents_omits_team_header_for_personal_scope() {
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/identities")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"agents":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let agents =
+        block_on(server_api.list_agents(RequestTeamScope::from_scope(&TeamlessScopeForTest)))
+            .unwrap();
+
+    assert!(agents.is_empty());
+}
 
 #[test]
 fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
@@ -34,6 +153,74 @@ fn ambient_agent_headers_for_task_overrides_existing_cloud_agent_header() {
             CLOUD_AGENT_ID_HEADER.to_string(),
             task_scoped_id.to_string()
         )]
+    );
+}
+
+#[test]
+fn list_agent_runs_sends_selected_team_header() {
+    let team_uid = ServerId::from(123);
+    let scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/runs")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"runs":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    block_on(
+        server_api.get_public_api_with_team_scope::<serde_json::Value>("agent/runs", Some(scope)),
+    )
+    .unwrap();
+}
+
+#[test]
+fn list_agent_runs_omits_team_header_for_teamless_scope() {
+    let scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/runs")
+            .match_header(TEAM_UID_HEADER, Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"runs":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    block_on(
+        server_api.get_public_api_with_team_scope::<serde_json::Value>("agent/runs", Some(scope)),
+    )
+    .unwrap();
+}
+
+#[test]
+fn spawn_agent_request_serializes_explicit_personal_ownership() {
+    let request = SpawnAgentRequest {
+        prompt: Some("hello".to_string()),
+        mode: UserQueryMode::Normal,
+        config: None,
+        title: None,
+        team: Some(false),
+        agent_identity_uid: None,
+        skill: None,
+        attachments: vec![],
+        interactive: None,
+        parent_run_id: None,
+        runtime_skills: vec![],
+        referenced_attachments: vec![],
+        conversation_id: None,
+        initial_snapshot_token: None,
+        snapshot_disabled: None,
+        orchestration_handoff: None,
+    };
+    let value = serde_json::to_value(request).unwrap();
+    assert_eq!(
+        value.get("team").and_then(|value| value.as_bool()),
+        Some(false)
     );
 }
 
@@ -73,6 +260,27 @@ fn connected_self_hosted_workers_path_uses_public_api_route() {
         CONNECTED_SELF_HOSTED_WORKERS_PATH,
         "agent/connected-self-hosted-workers"
     );
+}
+
+#[test]
+fn list_connected_self_hosted_workers_sends_selected_team_header() {
+    let team_uid = ServerId::from(124);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/connected-self-hosted-workers")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"workers":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let response =
+        block_on(server_api.list_connected_self_hosted_workers(request_scope_for_team(team_uid)))
+            .unwrap();
+
+    assert!(response.workers.is_empty());
 }
 
 #[test]
@@ -1157,4 +1365,146 @@ fn deserialize_fork_conversation_response() {
         response.forked_conversation_id,
         "abcdef01-2345-6789-abcd-ef0123456789"
     );
+}
+
+/// Verbatim prepare-upload response bodies, captured by marshalling the
+/// handler's own `PrepareAttachmentUploadsResponse` in warp-server. Hand-written
+/// approximations hid two mismatches that the real bytes exposed, so keep these
+/// literal rather than rebuilding them with `serde_json::json!`.
+const S3_FORM_PREPARE_RESPONSE: &str = r#"{"attachments":[{"attachment_id":"7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001","upload_target":{"fields":[{"name":"key","value":{"kind":"static","value":"task-1/7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001"}},{"name":"x-amz-checksum-crc32c","value":{"kind":"content_crc32c"}},{"name":"file","value":{"kind":"content_data"}}],"headers":null,"method":"POST","url":"UPLOAD_URL"},"upload_url":"UPLOAD_URL"}]}"#;
+
+const PUT_PREPARE_RESPONSE: &str = r#"{"attachments":[{"attachment_id":"7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001","upload_target":{"fields":[],"headers":{"Content-Type":"image/png"},"method":"PUT","url":"UPLOAD_URL"},"upload_url":"UPLOAD_URL"}]}"#;
+
+/// What a server that predates `upload_target` returns.
+const LEGACY_PREPARE_RESPONSE: &str = r#"{"attachments":[{"attachment_id":"7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001","upload_url":"UPLOAD_URL"}]}"#;
+
+fn parse_prepare_response(body: &str, upload_url: &str) -> PrepareAttachmentUploadsResponse {
+    serde_json::from_str(&body.replace("UPLOAD_URL", upload_url)).unwrap()
+}
+
+#[test]
+fn prepare_attachment_uploads_response_parses_s3_form_upload_target() {
+    let response = parse_prepare_response(S3_FORM_PREPARE_RESPONSE, "https://s3.test/bucket");
+
+    let target = response.attachments[0].resolve_upload_target("image/png");
+    assert_eq!(target.method, "POST");
+    assert_eq!(target.url, "https://s3.test/bucket");
+    assert!(target.headers.is_empty());
+    assert_eq!(
+        target
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect_vec(),
+        vec!["key", "x-amz-checksum-crc32c", "file"]
+    );
+    assert!(matches!(
+        target.fields[1].value,
+        UploadFieldValue::ContentCrc32C
+    ));
+    assert!(matches!(
+        target.fields[2].value,
+        UploadFieldValue::ContentData
+    ));
+}
+
+#[test]
+fn prepare_attachment_uploads_response_prefers_upload_target_over_upload_url() {
+    let response = parse_prepare_response(PUT_PREPARE_RESPONSE, "https://gcs.test/bucket/file");
+
+    let target = response.attachments[0].resolve_upload_target("application/octet-stream");
+    assert_eq!(target.method, "PUT");
+    assert_eq!(target.url, "https://gcs.test/bucket/file");
+    // The presigned URL is only valid for the type it was signed with, so the
+    // server's header wins over the caller's content type.
+    assert_eq!(target.headers.get("Content-Type").unwrap(), "image/png");
+}
+
+#[test]
+fn prepare_attachment_uploads_response_falls_back_to_upload_url() {
+    let response = parse_prepare_response(LEGACY_PREPARE_RESPONSE, "https://gcs.test/bucket/file");
+
+    let attachment = &response.attachments[0];
+    assert!(attachment.upload_target.is_none());
+
+    let target = attachment.resolve_upload_target("image/png");
+    assert_eq!(target.method, "PUT");
+    assert_eq!(target.url, "https://gcs.test/bucket/file");
+    assert_eq!(target.headers.get("Content-Type").unwrap(), "image/png");
+    assert!(target.fields.is_empty());
+}
+
+/// Upload `b"attachment bytes"` to the target the response's first attachment
+/// resolves to, the way the attachment upload path does.
+fn upload_first_attachment(body: &str, upload_url: &str) {
+    let response = parse_prepare_response(body, upload_url);
+    let target = response.attachments[0].resolve_upload_target("image/png");
+
+    block_on(upload_to_target(
+        &http_client::Client::new_for_test(),
+        &target,
+        b"attachment bytes".to_vec(),
+    ))
+    .unwrap();
+}
+
+/// A form-POST target must be uploaded as a multipart form. Uploading its URL
+/// with a plain PUT — what the client did before it read `upload_target` — is
+/// rejected by S3, so self-hosted S3 teams could not attach files at all.
+#[test]
+fn s3_form_upload_target_is_uploaded_as_a_multipart_post() {
+    let mut server = Server::new();
+    let storage = server
+        .mock("POST", "/s3/bucket")
+        .match_header(
+            "content-type",
+            Matcher::Regex("^multipart/form-data; boundary=.+".to_string()),
+        )
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex(
+                r#"name="key"\r\n\r\ntask-1/7b1f1f6c-2f5c-4c3e-9c3a-6a1a3d9f0001\r\n"#.to_string(),
+            ),
+            Matcher::Regex(r#"name="x-amz-checksum-crc32c""#.to_string()),
+            Matcher::Regex(r#"name="file"[\s\S]*attachment bytes"#.to_string()),
+        ]))
+        .with_status(204)
+        .create();
+
+    upload_first_attachment(
+        S3_FORM_PREPARE_RESPONSE,
+        &format!("{}/s3/bucket", server.url()),
+    );
+
+    storage.assert();
+}
+
+#[test]
+fn upload_url_fallback_is_uploaded_as_a_put_with_its_content_type() {
+    let mut server = Server::new();
+    let storage = server
+        .mock("PUT", "/gcs/task-1/file")
+        .match_header("content-type", "image/png")
+        .match_body("attachment bytes")
+        .with_status(200)
+        .create();
+
+    upload_first_attachment(
+        LEGACY_PREPARE_RESPONSE,
+        &format!("{}/gcs/task-1/file", server.url()),
+    );
+
+    storage.assert();
+}
+
+#[test]
+fn unknown_git_credential_schema_error_matches_undeployed_partial_refresh_fields() {
+    assert!(is_unknown_git_credential_schema_error(&anyhow::anyhow!(
+        "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+    )));
+    assert!(is_unknown_git_credential_schema_error(&anyhow::anyhow!(
+        "Unknown argument \"acceptsPartialRefresh\" on field \"taskGitCredentials\""
+    )));
+    assert!(!is_unknown_git_credential_schema_error(&anyhow::anyhow!(
+        "Failed to fetch task git credentials"
+    )));
 }

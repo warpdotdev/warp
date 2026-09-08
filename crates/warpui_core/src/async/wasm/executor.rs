@@ -6,8 +6,8 @@ use futures_util::future::{AbortHandle, Abortable};
 use tracing::Instrument as _;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::platform;
 use crate::r#async::executor::Error;
+use crate::platform;
 
 /// A handle to a task that will run on the main thread.
 pub struct ForegroundTask;

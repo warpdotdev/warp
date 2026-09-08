@@ -19,22 +19,22 @@ use super::loading_screen::{
     render_cloud_mode_github_auth_required_screen, render_cloud_mode_loading_screen,
 };
 use super::{AmbientAgentEntryBlock, AmbientAgentViewModel, AmbientAgentViewModelEvent};
+use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{display_user_query_with_mode, RenderableAIError};
+use crate::ai::agent::{RenderableAIError, display_user_query_with_mode};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent_sdk::driver::harness::auth_check_command_for;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
-use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::conversation_details_panel::ConversationDetailsData;
-use crate::ai::AIRequestUsageModel;
 use crate::pane_group::TerminalViewResources;
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::rich_content::{RichContentInsertionPosition, RichContentMetadata};
 use crate::terminal::view::{
     ConversationDetailsPanelAutoOpenPolicy, Event as TerminalViewEvent, TerminalView,
 };
-use crate::terminal::CLIAgent;
 use crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
@@ -118,7 +118,8 @@ impl TerminalView {
             AmbientAgentViewModelEvent::NeedsGithubAuth
             | AmbientAgentViewModelEvent::Cancelled
             | AmbientAgentViewModelEvent::HarnessCommandStarted { .. }
-            | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. } => true,
+            | AmbientAgentViewModelEvent::HandoffSnapshotUploadFailed { .. }
+            | AmbientAgentViewModelEvent::FollowupSubmissionFailed { .. } => true,
             _ => false,
         };
         if should_clean_up_pending_cloud_query {
@@ -273,6 +274,15 @@ impl TerminalView {
                 }
                 // Re-render to show the error state.
                 ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
+                ctx.notify();
+            }
+            AmbientAgentViewModelEvent::FollowupSubmissionFailed { error_message } => {
+                // Unlike `Failed`, the retained session's failure state persists by design, so
+                // this must not re-insert a tombstone or mark the conversation as errored.
+                self.show_error_toast(
+                    format!("Couldn't send your message to the retained session: {error_message}"),
+                    ctx,
+                );
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::ShowCloudAgentCapacityModal => {
@@ -639,10 +649,10 @@ impl TerminalView {
         #[cfg(not(target_family = "wasm"))]
         {
             let command_trimmed = command.trim();
-            if let Some(auth_cmd) = auth_check_command_for(selected_harness) {
-                if auth_cmd.trim() == command_trimmed {
-                    return false;
-                }
+            if let Some(auth_cmd) = auth_check_command_for(selected_harness)
+                && auth_cmd.trim() == command_trimmed
+            {
+                return false;
             }
         }
         match selected_harness {
@@ -915,6 +925,7 @@ impl TerminalView {
                 appearance,
                 &ui_state.loading_shimmer_handle,
                 &ui_state.tip_model,
+                &self.view_handle,
                 app,
             )
         };

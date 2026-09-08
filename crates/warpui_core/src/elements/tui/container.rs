@@ -1,5 +1,5 @@
 //! [`TuiContainer`]: a single-child decorator that adds a background fill, an
-//! optional box-drawing border, and padding around its child.
+//! optional hairline border, and padding around its child.
 //!
 //! # Construction
 //! Wrap a child with [`TuiContainer::new`] and layer decorations:
@@ -11,8 +11,8 @@
 //! - [`with_padding_top`](TuiContainer::with_padding_top) and sibling side
 //!   methods: cells of empty space on one side.
 //! - [`with_border`](TuiContainer::with_border) /
-//!   [`with_border_style`](TuiContainer::with_border_style): a one-cell box-drawn
-//!   frame.
+//!   [`with_border_style`](TuiContainer::with_border_style): a one-cell hairline
+//!   frame drawn with eighth-block glyphs (`▁▏▕▔`).
 //! - [`with_background`](TuiContainer::with_background): a fill color painted
 //!   behind the border and padding.
 //!
@@ -25,8 +25,9 @@
 use ratatui::style::Color;
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiSize, TuiStyle,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPresentationContext, TuiRect, TuiScreenPoint, TuiScreenPosition,
+    TuiScreenRect, TuiSize, TuiStyle,
 };
 use crate::AppContext;
 
@@ -36,6 +37,8 @@ pub struct TuiContainer {
     border: bool,
     border_style: TuiStyle,
     background: Option<Color>,
+    size: Option<TuiSize>,
+    origin: Option<TuiScreenPoint>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -66,6 +69,8 @@ impl TuiContainer {
             border: false,
             border_style: TuiStyle::default(),
             background: None,
+            size: None,
+            origin: None,
         }
     }
 
@@ -199,93 +204,129 @@ impl TuiElement for TuiContainer {
             inner.width.saturating_add(self.horizontal_inset()),
             inner.height.saturating_add(self.vertical_inset()),
         );
-        constraint.clamp(size)
+        let size = constraint.clamp(size);
+        self.size = Some(size);
+        size
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
+    }
+
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.origin = Some(ctx.scene_point(origin));
+        let Some(size) = self.size else {
+            return;
+        };
+        let area = TuiRect::new(0, 0, size.width, size.height);
         if area.is_empty() {
             return;
         }
+        if (self.background.is_some() || self.border)
+            && let Some(bounds) = self.bounds()
+        {
+            ctx.scene.record_hit_rect(bounds);
+        }
 
         if let Some(background) = self.background {
-            buffer.set_style(area, TuiStyle::default().bg(background));
+            surface.set_style(origin, size, TuiStyle::default().bg(background));
+            ctx.record_opaque_region(TuiScreenRect::new(ctx.scene_point(origin), size));
         }
 
         if self.border {
-            draw_border(area, buffer, self.painted_border_style());
+            draw_border(origin, size, surface, self.painted_border_style());
         }
 
-        self.child.render(self.child_area(area), buffer, ctx);
+        let child_area = self.child_area(area);
+        self.child.render(
+            origin.offset(i32::from(child_area.x), i32::from(child_area.y)),
+            surface,
+            ctx,
+        );
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.size
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.origin
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
         self.child.present(ctx);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        // `cursor_position` is reported relative to `area`'s origin, but the
-        // child reports relative to the child area. Add the child-area offset
-        // back so the cursor lands inside the border/padding.
-        let child_area = self.child_area(area);
-        self.child.cursor_position(child_area, ctx).map(|(cx, cy)| {
-            (
-                child_area.x.saturating_sub(area.x).saturating_add(cx),
-                child_area.y.saturating_sub(area.y).saturating_add(cy),
-            )
-        })
-    }
-
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if area.is_empty() {
-            return false;
-        }
-        self.child
-            .dispatch_event(event, self.child_area(area), event_ctx, ctx, app)
+        self.child.dispatch_event(event, event_ctx, app)
     }
 }
 
-/// Paints a single-cell box-drawing frame around the perimeter of `area`.
-fn draw_border(area: TuiRect, buffer: &mut TuiBuffer, style: TuiStyle) {
-    let right = area.right().saturating_sub(1);
-    let bottom = area.bottom().saturating_sub(1);
-    let multi_column = area.width > 1;
-    let multi_row = area.height > 1;
+/// Paints a single-cell hairline frame around the perimeter of `size`, using
+/// the eighth-block profile of ratatui's `symbols::border::ONE_EIGHTH_WIDE`.
+///
+/// Every stroke's ink sits on a cell boundary, unlike box-drawing glyphs
+/// (`┌─│`) whose strokes run through cell centers: the vertical rails `▏`/`▕`
+/// hug the outer edges of their cells, so the frame lines up exactly with
+/// cell-edge-aligned neighbors (text, menu/selection backgrounds); the top
+/// rule `▁` inks the bottom edge of the top border row and the bottom rule
+/// `▔` the top edge of the bottom border row, so both hug the content. The
+/// horizontal rules span the full width (corner cells included) and the rails
+/// cover only the interior rows — the strokes meet exactly at the row
+/// boundaries, closing the corners without dedicated corner glyphs.
+fn draw_border(
+    origin: TuiScreenPosition,
+    size: TuiSize,
+    surface: &mut TuiPaintSurface<'_>,
+    style: TuiStyle,
+) {
+    let right = size.width.saturating_sub(1);
+    let bottom = size.height.saturating_sub(1);
+    let multi_column = size.width > 1;
+    let multi_row = size.height > 1;
 
-    for x in area.x..area.right() {
-        put(buffer, x, area.y, "─", style);
+    for x in 0..size.width {
+        put(surface, origin.offset(i32::from(x), 0), "▁", style);
         if multi_row {
-            put(buffer, x, bottom, "─", style);
+            put(
+                surface,
+                origin.offset(i32::from(x), i32::from(bottom)),
+                "▔",
+                style,
+            );
         }
     }
-    for y in area.y..area.bottom() {
-        put(buffer, area.x, y, "│", style);
+    for y in 1..bottom {
+        put(surface, origin.offset(0, i32::from(y)), "▏", style);
         if multi_column {
-            put(buffer, right, y, "│", style);
+            put(
+                surface,
+                origin.offset(i32::from(right), i32::from(y)),
+                "▕",
+                style,
+            );
         }
-    }
-
-    put(buffer, area.x, area.y, "┌", style);
-    if multi_column {
-        put(buffer, right, area.y, "┐", style);
-    }
-    if multi_row {
-        put(buffer, area.x, bottom, "└", style);
-    }
-    if multi_column && multi_row {
-        put(buffer, right, bottom, "┘", style);
     }
 }
 
-/// Writes a single styled glyph at `(x, y)`, ignoring out-of-bounds positions.
-fn put(buffer: &mut TuiBuffer, x: u16, y: u16, symbol: &str, style: TuiStyle) {
-    if let Some(cell) = buffer.cell_mut((x, y)) {
+/// Writes a single styled glyph, ignoring out-of-bounds positions.
+fn put(
+    surface: &mut TuiPaintSurface<'_>,
+    position: TuiScreenPosition,
+    symbol: &str,
+    style: TuiStyle,
+) {
+    if let Some(cell) = surface.cell_mut(position) {
         cell.set_symbol(symbol).set_style(style);
     }
 }

@@ -1,6 +1,5 @@
 //! Ambient agent task types and utilities.
 
-use anyhow::anyhow;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 #[cfg(not(target_family = "wasm"))]
 pub use cloud_object_models::HarnessModelConfig;
@@ -9,13 +8,13 @@ use iso8601_duration::Duration as Iso8601Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
-use warp_core::report_error;
 use warp_core::ui::theme::WarpTheme;
+use warp_errors::report_error;
 use warpui::color::ColorU;
 use warpui::{SingletonEntity, View, ViewContext};
 
 use super::AmbientAgentTaskId;
-use crate::ai::artifacts::{deserialize_artifacts, Artifact};
+use crate::ai::artifacts::{Artifact, deserialize_artifacts};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
@@ -47,7 +46,14 @@ pub enum AgentSource {
     Interactive,
     WebApp,
     GitHubAction,
+    GitHubWebhook,
     CloudMode,
+    Orchestration,
+    Jira,
+    GitLabWebhook,
+    RunScorer,
+    Autofix,
+    BenchmarkTrial,
 }
 
 impl AgentSource {
@@ -63,7 +69,16 @@ impl AgentSource {
             AgentSource::Interactive => "LOCAL",
             AgentSource::WebApp => "WEB_APP",
             AgentSource::GitHubAction => "GITHUB_ACTION",
+            AgentSource::GitHubWebhook => "GITHUB_WEBHOOK",
             AgentSource::CloudMode => "CLOUD_MODE",
+            AgentSource::Orchestration => "ORCHESTRATION",
+            AgentSource::Jira => "JIRA",
+            AgentSource::GitLabWebhook => "GITLAB_WEBHOOK",
+            AgentSource::RunScorer => "RUN_SCORER",
+            // The server surfaces the internal AUTOFIX task source under the public
+            // name SELF_IMPROVEMENT (mirrors AgentWebhook/"API" above).
+            AgentSource::Autofix => "SELF_IMPROVEMENT",
+            AgentSource::BenchmarkTrial => "BENCHMARK_TRIAL",
         }
     }
 
@@ -77,13 +92,25 @@ impl AgentSource {
             AgentSource::Interactive | AgentSource::CloudMode => "Warp App",
             AgentSource::WebApp => "Oz Web",
             AgentSource::GitHubAction => "GitHub Action",
+            AgentSource::GitHubWebhook => "GitHub",
+            AgentSource::Orchestration => "Orchestration",
+            AgentSource::Jira => "Jira",
+            AgentSource::GitLabWebhook => "GitLab",
+            AgentSource::RunScorer => "Scorer",
+            AgentSource::Autofix => "Self-improvement",
+            AgentSource::BenchmarkTrial => "Benchmark",
         }
     }
 
     /// Returns true when tasks from this source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         match self {
-            AgentSource::GitHubAction => true,
+            AgentSource::GitHubAction
+            | AgentSource::GitHubWebhook
+            | AgentSource::GitLabWebhook
+            | AgentSource::RunScorer
+            | AgentSource::Autofix
+            | AgentSource::BenchmarkTrial => true,
             AgentSource::Linear
             | AgentSource::AgentWebhook
             | AgentSource::Slack
@@ -91,7 +118,9 @@ impl AgentSource {
             | AgentSource::ScheduledAgent
             | AgentSource::Interactive
             | AgentSource::WebApp
-            | AgentSource::CloudMode => false,
+            | AgentSource::CloudMode
+            | AgentSource::Orchestration
+            | AgentSource::Jira => false,
         }
     }
 
@@ -103,11 +132,35 @@ impl AgentSource {
             | AgentSource::Slack
             | AgentSource::Interactive
             | AgentSource::WebApp
-            | AgentSource::CloudMode => true,
+            | AgentSource::CloudMode
+            | AgentSource::Jira => true,
             AgentSource::Cli
             | AgentSource::ScheduledAgent
             | AgentSource::AgentWebhook
-            | AgentSource::GitHubAction => false,
+            | AgentSource::GitHubAction
+            | AgentSource::GitHubWebhook
+            | AgentSource::Orchestration
+            | AgentSource::GitLabWebhook
+            | AgentSource::RunScorer
+            | AgentSource::Autofix
+            | AgentSource::BenchmarkTrial => false,
+        }
+    }
+}
+
+/// Where the server executed an agent run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ExecutionLocation {
+    Local,
+    Remote,
+}
+
+impl ExecutionLocation {
+    pub(crate) fn as_query_param(self) -> &'static str {
+        match self {
+            ExecutionLocation::Local => "LOCAL",
+            ExecutionLocation::Remote => "REMOTE",
         }
     }
 }
@@ -129,14 +182,39 @@ where
             "SCHEDULED_AGENT" => Some(AgentSource::ScheduledAgent),
             "WEB_APP" => Some(AgentSource::WebApp),
             "GITHUB_ACTION" => Some(AgentSource::GitHubAction),
+            "GITHUB_WEBHOOK" => Some(AgentSource::GitHubWebhook),
             "CLOUD_MODE" => Some(AgentSource::CloudMode),
+            "ORCHESTRATION" => Some(AgentSource::Orchestration),
+            "JIRA" => Some(AgentSource::Jira),
+            "GITLAB_WEBHOOK" => Some(AgentSource::GitLabWebhook),
+            "RUN_SCORER" => Some(AgentSource::RunScorer),
+            // The server surfaces the internal AUTOFIX task source under the public
+            // name SELF_IMPROVEMENT; accept both spellings.
+            "AUTOFIX" | "SELF_IMPROVEMENT" => Some(AgentSource::Autofix),
+            "BENCHMARK_TRIAL" => Some(AgentSource::BenchmarkTrial),
             _ => {
-                report_error!(anyhow!("Unknown AmbientAgentSource: {}", s));
+                log::warn!("Unknown AmbientAgentSource: {s}");
                 None
             }
         },
         None => None,
     })
+}
+
+/// Ownership scope for a run: personal or team-owned. Mirrors the public API's
+/// `RunItem.scope`; distinct from `creator`, which is never a team.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+pub struct TaskScope {
+    #[serde(rename = "type", default)]
+    pub scope_type: String,
+    #[serde(default)]
+    pub uid: String,
+}
+
+impl TaskScope {
+    pub fn is_team(&self) -> bool {
+        self.scope_type.eq_ignore_ascii_case("team")
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -155,6 +233,8 @@ pub struct AmbientAgentTask {
     pub status_message: Option<TaskStatusMessage>,
     #[serde(default, deserialize_with = "deserialize_ambient_agent_source")]
     pub source: Option<AgentSource>,
+    #[serde(default)]
+    pub execution_location: Option<ExecutionLocation>,
     pub session_id: Option<String>,
     pub session_link: Option<String>,
     pub creator: Option<TaskPrincipalInfo>,
@@ -183,6 +263,17 @@ pub struct AmbientAgentTask {
     /// driver case). Empty on older servers.
     #[serde(default)]
     pub children: Vec<String>,
+
+    /// Server-computed: whether a debug agent may be bootstrapped into this run's retained
+    /// environment-setup-failure session right now (REMOTE-2661). `#[serde(default)]` so an
+    /// older or ineligible server deserializes to `false`.
+    #[serde(default)]
+    pub debug_agent_available: bool,
+
+    /// This run's ownership scope. `#[serde(default)]` for an older server that never sends
+    /// it, in which case only the literal creator is recognized as authorized.
+    #[serde(default)]
+    pub scope: Option<TaskScope>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -266,6 +357,20 @@ impl AmbientAgentTask {
         self.conversation_id.as_deref()
     }
 
+    /// Whether this run is a retained environment-setup-failure session whose debug window is
+    /// still usable, so a debug prompt may be routed into it (REMOTE-2661). The server is the
+    /// sole authority here and re-verifies eligibility before accepting a follow-up; this only
+    /// decides what the client presents and where a submission goes.
+    pub fn is_setup_failure_debug_session_open(&self) -> bool {
+        self.debug_agent_available
+    }
+
+    /// Whether a debug conversation may still be *bootstrapped* into this session, i.e. none
+    /// exists yet. A later prompt reuses the persisted conversation instead.
+    pub fn is_open_for_setup_failure_debug_bootstrap(&self) -> bool {
+        self.is_setup_failure_debug_session_open() && self.conversation_id().is_none()
+    }
+
     /// Returns true when this task's source must not accept user-triggered cloud follow-ups.
     pub fn blocks_cloud_followups(&self) -> bool {
         self.source
@@ -284,7 +389,7 @@ impl AmbientAgentTask {
 
     pub fn active_execution_session_id(&self) -> Option<&str> {
         let execution = self.active_run_execution();
-        if self.state == AmbientAgentTaskState::InProgress && execution.is_active() {
+        if self.supports_live_session() && execution.is_active() {
             execution.session_id
         } else {
             None
@@ -294,11 +399,12 @@ impl AmbientAgentTask {
     /// Returns the canonical live-session state for this task from the client's perspective.
     ///
     /// This separates task liveness from attachability: an in-progress task can have an active
-    /// execution without a usable shared-session id, and callers should not treat that as a
-    /// completed transcript/follow-up state.
+    /// execution without a usable shared-session id. FAILED/ERROR tasks may also remain live while
+    /// their sandbox is retained for debugging. Callers should not treat either case as a completed
+    /// transcript/follow-up state.
     pub fn active_live_session_state(&self) -> AmbientAgentLiveSessionState {
         let execution = self.active_run_execution();
-        if self.state != AmbientAgentTaskState::InProgress || !execution.is_active() {
+        if !self.supports_live_session() || !execution.is_active() {
             return AmbientAgentLiveSessionState::Inactive;
         }
 
@@ -317,7 +423,7 @@ impl AmbientAgentTask {
     }
 
     pub fn has_active_execution(&self) -> bool {
-        self.state == AmbientAgentTaskState::InProgress && self.active_run_execution().is_active()
+        self.supports_live_session() && self.active_run_execution().is_active()
     }
 
     pub fn is_terminal_run_state(&self) -> bool {
@@ -355,6 +461,15 @@ impl AmbientAgentTask {
     /// Returns true if the underlying session for the ambient agent is no longer running.
     pub fn is_no_longer_running(&self) -> bool {
         !self.active_run_execution().is_sandbox_running && !self.state.is_working()
+    }
+
+    fn supports_live_session(&self) -> bool {
+        matches!(
+            self.state,
+            AmbientAgentTaskState::InProgress
+                | AmbientAgentTaskState::Failed
+                | AmbientAgentTaskState::Error
+        )
     }
 }
 
@@ -492,6 +607,14 @@ pub struct TaskStatusMessage {
     pub message: String,
     #[serde(default, alias = "errorCode")]
     pub error_code: Option<TaskStatusErrorCode>,
+    /// Deadline of an open post-failure debug window (REMOTE-2208/REMOTE-2661), if the server
+    /// is holding one open. `#[serde(default)]`; `None` means no window is known to be open.
+    #[serde(default)]
+    pub session_debug_until: Option<DateTime<Utc>>,
+    /// True while a REMOTE-2661 debug turn is actively pinning the idle timer. Display-only;
+    /// can outlast an expired `session_debug_until` while pinned.
+    #[serde(default, alias = "debugAgentActive")]
+    pub debug_agent_active: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -534,7 +657,7 @@ pub fn cancel_task_with_toast<V: View>(task_id: AmbientAgentTaskId, ctx: &mut Vi
             let message = match result {
                 Ok(()) => "Task cancelled".to_string(),
                 Err(e) => {
-                    log::error!("Failed to cancel task: {e}");
+                    report_error!(&e);
                     format!("Failed to cancel task: {e}")
                 }
             };
@@ -553,7 +676,7 @@ pub fn cancel_task_silently<V: View>(task_id: AmbientAgentTaskId, ctx: &mut View
         async move { ai_client.cancel_ambient_agent_task(&task_id).await },
         move |_view, result, _| {
             if let Err(e) = result {
-                log::error!("Failed to cancel task: {e}");
+                report_error!(e.context("Failed to cancel task"));
             }
         },
     );

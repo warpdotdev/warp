@@ -103,12 +103,12 @@ fn test_random() {
         for _ in 0..10 {
             let end = rng.gen_range(0..tree.extent::<Count>().0 + 1);
             let start = rng.gen_range(0..end + 1);
-            let start_bias = if rng.gen() {
+            let start_bias = if rng.r#gen() {
                 SeekBias::Left
             } else {
                 SeekBias::Right
             };
-            let end_bias = if rng.gen() {
+            let end_bias = if rng.r#gen() {
                 SeekBias::Left
             } else {
                 SeekBias::Right

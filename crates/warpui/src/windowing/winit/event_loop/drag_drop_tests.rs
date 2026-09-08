@@ -17,16 +17,16 @@ fn test_drag_drop_debouncing_single_file() {
     let path_buf = PathBuf::from("/path/to/file.txt");
 
     // Process the event - this would normally be done by the event loop
-    if let Some(window_state) = state.windows.get_mut(&window_id) {
-        if let Some(path) = path_buf.as_os_str().to_str() {
-            window_state.pending_drag_drop_files.push(path.to_string());
-            assert_eq!(window_state.pending_drag_drop_files.len(), 1);
-            assert_eq!(window_state.pending_drag_drop_files[0], "/path/to/file.txt");
+    if let Some(window_state) = state.windows.get_mut(&window_id)
+        && let Some(path) = path_buf.as_os_str().to_str()
+    {
+        window_state.pending_drag_drop_files.push(path.to_string());
+        assert_eq!(window_state.pending_drag_drop_files.len(), 1);
+        assert_eq!(window_state.pending_drag_drop_files[0], "/path/to/file.txt");
 
-            // Verify timer flag is set correctly
-            window_state.has_pending_drag_drop_timer = true;
-            assert!(window_state.has_pending_drag_drop_timer);
-        }
+        // Verify timer flag is set correctly
+        window_state.has_pending_drag_drop_timer = true;
+        assert!(window_state.has_pending_drag_drop_timer);
     }
 }
 

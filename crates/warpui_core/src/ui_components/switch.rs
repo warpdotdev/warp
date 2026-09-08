@@ -98,22 +98,22 @@ impl UiComponent for Switch {
             };
 
             // If a tooltip is configured and we're hovered, show it above the switch
-            if let Some(TooltipConfig { text, styles }) = &tooltip {
-                if state.is_hovered() {
-                    let tooltip_element = Tooltip::new(text.clone(), *styles).build().finish();
-                    return Stack::new()
-                        .with_child(switch_element)
-                        .with_positioned_child(
-                            tooltip_element,
-                            OffsetPositioning::offset_from_parent(
-                                vec2f(0., -3.),
-                                ParentOffsetBounds::Unbounded,
-                                ParentAnchor::TopRight,
-                                ChildAnchor::BottomRight,
-                            ),
-                        )
-                        .finish();
-                }
+            if let Some(TooltipConfig { text, styles }) = &tooltip
+                && state.is_hovered()
+            {
+                let tooltip_element = Tooltip::new(text.clone(), *styles).build().finish();
+                return Stack::new()
+                    .with_child(switch_element)
+                    .with_positioned_child(
+                        tooltip_element,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., -3.),
+                            ParentOffsetBounds::Unbounded,
+                            ParentAnchor::TopRight,
+                            ChildAnchor::BottomRight,
+                        ),
+                    )
+                    .finish();
             }
 
             switch_element
@@ -240,46 +240,47 @@ impl Switch {
 
             // If a border is specified and the mouse is over the element,
             // render a circle behind the thumb with the border color.
-            if let Some(border_size) = self.hover_border_size {
-                if !is_disabled && state.is_mouse_over_element() {
-                    let mut hover_background = *TRACK_COLOR;
-                    hover_background.a = 100;
+            if let Some(border_size) = self.hover_border_size
+                && !is_disabled
+                && state.is_mouse_over_element()
+            {
+                let mut hover_background = *TRACK_COLOR;
+                hover_background.a = 100;
 
-                    let hover_size = thumb_height + border_size;
+                let hover_size = thumb_height + border_size;
 
-                    let thumb_hover = Container::new(
-                        ConstrainedBox::new(
-                            Rect::new()
-                                .with_background_color(hover_background)
-                                .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
-                                .finish(),
-                        )
-                        .with_width(hover_size)
-                        .with_height(hover_size)
-                        .finish(),
+                let thumb_hover = Container::new(
+                    ConstrainedBox::new(
+                        Rect::new()
+                            .with_background_color(hover_background)
+                            .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
+                            .finish(),
                     )
-                    .finish();
+                    .with_width(hover_size)
+                    .with_height(hover_size)
+                    .finish(),
+                )
+                .finish();
 
-                    // Position the hover so that it's centered around the thumb. Since the hover
-                    // is guaranteed to be larger than the thumb, we position the hover at the top
-                    // left corner of the thumb and then translate it to the left and up so that it
-                    // is centered.
-                    stack.add_positioned_child(
-                        thumb_hover,
-                        OffsetPositioning::from_axes(
-                            PositioningAxis::relative_to_parent(
-                                ParentOffsetBounds::Unbounded,
-                                OffsetType::Pixel(-((hover_size - thumb_height) / 2.)),
-                                AnchorPair::new(XAxisAnchor::Left, XAxisAnchor::Left),
-                            ),
-                            PositioningAxis::relative_to_parent(
-                                ParentOffsetBounds::Unbounded,
-                                OffsetType::Pixel(-((hover_size - thumb_height) / 2.)),
-                                AnchorPair::new(YAxisAnchor::Top, YAxisAnchor::Top),
-                            ),
+                // Position the hover so that it's centered around the thumb. Since the hover
+                // is guaranteed to be larger than the thumb, we position the hover at the top
+                // left corner of the thumb and then translate it to the left and up so that it
+                // is centered.
+                stack.add_positioned_child(
+                    thumb_hover,
+                    OffsetPositioning::from_axes(
+                        PositioningAxis::relative_to_parent(
+                            ParentOffsetBounds::Unbounded,
+                            OffsetType::Pixel(-((hover_size - thumb_height) / 2.)),
+                            AnchorPair::new(XAxisAnchor::Left, XAxisAnchor::Left),
                         ),
-                    );
-                }
+                        PositioningAxis::relative_to_parent(
+                            ParentOffsetBounds::Unbounded,
+                            OffsetType::Pixel(-((hover_size - thumb_height) / 2.)),
+                            AnchorPair::new(YAxisAnchor::Top, YAxisAnchor::Top),
+                        ),
+                    ),
+                );
             }
 
             stack.add_child(thumb);

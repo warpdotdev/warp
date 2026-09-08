@@ -4,8 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::time::Duration;
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine as _;
+use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use markdown_parser::FormattedText;
@@ -14,9 +14,9 @@ use num_traits::SaturatingSub;
 use regex::Regex;
 use string_offset::CharOffset;
 use url::Url;
-use vec1::{vec1, Vec1};
-use warp_core::features::FeatureFlag;
+use vec1::{Vec1, vec1};
 use warp_core::r#async::debounce;
+use warp_core::features::FeatureFlag;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_editor::content::buffer::{
     AutoScrollBehavior, Buffer, BufferEditAction, BufferEvent, BufferSelectAction, EditOrigin,
@@ -33,6 +33,7 @@ use warp_editor::render::model::{
 };
 use warp_editor::search::Searcher;
 use warp_editor::selection::{SelectionMode, SelectionModel, TextDirection, TextUnit};
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, WarpA11yRole};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::ListIndentLevel;
@@ -41,10 +42,10 @@ use warpui::{
 };
 
 use super::super::telemetry::SelectionMode as TelemetrySelectionMode;
+use super::NotebookWorkflow;
 use super::embedding_model::NotebookEmbed;
 use super::interaction_state_model::InteractionStateModel;
 use super::notebook_command::NotebookCommand;
-use super::NotebookWorkflow;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::editor::InteractionState;
 use crate::notebooks::editor::interaction_state_model::InteractionStateModelEvent;
@@ -159,17 +160,27 @@ impl NotebooksEditorModel {
         rte_window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        Self::new_internal(text_styles, Some(rte_window_id), ctx)
+        Self::new_internal(text_styles, Some(rte_window_id), false, ctx)
     }
 
     /// Create a model that is not yet bound to a window. The window id should be set later via `set_window_id`.
     pub fn new_unbound(text_styles: RichTextStyles, ctx: &mut ModelContext<Self>) -> Self {
-        Self::new_internal(text_styles, None, ctx)
+        Self::new_internal(text_styles, None, false, ctx)
+    }
+
+    /// Like [`Self::new_unbound`], but defers text layout until the editor's element is first laid
+    /// out.
+    ///
+    /// Font shaping a whole markdown document is expensive enough to be worth skipping entirely
+    /// for content that may never be displayed.
+    pub fn new_unbound_lazy(text_styles: RichTextStyles, ctx: &mut ModelContext<Self>) -> Self {
+        Self::new_internal(text_styles, None, true, ctx)
     }
 
     fn new_internal(
         text_styles: RichTextStyles,
         rte_window_id: Option<WindowId>,
+        lazy_layout: bool,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let content = ctx.add_model(|_| {
@@ -182,7 +193,8 @@ impl NotebooksEditorModel {
 
         let selection_model = ctx.add_model(|_ctx| BufferSelectionModel::new(content.clone()));
 
-        let render_state = ctx.add_model(|ctx| RenderState::new(text_styles, false, None, ctx));
+        let render_state =
+            ctx.add_model(|ctx| RenderState::new(text_styles, lazy_layout, None, ctx));
         ctx.subscribe_to_model(&render_state, Self::handle_render_model_event);
 
         let selection = ctx.add_model(|ctx| {
@@ -240,6 +252,22 @@ impl NotebooksEditorModel {
 
     pub fn markdown_table_count(&self, ctx: &impl ModelAsRef) -> usize {
         self.render_state.as_ref(ctx).markdown_table_count()
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn nested_shell_command_count(&self, ctx: &AppContext) -> usize {
+        self.child_models
+            .model_handles::<NotebookCommand>()
+            .filter(|handle| handle.as_ref(ctx).is_shell_command(ctx))
+            .count()
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub(crate) fn nested_rendered_mermaid_command_count(&self, ctx: &AppContext) -> usize {
+        self.child_models
+            .model_handles::<NotebookCommand>()
+            .filter(|handle| handle.as_ref(ctx).is_rendered_mermaid(ctx))
+            .count()
     }
 
     pub fn set_interaction_state(
@@ -310,6 +338,10 @@ impl NotebooksEditorModel {
         <Self as RichTextEditorModel>::reset_with_markdown(self, markdown, ctx);
     }
 
+    pub fn reset_with_ipynb(&mut self, ipynb: &str, ctx: &mut ModelContext<Self>) {
+        <Self as RichTextEditorModel>::reset_with_ipynb(self, ipynb, ctx);
+    }
+
     pub fn update_to_new_markdown(&mut self, markdown: &str, ctx: &mut ModelContext<Self>) {
         <Self as RichTextEditorModel>::update_to_new_markdown(self, markdown, ctx);
     }
@@ -334,7 +366,9 @@ impl NotebooksEditorModel {
                 // When a debounced resize event fires, the model is laid out from scratch, using [`Self::rebuild_layout`].
                 let _ = self.resize_tx.try_send(());
             }
-            RenderEvent::LayoutUpdated => {
+            // Lazy first layout flushes queued restore edits as `PendingEditsFlushed` rather than
+            // `LayoutUpdated`; both still need child models and Mermaid render offsets.
+            RenderEvent::LayoutUpdated | RenderEvent::PendingEditsFlushed => {
                 self.child_models.update(
                     self.interaction_state.clone(),
                     self.content.clone(),
@@ -347,7 +381,7 @@ impl NotebooksEditorModel {
                     self.rebuild_layout(ctx);
                 }
             }
-            _ => (),
+            RenderEvent::ViewportUpdated(_) => {}
         }
     }
 
@@ -394,14 +428,9 @@ impl NotebooksEditorModel {
             .child_models
             .model_handles::<NotebookCommand>()
             .filter_map(|handle| {
-                if matches!(
-                    handle.as_ref(ctx).mermaid_display_mode,
-                    MarkdownDisplayMode::Rendered
-                ) {
-                    handle
-                        .as_ref(ctx)
-                        .start_offset(ctx)
-                        .map(|o| o + CharOffset::from(1))
+                let command = handle.as_ref(ctx);
+                if command.is_rendered_mermaid(ctx) {
+                    command.start_offset(ctx).map(|o| o + CharOffset::from(1))
                 } else {
                     None
                 }
@@ -413,11 +442,11 @@ impl NotebooksEditorModel {
     }
 
     fn handle_content_model_event(&mut self, event: &BufferEvent, ctx: &mut ModelContext<Self>) {
-        if let Some(window_id) = self.rte_window_id {
-            if !ctx.is_window_open(window_id) {
-                log::debug!("Ignoring content event for closed window");
-                return;
-            }
+        if let Some(window_id) = self.rte_window_id
+            && !ctx.is_window_open(window_id)
+        {
+            log::debug!("Ignoring content event for closed window");
+            return;
         }
 
         let can_edit = matches!(self.interaction_state(ctx), InteractionState::Editable);
@@ -1419,7 +1448,10 @@ impl NotebooksEditorModel {
                 });
             }
             None => {
-                log::error!("Child model at {block_start} has end offset with value None");
+                report_error!(
+                    "Child model has end offset with value None",
+                    extra: { "block_start" => %block_start }
+                );
             }
         };
 

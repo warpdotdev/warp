@@ -12,11 +12,11 @@ use warp_editor::render::model::{
 };
 use warp_util::user_input::UserInput;
 use warpui::assets::asset_cache::{AssetCache, AssetState};
+use warpui::r#async::block_on;
 use warpui::event::ModifiersState;
 use warpui::image_cache::ImageType;
 use warpui::platform::WindowStyle;
 use warpui::presenter::ChildView;
-use warpui::r#async::block_on;
 use warpui::units::Pixels;
 use warpui::windowing::WindowManager;
 use warpui::{App, Element, Entity, SingletonEntity, TypedActionView, View, ViewHandle, WindowId};
@@ -38,10 +38,10 @@ use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
 use crate::settings::FontSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::model::session::Session;
 use crate::terminal::shell::ShellType;
-use crate::terminal::ShellLaunchData;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::ActiveSession;
@@ -797,10 +797,10 @@ fn test_run_command_from_text_selection() {
                 .render_state()
                 .clone();
             ctx.subscribe_to_model(&render_state, move |_, event, _ctx| {
-                if let RenderEvent::LayoutUpdated = event {
-                    if let Some(tx) = tx.take() {
-                        tx.send(()).unwrap();
-                    }
+                if let RenderEvent::LayoutUpdated = event
+                    && let Some(tx) = tx.take()
+                {
+                    tx.send(()).unwrap();
                 }
             });
         });

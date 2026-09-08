@@ -2,7 +2,7 @@ use itertools::Itertools;
 use string_offset::CharOffset;
 use warp_editor::render::model::BlockItem;
 use warpui::integration::{AssertionCallback, AssertionOutcome, AssertionWithDataCallback};
-use warpui::{async_assert, async_assert_eq, App, ViewHandle};
+use warpui::{App, ViewHandle, async_assert, async_assert_eq};
 
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -119,10 +119,10 @@ fn is_notebook_in_hidden_pane(app: &App, notebook_view: &ViewHandle<NotebookView
             for pane_group in pane_groups {
                 let is_hidden = pane_group.read(app, |pg, ctx| {
                     for pane_id in pg.pane_ids() {
-                        if let Some(notebook_pane) = pg.notebook_pane_by_pane_id(Some(pane_id)) {
-                            if notebook_pane.notebook_view(ctx).id() == notebook_view.id() {
-                                return pg.is_pane_hidden_for_close(pane_id);
-                            }
+                        if let Some(notebook_pane) = pg.notebook_pane_by_pane_id(Some(pane_id))
+                            && notebook_pane.notebook_view(ctx).id() == notebook_view.id()
+                        {
+                            return pg.is_pane_hidden_for_close(pane_id);
                         }
                     }
                     false

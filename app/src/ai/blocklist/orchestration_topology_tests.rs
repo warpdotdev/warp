@@ -1,9 +1,91 @@
+use uuid::Uuid;
 use warpui::{App, EntityId, ModelHandle};
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::test_util::settings::initialize_history_persistence_for_tests;
+
+#[test]
+fn participant_resolution_uses_the_direct_parent_as_orchestrator() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let surface_id = EntityId::new();
+        let root_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let grandchild_run_id = Uuid::new_v4().to_string();
+
+        let (root_id, child_id, grandchild_id) = history_model.update(&mut app, |history, ctx| {
+            let root_id = history.start_new_conversation(surface_id, false, false, false, ctx);
+            history.assign_run_id_for_conversation(
+                root_id,
+                root_run_id.clone(),
+                None,
+                surface_id,
+                ctx,
+            );
+            let child_id = history.start_new_child_conversation(
+                surface_id,
+                "child".to_string(),
+                root_id,
+                None,
+                false,
+                ctx,
+            );
+            history.assign_run_id_for_conversation(
+                child_id,
+                child_run_id.clone(),
+                None,
+                surface_id,
+                ctx,
+            );
+            let grandchild_id = history.start_new_child_conversation(
+                surface_id,
+                "grandchild".to_string(),
+                child_id,
+                None,
+                false,
+                ctx,
+            );
+            history.assign_run_id_for_conversation(
+                grandchild_id,
+                grandchild_run_id,
+                None,
+                surface_id,
+                ctx,
+            );
+            (root_id, child_id, grandchild_id)
+        });
+
+        history_model.read(&app, |history, _| {
+            let grandchild = history
+                .conversation(&grandchild_id)
+                .expect("grandchild conversation exists");
+            assert_eq!(
+                orchestrator_agent_id_for_conversation(history, grandchild),
+                Some(child_run_id.clone())
+            );
+            assert_eq!(
+                resolve_orchestration_participant(history, &child_run_id, Some(&child_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Orchestrator,
+                    conversation_id: Some(child_id),
+                }
+            );
+            assert_eq!(
+                resolve_orchestration_participant(history, &root_run_id, Some(&child_run_id)),
+                ResolvedOrchestrationParticipant {
+                    kind: OrchestrationParticipantKind::Agent {
+                        name: "Agent".to_string(),
+                    },
+                    conversation_id: Some(root_id),
+                }
+            );
+        });
+    });
+}
+
 #[test]
 fn pill_order_keys_prioritize_attention_then_in_progress_then_done() {
     let blocked = ConversationStatus::Blocked {
@@ -48,6 +130,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "oz-env-check".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -57,6 +140,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "sibling-agent".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -66,6 +150,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "codex-child".to_string(),
                 child_a,
                 None,
+                false,
                 ctx,
             )
         });
@@ -75,6 +160,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "follow-up-child".to_string(),
                 child_a,
                 None,
+                false,
                 ctx,
             )
         });
@@ -84,6 +170,7 @@ fn descendant_conversation_ids_in_spawn_order_flattens_nested_children_preorder(
                 "sibling-grandchild".to_string(),
                 child_b,
                 None,
+                false,
                 ctx,
             )
         });
@@ -119,6 +206,7 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
                 "child-a".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -128,6 +216,7 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
                 "child-b".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -137,6 +226,7 @@ fn adjacent_orchestration_child_navigation_uses_pinned_first_order() {
                 "child-c".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -277,6 +367,7 @@ fn has_local_orchestrated_children_detects_active_local_children() {
                 "local-child".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -331,6 +422,7 @@ fn has_local_orchestrated_children_ignores_remote_children() {
                 "remote-child".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -434,6 +526,116 @@ fn adjacent_orchestration_child_navigation_wraps_within_child_list() {
 }
 
 #[test]
+fn adjacent_orchestration_child_navigation_cycles_whole_tree_from_grandchild() {
+    // Navigation must root at the TOP of the tree (not one parent hop), so
+    // cycling from a grandchild covers the root and every descendant.
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let root_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let mid_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "mid".to_string(),
+                root_id,
+                None,
+                false,
+                ctx,
+            )
+        });
+        let grandchild_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "grandchild".to_string(),
+                mid_id,
+                None,
+                false,
+                ctx,
+            )
+        });
+
+        history_model.read(&app, |history_model, _| {
+            // Spawn order is pre-order: [root, mid, grandchild].
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    grandchild_id,
+                    OrchestrationNavigationDirection::Next,
+                ),
+                Some(root_id),
+                "next from the last descendant wraps to the tree root",
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    grandchild_id,
+                    OrchestrationNavigationDirection::Previous,
+                ),
+                Some(mid_id),
+            );
+            assert_eq!(
+                adjacent_orchestration_child_conversation_id(
+                    history_model,
+                    mid_id,
+                    OrchestrationNavigationDirection::Previous,
+                ),
+                Some(root_id),
+            );
+        });
+    });
+}
+
+#[test]
+fn child_conversations_in_pill_order_returns_direct_children_only() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let terminal_view_id = EntityId::new();
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+
+        let root_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let mid_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "mid".to_string(),
+                root_id,
+                None,
+                false,
+                ctx,
+            )
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_child_conversation(
+                terminal_view_id,
+                "grandchild".to_string(),
+                mid_id,
+                None,
+                false,
+                ctx,
+            )
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let direct_children: Vec<AIConversationId> =
+                child_conversations_in_pill_order(history_model, root_id)
+                    .into_iter()
+                    .map(|descendant| descendant.conversation_id)
+                    .collect();
+            assert_eq!(
+                direct_children,
+                vec![mid_id],
+                "the drill-down ordering must exclude grandchildren",
+            );
+        });
+    });
+}
+
+#[test]
 fn adjacent_orchestration_child_navigation_noops_for_single_child() {
     App::test((), |mut app| async move {
         initialize_history_persistence_for_tests(&mut app);
@@ -449,6 +651,7 @@ fn adjacent_orchestration_child_navigation_noops_for_single_child() {
                 "child".to_string(),
                 orchestrator_id,
                 None,
+                false,
                 ctx,
             )
         });
@@ -503,6 +706,7 @@ fn build_orchestrator_with_two_children(
             "child-a".to_string(),
             orchestrator_id,
             None,
+            false,
             ctx,
         )
     });
@@ -512,6 +716,7 @@ fn build_orchestrator_with_two_children(
             "child-b".to_string(),
             orchestrator_id,
             None,
+            false,
             ctx,
         )
     });
@@ -1010,6 +1215,61 @@ fn aggregated_status_prefers_blocked_over_waiting_for_events() {
                     blocked_action: "approve_command".to_string(),
                 },
             );
+        });
+    });
+}
+
+#[test]
+fn loaded_subtree_rollup_excludes_unloaded_descendants_from_the_count() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let (terminal_view_id, orchestrator_id, child_a, _child_b) =
+            build_orchestrator_with_two_children(&mut app, &history_model);
+
+        // Register a child id that exists only in the parent → children
+        // index (e.g. discovered remotely before its conversation loads).
+        let unloaded_child = AIConversationId::new();
+        history_model.update(&mut app, |history_model, _ctx| {
+            history_model.set_parent_for_conversation(unloaded_child, orchestrator_id);
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.update_conversation_status(
+                terminal_view_id,
+                child_a,
+                ConversationStatus::InProgress,
+                ctx,
+            );
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let rollup = loaded_subtree_rollup(history_model, orchestrator_id)
+                .expect("two loaded children exist");
+            assert_eq!(
+                rollup.descendant_count, 2,
+                "the badge count must cover exactly the loaded descendants the status aggregates",
+            );
+            assert_eq!(rollup.status, ConversationStatus::InProgress);
+        });
+    });
+}
+
+#[test]
+fn loaded_subtree_rollup_is_none_when_no_descendant_is_loaded() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let leaf_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+        let unloaded_child = AIConversationId::new();
+        history_model.update(&mut app, |history_model, _ctx| {
+            history_model.set_parent_for_conversation(unloaded_child, leaf_id);
+        });
+
+        history_model.read(&app, |history_model, _| {
+            assert_eq!(loaded_subtree_rollup(history_model, leaf_id), None);
         });
     });
 }

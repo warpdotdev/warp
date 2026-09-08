@@ -1,15 +1,15 @@
 use pathfinder_color::ColorU;
-use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
+use warp_core::ui::appearance::Appearance;
+use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
+use warpui_core::Element;
 use warpui_core::elements::{
     Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     FormattedTextElement, MainAxisAlignment, MainAxisSize, ParentElement, Radius, Shrinkable,
 };
 use warpui_core::fonts::Weight;
 use warpui_core::text_layout::TextAlignment;
-use warpui_core::Element;
 
 /// Content for a "you'll lose these features" opt-out confirmation dialog.
 pub struct FeatureOptOutDialog {

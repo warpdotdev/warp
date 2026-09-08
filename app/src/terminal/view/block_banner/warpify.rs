@@ -1,4 +1,5 @@
 use pathfinder_color::ColorU;
+use warpui::Element;
 use warpui::elements::{
     Align, Container, CrossAxisAlignment, Flex, MouseStateHandle, ParentElement, Shrinkable,
 };
@@ -6,7 +7,6 @@ use warpui::fonts::Weight;
 use warpui::keymap::Keystroke;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
-use warpui::Element;
 
 use super::render_block_banner;
 use crate::appearance::Appearance;

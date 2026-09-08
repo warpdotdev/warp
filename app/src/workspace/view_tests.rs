@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use pane_group::{NotebookPane, PaneState, SplitPaneState, TerminalPaneId};
-use repo_metadata::repositories::DetectedRepositories;
-use repo_metadata::watcher::DirectoryWatcher;
 #[cfg(feature = "local_fs")]
 use repo_metadata::CanonicalizedPath;
 #[cfg(feature = "local_fs")]
 use repo_metadata::RepoMetadataModel;
+use repo_metadata::repositories::DetectedRepositories;
+use repo_metadata::watcher::DirectoryWatcher;
 use session_sharing_protocol::common::SessionId;
 #[cfg(feature = "local_fs")]
 use tempfile::TempDir;
@@ -22,12 +22,14 @@ use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
 use super::*;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::agent_tips::AITipModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::ai::blocklist::agent_view::orchestration_pill_bar_model::OrchestrationPillBarModel;
 use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
@@ -40,7 +42,6 @@ use crate::ai::outline::RepoOutlines;
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai::skills::SkillManager;
-use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::model::view::CloudViewModel;
 use crate::context_chips::prompt::Prompt;
@@ -60,10 +61,10 @@ use crate::server::experiments::ServerExperiments;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings::PrivacySettings;
-use crate::settings_view::keybindings::KeybindingChangedNotifier;
+use crate::settings::cloud_preferences_syncer::CloudPreferencesSyncer;
 use crate::settings_view::DisplayCount;
+use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
 use crate::tab_configs::tab_config::{TabConfigPaneNode, TabConfigPaneType};
@@ -87,26 +88,8 @@ use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    experiments, workspace, AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions,
+    AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
-#[test]
-fn query_for_rewind_prefill_uses_custom_display_query_inputs() {
-    let context: std::sync::Arc<[crate::ai::agent::AIAgentContext]> = Vec::new().into();
-    let input = crate::ai::agent::AIAgentInput::FetchReviewComments {
-        repo_path: "/repo".to_string(),
-        context,
-    };
-
-    assert_eq!(
-        query_for_rewind_prefill(&[input]),
-        Some(
-            crate::search::slash_command_menu::static_commands::commands::PR_COMMENTS
-                .name
-                .to_string()
-        )
-    );
-}
-
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 
@@ -120,8 +103,10 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| AutoupdateState::new(ServerApiProvider::as_ref(ctx).get()));
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(|_| SystemStats::new());
+    app.add_singleton_model(|_| crate::tab::TabShortcutModifierState::new());
     app.add_singleton_model(SyncQueue::mock);
     app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(CloudEnvironmentCatalog::new);
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(|_ctx| UserProfiles::new(Vec::new()));
     app.add_singleton_model(TeamTesterStatus::mock);
@@ -208,10 +193,11 @@ pub(crate) fn initialize_app(app: &mut App) {
         warp_server_client::iap::IapManager::new(
             None,
             Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+            None,
             ctx,
         )
     });
-    app.add_singleton_model(|_| RestoredAgentConversations::new(vec![]));
+    app.add_singleton_model(|_| RestoredAgentConversations::new_seeded(vec![]));
     app.add_singleton_model(|ctx| {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
@@ -254,6 +240,7 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|ctx| PersistedWorkspace::new(vec![], HashMap::new(), None, ctx));
     app.add_singleton_model(|_| ProjectContextModel::default());
     app.add_singleton_model(|_| PricingInfoModel::new());
+    app.add_singleton_model(crate::ai::pricing_promotion::PricingPromotionState::new);
     app.add_singleton_model(AIDocumentModel::new);
     app.add_singleton_model(|_| History::new(vec![]));
 
@@ -281,6 +268,188 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn test_open_new_window_for_team_reuses_existing_team_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let existing_team_workspace = mock_workspace(&mut app);
+        let existing_team_window_id =
+            existing_team_workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let team_uid: ServerId = 123.into();
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+                user_workspaces.register_window(existing_team_window_id, Some(team_uid), ctx);
+            });
+        });
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.windows().last_window_shown_and_focused_for_test(),
+                Some(existing_team_window_id)
+            );
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn test_open_new_window_for_team_creates_window_when_team_has_none() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let team_uid: ServerId = 123.into();
+        let initial_window_count = app.window_ids().len();
+
+        source_workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count + 1);
+        app.read(|ctx| {
+            assert_eq!(
+                ctx.window_ids()
+                    .filter(|window_id| {
+                        UserWorkspaces::as_ref(ctx).team_uid_for_window(*window_id)
+                            == Some(team_uid)
+                    })
+                    .count(),
+                1
+            );
+        });
+    });
+}
+
+#[cfg(target_family = "wasm")]
+fn register_window_team(app: &mut App, window_id: WindowId, team_uid: ServerId) {
+    app.update(|ctx| {
+        UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(team_uid), ctx);
+        });
+    });
+}
+
+#[cfg(target_family = "wasm")]
+fn pane_group_ids(workspace: &ViewHandle<Workspace>, app: &App) -> Vec<EntityId> {
+    workspace.read(app, |workspace, _| {
+        workspace
+            .tabs
+            .iter()
+            .map(|tab| tab.pane_group.id())
+            .collect()
+    })
+}
+
+#[cfg(target_family = "wasm")]
+#[test]
+fn test_open_new_window_for_team_rebinds_current_window_without_creating() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let current_team_uid: ServerId = 123.into();
+        let next_team_uid: ServerId = 456.into();
+        register_window_team(&mut app, window_id, current_team_uid);
+
+        let team_changes = Rc::new(Cell::new(0));
+        let team_changes_for_subscription = team_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id: changed }
+                        if *changed == window_id
+                ) {
+                    team_changes_for_subscription.set(team_changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let initial_window_count = app.window_ids().len();
+        let initial_pane_group_ids = pane_group_ids(&workspace, &app);
+        assert!(!initial_pane_group_ids.is_empty());
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::OpenNewWindowForTeam {
+                    team_uid: next_team_uid,
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+        assert_eq!(pane_group_ids(&workspace, &app), initial_pane_group_ids);
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(next_team_uid)
+            );
+        });
+        assert_eq!(team_changes.get(), 1);
+    });
+}
+
+#[cfg(target_family = "wasm")]
+#[test]
+fn test_open_new_window_for_team_same_team_is_noop() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    use crate::workspaces::user_workspaces::UserWorkspacesEvent;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let team_uid: ServerId = 123.into();
+        register_window_team(&mut app, window_id, team_uid);
+
+        let team_changes = Rc::new(Cell::new(0));
+        let team_changes_for_subscription = team_changes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if matches!(event, UserWorkspacesEvent::WindowTeamChanged { .. }) {
+                    team_changes_for_subscription.set(team_changes_for_subscription.get() + 1);
+                }
+            });
+        });
+
+        let initial_window_count = app.window_ids().len();
+        let initial_pane_group_ids = pane_group_ids(&workspace, &app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::OpenNewWindowForTeam { team_uid }, ctx);
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count);
+        assert_eq!(pane_group_ids(&workspace, &app), initial_pane_group_ids);
+        app.read(|ctx| {
+            assert_eq!(
+                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                Some(team_uid)
+            );
+        });
+        assert_eq!(team_changes.get(), 0);
+    });
 }
 
 fn restored_workspace(
@@ -312,6 +481,7 @@ fn transferred_tab_workspace(
             global_resource_handles,
             None,
             NewWorkspaceSource::TransferredTab {
+                source_window_id: ctx.window_id(),
                 tab_color: None,
                 custom_title: None,
                 left_panel_open: false,
@@ -374,15 +544,214 @@ fn test_theme_chooser_does_not_suppress_tab_bar_traffic_light_padding() {
     });
 }
 
+/// Regression for account-first onboarding users who select Warp Drive and
+/// conversation history, skip signup, and create an account later. The stored
+/// preferences should remain true while unavailable, then take effect
+/// automatically as account and AI availability change—without an off/on
+/// toggle.
+#[test]
+fn test_tools_panel_preferences_activate_after_signup_and_ai_enablement() {
+    let _skip_anon_guard = FeatureFlag::SkipFirebaseAnonymousUser.override_enabled(true);
+    let _conversation_list_guard =
+        FeatureFlag::AgentViewConversationListView.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        // Preserve the user's onboarding intent while starting logged out with
+        // AI disabled (the account-skipped account-first completion state).
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(true, ctx)
+                    .expect("remember Warp Drive preference");
+            });
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .show_conversation_history
+                    .set_value(true, ctx)
+                    .expect("remember conversation-history preference");
+                settings
+                    .is_any_ai_enabled
+                    .set_value(false, ctx)
+                    .expect("AI remains disabled after skipped signup");
+            });
+            let auth_state = AuthStateProvider::as_ref(ctx).get();
+            auth_state.set_user(None);
+            auth_state.set_credentials(None);
+        });
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "the stored preference should keep the locked Warp Drive entry visible"
+            );
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView),
+                "the stored preference should keep the locked conversations entry visible"
+            );
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::RequiresAccount
+                );
+                drop(left_panel.render(ctx));
+
+                left_panel.handle_action_with_force_open(
+                    &LeftPanelAction::ConversationListView,
+                    false,
+                    ctx,
+                );
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::RequiresAccount
+                );
+                drop(left_panel.render(ctx));
+            });
+            workspace.handle_left_panel_event(&LeftPanelEvent::SignInRequested, ctx);
+            assert!(
+                workspace
+                    .current_workspace_state
+                    .is_require_login_modal_open,
+                "locked-panel Sign in should open the existing auth modal"
+            );
+            // Keep the remainder of this state-transition test focused on the
+            // tool panel rather than modal rendering.
+            workspace
+                .current_workspace_state
+                .is_require_login_modal_open = false;
+        });
+        app.read(|ctx| {
+            // Availability must not erase the raw onboarding preferences.
+            assert!(*WarpDriveSettings::as_ref(ctx).enable_warp_drive);
+            assert!(*AISettings::as_ref(ctx).show_conversation_history);
+            assert!(!WarpDriveSettings::is_warp_drive_available(ctx));
+            assert!(!WarpDriveSettings::is_warp_drive_enabled(ctx));
+            assert!(!AISettings::as_ref(ctx).is_conversation_history_available(ctx));
+            assert!(!AISettings::as_ref(ctx).is_conversation_history_enabled(ctx));
+        });
+
+        // Signing up makes account-backed features available. AuthComplete
+        // must refresh the existing workspace even though no setting changed.
+        app.update(|ctx| {
+            AuthStateProvider::as_ref(ctx)
+                .get()
+                .apply_remote_server_auth_context(
+                    "test-token".to_string(),
+                    "test-user".to_string(),
+                    "test@warp.dev".to_string(),
+                );
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_auth_manager_event(
+                AuthManager::handle(ctx),
+                &AuthManagerEvent::AuthComplete,
+                ctx,
+            );
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Drive entry remains visible and unlocks after signup"
+            );
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView),
+                "conversation entry remains visible while waiting for AI"
+            );
+            assert!(!workspace.auth_state.is_anonymous_or_logged_out());
+            assert!(WarpDriveSettings::is_warp_drive_enabled(ctx));
+            assert!(!AISettings::as_ref(ctx).is_conversation_history_enabled(ctx));
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::Available
+                );
+
+                left_panel.handle_action_with_force_open(
+                    &LeftPanelAction::ConversationListView,
+                    false,
+                    ctx,
+                );
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::RequiresAi
+                );
+                drop(left_panel.render(ctx));
+            });
+        });
+
+        // Enabling AI later should make the preserved conversation-history
+        // preference effective through the existing AI-settings subscription.
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .is_any_ai_enabled
+                    .set_value(true, ctx)
+                    .expect("enable AI");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView)
+            );
+            workspace.left_panel_view.update(ctx, |left_panel, ctx| {
+                left_panel.handle_action_with_force_open(
+                    &LeftPanelAction::ConversationListView,
+                    false,
+                    ctx,
+                );
+                assert_eq!(
+                    left_panel.active_view_availability(ctx),
+                    left_panel::ToolPanelAvailability::Available
+                );
+            });
+        });
+        app.read(|ctx| {
+            assert!(AISettings::as_ref(ctx).is_conversation_history_enabled(ctx));
+        });
+
+        // The raw setting still controls whether the toolbelt entry exists.
+        app.update(|ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .show_conversation_history
+                    .set_value(false, ctx)
+                    .expect("hide conversation history");
+            });
+        });
+        workspace.read(&app, |workspace, _| {
+            assert!(
+                !workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::ConversationListView)
+            );
+        });
+    });
+}
+
 fn assert_vertical_tabs_tools_panel_preserves_padding(config: HeaderToolbarChipSelection) {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
-                report_if_error!(settings
-                    .header_toolbar_chip_selection
-                    .set_value(config, ctx));
+                report_if_error!(
+                    settings
+                        .header_toolbar_chip_selection
+                        .set_value(config, ctx)
+                );
             });
         });
 
@@ -432,6 +801,97 @@ fn test_tools_panel_does_not_suppress_vertical_tab_bar_traffic_light_padding() {
         assert_vertical_tabs_tools_panel_preserves_padding(config);
     }
 }
+/// Regression test for the handoff model carry-over: the copy must preserve
+/// the source pane's explicit selection M even when M equals the destination
+/// pane's current profile default — the case where re-normalizing the resolved
+/// id against the destination's default (instead of copying the raw override)
+/// would drop the override and let the source profile's default D win.
+#[test]
+fn copy_model_and_profile_preserves_explicit_model_over_source_profile_default() {
+    use warpui::EntityId;
+
+    use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, ModelsByFeature};
+    use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let m = LLMId::from("auto-genius");
+        let d = LLMId::from("auto");
+
+        let source_id = EntityId::new();
+        let new_id = EntityId::new();
+
+        app.update(|ctx| {
+            // Catalog containing both slugs so profile/override ids resolve.
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                let models = ModelsByFeature {
+                    agent_mode: AvailableLLMs::new(
+                        "auto".into(),
+                        vec![
+                            LLMInfo::new_for_test("auto"),
+                            LLMInfo::new_for_test("auto-genius"),
+                        ],
+                        None,
+                    )
+                    .expect("valid available llms"),
+                    ..Default::default()
+                };
+                prefs.update_feature_model_choices(Ok(models), ctx);
+            });
+
+            // Default profile default = M (the destination pane's current profile).
+            // Source uses a second profile whose default = D.
+            let profiles = AIExecutionProfilesModel::handle(ctx);
+            let default_profile_id = profiles.read(ctx, |p, _| p.default_profile_id());
+            profiles.update(ctx, |p, ctx| {
+                p.set_base_model(&default_profile_id, Some(m.clone()), ctx);
+                let source_profile_id = p.create_profile(ctx).expect("create source profile");
+                p.set_base_model(&source_profile_id, Some(d.clone()), ctx);
+                p.set_active_profile(source_id, source_profile_id, ctx);
+            });
+
+            // Source's explicit selection = M (differs from its profile default D).
+            let scope = TeamlessScopeForTest;
+            LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                prefs.update_preferred_agent_mode_llm(&scope, &m, source_id, ctx);
+            });
+        });
+
+        // Preconditions: source resolves to M; destination's current default is M.
+        app.update(|ctx| {
+            let scope = TeamlessScopeForTest;
+            let prefs = LLMPreferences::as_ref(ctx);
+            assert_eq!(
+                prefs.get_active_base_model(&scope, ctx, Some(source_id)).id,
+                m,
+                "source pane should resolve to its explicit selection"
+            );
+            assert_eq!(
+                prefs.get_active_base_model(&scope, ctx, Some(new_id)).id,
+                m,
+                "destination pane's current profile default should be M"
+            );
+        });
+
+        // Carry source -> new via the production helper.
+        app.update(|ctx| {
+            Workspace::copy_model_and_profile_to_terminal_view(source_id, new_id, ctx);
+        });
+
+        app.update(|ctx| {
+            let scope = TeamlessScopeForTest;
+            assert_eq!(
+                LLMPreferences::as_ref(ctx)
+                    .get_active_base_model(&scope, ctx, Some(new_id))
+                    .id,
+                m,
+                "destination pane must retain the source's explicit selection, not the source profile default"
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 fn open_worktree_sidecar(workspace: &ViewHandle<Workspace>, app: &mut App) {
     workspace.update(app, |workspace, ctx| {
@@ -686,6 +1146,107 @@ fn test_open_file_notebook_focuses_existing_markdown_pane() {
     });
 }
 
+/// Regression test for the agent file-range preview's "Open file" button: the
+/// handler used to zero out `range_start`, so consumers that read the jump
+/// target off the `CodeSource` opened the file at the top.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_file_with_target_event_preserves_requested_line() {
+    use crate::code::editor_management::CodeManager;
+    use crate::code::global_buffer_model::GlobalBufferModel;
+    use crate::terminal::local_shell::LocalShellState;
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.add_singleton_model(|_| CodeManager::default());
+        app.add_singleton_model(|_| LocalShellState::NotLoaded);
+        app.add_singleton_model(GlobalBufferModel::new);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let code_path = temp_dir.path().join("main.rs");
+        let contents: String = (1..=80).map(|line| format!("// line {line}\n")).collect();
+        std::fs::write(&code_path, contents).expect("failed to write code file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 42,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: code_path.clone(),
+                    target: FileTarget::CodeEditor(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let code_panes = pane_group.code_panes(ctx).collect_vec();
+            assert_eq!(code_panes.len(), 1);
+            assert_eq!(
+                *code_panes[0].1.as_ref(ctx).source(),
+                CodeSource::Link {
+                    path: code_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                }
+            );
+        });
+    });
+}
+
+/// Regression test for the raw-code toggle: the notebook-viewer target used to
+/// drop the `CodeSource` outright, so the raw view always started at line 1.
+#[cfg(feature = "local_fs")]
+#[test]
+fn test_open_markdown_viewer_target_preserves_requested_line() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let markdown_path = temp_dir.path().join("README.md");
+        std::fs::write(&markdown_path, "# Test\n").expect("failed to write markdown file");
+
+        let range_start = LineAndColumnArg {
+            line_num: 12,
+            column_num: None,
+        };
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().clone();
+            workspace.handle_file_tree_event(
+                pane_group,
+                &crate::pane_group::Event::OpenFileWithTarget {
+                    path: markdown_path.clone(),
+                    target: FileTarget::MarkdownViewer(EditorLayout::SplitPane),
+                    line_col: Some(range_start),
+                },
+                ctx,
+            );
+        });
+
+        workspace.read(&app, |workspace, ctx| {
+            let pane_group = workspace.active_tab_pane_group().as_ref(ctx);
+            let markdown_panes = pane_group.file_notebook_panes(ctx).collect_vec();
+            assert_eq!(markdown_panes.len(), 1);
+            assert_eq!(
+                markdown_panes[0].1.as_ref(ctx).code_source(),
+                Some(&CodeSource::Link {
+                    path: markdown_path.clone(),
+                    range_start: Some(range_start),
+                    range_end: None,
+                })
+            );
+        });
+    });
+}
+
 #[cfg(feature = "local_fs")]
 #[test]
 fn test_worktree_sidecar_search_editor_enter_executes_selection() {
@@ -813,7 +1374,7 @@ fn mock_workspace_with_shared_session(app: &mut App) -> ViewHandle<Workspace> {
 }
 
 // Creates a workspace as a viewer of a shared session.
-fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace> {
+pub(crate) fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace> {
     // Create the workspace as a session-sharing sharer.
     let global_resource_handles = GlobalResourceHandles::mock(app);
 
@@ -1219,6 +1780,181 @@ fn test_set_active_tab_color() {
 }
 
 #[test]
+fn test_cycle_active_tab_color_uses_resolved_color_and_only_mutates_the_active_tab() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let active = workspace.active_tab_index;
+            let inactive = 0;
+            workspace.tabs[inactive].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace.tabs[inactive].in_multi_selection = true;
+            workspace.tabs[active].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "an uncolored active tab should start at red"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                "red should advance to green"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Yellow),
+                "green should advance to yellow"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "yellow should advance to blue"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "blue should advance to magenta"
+            );
+            workspace.tabs[active].default_directory_color = Some(AnsiColorIdentifier::Yellow);
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan),
+                "magenta should advance to cyan"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Cleared,
+                "cyan should advance to an explicit clear"
+            );
+            assert_eq!(
+                workspace.tabs[active].color(),
+                None,
+                "an explicit clear should suppress the directory-derived color"
+            );
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "the invocation after an explicit clear should restart at red"
+            );
+
+            assert_eq!(
+                workspace.tabs[inactive].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "the inactive tab should not change"
+            );
+            assert!(workspace.tabs[inactive].in_multi_selection);
+            assert!(workspace.tabs[active].in_multi_selection);
+
+            workspace.tabs[active].selected_color = SelectedTabColor::Unset;
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "a directory-derived yellow should advance to blue"
+            );
+
+            workspace.active_tab_index = workspace.tabs.len();
+            let active_selection = workspace.tabs[active].selected_color;
+            let inactive_selection = workspace.tabs[inactive].selected_color;
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            workspace.active_tab_index = active;
+            assert_eq!(workspace.tabs[active].selected_color, active_selection);
+            assert_eq!(workspace.tabs[inactive].selected_color, inactive_selection);
+        });
+    });
+}
+
+#[test]
+fn test_cycle_active_tab_color_mutates_group_color_without_member_overrides() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            workspace.add_terminal_tab(false, ctx);
+            let active = workspace.active_tab_index;
+            let grouped_sibling = active - 1;
+            let unrelated = 0;
+
+            let mut group = TabGroup::new();
+            let group_id = group.id;
+            group.color = SelectedTabColor::Color(AnsiColorIdentifier::Yellow);
+            workspace.tab_groups.insert(group_id, group);
+            let mut unrelated_group = TabGroup::new();
+            let unrelated_group_id = unrelated_group.id;
+            unrelated_group.color = SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace
+                .tab_groups
+                .insert(unrelated_group_id, unrelated_group);
+            workspace.tabs[active].group_id = Some(group_id);
+            workspace.tabs[grouped_sibling].group_id = Some(group_id);
+            workspace.tabs[active].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta);
+            workspace.tabs[grouped_sibling].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Green);
+            workspace.tabs[unrelated].selected_color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Red);
+            workspace.tabs[active].in_multi_selection = true;
+            workspace.tabs[unrelated].in_multi_selection = true;
+
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Blue),
+                "the active tab's group should advance from yellow to blue"
+            );
+            assert_eq!(
+                workspace.tabs[active].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "the active member override should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tabs[grouped_sibling].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Green),
+                "the sibling member override should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tabs[unrelated].selected_color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Red),
+                "an unrelated tab should remain unchanged"
+            );
+            assert_eq!(
+                workspace.tab_groups[&unrelated_group_id].color,
+                SelectedTabColor::Color(AnsiColorIdentifier::Magenta),
+                "an unrelated group should remain unchanged"
+            );
+            assert!(workspace.tabs[active].in_multi_selection);
+            assert!(workspace.tabs[unrelated].in_multi_selection);
+
+            workspace.tab_groups.get_mut(&group_id).unwrap().color =
+                SelectedTabColor::Color(AnsiColorIdentifier::Cyan);
+            workspace.handle_action(&WorkspaceAction::CycleActiveTabColor, ctx);
+            assert_eq!(
+                workspace.tab_groups[&group_id].color,
+                SelectedTabColor::Cleared,
+                "cyan should explicitly clear the group color"
+            );
+        });
+    });
+}
+
+#[test]
 fn test_workspace_sessions_retrieves_tabs() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
@@ -1231,9 +1967,11 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == pane_id })
+            );
 
             // Add a tab and check if workspace_sessions finds the second session from the new tab.
             workspace.add_terminal_tab(false, ctx);
@@ -1242,10 +1980,47 @@ fn test_workspace_sessions_retrieves_tabs() {
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(0).unwrap()))
                 .expect("WindowId was not retrieved.");
 
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
+            );
         });
+    });
+}
+
+#[test]
+fn ctrl_t_action_forwards_to_pty_when_no_external_widget_detected() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let _flag = FeatureFlag::ShellWidgetHandoff.override_enabled(true);
+        let workspace = mock_workspace(&mut app);
+
+        let terminal_view = workspace.update(&mut app, |workspace, ctx| {
+            workspace
+                .active_session_view(ctx)
+                .expect("mock_workspace should have an active session")
+        });
+
+        let pty_writes: std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>> = Default::default();
+        let writes = pty_writes.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&terminal_view, move |_, event, _| {
+                if let crate::terminal::view::Event::WriteBytesToPty { bytes } = event {
+                    writes.borrow_mut().push(bytes.to_vec());
+                }
+            });
+        });
+
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(&WorkspaceAction::TriggerExternalCtrlTFileSearch, ctx);
+        });
+
+        assert_eq!(
+            *pty_writes.borrow(),
+            vec![vec![0x14]],
+            "ctrl-t must be forwarded to the pty as a plain keystroke when no external widget is detected"
+        );
     });
 }
 
@@ -1269,9 +2044,11 @@ fn test_workspace_sessions_retrieves_panes() {
                 .get_pane_group_view(0)
                 .map(|tab| tab.read(ctx, |tab, _ctx| tab.pane_id_by_index(1).unwrap()))
                 .expect("WindowId was not retrieved.");
-            assert!(workspace
-                .workspace_sessions(ctx.window_id(), ctx)
-                .any(|x| { x.pane_view_locator().pane_id == new_pane_id }));
+            assert!(
+                workspace
+                    .workspace_sessions(ctx.window_id(), ctx)
+                    .any(|x| { x.pane_view_locator().pane_id == new_pane_id })
+            );
         });
     });
 }
@@ -2126,8 +2903,11 @@ fn test_tab_context_menu_share_session_items() {
         workspace.read(&app, |workspace, ctx| {
             let items =
                 workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
-            assert!(items[0]
-                .is_approximately_same_item_as(&MenuItemFields::new("Stop sharing").into_item()));
+            assert!(
+                items[0].is_approximately_same_item_as(
+                    &MenuItemFields::new("Stop sharing").into_item()
+                )
+            );
             assert!(items[1].is_approximately_same_item_as(
                 &MenuItemFields::new("Stop sharing all").into_item()
             ));
@@ -2148,8 +2928,11 @@ fn test_tab_context_menu_share_session_items() {
         workspace.read(&app, |workspace, ctx| {
             let items =
                 workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
-            assert!(items[0]
-                .is_approximately_same_item_as(&MenuItemFields::new("Share session").into_item()));
+            assert!(
+                items[0].is_approximately_same_item_as(
+                    &MenuItemFields::new("Share session").into_item()
+                )
+            );
             assert!(items[1].is_approximately_same_item_as(
                 &MenuItemFields::new("Stop sharing all").into_item()
             ));
@@ -2165,8 +2948,11 @@ fn test_tab_context_menu_share_session_items() {
         workspace.read(&app, |workspace, ctx| {
             let items =
                 workspace.tabs[1].menu_items(1, 3, &workspace.tab_groups, false, true, true, ctx);
-            assert!(items[0]
-                .is_approximately_same_item_as(&MenuItemFields::new("Share session").into_item()));
+            assert!(
+                items[0].is_approximately_same_item_as(
+                    &MenuItemFields::new("Share session").into_item()
+                )
+            );
             assert!(items[1].is_approximately_same_item_as(&MenuItem::Separator));
         });
     });
@@ -2764,9 +3550,11 @@ fn test_vertical_tabs_panel_restored_open_when_show_in_restored_windows_enabled(
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
-                report_if_error!(settings
-                    .show_vertical_tab_panel_in_restored_windows
-                    .set_value(true, ctx));
+                report_if_error!(
+                    settings
+                        .show_vertical_tab_panel_in_restored_windows
+                        .set_value(true, ctx)
+                );
             });
         });
 
@@ -3003,6 +3791,47 @@ fn test_pointer_opened_tab_configs_menu_does_not_select_top_item() {
                     .read(ctx, |menu, _| menu.selected_index()),
                 None
             );
+        });
+    });
+}
+
+#[test]
+fn test_new_session_menu_is_capped_to_window_height() {
+    let _tab_configs_guard = FeatureFlag::TabConfigs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.update(&mut app, |workspace, ctx| {
+            let window_height = ctx
+                .windows()
+                .platform_window(ctx.window_id())
+                .expect("expected workspace window")
+                .size()
+                .y();
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            let expected_height =
+                (window_height - NEW_SESSION_MENU_WINDOW_MARGIN - NEW_SESSION_MENU_CHROME_HEIGHT)
+                    .max(NEW_SESSION_MENU_MIN_HEIGHT);
+            let menu_height = workspace.new_session_menu_max_height(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+
+            assert!((menu_height - expected_height).abs() < f32::EPSILON);
+
+            workspace.open_new_session_dropdown_menu(
+                crate::workspace::action::NewSessionMenuAnchor::AddTabButton(Vector2F::zero()),
+                ctx,
+            );
+            assert!(workspace.show_new_session_dropdown_menu.is_some());
         });
     });
 }
@@ -3289,11 +4118,13 @@ fn test_worktree_sidecar_search_editor_proxies_navigation_and_escape() {
             assert!(workspace.show_new_session_dropdown_menu.is_none());
             assert!(!workspace.show_new_session_sidecar);
             assert!(workspace.worktree_sidecar_search_query.is_empty());
-            assert!(workspace
-                .worktree_sidecar_search_editor
-                .as_ref(ctx)
-                .buffer_text(ctx)
-                .is_empty());
+            assert!(
+                workspace
+                    .worktree_sidecar_search_editor
+                    .as_ref(ctx)
+                    .buffer_text(ctx)
+                    .is_empty()
+            );
         });
     });
 }
@@ -3393,9 +4224,11 @@ fn test_vertical_tabs_context_menu_does_not_show_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .workspace_decoration_visibility
-                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
                 report_if_error!(settings.use_vertical_tabs.set_value(true, ctx));
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
@@ -3420,9 +4253,11 @@ fn test_standard_tab_context_menu_shows_hover_only_tab_bar() {
 
         workspace.update(&mut app, |workspace, ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .workspace_decoration_visibility
-                    .set_value(WorkspaceDecorationVisibility::OnHover, ctx));
+                report_if_error!(
+                    settings
+                        .workspace_decoration_visibility
+                        .set_value(WorkspaceDecorationVisibility::OnHover, ctx)
+                );
             });
             workspace.should_show_ai_assistant_warm_welcome = false;
 
@@ -3456,10 +4291,12 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
                     .current_workspace_state
                     .is_agent_management_view_open
             );
-            assert!(workspace
-                .agent_management_view
-                .as_ref(ctx)
-                .is_showing_setup_guide());
+            assert!(
+                workspace
+                    .agent_management_view
+                    .as_ref(ctx)
+                    .is_showing_setup_guide()
+            );
 
             workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
             assert!(
@@ -3467,10 +4304,12 @@ fn test_open_cloud_agent_setup_guide_action_opens_management_view_and_is_idempot
                     .current_workspace_state
                     .is_agent_management_view_open
             );
-            assert!(workspace
-                .agent_management_view
-                .as_ref(ctx)
-                .is_showing_setup_guide());
+            assert!(
+                workspace
+                    .agent_management_view
+                    .as_ref(ctx)
+                    .is_showing_setup_guide()
+            );
         });
     });
 }
@@ -3805,10 +4644,12 @@ fn test_close_tab_group_removes_group_and_members() {
 
             // All group members are closed and the group entry is removed.
             assert!(!workspace.tab_groups.contains_key(&group_id));
-            assert!(workspace
-                .tabs
-                .iter()
-                .all(|tab| tab.group_id != Some(group_id)));
+            assert!(
+                workspace
+                    .tabs
+                    .iter()
+                    .all(|tab| tab.group_id != Some(group_id))
+            );
         });
     });
 }
@@ -3824,9 +4665,11 @@ fn test_new_tab_with_after_all_tabs_setting_lands_top_level_at_end() {
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .new_tab_placement
-                    .set_value(NewTabPlacement::AfterAllTabs, ctx));
+                report_if_error!(
+                    settings
+                        .new_tab_placement
+                        .set_value(NewTabPlacement::AfterAllTabs, ctx)
+                );
             });
         });
 
@@ -3878,9 +4721,11 @@ fn test_new_tab_with_after_current_tab_setting_lands_after_active_tab_in_group()
         initialize_app(&mut app);
         app.update(|ctx| {
             TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .new_tab_placement
-                    .set_value(NewTabPlacement::AfterCurrentTab, ctx));
+                report_if_error!(
+                    settings
+                        .new_tab_placement
+                        .set_value(NewTabPlacement::AfterCurrentTab, ctx)
+                );
             });
         });
 
@@ -4254,4 +5099,375 @@ fn test_pin_tab_on_grouped_tab_extracts_then_pins() {
             assert!(!workspace.tabs[2].pinned);
         });
     });
+}
+
+/// Regression for the tools-panel tab visibility toggles surfaced in the
+/// Appearance settings page: toggling a tab's backing setting must add/remove
+/// that tab from the tools panel live, and re-enabling Warp Drive must make it
+/// selectable again (the original report was that Warp Drive could vanish from
+/// the tools panel with no way back).
+#[test]
+fn test_tools_panel_warp_drive_toggle_updates_available_views() {
+    // Force the non-anonymous path so `is_warp_drive_enabled` follows the
+    // `enable_warp_drive` setting rather than the auth state.
+    let _skip_anon_guard = FeatureFlag::SkipFirebaseAnonymousUser.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+
+        // Warp Drive is enabled by default, so it is an available tools-panel
+        // tab and can be made the active view.
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Warp Drive should be an available tools-panel tab by default"
+            );
+            workspace.left_panel_view.update(ctx, |lp, ctx| {
+                lp.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+            });
+            assert_eq!(
+                workspace.left_panel_view.as_ref(ctx).active_view(),
+                ToolPanelView::WarpDrive,
+                "Warp Drive should be selectable as the active view"
+            );
+        });
+
+        // Turning the toggle off (via its backing setting) removes Warp Drive
+        // from the tools panel; if other tabs remain the active view falls back
+        // to one of them.
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(false, ctx)
+                    .expect("disable warp drive");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                !workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Disabling the setting should remove Warp Drive from the tools panel"
+            );
+            if !workspace.left_panel_views.is_empty() {
+                assert_ne!(
+                    workspace.left_panel_view.as_ref(ctx).active_view(),
+                    ToolPanelView::WarpDrive,
+                    "Active view should fall back to a remaining tab when Warp Drive is removed"
+                );
+            }
+        });
+
+        // Re-enabling restores Warp Drive as a selectable tab.
+        app.update(|ctx| {
+            WarpDriveSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .enable_warp_drive
+                    .set_value(true, ctx)
+                    .expect("re-enable warp drive");
+            });
+        });
+        workspace.update(&mut app, |workspace, ctx| {
+            assert!(
+                workspace
+                    .left_panel_views
+                    .contains(&ToolPanelView::WarpDrive),
+                "Re-enabling the setting should restore Warp Drive to the tools panel"
+            );
+            workspace.left_panel_view.update(ctx, |lp, ctx| {
+                lp.handle_action_with_force_open(&LeftPanelAction::WarpDrive, false, ctx);
+            });
+            assert_eq!(
+                workspace.left_panel_view.as_ref(ctx).active_view(),
+                ToolPanelView::WarpDrive,
+                "Warp Drive should be selectable again after re-enabling"
+            );
+        });
+    });
+}
+
+#[cfg(target_family = "wasm")]
+mod simplified_wasm_tab_bar {
+    use chrono::Utc;
+    use uuid::Uuid;
+    use warpui::{AppContext, View, ViewContext};
+
+    use super::*;
+    use crate::ai::agent::api::ServerConversationToken;
+    use crate::ai::agent::conversation::{
+        AIAgentHarness, AIConversation, ServerAIConversationMetadata,
+    };
+    use crate::ai::ambient_agents::task::TaskPrincipalInfo;
+    use crate::ai::ambient_agents::{
+        AgentSource, AmbientAgentTask, AmbientAgentTaskId, AmbientAgentTaskState,
+    };
+    use crate::ai::blocklist::history_model::CloudConversationData;
+    use crate::auth::user::TEST_USER_UID;
+    use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+    use crate::persistence::model::ConversationUsageMetadata;
+    use crate::server::ids::ServerId;
+
+    fn mock_workspace_from_cloud_conversation(app: &mut App) -> ViewHandle<Workspace> {
+        let global_resource_handles = GlobalResourceHandles::mock(app);
+        let (_, workspace) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
+            Workspace::new(
+                global_resource_handles,
+                None,
+                NewWorkspaceSource::FromCloudConversationId {
+                    conversation_id: ServerConversationToken::new("test-server-token".to_string()),
+                },
+                ctx,
+            )
+        });
+        workspace
+    }
+
+    fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
+        Uuid::new_v4().to_string().parse().unwrap()
+    }
+
+    fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAgentTask {
+        let now = Utc::now();
+        AmbientAgentTask {
+            task_id,
+            parent_run_id: None,
+            title: "Owned task".to_string(),
+            state: AmbientAgentTaskState::Succeeded,
+            prompt: "test".to_string(),
+            created_at: now,
+            started_at: Some(now),
+            updated_at: now,
+            run_time: Some("PT1S".parse().unwrap()),
+            status_message: None,
+            source: Some(AgentSource::CloudMode),
+            execution_location: None,
+            session_id: None,
+            session_link: None,
+            executor: None,
+            creator: Some(TaskPrincipalInfo {
+                creator_type: "USER".to_string(),
+                uid: TEST_USER_UID.to_string(),
+                display_name: None,
+            }),
+            conversation_id: None,
+            request_usage: None,
+            is_sandbox_running: false,
+            agent_config_snapshot: None,
+            artifacts: vec![],
+            last_event_sequence: None,
+            children: vec![],
+            debug_agent_available: false,
+            scope: None,
+        }
+    }
+
+    fn mock_server_metadata() -> ServerMetadata {
+        ServerMetadata {
+            uid: ServerId::default(),
+            revision: Revision::now(),
+            metadata_last_updated_ts: Utc::now().into(),
+            trashed_ts: None,
+            folder_id: None,
+            is_welcome_object: false,
+            creator_uid: None,
+            last_editor_uid: None,
+            current_editor_uid: None,
+        }
+    }
+
+    fn mock_server_permissions() -> ServerPermissions {
+        ServerPermissions {
+            space: Owner::mock_current_user(),
+            guests: Vec::new(),
+            anyone_link_sharing: None,
+            permissions_last_updated_ts: Utc::now().into(),
+        }
+    }
+
+    fn test_server_conversation_metadata(
+        task_id: Option<AmbientAgentTaskId>,
+    ) -> ServerAIConversationMetadata {
+        ServerAIConversationMetadata {
+            title: "Restored cloud conversation".to_string(),
+            working_directory: None,
+            harness: AIAgentHarness::Oz,
+            usage: ConversationUsageMetadata {
+                was_summarized: false,
+                context_window_usage: 0.0,
+                credits_spent: 0.0,
+                platform_credits_spent: 0.0,
+                total_provider_cost_in_cents: None,
+                credits_spent_for_last_block: None,
+                charged_usage_for_last_block: None,
+                total_charged_usage: None,
+                token_usage: vec![],
+                tool_usage_metadata: Default::default(),
+                context_window_segments: Vec::new(),
+            },
+            metadata: mock_server_metadata(),
+            creator: None,
+            permissions: mock_server_permissions(),
+            ambient_agent_task_id: task_id,
+            server_conversation_token: ServerConversationToken::new(
+                "test-server-token".to_string(),
+            ),
+            artifacts: Vec::new(),
+        }
+    }
+
+    fn cloud_conversation_with_ambient_task(task_id: AmbientAgentTaskId) -> CloudConversationData {
+        let mut conversation = AIConversation::new(false, false);
+        conversation.set_task_id(task_id);
+        conversation.set_server_metadata(test_server_conversation_metadata(Some(task_id)));
+        CloudConversationData::Oz(Box::new(conversation))
+    }
+
+    fn restore_owned_handoff_cloud_cloud_pane(
+        workspace: &mut Workspace,
+        ctx: &mut ViewContext<Workspace>,
+    ) -> AmbientAgentTaskId {
+        let task_id = new_ambient_agent_task_id();
+        AgentConversationsModel::handle(ctx).update(ctx, |model, _| {
+            model.insert_task_for_test(ambient_agent_task_for_current_user(task_id));
+        });
+        workspace.active_tab_pane_group().update(ctx, |panes, ctx| {
+            panes.load_data_into_conversation_transcript_viewer(
+                cloud_conversation_with_ambient_task(task_id),
+                Some(task_id),
+                ctx,
+            );
+        });
+        task_id
+    }
+
+    fn assert_owned_handoff_restore_is_chrome_hostile(workspace: &Workspace, ctx: &AppContext) {
+        let terminal_view = workspace
+            .active_tab_pane_group()
+            .as_ref(ctx)
+            .focused_session_view(ctx)
+            .expect("restored pane should have an active terminal view");
+        let model = terminal_view.as_ref(ctx).model.lock();
+        assert!(!model.is_conversation_transcript_viewer());
+        assert!(matches!(
+            model.shared_session_status(),
+            SharedSessionStatus::NotShared
+        ));
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_none_for_empty_workspace() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            workspace.read(&app, |workspace, ctx| {
+                assert!(!workspace.opened_from_content_deep_link);
+                assert_eq!(workspace.get_simplified_wasm_tab_bar_content(ctx), None);
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_some_for_shared_session_viewer() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace_viewing_shared_session(&mut app);
+            workspace.read(&app, |workspace, ctx| {
+                assert!(workspace.opened_from_content_deep_link);
+                assert!(matches!(
+                    workspace.get_simplified_wasm_tab_bar_content(ctx),
+                    Some(SimplifiedWasmTabBarContent::SharedSession { .. })
+                ));
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_some_for_drive_object_without_deep_link() {
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                assert!(!workspace.opened_from_content_deep_link);
+                workspace.active_tab_pane_group().update(ctx, |panes, ctx| {
+                    panes.add_pane_with_direction(
+                        Direction::Right,
+                        NotebookPane::new(ctx.add_typed_action_view(NotebookView::new), ctx),
+                        true,
+                        ctx,
+                    );
+                });
+                assert!(
+                    workspace
+                        .active_tab_pane_group()
+                        .as_ref(ctx)
+                        .focused_pane_id(ctx)
+                        .is_warp_drive_object_pane()
+                );
+                assert_eq!(
+                    workspace.get_simplified_wasm_tab_bar_content(ctx),
+                    Some(SimplifiedWasmTabBarContent::WarpDriveObject)
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_is_none_after_owned_handoff_restore_without_deep_link() {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+                restore_owned_handoff_cloud_cloud_pane(workspace, ctx);
+                assert!(!workspace.opened_from_content_deep_link);
+                assert_owned_handoff_restore_is_chrome_hostile(workspace, ctx);
+                assert_eq!(workspace.get_simplified_wasm_tab_bar_content(ctx), None);
+                assert!(
+                    !workspace
+                        .keymap_context(ctx)
+                        .set
+                        .contains("Workspace_CloudConversationWebViewer")
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn simplified_wasm_tab_bar_stays_some_after_owned_handoff_cloud_cloud_restore() {
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
+        let _setup_v2 = FeatureFlag::CloudModeSetupV2.override_enabled(true);
+        let _handoff = FeatureFlag::HandoffCloudCloud.override_enabled(true);
+
+        App::test((), |mut app| async move {
+            initialize_app(&mut app);
+            let workspace = mock_workspace_from_cloud_conversation(&mut app);
+            workspace.update(&mut app, |workspace, ctx| {
+            let task_id = restore_owned_handoff_cloud_cloud_pane(workspace, ctx);
+            assert!(workspace.opened_from_content_deep_link);
+            assert_owned_handoff_restore_is_chrome_hostile(workspace, ctx);
+            assert_eq!(
+                workspace.get_simplified_wasm_tab_bar_content(ctx),
+                Some(SimplifiedWasmTabBarContent::ConversationTranscript {
+                    task_id: Some(task_id),
+                })
+            );
+            assert!(
+                workspace
+                    .keymap_context(ctx)
+                    .set
+                    .contains("Workspace_CloudConversationWebViewer"),
+                "deep-linked conversation viewers must keep the web-viewer context so the command palette stays disabled"
+            );
+        });
+        });
+    }
 }

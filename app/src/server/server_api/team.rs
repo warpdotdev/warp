@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use cynic::{MutationBuilder, QueryBuilder};
 #[cfg(test)]
@@ -62,6 +62,7 @@ use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectEventEntrypoint;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
 use crate::server::ids::ServerId;
+use crate::workspaces::gql_convert::workspaces_metadata_response_from_gql;
 use crate::workspaces::team::{DiscoverableTeam, MembershipRole};
 use crate::workspaces::user_workspaces::{CreateTeamResponse, WorkspacesMetadataWithPricing};
 use crate::workspaces::workspace::Workspace;
@@ -136,7 +137,7 @@ pub trait TeamClient: 'static + Send + Sync {
     ) -> Result<WorkspacesMetadataWithPricing>;
 
     async fn reset_invite_links(&self, team_uid: ServerId)
-        -> Result<WorkspacesMetadataWithPricing>;
+    -> Result<WorkspacesMetadataWithPricing>;
 
     async fn set_is_invite_link_enabled(
         &self,
@@ -177,7 +178,7 @@ impl TeamClient for ServerApi {
         let metadata = match response.user {
             warp_graphql::queries::get_workspaces_metadata_for_user::UserResult::UserOutput(
                 user_output,
-            ) => user_output.user.into(),
+            ) => workspaces_metadata_response_from_gql(user_output.user, self.is_service_account()),
             warp_graphql::queries::get_workspaces_metadata_for_user::UserResult::Unknown => {
                 return Err(anyhow!("Unable to fetch workspaces metadata"));
             }
@@ -222,12 +223,12 @@ impl TeamClient for ServerApi {
                 }
             }
             AddInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
             }
             AddInviteLinkDomainRestrictionResult::Unknown => {
                 return Err(anyhow!(
                     "unknown error while adding invite link domain restriction"
-                ))
+                ));
             }
         }
 
@@ -261,12 +262,12 @@ impl TeamClient for ServerApi {
                 }
             }
             DeleteInviteLinkDomainRestrictionResult::UserFacingError(user_facing_error) => {
-                return Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+                return Err(anyhow!(get_user_facing_error_message(user_facing_error)));
             }
             DeleteInviteLinkDomainRestrictionResult::Unknown => {
                 return Err(anyhow!(
                     "unknown error while deleting invite link domain restriction"
-                ))
+                ));
             }
         }
 

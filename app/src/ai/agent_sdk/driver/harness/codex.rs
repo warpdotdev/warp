@@ -13,6 +13,8 @@ use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
+use warp_core::safe_info;
+use warp_errors::report_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -20,25 +22,25 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, rehydrate_codex_transcript,
-    CodexResumeInfo, CodexTranscriptEnvelope,
+    CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
+    parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
-    write_temp_file, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness,
+    HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
-use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
-use crate::server::server_api::harness_support::{upload_to_target, HarnessSupportClient};
 use crate::server::server_api::ServerApi;
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
+use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
-use crate::terminal::CLIAgent;
 
 pub(crate) struct CodexHarness;
 
@@ -86,6 +88,9 @@ impl ThirdPartyHarness for CodexHarness {
             // OAuth refresh failures — all five Codex variants share this
             // substring (see upstream session/token messages).
             "could not be refreshed",
+            // Generically check for invalid request errors.
+            // Keep this last so more specific patterns can be matched first.
+            "\"type\": \"invalid_request_error\"",
         ]
     }
 
@@ -117,7 +122,8 @@ impl ThirdPartyHarness for CodexHarness {
         system_prompt: Option<&str>,
         resumption_prompt: Option<&str>,
         context: Option<&str>,
-        working_dir: &Path,
+        workspace_root: &Path,
+        harness_working_dir: &Path,
         _task_id: Option<AmbientAgentTaskId>,
         server_api: Arc<ServerApi>,
         terminal_driver: ModelHandle<TerminalDriver>,
@@ -129,7 +135,8 @@ impl ThirdPartyHarness for CodexHarness {
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
         prepare_codex_environment_config(
-            working_dir,
+            workspace_root,
+            harness_working_dir,
             system_prompt,
             resolved_env_vars,
             resolved_secrets,
@@ -148,15 +155,15 @@ impl ThirdPartyHarness for CodexHarness {
         // to the user-turn prompt so codex treats it as immediate intent.
         // Order: resumption_prompt → context → prompt
         let mut parts: Vec<&str> = Vec::new();
-        if let Some(preamble) = resumption_prompt {
-            if !preamble.is_empty() {
-                parts.push(preamble);
-            }
+        if let Some(preamble) = resumption_prompt
+            && !preamble.is_empty()
+        {
+            parts.push(preamble);
         }
-        if let Some(ctx) = context {
-            if !ctx.is_empty() {
-                parts.push(ctx);
-            }
+        if let Some(ctx) = context
+            && !ctx.is_empty()
+        {
+            parts.push(ctx);
         }
         parts.push(prompt);
         let owned_prompt = parts.join("\n\n");
@@ -165,7 +172,7 @@ impl ThirdPartyHarness for CodexHarness {
             self.cli_agent().command_prefix(),
             &owned_prompt,
             system_prompt,
-            working_dir,
+            harness_working_dir,
             client,
             terminal_driver,
             codex_resume,
@@ -229,7 +236,7 @@ impl CodexHarnessRunner {
         cli_command: &str,
         prompt: &str,
         _system_prompt: Option<&str>,
-        _working_dir: &Path,
+        harness_working_dir: &Path,
         client: Arc<dyn HarnessSupportClient>,
         terminal_driver: ModelHandle<TerminalDriver>,
         resume: Option<CodexResumeInfo>,
@@ -243,7 +250,7 @@ impl CodexHarnessRunner {
                 session_id,
                 mut envelope,
             }) => {
-                let continuation = rehydrate_codex_transcript(&mut envelope, _working_dir)
+                let continuation = rehydrate_codex_transcript(&mut envelope, harness_working_dir)
                     .map_err(AgentDriverError::ConfigBuildFailed)?;
                 (
                     Some(session_id),
@@ -322,7 +329,7 @@ impl HarnessRunner for CodexHarnessRunner {
                             .create_external_conversation(CODEX_CLI_FORMAT)
                             .await
                             .map_err(|e| {
-                                log::error!("Failed to create external conversation: {e}");
+                                report_error!(&e);
                                 AgentDriverError::ConfigBuildFailed(e)
                             })
                     })
@@ -364,6 +371,24 @@ impl HarnessRunner for CodexHarnessRunner {
             })
             .await
             .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending /exit"))
+    }
+
+    async fn exit_followup(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        // Retry with a bare Enter shortly after `/exit`, in case the first
+        // write was dropped (e.g. the block was transiently under agent
+        // control) or Codex is sitting at a confirmation prompt. No
+        // numbered confirmation dialog analogous to Claude's has been
+        // observed for Codex; this is a blind retry, not a targeted dismissal.
+        log::info!("Sending exit follow-up (Enter) to Codex CLI");
+        let terminal_driver = self.terminal_driver.clone();
+        foreground
+            .spawn(move |_, ctx| {
+                terminal_driver.update(ctx, |driver, ctx| {
+                    driver.send_bare_enter_to_cli(ctx);
+                });
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Agent driver dropped while sending exit follow-up"))
     }
 
     /// Capture the codex session ID from the `SessionStart` event picked up by the `CLIAgentSessionsModel`.
@@ -513,7 +538,8 @@ const CODEX_MODEL_REASONING_EFFORT_KEY: &str = "model_reasoning_effort";
 /// release to change this.
 const CODEX_MODEL_MIGRATIONS_TARGET: &str = "gpt-5.4";
 fn prepare_codex_environment_config(
-    working_dir: &Path,
+    workspace_root: &Path,
+    harness_working_dir: &Path,
     system_prompt: Option<&str>,
     resolved_env_vars: &HashMap<OsString, OsString>,
     resolved_secrets: &HashMap<String, ManagedSecretValue>,
@@ -538,19 +564,58 @@ fn prepare_codex_environment_config(
 
     prepare_codex_config_toml(
         &codex_dir.join(CODEX_CONFIG_TOML_FILE_NAME),
-        working_dir,
+        harness_working_dir,
         resolved_mcp_servers,
         third_party_harness_model_config,
         openai_base_url.as_deref(),
     )?;
+    publish_skills_for_codex(workspace_root, harness_working_dir);
     Ok(())
 }
 
+/// Publish configured and eligible bundled skills under
+/// `<harness_working_dir>/.agents/skills`, so Codex sees the same skills
+/// available to the Warp driver.
+///
+/// Relative source directories are resolved from the workspace root, matching
+/// Oz. The links are published into the harness working directory because
+/// Codex discovers `.agents/skills` by walking up from its starting directory
+/// to the repository root (falling back to just the starting directory itself
+/// when no repository is found). This also keeps concurrent tasks from
+/// publishing into a shared home directory. A published skill overrides any
+/// existing entry with the same name (see
+/// `skill_dirs_publish::publish_skill`), with the conflict-resolution behavior
+/// depending on whether this run is sandboxed (see
+/// `warp_isolation_platform::detect`).
+fn publish_skills_for_codex(workspace_root: &Path, harness_working_dir: &Path) {
+    let skill_root = harness_working_dir.join(".agents").join("skills");
+    let is_sandbox = warp_isolation_platform::detect().is_some();
+    let published = super::skill_dirs_publish::publish_skills_for_harness(
+        &skill_root,
+        workspace_root,
+        is_sandbox,
+    );
+    super::skill_dirs_publish::exclude_published_skill_paths_from_git(
+        harness_working_dir,
+        &published,
+    );
+    if !published.is_empty() {
+        let published = published.len();
+        safe_info!(
+            safe: ("Published {published} skill(s) to the Codex skill root"),
+            full: (
+                "Published {published} skill(s) to Codex skill root {}",
+                skill_root.display()
+            )
+        );
+    }
+}
+
 fn codex_config_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var(CODEX_HOME_ENV) {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Ok(dir) = std::env::var(CODEX_HOME_ENV)
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     dirs::home_dir()
         .map(|home| home.join(CODEX_CONFIG_DIR))

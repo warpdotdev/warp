@@ -14,8 +14,8 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, ViewContext, ViewHandle};
 
 use crate::appearance::Appearance;
-use crate::resource_center::section_views::feature_section::FeatureSection;
 use crate::resource_center::TipAction;
+use crate::resource_center::section_views::feature_section::FeatureSection;
 
 pub const HEADER_FONT_SIZE: f32 = 16.;
 pub const SECTION_HEADER_FONT_SIZE: f32 = 16.;

@@ -1,14 +1,15 @@
 use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
-    ActivePrompt, AgentPromptFailureReason, CLIAgentSessionState, CommandExecutionFailureReason,
-    ControlAction, ControlActionFailureReason, LongRunningCommandAgentInteraction,
-    SelectedAgentModel, UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
+    ActivePrompt, AgentPromptFailureReason, AgentPromptRequest, CLIAgentSessionState,
+    CommandExecutionFailureReason, ControlAction, ControlActionFailureReason,
+    LongRunningCommandAgentInteraction, ParticipantId, SelectedAgentModel,
+    UniversalDeveloperInputContextUpdate, WriteToPtyFailureReason,
 };
 #[cfg(not(any(test, feature = "integration_tests")))]
 use session_sharing_protocol::common::{
@@ -21,11 +22,14 @@ use session_sharing_protocol::sharer::{
 };
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::send_telemetry_from_ctx;
-use warpui::{AppContext, ModelHandle, SingletonEntity, ViewHandle, WindowId};
+use warp_errors::report_error;
+use warpui::{AppContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle, WindowId};
 
 use super::terminal_manager::{TerminalManager, TerminalSurfaceInit, TerminalSurfaceResult};
+use crate::NetworkStatus;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::AIConversation;
+use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::{
     BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIControllerEvent,
@@ -40,6 +44,7 @@ use crate::features::FeatureFlag;
 use crate::network::{NetworkStatusEvent, NetworkStatusKind};
 use crate::pane_group::TerminalViewResources;
 use crate::persistence::ModelEvent;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{TelemetryAgentViewEntryOrigin, TelemetryEvent};
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
@@ -52,23 +57,25 @@ use crate::terminal::shared_session::presence_manager::PresenceManager;
 use crate::terminal::shared_session::replay_agent_conversations::reconstruct_response_events_from_conversations;
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::shared_handlers::{
-    apply_auto_approve_agent_actions_update, apply_cli_agent_state_update, apply_input_mode_update,
-    apply_selected_agent_model_update, apply_selected_conversation_update,
-    build_selected_conversation_update, RemoteUpdateGuard,
+    RemoteUpdateGuard, apply_auto_approve_agent_actions_update, apply_cli_agent_state_update,
+    apply_input_mode_update, apply_selected_agent_model_update, apply_selected_conversation_update,
+    build_selected_conversation_update,
 };
 use crate::terminal::shared_session::sharer::network::{
-    failed_to_add_guests_user_error, failed_to_initialize_session_user_error,
-    session_terminated_reason_string, Network, NetworkEvent,
+    Network, NetworkEvent, failed_to_add_guests_user_error,
+    failed_to_initialize_session_user_error, session_terminated_reason_string,
 };
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus,
+    SharedSessionStatus, max_session_size,
 };
 use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
 use crate::terminal::writeable_pty::terminal_manager_util::wire_up_remote_server_controller_with_view;
 use crate::terminal::{TerminalManager as TerminalManagerTrait, TerminalModel, TerminalView};
 use crate::view_components::ToastFlavor;
-use crate::NetworkStatus;
+#[cfg(not(any(test, feature = "integration_tests")))]
+use crate::workspaces::user_workspaces::TeamScope;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 
 const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try again.";
 
@@ -79,6 +86,75 @@ const ACL_UPDATE_FAILURE_RESPONSE: &str = "Something went wrong. Please try agai
 /// buffer stays in sync.
 fn should_skip_sharer_op(is_ambient_session: bool, op: &CrdtOperation) -> bool {
     is_ambient_session && matches!(op, CrdtOperation::UpdateSelections(_))
+}
+
+/// Decides whether a no-token agent prompt should be honored against a retained
+/// environment-setup-failure debug session, via the REMOTE-2661
+/// `setupFailureDebugAuthorization` server callback. The sharer cannot authenticate the
+/// participant itself, so anything short of an explicit `Ok(true)` rejects the prompt —
+/// deliberately no local fallback.
+async fn is_setup_failure_debug_prompt_authorized(
+    ai_client: &Arc<dyn crate::server::server_api::ai::AIClient>,
+    task_id: crate::ai::ambient_agents::AmbientAgentTaskId,
+    participant_firebase_uid: Option<crate::auth::UserUid>,
+    workload_token: Option<String>,
+) -> bool {
+    let (Some(participant_firebase_uid), Some(workload_token)) =
+        (participant_firebase_uid, workload_token)
+    else {
+        return false;
+    };
+    ai_client
+        .setup_failure_debug_authorization(
+            task_id,
+            workload_token,
+            participant_firebase_uid.as_string(),
+        )
+        .await
+        .unwrap_or(false)
+}
+
+/// Honors an already-authorized agent prompt: writes it to the CLI harness PTY when one is
+/// active, or executes it against the Oz harness otherwise. Callers must have already checked
+/// that `participant_id` may submit this prompt.
+fn accept_agent_prompt(
+    terminal_view: &ViewHandle<TerminalView>,
+    request: AgentPromptRequest,
+    participant_id: ParticipantId,
+    ctx: &mut AppContext,
+) {
+    let terminal_view_id = terminal_view.id();
+    let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
+        .session(terminal_view_id)
+        .is_some();
+    if has_active_cli_agent {
+        // Reuse the rich input submit pipeline so agent-specific
+        // strategies are applied. Bypasses the rich-input-UI side effects
+        // (telemetry, draft clear, editor buffer clear, pending-image consumption).
+        terminal_view.update(ctx, |view, ctx| {
+            view.submit_text_to_cli_agent_pty(request.prompt.clone(), ctx);
+        });
+        return;
+    }
+
+    // Execute the agent prompt in the Oz-harness case.
+    terminal_view.update(ctx, |view, ctx| {
+        // Restore the sharer's frozen visual state. The buffer is cleared by
+        // system_clear_buffer when SentRequest fires from execute_agent_prompt_for_shared_session.
+        view.input().update(ctx, |input, ctx| {
+            input.unfreeze_agent_input(false, ctx);
+        });
+
+        view.ai_controller().update(ctx, |ai_controller, ctx| {
+            ai_controller.execute_agent_prompt_for_shared_session(
+                request.prompt.clone(),
+                request.server_conversation_token,
+                request.attachments.clone(),
+                participant_id.clone(),
+                ctx,
+            );
+        });
+    });
 }
 
 /// Configuration for constructing the GUI terminal surface.
@@ -114,11 +190,7 @@ pub(crate) fn terminal_view_restored_blocks(
                     .collect();
                 // Because there are multiple conversations that may have interleaved timestamps, we need to sort by start_ts
                 items.sort_by_key(|item| item.start_ts());
-                if items.is_empty() {
-                    None
-                } else {
-                    Some(items)
-                }
+                if items.is_empty() { None } else { Some(items) }
             }
             _ => None,
         })
@@ -131,7 +203,7 @@ pub(crate) fn create_terminal_view_surface(
     ctx: &mut AppContext,
 ) -> TerminalSurfaceResult<
     TerminalView,
-    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext),
+    impl FnOnce(&mut TerminalManager<TerminalView>, &ViewHandle<TerminalView>, &mut AppContext) + use<>,
 > {
     let TerminalSurfaceInit {
         wakeups_rx,
@@ -154,7 +226,11 @@ pub(crate) fn create_terminal_view_surface(
         has_restored_command_blocks,
     } = config;
     let current_prompt = ctx.add_model(|ctx| {
-        CurrentPrompt::new_with_model_events(sessions.clone(), Some(&model_events), ctx)
+        CurrentPrompt::new_with_model_events(
+            sessions.clone(),
+            Some((&model_events, model.clone())),
+            ctx,
+        )
     });
     let prompt_type = ctx.add_model(|ctx| PromptType::new_dynamic(current_prompt.clone(), ctx));
     let view = ctx.add_typed_action_view(window_id, |ctx| {
@@ -265,7 +341,7 @@ fn wire_up_terminal_view_session_sharing(
         });
         if let Some(network) = session_sharer_clone.borrow().as_ref() {
             let Ok(serialized_prompt) = serde_json::to_string(&prompt_snapshot) else {
-                log::error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
+                report_error!("Failed to serialize prompt snapshot to send active prompt update to shared session server");
                 return
             };
             network.update(ctx, |network, _| {
@@ -297,6 +373,7 @@ fn wire_up_terminal_view_session_sharing(
     // Send model selection updates during session sharing
     let session_sharer_for_models = session_sharer.clone();
     let terminal_view_id = view.id();
+    let weak_view_for_models = view.downgrade();
     let model_remote_update_guard = sharer_remote_update_guard.clone();
     ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_prefs, event, ctx| {
         // Only react to agent mode LLM changes
@@ -309,9 +386,15 @@ fn wire_up_terminal_view_session_sharing(
         }
 
         if let Some(network) = session_sharer_for_models.borrow().as_ref() {
+            let Some(window_id) = weak_view_for_models.window_id(ctx) else {
+                return;
+            };
+            let scope = ResolvedTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+            );
             let llm_prefs = LLMPreferences::as_ref(ctx);
             let selected_model_id: String = llm_prefs
-                .get_active_base_model(ctx, Some(terminal_view_id))
+                .get_active_base_model(&scope, ctx, Some(terminal_view_id))
                 .id
                 .clone()
                 .into();
@@ -668,14 +751,13 @@ impl TerminalManager<TerminalView> {
         ai_context_model: &ModelHandle<BlocklistAIContextModel>,
         ctx: &mut AppContext,
     ) {
-        if let Some(network) = session_sharer.borrow().as_ref() {
-            if let Some(update) =
+        if let Some(network) = session_sharer.borrow().as_ref()
+            && let Some(update) =
                 build_selected_conversation_update(agent_view_controller, ai_context_model, ctx)
-            {
-                network.update(ctx, |network, _| {
-                    network.send_universal_developer_input_context_update(update)
-                });
-            }
+        {
+            network.update(ctx, |network, _| {
+                network.send_universal_developer_input_context_update(update)
+            });
         }
     }
 
@@ -735,7 +817,7 @@ impl TerminalManager<TerminalView> {
         } else {
             let current_prompt_snapshot = prompt_type.as_ref(ctx).snapshot(ctx);
             let Ok(serialized_prompt) = serde_json::to_string(&current_prompt_snapshot) else {
-                log::error!(
+                report_error!(
                     "Failed to serialize prompt snapshot to send active prompt update to shared session server"
                 );
                 return;
@@ -748,15 +830,9 @@ impl TerminalManager<TerminalView> {
         });
 
         let (events_tx, events_rx) = async_channel::unbounded();
-        let input_replica_id = terminal_view
-            .as_ref(ctx)
-            .input()
-            .as_ref(ctx)
-            .editor()
-            .as_ref(ctx)
-            .replica_id(ctx);
 
         let scrollback_first_block_index = scrollback_type.first_block_index(&model.lock());
+        let max_session_size = max_session_size(window_id, ctx);
 
         // TODO: rather than picking which constructor we use here,
         // we might want to use a dedicated terminal manager for tests.
@@ -766,14 +842,20 @@ impl TerminalManager<TerminalView> {
                 let network = ctx.add_model(|ctx| Network::new_for_test(
                     model.clone(),
                     events_rx,
-                    scrollback_type,
                     active_prompt,
                     selection,
-                    input_replica_id,
+                    max_session_size,
                     ctx,
                 ));
             } else {
                 let input_config = terminal_view.as_ref(ctx).input_config(ctx);
+                let input_replica_id = terminal_view
+                    .as_ref(ctx)
+                    .input()
+                    .as_ref(ctx)
+                    .editor()
+                    .as_ref(ctx)
+                    .replica_id(ctx);
                 // Compute current auto-approve state from the AI context model
                 let auto_approve_agent_actions = terminal_view
                     .as_ref(ctx)
@@ -844,6 +926,10 @@ impl TerminalManager<TerminalView> {
                     cli_agent_session,
                 };
 
+                let team_uid = ResolvedTeamScope::from_scope(
+                    &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+                )
+                .team_uid();
                 let network = ctx.add_model(|ctx| {
                     Network::new(
                         model.clone(),
@@ -853,9 +939,11 @@ impl TerminalManager<TerminalView> {
                         selection,
                         input_replica_id,
                         terminal_view.id(),
+                        team_uid,
                         universal_developer_input_context,
                         lifetime,
                         source.clone(),
+                        max_session_size,
                         ctx,
                     )
                 });
@@ -967,6 +1055,7 @@ impl TerminalManager<TerminalView> {
                 });
 
                 terminal_view.update(ctx, |view, ctx| {
+                    view.notify_shared_session_link_changed(ctx);
                     let reason_string = failed_to_initialize_session_user_error(reason);
 
                     if matches!(
@@ -1184,6 +1273,7 @@ impl TerminalManager<TerminalView> {
                     view.input().update(ctx, |input, ctx| {
                         input.process_remote_edits(block_id, operations.clone(), ctx);
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::CommandExecutionRequested {
@@ -1243,6 +1333,7 @@ impl TerminalManager<TerminalView> {
                             ctx,
                         );
                     });
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequested { id, bytes } => {
@@ -1288,6 +1379,7 @@ impl TerminalManager<TerminalView> {
 
                 terminal_view.update(ctx, |view, ctx| {
                     view.write_viewer_bytes_to_pty(bytes.clone(), ctx);
+                    emit_shared_session_viewer_input(view, ctx);
                 });
             }
             NetworkEvent::AgentPromptRequested {
@@ -1354,43 +1446,89 @@ impl TerminalManager<TerminalView> {
                         });
                         return;
                     }
+
+                    // REMOTE-2661: a no-token prompt is how a debug conversation bootstraps
+                    // into a retained setup-failure session. The sharer only knows the
+                    // participant's firebase_uid from presence, not a credential, so this must
+                    // be authorized by the server before being honored.
+                    if request.server_conversation_token.is_none() {
+                        let task_id = model.lock().ambient_agent_task_id().filter(|task_id| {
+                            AgentConversationsModel::as_ref(ctx)
+                                .get_task_data(task_id)
+                                .is_some_and(|task| task.is_setup_failure_debug_session_open())
+                        });
+                        if let Some(task_id) = task_id {
+                            let participant_firebase_uid = terminal_view
+                                .as_ref(ctx)
+                                .shared_session_presence_manager()
+                                .and_then(|manager| {
+                                    manager.as_ref(ctx).viewer_firebase_uid(participant_id)
+                                });
+                            let Some(participant_firebase_uid) = participant_firebase_uid else {
+                                log::warn!(
+                                    "Rejecting a no-token agent prompt (REMOTE-2661): participant_id={participant_id} has no resolvable firebase_uid to authorize"
+                                );
+                                network.update(ctx, |network, _ctx| {
+                                    network.send_agent_prompt_rejection(
+                                        id.clone(),
+                                        participant_id.clone(),
+                                        AgentPromptFailureReason::InsufficientPermissions,
+                                    );
+                                });
+                                return;
+                            };
+
+                            let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+                            let id = id.clone();
+                            let participant_id = participant_id.clone();
+                            let request = request.clone();
+                            let terminal_view = terminal_view.clone();
+
+                            network.update(ctx, move |_network, ctx| {
+                                ctx.spawn(
+                                    async move {
+                                        let workload_token =
+                                            warp_isolation_platform::issue_workload_token(Some(
+                                                std::time::Duration::from_secs(60),
+                                            ))
+                                            .await
+                                            .map(|issued| issued.token)
+                                            .ok();
+                                        is_setup_failure_debug_prompt_authorized(
+                                            &ai_client,
+                                            task_id,
+                                            Some(participant_firebase_uid),
+                                            workload_token,
+                                        )
+                                        .await
+                                    },
+                                    move |network, authorized, ctx| {
+                                        if authorized {
+                                            accept_agent_prompt(
+                                                &terminal_view,
+                                                request,
+                                                participant_id,
+                                                ctx,
+                                            );
+                                        } else {
+                                            log::warn!(
+                                                "Rejecting a no-token agent prompt while retaining a setup-failed run (REMOTE-2661): server denied authorization or the call failed"
+                                            );
+                                            network.send_agent_prompt_rejection(
+                                                id,
+                                                participant_id,
+                                                AgentPromptFailureReason::InsufficientPermissions,
+                                            );
+                                        }
+                                    },
+                                );
+                            });
+                            return;
+                        }
+                    }
                 }
 
-                // If a third-party CLI harness (e.g. Claude Code) is running, write
-                // the follow-up prompt directly to the PTY. The CLI handles it as
-                // interactive input. 
-                let terminal_view_id = terminal_view.id();
-                let has_active_cli_agent = CLIAgentSessionsModel::as_ref(ctx)
-                    .session(terminal_view_id)
-                    .is_some();
-                if has_active_cli_agent {
-                    // Reuse the rich input submit pipeline so agent-specific
-                    // strategies are applied. Bypasses the rich-input-UI side effects 
-  					// (telemetry, draft clear, editor buffer clear, pending-image consumption).
-                    terminal_view.update(ctx, |view, ctx| {
-                        view.submit_text_to_cli_agent_pty(request.prompt.clone(), ctx);
-                    });
-                    return;
-                }
-
-                // Execute the agent prompt in the Oz-harness case
-                terminal_view.update(ctx, |view, ctx| {
-                    // Restore the sharer's frozen visual state. The buffer is cleared by
-                    // system_clear_buffer when SentRequest fires from execute_agent_prompt_for_shared_session.
-                    view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_agent_input(false, ctx);
-                    });
-
-                    view.ai_controller().update(ctx, |ai_controller, ctx| {
-                        ai_controller.execute_agent_prompt_for_shared_session(
-                            request.prompt.clone(),
-                            request.server_conversation_token,
-                            request.attachments.clone(),
-                            participant_id.clone(),
-                            ctx,
-                        );
-                    });
-                });
+                accept_agent_prompt(&terminal_view, request.clone(), participant_id.clone(), ctx);
             }
             NetworkEvent::LinkAccessLevelUpdateResponse { response } => {
                 terminal_view.update(ctx, |view, ctx| match response {
@@ -1491,9 +1629,16 @@ impl TerminalManager<TerminalView> {
 
                 if let Some(ref model) = context_update.selected_model {
                     let terminal_view_id = terminal_view.id();
+                    let weak_view_handle = terminal_view.downgrade();
 
                     // Update LLMPreferences to match the selected model received from the server.
-                    apply_selected_agent_model_update(terminal_view_id, model, &active_remote_update, ctx);
+                    apply_selected_agent_model_update(
+                        &weak_view_handle,
+                        terminal_view_id,
+                        model,
+                        &active_remote_update,
+                        ctx,
+                    );
                 }
                 if let Some(ref input_mode) = context_update.input_mode {
                     let weak_view_handle = terminal_view.downgrade();
@@ -2011,6 +2156,19 @@ impl TerminalManagerTrait for TerminalManager<TerminalView> {
     }
 }
 
+/// Reports viewer input on a cloud agent's shared session so the agent driver can treat someone
+/// debugging in the session as activity.
+///
+/// Scoped to those sessions because a cloud agent's sharer is a process that can hold the session
+/// open on the strength of this signal. Ordinary shared sessions have no consumer for it, and
+/// these fire at keystroke frequency.
+fn emit_shared_session_viewer_input(view: &TerminalView, ctx: &mut ViewContext<TerminalView>) {
+    if !view.model.lock().is_shared_ambient_agent_session() {
+        return;
+    }
+    ctx.emit(TerminalViewEvent::SharedSessionViewerInput);
+}
+
 /// Send a Shutdown event to each PTY's event loop and waits for the
 /// event loop to terminate.
 /// This is needed on Windows to ensure all OpenConsole processes are
@@ -2029,3 +2187,7 @@ pub fn shutdown_all_pty_event_loops(ctx: &mut AppContext) {
         })
     })
 }
+
+#[cfg(test)]
+#[path = "terminal_view_adaptor_tests.rs"]
+mod tests;

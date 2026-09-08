@@ -12,6 +12,7 @@ cfg-if.workspace = true
 env_logger.workspace = true
 log.workspace = true
 warp_core.workspace = true
+warp_errors.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 dirs.workspace = true
@@ -33,5 +34,5 @@ warp_web_event_bus.workspace = true
 tempfile.workspace = true
 
 [features]
-crash_reporting = ["dep:sentry", "dep:sentry-log", "warp_core/crash_reporting"]
+crash_reporting = ["dep:sentry", "dep:sentry-log", "warp_errors/crash_reporting"]
 agent_mode_evals = []

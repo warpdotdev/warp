@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng as _};
+use rand::{Rng as _, thread_rng};
 use warp_core::settings::ToggleableSetting;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{
@@ -28,9 +28,9 @@ use crate::view_components::action_button::{
     ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 use crate::view_components::compactible_action_button::{
-    render_compact_and_regular_button_rows, CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD,
+    CompactibleActionButton, MEDIUM_SIZE_SWITCH_THRESHOLD, render_compact_and_regular_button_rows,
 };
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const ACCEPT_LABEL: &str = "Generate tests";
 const CANCEL_LABEL: &str = "Dismiss";

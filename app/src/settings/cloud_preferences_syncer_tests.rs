@@ -10,9 +10,10 @@ use warp_core::user_preferences::GetUserPreferences;
 use warpui::{App, SingletonEntity};
 
 use super::{
-    initialize_cloud_preferences_syncer, ClientIdProvider, CloudPreferencesSyncer,
-    ForceCloudToMatchLocal, SETTINGS_FILE_LAST_SYNCED_HASH_KEY,
+    ClientIdProvider, CloudPreferencesSyncer, ForceCloudToMatchLocal,
+    SETTINGS_FILE_LAST_SYNCED_HASH_KEY, initialize_cloud_preferences_syncer,
 };
+use crate::ASSETS;
 use crate::auth::auth_state::AuthState;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
 use crate::cloud_object::{
@@ -23,7 +24,7 @@ use crate::cloud_object::{
 };
 use crate::server::cloud_objects::fake_object_client::FakeObjectClient;
 use crate::server::cloud_objects::test_utils::{
-    create_update_manager_struct, initialize_app, UpdateManagerStruct,
+    UpdateManagerStruct, create_update_manager_struct, initialize_app,
 };
 use crate::server::cloud_objects::update_manager::{InitialLoadResponse, UpdateManager};
 use crate::server::ids::{ClientId, ServerId, ServerIdAndType, SyncId};
@@ -31,7 +32,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::settings::cloud_preferences::{
     CloudPreferenceModel, CloudPreferencesSettings, Platform,
 };
-use crate::ASSETS;
+use crate::test_util::assert_eventually;
 
 define_settings_group!(TestSettings, settings: [
     all_platforms_cloud_setting: AllPlatforms {
@@ -205,16 +206,13 @@ async fn spawned_sync_queue_future_at_index(app: &mut App, index: usize) {
         .await
 }
 async fn wait_for_num_spawned_futures(app: &mut App, expected_num: usize, message: &str) {
-    for _ in 0..50 {
-        let num_spawned_futures =
-            SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len());
-        if num_spawned_futures == expected_num {
-            return;
-        }
-        warpui::r#async::Timer::after(Duration::from_millis(100)).await;
-    }
-
-    assert_num_spawned_futures(app, expected_num, message);
+    assert_eventually!(
+        1000 => SyncQueue::handle(app).read(app, |sync_queue, _ctx| {
+            sync_queue.spawned_futures().len() == expected_num
+        }),
+        "{message}: expected {expected_num} spawned futures, found {}",
+        SyncQueue::handle(app).read(app, |sync_queue, _ctx| sync_queue.spawned_futures().len())
+    );
 }
 
 async fn await_spawned_futures(app: &mut App, num_futures: usize, message: &str) {

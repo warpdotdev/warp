@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use content_inspector::{inspect, ContentType};
+use content_inspector::{ContentType, inspect};
 use mime_guess::{self, mime};
 
 /// File extensions for Markdown files.

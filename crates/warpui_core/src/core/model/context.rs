@@ -4,24 +4,33 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use anyhow::Result;
-use futures::stream::{AbortHandle, Abortable};
 use futures::FutureExt;
+use futures::stream::{AbortHandle, Abortable};
 use thiserror::Error;
+use warp_errors::report_error;
 
 use crate::accessibility::AccessibilityContent;
+use crate::r#async::{
+    BoxFuture, SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer, executor,
+};
 use crate::core::{Observation, Subscription, SubscriptionKey, TaskCallback};
-use crate::r#async::{executor, SpawnableOutput, SpawnedFutureHandle, SpawnedLocalStream, Timer};
 use crate::windowing::WindowManager;
 use crate::{
     AppContext, Effect, Entity, EntityId, GetSingletonModelHandle, ModelAsRef, ModelHandle,
     ReadModel, ReadView, RequestState, RetryOption, UpdateModel, UpdateView, View, ViewAsRef,
-    ViewContext, ViewHandle, WeakModelHandle,
+    ViewContext, ViewHandle, ViewUpdateError, WeakModelHandle,
 };
 
 /// Error returned when a model has been dropped, and so references to it are invalid.
 #[derive(Debug, Error, PartialEq, Eq)]
 #[error("Model has been dropped")]
 pub struct ModelDropped;
+
+/// Callback that receives the output of a resolved future spawned from a [`ModelContext`].
+type SpawnResolveCallback<T, O> = Box<dyn FnOnce(&mut T, O, &mut ModelContext<T>)>;
+
+/// Callback that runs when a future spawned from a [`ModelContext`] is aborted.
+type SpawnAbortCallback<T> = Box<dyn FnOnce(&mut T, &mut ModelContext<T>)>;
 
 /// Structure that combines model identifiers and a handle to the application
 /// context/application state.
@@ -104,26 +113,26 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
-                pending.keys.insert(SubscriptionKey::Model(self.model_id));
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity
+        {
+            pending.keys.insert(SubscriptionKey::Model(self.model_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
         }
 
         // Otherwise process immediately.
@@ -169,26 +178,26 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         let target_entity = handle.id();
 
         // If we're currently emitting events for this entity, defer the unsubscribe.
-        if let Some(ref mut pending) = self.app.pending_unsubscribes {
-            if pending.entity_id == target_entity {
-                pending.keys.insert(SubscriptionKey::Model(self.model_id));
+        if let Some(ref mut pending) = self.app.pending_unsubscribes
+            && pending.entity_id == target_entity
+        {
+            pending.keys.insert(SubscriptionKey::Model(self.model_id));
 
-                // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
-                if let std::collections::hash_map::Entry::Occupied(mut entry) =
-                    self.app.subscriptions.entry(target_entity)
-                {
-                    entry.get_mut().retain(|subscription| match subscription {
-                        Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
-                        Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
-                    });
+            // Remove subscriptions created earlier in this emission so subscribe-then-unsubscribe ordering is preserved.
+            if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                self.app.subscriptions.entry(target_entity)
+            {
+                entry.get_mut().retain(|subscription| match subscription {
+                    Subscription::FromView { .. } | Subscription::FromApp { .. } => true,
+                    Subscription::FromModel { model_id, .. } => *model_id != self.model_id,
+                });
 
-                    if entry.get().is_empty() {
-                        entry.remove();
-                    }
+                if entry.get().is_empty() {
+                    entry.remove();
                 }
-
-                return;
             }
+
+            return;
         }
 
         // Otherwise process immediately.
@@ -248,10 +257,10 @@ impl<'a, T: Entity> ModelContext<'a, T> {
     pub fn notify(&mut self) {
         // If the last effect is a model notification for this model,
         // don't add another one.
-        if let Some(Effect::ModelNotification { model_id }) = self.app.pending_effects.back() {
-            if *model_id == self.model_id {
-                return;
-            }
+        if let Some(Effect::ModelNotification { model_id }) = self.app.pending_effects.back()
+            && *model_id == self.model_id
+        {
+            return;
         }
 
         self.app
@@ -275,7 +284,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         &mut self,
         future: S,
         callback: F,
-    ) -> impl Future<Output = ()>
+    ) -> impl Future<Output = ()> + use<S, F, U, T>
     where
         S: 'static + Future,
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>) -> U,
@@ -300,7 +309,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
 
         async move {
             if rx.await.is_err() {
-                log::error!("sender unexpectedly dropped before receiver");
+                report_error!("sender unexpectedly dropped before receiver");
             }
         }
     }
@@ -397,12 +406,12 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>) -> U,
         U: 'static,
     {
-        self.spawn_abortable::<S, _, _>(
-            future,
-            |view, output, ctx| {
-                callback(view, output, ctx);
-            },
-            |_, _| {},
+        self.spawn_abortable_boxed(
+            Box::pin(future),
+            Box::new(|model, output, ctx| {
+                callback(model, output, ctx);
+            }),
+            Box::new(|_, _| {}),
         )
     }
 
@@ -436,6 +445,22 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         F: 'static + FnOnce(&mut T, S::Output, &mut ModelContext<T>),
         A: 'static + FnOnce(&mut T, &mut ModelContext<T>),
     {
+        self.spawn_abortable_boxed(Box::pin(future), Box::new(on_resolve), Box::new(on_abort))
+    }
+
+    /// Type-erased body of [`Self::spawn`] and [`Self::spawn_abortable`].
+    ///
+    /// The public entry points box the future and the callbacks immediately, so this body is
+    /// compiled once per output type instead of once per call site.
+    fn spawn_abortable_boxed<O>(
+        &mut self,
+        future: BoxFuture<'static, O>,
+        on_resolve: SpawnResolveCallback<T, O>,
+        on_abort: SpawnAbortCallback<T>,
+    ) -> SpawnedFutureHandle
+    where
+        O: 'static + SpawnableOutput,
+    {
         let (tx, rx) = futures::channel::oneshot::channel();
 
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
@@ -445,7 +470,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
                 let abortable = Abortable::new(future, abort_registration);
                 let result = abortable.await;
                 if tx.send(result).is_err() {
-                    log::error!("Error sending background task result to main thread",);
+                    report_error!("Error sending background task result to main thread");
                 }
             }))
             .detach();
@@ -454,7 +479,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
             let output = match rx_result {
                 Ok(output) => output,
                 Err(_) => {
-                    log::error!("sender unexpectedly dropped before receiver");
+                    report_error!("sender unexpectedly dropped before receiver");
                     on_abort(model, ctx);
                     return;
                 }
@@ -541,7 +566,7 @@ impl<'a, T: Entity> ModelContext<'a, T> {
         SpawnedLocalStream::new(
             async move {
                 if rx.await.is_err() {
-                    log::error!("sender unexpectedly dropped before receiver");
+                    report_error!("sender unexpectedly dropped before receiver");
                 }
             }
             .boxed_local(),
@@ -590,6 +615,18 @@ impl<M> UpdateView for ModelContext<'_, M> {
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         self.app.update_view(handle, update)
+    }
+
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        self.app.try_update_view(handle, update)
     }
 }
 

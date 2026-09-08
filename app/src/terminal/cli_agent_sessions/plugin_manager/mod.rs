@@ -1,6 +1,7 @@
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod gemini;
+pub(crate) mod grok;
 pub(crate) mod opencode;
 
 use std::cmp::Ordering;
@@ -12,12 +13,13 @@ use async_trait::async_trait;
 use claude::ClaudeCodePluginManager;
 use codex::CodexPluginManager;
 use gemini::GeminiPluginManager;
+use grok::GrokPluginManager;
 use opencode::OpenCodePluginManager;
 
 use crate::features::FeatureFlag;
+use crate::terminal::CLIAgent;
 use crate::terminal::model::session::LocalCommandExecutor;
 use crate::terminal::shell::ShellType;
-use crate::terminal::CLIAgent;
 
 /// Distinguishes whether the plugin instructions modal should show install or update steps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,6 +287,7 @@ pub(crate) fn plugin_manager_for_with_shell(
                 path_env_var,
             )))
         }
+        CLIAgent::Grok => Some(Box::new(GrokPluginManager)),
         CLIAgent::OpenCode
         | CLIAgent::Codex
         | CLIAgent::Gemini
@@ -292,12 +295,14 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Droid
         | CLIAgent::Copilot
         | CLIAgent::Pi
+        | CLIAgent::OhMyPi
         | CLIAgent::Auggie
         | CLIAgent::CursorCli
         | CLIAgent::Hermes
         | CLIAgent::Goose
         | CLIAgent::Vibe
         | CLIAgent::Antigravity
+        | CLIAgent::WarpTui
         | CLIAgent::Unknown => None,
     }
 }

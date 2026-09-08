@@ -1,6 +1,8 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use unindent::Unindent;
 use vim::vim::{MotionType, VimMode};
 use warp_core::features::FeatureFlag;
@@ -15,11 +17,16 @@ use warpui::keymap::Keystroke;
 use warpui::platform::WindowStyle;
 use warpui::text::point::Point;
 use warpui::units::IntoPixels;
-use warpui::{App, SingletonEntity, TypedActionView, UpdateModel, ViewHandle};
+use warpui::{
+    App, EntityId, EntityIdSet, Event, Presenter, SingletonEntity, TypedActionView, UpdateModel,
+    ViewHandle, WindowId, WindowInvalidation,
+};
 
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
+use crate::code::editor::find::view::CodeEditorFind;
 use crate::code::editor::view::{CodeEditorRenderOptions, CodeEditorView, CodeEditorViewAction};
+use crate::editor::{EditorAction, EditorView};
 use crate::notebooks::editor::keys::NotebookKeybindings;
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
@@ -27,8 +34,8 @@ use crate::settings::AppEditorSettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::vim_registers::VimRegisters;
-use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::ActiveSession;
+use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
 // Await render/layout completion for a CodeEditorView in tests.
@@ -81,7 +88,16 @@ fn initialize_code_editor_app(app: &mut App) {
 
 /// Helper function for creating a code editor with buffer text.
 fn add_code_editor(buffer_content: &str, app: &mut App) -> ViewHandle<CodeEditorView> {
-    let (_, editor) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+    add_code_editor_with_window(buffer_content, app).1
+}
+
+/// Like [`add_code_editor`], but also returns the window the editor was added to. Tests that
+/// render the view tree and dispatch synthetic window events need the window id.
+fn add_code_editor_with_window(
+    buffer_content: &str,
+    app: &mut App,
+) -> (WindowId, ViewHandle<CodeEditorView>) {
+    app.add_window(WindowStyle::NotStealFocus, move |ctx| {
         let mut editor = CodeEditorView::new(
             None,
             None,
@@ -95,8 +111,7 @@ fn add_code_editor(buffer_content: &str, app: &mut App) -> ViewHandle<CodeEditor
         editor.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
 
         editor
-    });
-    editor
+    })
 }
 
 /// Helper function for simulating vim user input.
@@ -161,6 +176,119 @@ fn set_viewport_lines(editor: &ViewHandle<CodeEditorView>, lines: usize, app: &m
         );
     });
     line_height
+}
+
+/// Helper to get the find bar owned by a CodeEditorView.
+fn find_bar(editor: &ViewHandle<CodeEditorView>, app: &App) -> ViewHandle<CodeEditorFind> {
+    editor.read(app, |view, _| {
+        view.find_bar.clone().expect("find bar should exist")
+    })
+}
+
+/// Helper to check whether the find bar's query input can be edited.
+fn is_find_input_editable(find_bar: &ViewHandle<CodeEditorFind>, app: &App) -> bool {
+    find_bar.read(app, |find_bar, ctx| find_bar.is_find_input_editable(ctx))
+}
+
+/// Helper to check whether the find bar's query input holds keyboard focus.
+fn is_find_input_focused(find_editor: &ViewHandle<EditorView>, app: &App) -> bool {
+    find_editor.read(app, |_, ctx| find_editor.is_focused(ctx))
+}
+
+/// The window size used by tests that render the view tree.
+fn test_window_size() -> Vector2F {
+    vec2f(1200., 800.)
+}
+
+/// Renders the given views into `presenter` and paints a scene, so that element positions are
+/// recorded and synthetic mouse events can be hit-tested. Every view on the path to the element
+/// under test must be listed: a `ChildView` lays out to zero size unless its view was rendered.
+fn render_views(app: &mut App, presenter: &Rc<RefCell<Presenter>>, view_ids: &[EntityId]) {
+    let mut updated = EntityIdSet::default();
+    for view_id in view_ids {
+        updated.insert(*view_id);
+    }
+    let invalidation = WindowInvalidation {
+        updated,
+        ..Default::default()
+    };
+    let presenter = presenter.clone();
+    app.update(move |ctx| {
+        presenter.borrow_mut().invalidate(invalidation, ctx);
+        presenter
+            .borrow_mut()
+            .build_scene(test_window_size(), 1., None, ctx);
+    });
+}
+
+/// Dispatches a full mouse press/release through the window, the same way the platform layer
+/// delivers a real click.
+fn click_at(
+    app: &mut App,
+    presenter: &Rc<RefCell<Presenter>>,
+    window_id: WindowId,
+    position: Vector2F,
+) {
+    app.update({
+        let presenter = presenter.clone();
+        move |ctx| {
+            ctx.simulate_window_event(
+                Event::LeftMouseDown {
+                    position,
+                    modifiers: Default::default(),
+                    click_count: 1,
+                    is_first_mouse: false,
+                },
+                window_id,
+                presenter,
+            );
+        }
+    });
+    app.update({
+        let presenter = presenter.clone();
+        move |ctx| {
+            ctx.simulate_window_event(
+                Event::LeftMouseUp {
+                    position,
+                    modifiers: Default::default(),
+                },
+                window_id,
+                presenter,
+            );
+        }
+    });
+}
+
+/// Dispatches typed characters through the window, so they are routed by the rendered element
+/// tree rather than delivered straight to a chosen view.
+fn type_characters(
+    app: &mut App,
+    presenter: &Rc<RefCell<Presenter>>,
+    window_id: WindowId,
+    chars: &str,
+) {
+    let presenter = presenter.clone();
+    let chars = chars.to_string();
+    app.update(move |ctx| {
+        ctx.simulate_window_event(Event::TypedCharacters { chars }, window_id, presenter);
+    });
+}
+
+/// The center of the find bar's query input, as laid out in the last painted scene.
+fn find_input_center(
+    find_bar: &ViewHandle<CodeEditorFind>,
+    presenter: &Rc<RefCell<Presenter>>,
+    app: &App,
+) -> Vector2F {
+    let position_id = find_bar.read(app, |find_bar, _| {
+        find_bar.find_editor_position_id_for_test().to_string()
+    });
+    let bounds = presenter
+        .borrow()
+        .position_cache()
+        .get_position(&position_id)
+        .expect("find input should have been painted");
+    bounds.origin() + bounds.size() * 0.5
 }
 
 /// Read the current vertical scroll position.
@@ -662,6 +790,115 @@ fn test_vim_number_repeat_yank_paste_linewise() {
     });
 }
 
+#[test]
+fn test_vim_uppercase_r_extends_at_eol_and_dot_replays_the_session() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("abc\nabcdef", &mut app);
+        set_cursor_position(&editor, 1, 2, &mut app);
+        vim_user_insert(&editor, "Rxy", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+        });
+
+        assert_eq!(buffer_text(&editor, &app), "abxy\nabcdef");
+        assert_eq!(cursor_position(&editor, &app), (1, 3));
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, ".", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "abxy\nxycdef");
+        assert_eq!(cursor_position(&editor, &app), (2, 1));
+
+        let counted_editor = add_code_editor("abcdefgh", &mut app);
+        set_cursor_position(&counted_editor, 1, 0, &mut app);
+        vim_user_insert(&counted_editor, "2Rxy", &mut app);
+        counted_editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+        });
+        assert_eq!(buffer_text(&counted_editor, &app), "xyxyefgh");
+        assert_eq!(cursor_position(&counted_editor, &app), (1, 3));
+    });
+}
+
+#[test]
+fn test_vim_linewise_operations_at_eof() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let last_line_delete = add_code_editor("one\ntwo", &mut app);
+        set_cursor_position(&last_line_delete, 2, 0, &mut app);
+        vim_user_insert(&last_line_delete, "dd", &mut app);
+        assert_eq!(buffer_text(&last_line_delete, &app), "one");
+
+        let delete_to_eof = add_code_editor("one\ntwo\nthree", &mut app);
+        set_cursor_position(&delete_to_eof, 2, 0, &mut app);
+        vim_user_insert(&delete_to_eof, "dG", &mut app);
+        assert_eq!(buffer_text(&delete_to_eof, &app), "one");
+
+        let yank_to_eof = add_code_editor("one\ntwo\nthree", &mut app);
+        set_cursor_position(&yank_to_eof, 2, 0, &mut app);
+        vim_user_insert(&yank_to_eof, "yGggP", &mut app);
+        assert_eq!(
+            buffer_text(&yank_to_eof, &app),
+            "two\nthree\none\ntwo\nthree"
+        );
+        let blank_final_line_delete = add_code_editor("", &mut app);
+        blank_final_line_delete.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("one\n"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        vim_user_insert(&blank_final_line_delete, "G", &mut app);
+        vim_user_insert(&blank_final_line_delete, "dd", &mut app);
+        assert_eq!(buffer_text(&blank_final_line_delete, &app), "one");
+        let blank_final_line = add_code_editor("", &mut app);
+        blank_final_line.update(&mut app, |view, ctx| {
+            view.reset(InitialBufferState::plain_text("one\n"), ctx);
+            view.handle_action(&CodeEditorViewAction::CursorAtBufferStart, ctx);
+        });
+        vim_user_insert(&blank_final_line, "Gyy", &mut app);
+        let blank_line_register = app
+            .update(|ctx| {
+                VimRegisters::handle(ctx)
+                    .update(ctx, |registers, ctx| registers.read_from_register('"', ctx))
+            })
+            .expect("blank line yank should populate the unnamed register");
+        assert_eq!(blank_line_register.text, "\n");
+        assert_eq!(blank_line_register.motion_type, MotionType::Linewise);
+        vim_user_insert(&blank_final_line, "P", &mut app);
+        assert_eq!(buffer_text(&blank_final_line, &app), "one\n\n");
+
+        let one_line_delete = add_code_editor("one", &mut app);
+        vim_user_insert(&one_line_delete, "dd", &mut app);
+        assert_eq!(buffer_text(&one_line_delete, &app), "");
+        let default_line_ending = if cfg!(windows) { "\r\n" } else { "\n" };
+
+        let one_line_yank = add_code_editor("one", &mut app);
+        vim_user_insert(&one_line_yank, "yyP", &mut app);
+        assert_eq!(
+            buffer_text(&one_line_yank, &app),
+            format!("one{default_line_ending}one")
+        );
+
+        let empty_line_yank = add_code_editor("", &mut app);
+        assert_eq!(buffer_text(&empty_line_yank, &app), "");
+        vim_user_insert(&empty_line_yank, "yy", &mut app);
+        let empty_line_register = app
+            .update(|ctx| {
+                VimRegisters::handle(ctx)
+                    .update(ctx, |registers, ctx| registers.read_from_register('"', ctx))
+            })
+            .expect("empty line yank should populate the unnamed register");
+        assert_eq!(empty_line_register.text, "\n");
+        assert_eq!(empty_line_register.motion_type, MotionType::Linewise);
+        vim_user_insert(&empty_line_yank, "P", &mut app);
+        assert_eq!(buffer_text(&empty_line_yank, &app), default_line_ending);
+    });
+}
 #[test]
 fn test_vim_number_repeat_yank_paste_charwise() {
     let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
@@ -1730,5 +1967,385 @@ fn test_vim_ctrl_d_clears_pending_operator() {
             original,
             "w after `d<C-d>` should not delete (pending d should be cleared)"
         );
+    });
+}
+
+#[test]
+fn test_vim_d_percent_deletes_to_matching_bracket() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        // Forward: cursor on the opening bracket deletes the whole bracket pair.
+        let editor = add_code_editor("foo(bar)baz", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        vim_user_insert(&editor, "d%", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "foobaz");
+        assert_eq!(cursor_position(&editor, &app), (1, 3));
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+
+        // Backward: cursor on the closing bracket deletes the same range.
+        let editor = add_code_editor("foo(bar)baz", &mut app);
+        set_cursor_position(&editor, 1, 7, &mut app);
+        vim_user_insert(&editor, "d%", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "foobaz");
+        assert_eq!(cursor_position(&editor, &app), (1, 3));
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_c_percent_changes_to_matching_bracket() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("foo(bar)baz", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        vim_user_insert(&editor, "c%", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "foobaz");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Insert));
+        assert_eq!(cursor_position(&editor, &app), (1, 3));
+
+        // Type replacement text and return to Normal mode.
+        vim_user_insert(&editor, "[]", &mut app);
+        editor.update(&mut app, |view, ctx| {
+            view.vim_keystroke(&Keystroke::parse("escape").unwrap(), ctx);
+        });
+        assert_eq!(buffer_text(&editor, &app), "foo[]baz");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_y_percent_yanks_to_matching_bracket() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+
+        let editor = add_code_editor("foo(bar)baz", &mut app);
+        set_cursor_position(&editor, 1, 3, &mut app);
+        // y% yanks the bracket pair without modifying the buffer.
+        vim_user_insert(&editor, "y%", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "foo(bar)baz");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+
+        // Paste the yanked text before the start of the line to prove the register captured `(bar)`.
+        vim_user_insert(&editor, "0P", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "(bar)foo(bar)baz");
+    });
+}
+
+#[test]
+fn test_vim_double_greater_indents_current_line() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+        assert_eq!(cursor_position(&editor, &app), (2, 4));
+    });
+}
+
+#[test]
+fn test_vim_double_less_dedents_current_line() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("    line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "<<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+        assert_eq!(cursor_position(&editor, &app), (1, 0));
+    });
+}
+
+#[test]
+fn test_vim_double_less_at_column_zero_is_noop() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "<<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_double_less_removes_only_one_indent_unit() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("        line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "<<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_double_greater_preserves_non_leading_text() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("  line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_greater_with_down_motion_indents_two_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">j", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_counted_double_greater_indents_two_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "2>>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_greater_to_last_line_indents_all_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">G", &mut app);
+        assert_eq!(
+            buffer_text(&editor, &app),
+            "    line 1\n    line 2\n    line 3"
+        );
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_linewise_greater_indents_selection() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, "V", &mut app);
+        assert_eq!(
+            vim_mode(&editor, &app),
+            Some(VimMode::Visual(MotionType::Linewise))
+        );
+        vim_user_insert(&editor, ">", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_linewise_less_dedents_selection() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\n    line 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, "V", &mut app);
+        vim_user_insert(&editor, "<", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_visual_greater_across_multiple_lines() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, "V", &mut app);
+        vim_user_insert(&editor, "j", &mut app);
+        vim_user_insert(&editor, ">", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\n    line 2\nline 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_indent_then_undo_restores_buffer() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2", &mut app);
+
+        set_cursor_position(&editor, 2, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\n    line 2");
+
+        vim_user_insert(&editor, "u", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "line 1\nline 2");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_vim_indent_dot_repeat_repeats_last_indent() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let editor = add_code_editor("line 1\nline 2\nline 3", &mut app);
+
+        set_cursor_position(&editor, 1, 0, &mut app);
+        vim_user_insert(&editor, ">>", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\nline 3");
+
+        set_cursor_position(&editor, 3, 0, &mut app);
+        vim_user_insert(&editor, ".", &mut app);
+        assert_eq!(buffer_text(&editor, &app), "    line 1\nline 2\n    line 3");
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+/// Text used by the find-bar tests. "hello" is the word under the cursor at the buffer start, so
+/// Vim's `*` picks it up.
+const FIND_BAR_TEST_TEXT: &str = "hello world\nhello beta\ntheta again";
+
+/// Renders the code editor and its find bar, then clicks the center of the find bar's query
+/// input, exactly as a user would. Returns the find query editor.
+fn click_find_input(
+    editor: &ViewHandle<CodeEditorView>,
+    find_bar: &ViewHandle<CodeEditorFind>,
+    presenter: &Rc<RefCell<Presenter>>,
+    window_id: WindowId,
+    app: &mut App,
+) -> ViewHandle<EditorView> {
+    let find_editor = find_bar.read(app, |find_bar, _| find_bar.find_editor_for_test());
+    render_views(
+        app,
+        presenter,
+        &[editor.id(), find_bar.id(), find_editor.id()],
+    );
+    let position = find_input_center(find_bar, presenter, app);
+    click_at(app, presenter, window_id, position);
+    find_editor
+}
+
+#[test]
+fn test_clicking_find_input_after_vim_enter_restores_editing() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let (window_id, editor) = add_code_editor_with_window(FIND_BAR_TEST_TEXT, &mut app);
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        editor.update(&mut app, |view, ctx| {
+            view.handle_action(&CodeEditorViewAction::ShowFindBar, ctx);
+        });
+        let find_bar = find_bar(&editor, &app);
+        find_bar.update(&mut app, |find_bar, ctx| {
+            find_bar.set_find_query(ctx, "hello");
+        });
+        assert!(is_find_input_editable(&find_bar, &app));
+
+        // In Vim mode, Enter commits the query and hands the caret back to the editor, which
+        // leaves the find input disabled and unfocused.
+        let find_editor = find_bar.read(&app, |find_bar, _| find_bar.find_editor_for_test());
+        find_editor.update(&mut app, |find_editor, ctx| {
+            find_editor.handle_action(&EditorAction::Enter, ctx);
+        });
+        assert!(!is_find_input_editable(&find_bar, &app));
+        assert!(!is_find_input_focused(&find_editor, &app));
+
+        click_find_input(&editor, &find_bar, &presenter, window_id, &mut app);
+
+        assert!(is_find_input_editable(&find_bar, &app));
+        assert!(is_find_input_focused(&find_editor, &app));
+
+        // Typing must now be routed to the find input rather than to Vim: the query is replaced
+        // (it is selected on activation) while the buffer and the Vim mode stay untouched. Had
+        // Vim received these keystrokes, `a` would have switched it to Insert mode.
+        render_views(
+            &mut app,
+            &presenter,
+            &[editor.id(), find_bar.id(), find_editor.id()],
+        );
+        type_characters(&mut app, &presenter, window_id, "eta");
+
+        assert_eq!(
+            find_editor.read(&app, |find_editor, ctx| find_editor.buffer_text(ctx)),
+            "eta"
+        );
+        assert_eq!(buffer_text(&editor, &app), FIND_BAR_TEST_TEXT);
+        assert_eq!(vim_mode(&editor, &app), Some(VimMode::Normal));
+    });
+}
+
+#[test]
+fn test_clicking_find_input_after_vim_search_word_restores_editing() {
+    let _feature_flag_guard = FeatureFlag::VimCodeEditor.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_code_editor_app(&mut app);
+        let (window_id, editor) = add_code_editor_with_window(FIND_BAR_TEST_TEXT, &mut app);
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        // `*` searches for the word under the cursor and leaves the find input disabled.
+        vim_user_insert(&editor, "*", &mut app);
+        let find_bar = find_bar(&editor, &app);
+        assert!(!is_find_input_editable(&find_bar, &app));
+
+        let find_editor = click_find_input(&editor, &find_bar, &presenter, window_id, &mut app);
+
+        assert!(is_find_input_editable(&find_bar, &app));
+        assert!(is_find_input_focused(&find_editor, &app));
     });
 }

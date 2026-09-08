@@ -1,9 +1,9 @@
 use super::*;
 use crate::proto::{
-    delete_file_response, discard_files_response, save_buffer_response, server_message,
-    write_file_response, DeleteFileResponse, DeleteFileSuccess, DiscardFilesError,
-    DiscardFilesResponse, DiscardFilesSuccess, FileOperationError, SaveBufferResponse,
-    SaveBufferSuccess, ServerMessage, WriteFileResponse, WriteFileSuccess,
+    DeleteFileResponse, DeleteFileSuccess, DiscardFilesError, DiscardFilesResponse,
+    DiscardFilesSuccess, FileOperationError, SaveBufferResponse, SaveBufferSuccess, ServerMessage,
+    WriteFileResponse, WriteFileSuccess, delete_file_response, discard_files_response,
+    save_buffer_response, server_message, write_file_response,
 };
 
 fn msg(inner: server_message::Message) -> ServerMessage {

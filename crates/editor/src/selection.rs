@@ -482,6 +482,13 @@ impl SelectionModel {
         self.pending_selection = None;
     }
 
+    /// Whether a drag selection is in progress: begun via
+    /// [`Self::begin_selection`] (mouse down) and not yet ended via
+    /// [`Self::end_selection`] (mouse up).
+    pub fn has_pending_selection(&self) -> bool {
+        self.pending_selection.is_some()
+    }
+
     /// Set a single cursor at the offset.
     pub fn set_cursor(&mut self, offset: CharOffset, ctx: &mut ModelContext<Self>) {
         self.update_selection(

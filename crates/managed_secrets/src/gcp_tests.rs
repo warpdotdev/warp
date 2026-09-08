@@ -1,9 +1,12 @@
+use std::ffi::OsString;
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::json;
 
-use super::{GcpFederationConfig, PrepareGcpCredentialsError, generate_gcp_credential_config};
+use super::{
+    GcpCredentials, GcpFederationConfig, PrepareGcpCredentialsError, generate_gcp_credential_config,
+};
 
 #[test]
 fn basic_config_shape() {
@@ -119,6 +122,29 @@ fn service_account_impersonation() {
             }
         })
     );
+}
+
+#[test]
+fn config_file_path_matches_application_credentials_env_var() {
+    let config = GcpFederationConfig {
+        project_number: "123456789".to_string(),
+        pool_id: "my-pool".to_string(),
+        provider_id: "my-provider".to_string(),
+        service_account_email: None,
+        token_lifetime: None,
+    };
+
+    let credentials = GcpCredentials::federated("run-77", &config).unwrap();
+
+    // The accessor used by the GCP cloud provider to point `gcloud --cred-file`
+    // at the credential config must resolve to the same file that GCP SDKs
+    // discover via `GOOGLE_APPLICATION_CREDENTIALS`.
+    let env_vars = credentials.env_vars();
+    assert_eq!(
+        env_vars.get(&OsString::from("GOOGLE_APPLICATION_CREDENTIALS")),
+        Some(&OsString::from(credentials.config_file_path())),
+    );
+    assert!(credentials.config_file_path().exists());
 }
 
 #[test]

@@ -1,10 +1,10 @@
 use warp_core::context_flag::ContextFlag;
+use warpui::AppContext;
 use warpui::keymap::{
     BindingDescription, ContextPredicate, EditableBinding, FixedBinding, PerPlatformKeystroke,
 };
 use warpui::platform::OperatingSystem;
 use warpui::units::IntoLines;
-use warpui::AppContext;
 
 use super::{
     AgentOnboardingVersion, AskAISource, ContextMenuAction, OnboardingIntention, OnboardingVersion,
@@ -18,6 +18,7 @@ use crate::channel::{Channel, ChannelState};
 use crate::features::FeatureFlag;
 use crate::server::telemetry::{InteractionSource, ToggleBlockFilterSource};
 use crate::settings_view::flags;
+use crate::terminal::TerminalView;
 use crate::terminal::input::{
     SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
 };
@@ -29,9 +30,8 @@ use crate::terminal::view::{
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY,
     LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY,
 };
-use crate::terminal::TerminalView;
 use crate::util::bindings;
-use crate::util::bindings::{cmd_or_ctrl_shift, is_binding_pty_compliant, CustomAction};
+use crate::util::bindings::{CustomAction, cmd_or_ctrl_shift, is_binding_pty_compliant};
 
 pub const TOGGLE_BLOCK_FILTER_KEYBINDING: &str =
     "terminal:toggle_block_filter_on_selected_or_last_block";
@@ -41,6 +41,7 @@ pub const TOGGLE_AUTOEXECUTE_MODE_KEYBINDING: &str = "terminal:toggle_autoexecut
 pub const TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING: &str = "terminal:toggle_queue_next_prompt";
 pub const TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING: &str = "terminal:toggle_hide_cli_responses";
 pub const OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING: &str = "terminal:open_cli_agent_rich_input";
+pub const ATTACH_FILE_KEYBINDING: &str = "terminal:attach_file";
 pub const CYCLE_NEXT_ORCHESTRATION_CHILD_AGENT_KEYBINDING: &str =
     "terminal:cycle_next_orchestration_child_agent";
 pub const CYCLE_PREVIOUS_ORCHESTRATION_CHILD_AGENT_KEYBINDING: &str =
@@ -55,6 +56,8 @@ pub const CAN_FORK_FROM_LAST_KNOWN_GOOD_STATE_KEY: &str = "CanForkFromLastKnownG
 pub const INPUT_BOX_VISIBLE_KEY: &str = "InputVisible";
 pub const KEYBOARD_PROTOCOL_ENABLED_KEY: &str = "KeyboardProtocolEnabled";
 pub const CLI_AGENT_SESSION_ACTIVE_KEY: &str = "CLIAgentSessionActive";
+/// Shared-session availability for attach-file, including FileAttach's cloud-viewer exception.
+pub const CAN_ATTACH_FILE_KEY: &str = "CanAttachFile";
 pub const ROOT_CLOUD_MODE_PANE_KEY: &str = "RootCloudModePane";
 pub const CAN_SHOW_CONVERSATION_DETAILS_KEY: &str = "CanShowConversationDetails";
 
@@ -969,6 +972,19 @@ pub fn init(app: &mut AppContext) {
     .with_context_predicate(id!("Terminal"))]);
 
     app.register_editable_bindings([
+        EditableBinding::new(
+            ATTACH_FILE_KEYBINDING,
+            "Attach file to agent conversation",
+            TerminalAction::AttachFile,
+        )
+        .with_group(bindings::BindingGroup::WarpAi.as_str())
+        .with_context_predicate(
+            (id!("Input") | id!("Terminal"))
+                & (id!(flags::ACTIVE_AGENT_VIEW)
+                    | id!(flags::ACTIVE_INLINE_AGENT_VIEW)
+                    | id!(CLI_AGENT_SESSION_ACTIVE_KEY))
+                & id!(CAN_ATTACH_FILE_KEY),
+        ),
         EditableBinding::new(
             TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
             "Toggle Auto-execute Mode",

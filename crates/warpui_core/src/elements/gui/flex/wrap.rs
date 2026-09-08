@@ -1,15 +1,15 @@
 use ordered_float::OrderedFloat;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use super::{
-    cross_axis_size, main_axis_size, size_along_axis, AppContext, Axis, CrossAxisAlignment,
-    Element, EventContext, LayoutContext, LayoutState, MainAxisSize, PaintContext, Point,
-    SizeConstraint, Vector2FExt,
+    AppContext, Axis, CrossAxisAlignment, Element, EventContext, LayoutContext, LayoutState,
+    MainAxisSize, PaintContext, Point, SizeConstraint, Vector2FExt, cross_axis_size,
+    main_axis_size, size_along_axis,
 };
+use crate::ClipBounds;
 use crate::elements::{AxisOrientation, MainAxisAlignment};
 use crate::event::DispatchedEvent;
-use crate::ClipBounds;
 
 /// An element that positions its children in horizontal or vertical runs, leaving space in between
 /// each run.
@@ -361,6 +361,14 @@ impl Element for Wrap {
         }
         handled
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.children
+            .iter()
+            .flat_map(|child| child.debug_child_view_ids())
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -465,6 +473,11 @@ impl Element for WrapFill {
     fn parent_data(&self) -> Option<&dyn std::any::Any> {
         Some(&self.parent_data)
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.child.debug_child_view_ids()
+    }
 }
 
 /// Helper struct to encapsulate a child of a `Wrap` element that may not be painted or laid out
@@ -540,6 +553,11 @@ impl Element for WrapChild {
         } else {
             false
         }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.element.debug_child_view_ids()
     }
 }
 

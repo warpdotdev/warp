@@ -1,22 +1,25 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use ai::agent::action::{AskUserQuestionItem, AskUserQuestionOption, AskUserQuestionType};
 use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult};
+use ai::agent::{
+    AskUserQuestionAction, AskUserQuestionCurrent, AskUserQuestionEffect, AskUserQuestionPhase,
+    AskUserQuestionSession, QuestionDraft,
+};
 use itertools::Itertools;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::elements::new_scrollable::SingleAxisConfig;
 use warpui::elements::{
     Border, ChildView, Clipped, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Fill, Flex, FormattedTextElement, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, ParentElement, Point, Radius, Stack, Text, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    CrossAxisAlignment, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Flex, FormattedTextElement,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Point, Radius, Stack, Text,
 };
 use warpui::event::DispatchedEvent;
 use warpui::geometry::vector::Vector2F;
 use warpui::keymap::{FixedBinding, Keystroke};
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::ui_components::components::Coords;
 use warpui::units::Pixels;
 use warpui::{
@@ -25,10 +28,12 @@ use warpui::{
     View, ViewContext, ViewHandle,
 };
 
+use crate::Appearance;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::icons::yellow_stop_icon;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{AIAgentActionId, AIAgentActionResult, AIAgentActionResultType};
+use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::ai::blocklist::action_model::{
     AIActionStatus, BlocklistAIActionEvent, BlocklistAIActionModel,
 };
@@ -37,18 +42,17 @@ use crate::ai::blocklist::block::number_shortcut_buttons::{
     self, NumberShortcutButtonBuilder, NumberShortcutButtons, NumberShortcutButtonsConfig,
 };
 use crate::ai::blocklist::block::view_impl::{
-    render_autonomy_dropdown_setting_speedbump_footer, CONTENT_HORIZONTAL_PADDING,
-    CONTENT_ITEM_VERTICAL_MARGIN,
+    CONTENT_HORIZONTAL_PADDING, CONTENT_ITEM_VERTICAL_MARGIN,
+    render_autonomy_dropdown_setting_speedbump_footer,
 };
 use crate::ai::blocklist::inline_action::inline_action_header::{
-    ExpandedConfig, HeaderConfig, InteractionMode, INLINE_ACTION_HEADER_VERTICAL_PADDING,
-    INLINE_ACTION_HORIZONTAL_PADDING,
+    ExpandedConfig, HeaderConfig, INLINE_ACTION_HEADER_VERTICAL_PADDING,
+    INLINE_ACTION_HORIZONTAL_PADDING, InteractionMode,
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::{self, icon_size};
 use crate::ai::blocklist::inline_action::requested_action::CTRL_C_KEYSTROKE;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::AskUserQuestionPermission;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::terminal::input::message_bar::common::{
     render_standard_message, standard_message_bar_height, styles,
 };
@@ -60,7 +64,6 @@ use crate::view_components::action_button::{
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::dropdown::{Dropdown, DropdownItem};
-use crate::Appearance;
 
 const ASK_USER_QUESTION_ACTIVE: &str = "AskUserQuestionActive";
 
@@ -83,10 +86,6 @@ fn ask_user_question_header_height(appearance: &Appearance, app: &AppContext) ->
         .max(icon_size(app))
         .max(ButtonSize::InlineActionHeader.button_height(appearance, app))
         + (2. * INLINE_ACTION_HEADER_VERTICAL_PADDING)
-}
-
-fn ask_user_question_auto_advance_enabled(is_multiselect: bool, is_last_question: bool) -> bool {
-    is_last_question || !is_multiselect
 }
 
 pub fn init(app: &mut AppContext) {
@@ -141,150 +140,6 @@ pub enum AskUserQuestionViewEvent {
     SpeedbumpPermissionChanged(AskUserQuestionPermission),
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-/// In-progress answer data for a single question while the user is editing.
-/// Tracks selected choices plus optional free-text "Other" input.
-pub(crate) struct QuestionDraft {
-    pub selected_option_indices: HashSet<usize>,
-    pub other_text: Option<String>,
-    pub is_other_input_active: bool,
-}
-
-impl QuestionDraft {
-    fn has_answer(&self) -> bool {
-        !self.selected_option_indices.is_empty()
-            || self
-                .other_text
-                .as_deref()
-                .is_some_and(|text| !text.is_empty())
-    }
-    fn is_empty(&self) -> bool {
-        !self.has_answer() && !self.is_other_input_active
-    }
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-/// Per-question draft slot used by the questionnaire state machine.
-/// `Unanswered` is intentionally distinct from an empty `Answered` draft.
-enum QuestionDraftState {
-    #[default]
-    Unanswered,
-    Answered(QuestionDraft),
-}
-
-/// Snapshot of the currently visible question and its optional draft.
-#[derive(Clone, Copy)]
-struct AskUserQuestionCurrent<'a> {
-    question: &'a AskUserQuestionItem,
-    draft: Option<&'a QuestionDraft>,
-}
-
-/// Rendering phase for this questionnaire block.
-#[derive(Clone, Copy)]
-enum AskUserQuestionPhase<'a> {
-    Editing,
-    Completed {
-        answers: &'a [AskUserQuestionAnswerItem],
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Editing-phase state for the questionnaire.
-/// Holds the active question index and one draft slot per question.
-struct AskUserQuestionEditingState {
-    current_question_index: usize,
-    drafts: Vec<QuestionDraftState>,
-}
-
-impl AskUserQuestionEditingState {
-    // Helpers for reading/updating the active question cursor and per-question draft slots.
-    fn new(draft_count: usize) -> Self {
-        Self {
-            current_question_index: 0,
-            drafts: vec![QuestionDraftState::Unanswered; draft_count],
-        }
-    }
-
-    fn current_question_index(&self) -> usize {
-        self.current_question_index
-    }
-
-    fn current_draft(&self) -> Option<&QuestionDraft> {
-        self.draft_for_question(self.current_question_index)
-    }
-
-    fn draft_for_question(&self, index: usize) -> Option<&QuestionDraft> {
-        let QuestionDraftState::Answered(draft) = self.drafts.get(index)? else {
-            return None;
-        };
-        Some(draft)
-    }
-
-    fn is_last_question(&self, question_count: usize) -> bool {
-        self.current_question_index + 1 >= question_count
-    }
-
-    fn update_current_draft(&mut self, update: impl FnOnce(&mut QuestionDraft)) {
-        let Some(slot) = self.drafts.get_mut(self.current_question_index) else {
-            return;
-        };
-
-        // Store unanswered questions as a distinct state instead of an empty draft so later logic
-        // can tell the difference between "no answer yet" and "there is answer state to render".
-        let mut draft = match std::mem::take(slot) {
-            QuestionDraftState::Unanswered => QuestionDraft::default(),
-            QuestionDraftState::Answered(draft) => draft,
-        };
-        update(&mut draft);
-        *slot = if draft.is_empty() {
-            QuestionDraftState::Unanswered
-        } else {
-            QuestionDraftState::Answered(draft)
-        };
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-/// Lifecycle state for the questionnaire flow.
-/// `Editing` is mutable local draft state; `Completed` is the frozen submitted summary.
-enum AskUserQuestionState {
-    Editing(AskUserQuestionEditingState),
-    Completed {
-        answers: Vec<AskUserQuestionAnswerItem>,
-    },
-}
-
-/// State-machine inputs derived from UI interactions.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum AskUserQuestionAction {
-    ToggleOption {
-        option_index: usize,
-    },
-    OpenOtherInput,
-    SaveOtherText {
-        text: Option<String>,
-    },
-    NavigatePrev,
-    NavigateNext,
-    PressEnter {
-        highlighted_index: Option<usize>,
-        active_other_text: Option<String>,
-    },
-    Confirm,
-    SkipAll,
-}
-
-/// State-machine outputs that tell the view which follow-up UI work to do.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum AskUserQuestionEffect {
-    Noop,
-    RefreshCurrent,
-    FocusOtherInput,
-    ShowQuestion,
-    ScheduleAutoAdvance,
-    Submit(Vec<AskUserQuestionAnswerItem>),
-}
-
 /// Derived render state for controls that depend on the active question/draft.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AskUserQuestionViewState {
@@ -318,381 +173,6 @@ struct AskUserQuestionInteractiveViews {
 struct AskUserQuestionCompletionState {
     label: String,
     status_icon: warpui::elements::Icon,
-}
-
-/// Local questionnaire state machine used by the view.
-/// UI events are translated into actions here, which update internal state and return effects for
-/// follow-up view work (focus, refresh, navigation, submit).
-struct AskUserQuestionSession {
-    questions: Vec<AskUserQuestionItem>,
-    state: AskUserQuestionState,
-}
-
-/// Owns questionnaire prompts and applies state transitions independently of persisted action
-/// status, returning effects for the view to execute.
-impl AskUserQuestionSession {
-    fn new(mut questions: Vec<AskUserQuestionItem>) -> Self {
-        // Put multi-select questions before single-select so the last question
-        // can auto-submit after a single option toggle.
-        questions.sort_by_key(|q| !q.is_multiselect());
-        Self {
-            state: AskUserQuestionState::Editing(AskUserQuestionEditingState::new(questions.len())),
-            questions,
-        }
-    }
-
-    fn phase(&self) -> AskUserQuestionPhase<'_> {
-        match &self.state {
-            AskUserQuestionState::Editing(_) => AskUserQuestionPhase::Editing,
-            AskUserQuestionState::Completed { answers } => {
-                AskUserQuestionPhase::Completed { answers }
-            }
-        }
-    }
-
-    fn is_editing(&self) -> bool {
-        matches!(self.state, AskUserQuestionState::Editing(_))
-    }
-
-    fn questions(&self) -> &[AskUserQuestionItem] {
-        &self.questions
-    }
-
-    fn question_count(&self) -> usize {
-        self.questions.len()
-    }
-
-    fn has_multiple_questions(&self) -> bool {
-        self.question_count() > 1
-    }
-
-    fn current(&self) -> Option<AskUserQuestionCurrent<'_>> {
-        let AskUserQuestionState::Editing(editing) = &self.state else {
-            return None;
-        };
-
-        Some(AskUserQuestionCurrent {
-            question: self.questions.get(editing.current_question_index())?,
-            draft: editing.current_draft(),
-        })
-    }
-
-    /// Saved draft for the question at `index` (None when unanswered or not editing). Lets the
-    /// off-screen measurement copies reflect each question's real answer state, so a long saved
-    /// "Other..." answer is accounted for in the reserved height instead of resizing the card when
-    /// the user navigates back to that question.
-    fn draft_for_question(&self, index: usize) -> Option<&QuestionDraft> {
-        let AskUserQuestionState::Editing(editing) = &self.state else {
-            return None;
-        };
-        editing.draft_for_question(index)
-    }
-
-    fn current_question_index(&self) -> usize {
-        match &self.state {
-            AskUserQuestionState::Editing(editing) => editing.current_question_index(),
-            AskUserQuestionState::Completed { .. } => 0,
-        }
-    }
-
-    fn is_last_question(&self) -> bool {
-        match &self.state {
-            AskUserQuestionState::Editing(editing) => {
-                editing.is_last_question(self.questions.len())
-            }
-            AskUserQuestionState::Completed { .. } => false,
-        }
-    }
-
-    // Centralize all state transitions so the view layer only maps UI events to actions and then
-    // applies the returned effect.
-    fn apply(&mut self, action: AskUserQuestionAction) -> AskUserQuestionEffect {
-        match action {
-            AskUserQuestionAction::ToggleOption { option_index } => {
-                self.toggle_option(option_index)
-            }
-            AskUserQuestionAction::OpenOtherInput => self.open_other_input(),
-            AskUserQuestionAction::SaveOtherText { text } => self.save_other_text(text),
-            AskUserQuestionAction::NavigatePrev => self.navigate_prev(),
-            AskUserQuestionAction::NavigateNext => self.navigate_next(),
-            AskUserQuestionAction::PressEnter {
-                highlighted_index,
-                active_other_text,
-            } => self.press_enter(highlighted_index, active_other_text),
-            AskUserQuestionAction::Confirm => self.confirm(),
-            AskUserQuestionAction::SkipAll => self.skip_all(),
-        }
-    }
-
-    fn editing_state_mut(&mut self) -> Option<&mut AskUserQuestionEditingState> {
-        let AskUserQuestionState::Editing(editing) = &mut self.state else {
-            return None;
-        };
-        Some(editing)
-    }
-
-    fn toggle_option(&mut self, option_index: usize) -> AskUserQuestionEffect {
-        let Some((is_multi_select, auto_advance_enabled)) = self.current().map(|current| {
-            let is_multi_select = current.question.is_multiselect();
-            (
-                is_multi_select,
-                ask_user_question_auto_advance_enabled(is_multi_select, self.is_last_question()),
-            )
-        }) else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        let mut should_auto_advance_after_toggle = false;
-        editing.update_current_draft(|draft| {
-            if is_multi_select {
-                // Multiselect behaves like a checklist: toggling one option should not affect any
-                // of the other selected options, and only the last question is allowed to auto-advance.
-                if !draft.selected_option_indices.insert(option_index) {
-                    draft.selected_option_indices.remove(&option_index);
-                }
-                should_auto_advance_after_toggle =
-                    auto_advance_enabled && !draft.selected_option_indices.is_empty();
-                return;
-            }
-            // Single-select behaves like a radio group, except clicking the selected option again
-            // clears the answer entirely.
-            if draft.selected_option_indices.contains(&option_index) {
-                draft.selected_option_indices.clear();
-                draft.other_text = None;
-                draft.is_other_input_active = false;
-                return;
-            }
-
-            draft.selected_option_indices.clear();
-            draft.selected_option_indices.insert(option_index);
-            draft.other_text = None;
-            draft.is_other_input_active = false;
-            should_auto_advance_after_toggle = auto_advance_enabled;
-        });
-
-        if should_auto_advance_after_toggle {
-            AskUserQuestionEffect::ScheduleAutoAdvance
-        } else {
-            AskUserQuestionEffect::RefreshCurrent
-        }
-    }
-
-    fn open_other_input(&mut self) -> AskUserQuestionEffect {
-        let Some(is_multi_select) = self
-            .current()
-            .map(|current| current.question.is_multiselect())
-        else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        editing.update_current_draft(|draft| {
-            if !is_multi_select {
-                draft.selected_option_indices.clear();
-            }
-            draft.is_other_input_active = true;
-        });
-        AskUserQuestionEffect::FocusOtherInput
-    }
-
-    fn save_other_text(&mut self, text: Option<String>) -> AskUserQuestionEffect {
-        let Some(auto_advance_enabled) = self.current().map(|current| {
-            ask_user_question_auto_advance_enabled(
-                current.question.is_multiselect(),
-                self.is_last_question(),
-            )
-        }) else {
-            return AskUserQuestionEffect::Noop;
-        };
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        editing.update_current_draft(|draft| {
-            draft.other_text = text;
-            draft.is_other_input_active = false;
-        });
-        if editing
-            .current_draft()
-            .is_some_and(|draft| draft.other_text.is_some())
-        {
-            if auto_advance_enabled {
-                AskUserQuestionEffect::ScheduleAutoAdvance
-            } else {
-                AskUserQuestionEffect::RefreshCurrent
-            }
-        } else {
-            AskUserQuestionEffect::RefreshCurrent
-        }
-    }
-
-    fn navigate_prev(&mut self) -> AskUserQuestionEffect {
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-        if editing.current_question_index == 0 {
-            return AskUserQuestionEffect::Noop;
-        }
-
-        editing.current_question_index -= 1;
-        AskUserQuestionEffect::ShowQuestion
-    }
-
-    fn navigate_next(&mut self) -> AskUserQuestionEffect {
-        let question_count = self.questions.len();
-        let Some(editing) = self.editing_state_mut() else {
-            return AskUserQuestionEffect::Noop;
-        };
-        if editing.is_last_question(question_count) {
-            return AskUserQuestionEffect::Noop;
-        }
-
-        editing.current_question_index += 1;
-        AskUserQuestionEffect::ShowQuestion
-    }
-
-    fn press_enter(
-        &mut self,
-        highlighted_index: Option<usize>,
-        active_other_text: Option<String>,
-    ) -> AskUserQuestionEffect {
-        let Some((supports_other, option_count)) = self.current().map(|current| {
-            (
-                current.question.supports_other(),
-                current
-                    .question
-                    .multiple_choice_options()
-                    .map_or(0, |options| options.len()),
-            )
-        }) else {
-            return AskUserQuestionEffect::Noop;
-        };
-
-        if supports_other && highlighted_index == Some(option_count) {
-            return self.open_other_input();
-        }
-
-        if let Some(option_index) = highlighted_index.filter(|index| *index < option_count) {
-            let _ = self.toggle_option(option_index);
-            return self.enter_submit_effect();
-        }
-
-        if self
-            .current()
-            .and_then(|current| current.draft)
-            .is_some_and(|draft| draft.is_other_input_active)
-        {
-            let _ = self.save_other_text(active_other_text);
-        }
-
-        self.enter_submit_effect()
-    }
-
-    fn enter_submit_effect(&mut self) -> AskUserQuestionEffect {
-        if self
-            .current()
-            .and_then(|current| current.draft)
-            .is_some_and(QuestionDraft::has_answer)
-        {
-            AskUserQuestionEffect::ScheduleAutoAdvance
-        } else {
-            self.confirm()
-        }
-    }
-
-    fn confirm(&mut self) -> AskUserQuestionEffect {
-        let question_count = self.questions.len();
-        let drafts = {
-            let Some(editing) = self.editing_state_mut() else {
-                return AskUserQuestionEffect::Noop;
-            };
-            if !editing.is_last_question(question_count) {
-                editing.current_question_index += 1;
-                return AskUserQuestionEffect::ShowQuestion;
-            }
-
-            editing.drafts.clone()
-        };
-        let answers = Self::build_answers(&self.questions, &drafts);
-
-        self.state = AskUserQuestionState::Completed {
-            answers: answers.clone(),
-        };
-        AskUserQuestionEffect::Submit(answers)
-    }
-
-    fn skip_all(&mut self) -> AskUserQuestionEffect {
-        let drafts = {
-            let Some(editing) = self.editing_state_mut() else {
-                return AskUserQuestionEffect::Noop;
-            };
-            for draft in &mut editing.drafts {
-                *draft = QuestionDraftState::Unanswered;
-            }
-
-            editing.drafts.clone()
-        };
-        let answers = Self::build_answers(&self.questions, &drafts);
-
-        self.state = AskUserQuestionState::Completed {
-            answers: answers.clone(),
-        };
-        AskUserQuestionEffect::Submit(answers)
-    }
-
-    fn build_answers(
-        questions: &[AskUserQuestionItem],
-        drafts: &[QuestionDraftState],
-    ) -> Vec<AskUserQuestionAnswerItem> {
-        questions
-            .iter()
-            .enumerate()
-            .map(|(index, question)| Self::build_answer(question, drafts.get(index)))
-            .collect_vec()
-    }
-
-    fn build_answer(
-        question: &AskUserQuestionItem,
-        draft: Option<&QuestionDraftState>,
-    ) -> AskUserQuestionAnswerItem {
-        // The executor expects one answer entry per question, so unanswered drafts and drafts that
-        // collapse back to "no actual content" are both normalized to Skipped here.
-        let Some(QuestionDraftState::Answered(draft)) = draft else {
-            return AskUserQuestionAnswerItem::Skipped {
-                question_id: question.question_id.clone(),
-            };
-        };
-
-        let selected_options = match &question.question_type {
-            AskUserQuestionType::MultipleChoice { options, .. } => draft
-                .selected_option_indices
-                .iter()
-                .copied()
-                .sorted_unstable()
-                .filter_map(|index| options.get(index).map(|option| option.label.clone()))
-                .collect_vec(),
-        };
-        let other_text = draft.other_text.clone().unwrap_or_default();
-
-        if selected_options.is_empty() && other_text.is_empty() {
-            AskUserQuestionAnswerItem::Skipped {
-                question_id: question.question_id.clone(),
-            }
-        } else {
-            AskUserQuestionAnswerItem::Answered {
-                question_id: question.question_id.clone(),
-                selected_options,
-                other_text,
-            }
-        }
-    }
 }
 
 /// Stateful inline-action view that renders questionnaire UI and coordinates with the action model.
@@ -1026,14 +506,14 @@ impl AskUserQuestionView {
             return None;
         }
 
-        if draft.is_some_and(|draft| draft.is_other_input_active) {
-            if let Some(input) = other_text_input {
-                return Some(number_shortcut_buttons::inline_input_shortcut_button(
-                    number,
-                    input.clone(),
-                    MouseStateHandle::default(),
-                ));
-            }
+        if draft.is_some_and(|draft| draft.is_other_input_active)
+            && let Some(input) = other_text_input
+        {
+            return Some(number_shortcut_buttons::inline_input_shortcut_button(
+                number,
+                input.clone(),
+                MouseStateHandle::default(),
+            ));
         }
 
         let accepted_text = draft
@@ -1215,7 +695,7 @@ impl AskUserQuestionView {
             AskUserQuestionEffect::RefreshCurrent => {
                 self.rebuild_current_question(AskUserQuestionRebuildMode::PreserveSelection, ctx);
             }
-            AskUserQuestionEffect::FocusOtherInput => {
+            AskUserQuestionEffect::FocusCustomAnswerInput => {
                 self.rebuild_current_question(AskUserQuestionRebuildMode::PreserveSelection, ctx);
                 if let Some(text_input) = &self.text_input {
                     ctx.focus(text_input);
@@ -1766,7 +1246,9 @@ impl TypedActionView for AskUserQuestionView {
             }
             AskUserQuestionViewAction::OtherSelected => {
                 self.abort_auto_advance();
-                let effect = self.session.apply(AskUserQuestionAction::OpenOtherInput);
+                let effect = self
+                    .session
+                    .apply(AskUserQuestionAction::EnterCustomAnswerEditing);
                 self.handle_session_effect(effect, ctx);
             }
             AskUserQuestionViewAction::NavigateNext => {
@@ -1795,7 +1277,7 @@ impl TypedActionView for AskUserQuestionView {
                     .buttons
                     .read(ctx, |buttons, _| buttons.selected_button_index());
                 let active_other_text = self.read_active_other_text(ctx);
-                let effect = self.session.apply(AskUserQuestionAction::PressEnter {
+                let effect = self.session.apply(AskUserQuestionAction::SubmitAnswer {
                     highlighted_index,
                     active_other_text,
                 });
@@ -1910,8 +1392,8 @@ pub(crate) fn render_text_with_markdown_support(
     text_color: pathfinder_color::ColorU,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
-    if let Ok(formatted_text) = markdown_parser::parse_markdown(text) {
-        FormattedTextElement::new(
+    match markdown_parser::parse_markdown(text) {
+        Ok(formatted_text) => FormattedTextElement::new(
             formatted_text,
             font_size,
             appearance.ui_font_family(),
@@ -1920,12 +1402,11 @@ pub(crate) fn render_text_with_markdown_support(
             Default::default(),
         )
         .with_line_height_ratio(DEFAULT_UI_LINE_HEIGHT_RATIO)
-        .finish()
-    } else {
-        Text::new(text.to_string(), appearance.ui_font_family(), font_size)
+        .finish(),
+        _ => Text::new(text.to_string(), appearance.ui_font_family(), font_size)
             .soft_wrap(true)
             .with_color(text_color)
-            .finish()
+            .finish(),
     }
 }
 

@@ -4,7 +4,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use blocking::unblock;
 use warp_cli::artifact::UploadArtifactArgs;
 
@@ -12,14 +12,14 @@ use super::common::parse_ambient_task_id;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::{
     AIClient, CreateFileArtifactUploadRequest, CreateFileArtifactUploadResponse,
     FileArtifactRecord, FileArtifactUploadTargetInfo,
 };
 use crate::server::server_api::harness_support::FileUploadBody;
 use crate::server::server_api::presigned_upload::upload_file_to_target;
-use crate::server::server_api::ServerApi;
-use crate::util::image::{infer_mime_type, MIME_SNIFF_BYTES};
+use crate::util::image::{MIME_SNIFF_BYTES, infer_mime_type};
 
 const OZ_RUN_ID_ENV_VAR: &str = "OZ_RUN_ID";
 
@@ -28,6 +28,8 @@ pub(crate) struct FileArtifactUploadRequest {
     pub(crate) path: PathBuf,
     pub(crate) run_id: Option<AmbientAgentTaskId>,
     pub(crate) conversation_id: Option<ServerConversationToken>,
+    /// Short badge-visible title for the artifact (e.g. a recording title).
+    pub(crate) title: Option<String>,
     pub(crate) description: Option<String>,
 }
 
@@ -44,6 +46,7 @@ impl TryFrom<UploadArtifactArgs> for FileArtifactUploadRequest {
             path: value.path,
             run_id,
             conversation_id: value.conversation_id.map(ServerConversationToken::new),
+            title: None,
             description: value.description,
         })
     }
@@ -108,12 +111,15 @@ impl FileArtifactUploader {
         association: ResolvedUploadAssociation,
     ) -> Result<CompletedFileArtifactUpload> {
         let FileArtifactUploadRequest {
-            path, description, ..
+            path,
+            title,
+            description,
+            ..
         } = request;
 
         let artifact = self.prepare_upload_artifact(path).await?;
         let create_response = self
-            .create_upload_target(association, description, &artifact)
+            .create_upload_target(association, title, description, &artifact)
             .await?;
 
         let checksum = self
@@ -138,6 +144,7 @@ impl FileArtifactUploader {
     async fn create_upload_target(
         &self,
         association: ResolvedUploadAssociation,
+        title: Option<String>,
         description: Option<String>,
         artifact: &PreparedUploadArtifact,
     ) -> Result<CreateFileArtifactUploadResponse> {
@@ -149,6 +156,7 @@ impl FileArtifactUploader {
                     .map(|token| token.as_str().to_string()),
                 run_id: association.run_id.as_ref().map(ToString::to_string),
                 filepath: artifact.filepath.clone(),
+                title,
                 description,
                 mime_type: Some(artifact.mime_type.clone()),
                 size_bytes: artifact.graphql_size_bytes(),

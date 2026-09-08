@@ -7,10 +7,10 @@ use warp_managed_secrets::ManagedSecretValue;
 use crate::ai::mcp::parsing::normalize_codex_toml_to_json;
 use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::{
-    mcp_provider_from_file_path, CLIServer, JsonTemplate, MCPProvider, MCPServer, MCPServerExt,
+    CLIServer, JsonTemplate, MCPProvider, MCPServer, MCPServerExt,
     ParsedTemplatableMCPServerResult, ServerSentEvents, StaticEnvVar, StaticHeader,
     TemplatableMCPServer, TemplatableMCPServerInstallation, TemplateVariable, TransportType,
-    VariableType, VariableValue,
+    VariableType, VariableValue, mcp_provider_from_file_path,
 };
 
 #[test]
@@ -119,14 +119,18 @@ fn test_sse_server_with_headers() {
     if let TransportType::ServerSentEvents(parsed_sse) = &parsed_server.transport_type {
         assert_eq!(parsed_sse.url, "https://example.com/sse");
         assert_eq!(parsed_sse.headers.len(), 2);
-        assert!(parsed_sse
-            .headers
-            .iter()
-            .any(|h| h.name == "Authorization" && h.value == "Bearer token123"));
-        assert!(parsed_sse
-            .headers
-            .iter()
-            .any(|h| h.name == "X-Custom-Header" && h.value == "custom-value"));
+        assert!(
+            parsed_sse
+                .headers
+                .iter()
+                .any(|h| h.name == "Authorization" && h.value == "Bearer token123")
+        );
+        assert!(
+            parsed_sse
+                .headers
+                .iter()
+                .any(|h| h.name == "X-Custom-Header" && h.value == "custom-value")
+        );
     } else {
         panic!("Expected ServerSentEvents transport type");
     }
@@ -978,10 +982,68 @@ fn test_apply_secrets_missing_secret_leaves_placeholder() {
     );
 
     let secrets = make_secrets(vec![]);
-    installation.apply_secrets(&secrets);
+    let unresolved_secret_names = installation.apply_secrets(&secrets);
 
     assert_eq!(
         installation.variable_values()["API_KEY"].value,
         "{{nonexistent_secret}}"
     );
+    // Preserving the placeholder is deliberate, but it means the server is
+    // about to run with literal `{{...}}` text where a credential belongs, so
+    // the caller has to be told which secret went missing.
+    assert_eq!(
+        unresolved_secret_names,
+        vec!["nonexistent_secret".to_string()]
+    );
+}
+
+#[test]
+fn test_apply_secrets_reports_no_unresolved_refs_when_everything_resolves() {
+    let mut installation = create_test_installation(
+        "sse-server",
+        r#"{"sse-server":{"url":"https://example.com","headers":{"Authorization":"{{Authorization}}"}}}"#,
+        vec![("Authorization", "Bearer {{my_token}}")],
+    );
+
+    let secrets = make_secrets(vec![("my_token", "tok_abc123")]);
+    let unresolved_secret_names = installation.apply_secrets(&secrets);
+
+    assert!(unresolved_secret_names.is_empty());
+}
+
+#[test]
+fn test_apply_secrets_does_not_parse_refs_from_resolved_secret_values() {
+    let mut installation = create_test_installation(
+        "sse-server",
+        r#"{"sse-server":{"url":"https://example.com","headers":{"Authorization":"{{Authorization}}"}}}"#,
+        vec![("Authorization", "Bearer {{my_token}}")],
+    );
+
+    let secrets = make_secrets(vec![("my_token", "literal-{{not-a-secret-ref}}")]);
+    let unresolved_secret_names = installation.apply_secrets(&secrets);
+
+    assert!(unresolved_secret_names.is_empty());
+    assert_eq!(
+        installation.variable_values()["Authorization"].value,
+        "Bearer literal-{{not-a-secret-ref}}"
+    );
+}
+
+#[test]
+fn test_apply_secrets_unresolved_refs_never_expose_resolved_values() {
+    // One ref resolves and one does not. The report must name only the
+    // missing secret, never the value of the one that resolved.
+    let mut installation = create_test_installation(
+        "sse-server",
+        r#"{"sse-server":{"url":"https://example.com","headers":{"Authorization":"{{Authorization}}","X-Extra":"{{X-Extra}}"}}}"#,
+        vec![
+            ("Authorization", "Bearer {{present_token}}"),
+            ("X-Extra", "{{absent_token}}"),
+        ],
+    );
+
+    let secrets = make_secrets(vec![("present_token", "super-secret-value")]);
+    let unresolved_secret_names = installation.apply_secrets(&secrets);
+
+    assert_eq!(unresolved_secret_names, vec!["absent_token".to_string()]);
 }

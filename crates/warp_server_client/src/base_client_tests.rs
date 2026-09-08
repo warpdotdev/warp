@@ -1,16 +1,17 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use cloud_objects::ids::ServerId;
 use futures::executor::block_on;
+use warp_core::channel::ChannelState;
 use warp_server_auth::auth_state::AuthState;
 
 use super::{
     AGENT_SOURCE_HEADER, AMBIENT_WORKLOAD_TOKEN_HEADER, AmbientHeaderPolicy,
     AuthenticatedGraphqlConfig, BaseClient, CLOUD_AGENT_ID_HEADER, GraphqlRoutingConfig,
-    HeaderOverride,
+    HeaderOverride, TEAM_UID_HEADER,
 };
-#[cfg(feature = "agent_mode_evals")]
-use super::{EVAL_USER_ID_HEADER, EVAL_USER_IDS};
+use crate::auth::{AuthClient, AuthClientImpl};
 
 struct StaticIapTokenProvider;
 
@@ -58,26 +59,6 @@ fn iap_proxy_auth_header_uses_configured_provider() {
             http_client::iap::IAP_PROXY_AUTH_HEADER,
             "Bearer iap-token".to_string()
         ))
-    );
-}
-
-#[cfg(feature = "agent_mode_evals")]
-#[test]
-fn eval_user_id_is_selected_once_and_used_for_authenticated_graphql() {
-    let client = client();
-    let eval_user_id = client.eval_user_id().unwrap();
-
-    assert!(EVAL_USER_IDS.contains(&eval_user_id));
-
-    let options = block_on(client.graphql_request_options(None)).unwrap();
-    let eval_user_id = eval_user_id.to_string();
-    assert_eq!(
-        options.headers.get(EVAL_USER_ID_HEADER).map(String::as_str),
-        Some(eval_user_id.as_str())
-    );
-    assert_eq!(
-        client.eval_user_id().map(|id| id.to_string()),
-        Some(eval_user_id)
     );
 }
 
@@ -201,18 +182,84 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
             .headers
             .contains_key(&CLOUD_AGENT_ID_HEADER.to_ascii_lowercase())
     );
-    #[cfg(feature = "agent_mode_evals")]
-    {
-        let eval_user_id = client.eval_user_id().unwrap().to_string();
-        assert!(!options.headers.contains_key("x-eval-user-id"));
-        assert_eq!(
-            options.headers.get(EVAL_USER_ID_HEADER).map(String::as_str),
-            Some(eval_user_id.as_str())
-        );
-    }
-    #[cfg(not(feature = "agent_mode_evals"))]
     assert_eq!(
         options.headers.get("x-eval-user-id").map(String::as_str),
         Some("1234")
     );
+}
+
+fn api_key_client(path_prefix: &str) -> (AuthClientImpl, Arc<Mutex<Option<String>>>) {
+    let observed_team_uid = Arc::new(Mutex::new(None));
+    let observed_team_uid_for_request = observed_team_uid.clone();
+    let mut http_client = http_client::Client::new();
+    http_client.set_before_request_fn(Box::new(move |request, _| {
+        *observed_team_uid_for_request.lock().unwrap() = request
+            .headers()
+            .get(TEAM_UID_HEADER)
+            .map(|value| value.to_str().unwrap().to_string());
+    }));
+    let auth_state = AuthState::new_logged_out_for_test();
+    auth_state.set_remote_server_bearer_token("test-token".to_string());
+    let (event_sender, _) = async_channel::unbounded();
+    let base_client = BaseClient::new(
+        Arc::new(http_client),
+        Arc::new(auth_state),
+        event_sender,
+        None,
+        GraphqlRoutingConfig {
+            path_prefix: Some(path_prefix.to_string()),
+        },
+        AuthenticatedGraphqlConfig::default(),
+        None,
+    );
+    *base_client.ambient_workload_token.lock() = Some(warp_isolation_platform::WorkloadToken {
+        token: "test-workload-token".to_string(),
+        expires_at: None,
+    });
+
+    (
+        AuthClientImpl::new(Arc::new(base_client)),
+        observed_team_uid,
+    )
+}
+
+fn mock_api_key_list(path_prefix: &str) -> mockito::Mock {
+    let mut server = ChannelState::mock_server();
+    server
+        .mock(
+            "POST",
+            mockito::Matcher::Regex(format!("^{path_prefix}/graphql/v2")),
+        )
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{"data":{"apiKeys":{"__typename":"APIKeyPropertiesOutput","apiKeys":[],"responseContext":{"serverVersion":null}}}}"#,
+        )
+        .create()
+}
+
+#[test]
+fn list_api_keys_sends_selected_team_header() {
+    let team_uid = "abcdefghijklmnopqrstuv";
+    let request = mock_api_key_list("/api-key-selected");
+    let (auth_client, observed_team_uid) = api_key_client("/api-key-selected");
+
+    let keys =
+        block_on(auth_client.list_api_keys(Some(ServerId::try_from(team_uid).unwrap()))).unwrap();
+
+    assert!(keys.is_empty());
+    assert_eq!(observed_team_uid.lock().unwrap().as_deref(), Some(team_uid));
+    request.assert();
+}
+
+#[test]
+fn list_api_keys_omits_team_header_when_unscoped() {
+    let request = mock_api_key_list("/api-key-unscoped");
+    let (auth_client, observed_team_uid) = api_key_client("/api-key-unscoped");
+
+    let keys = block_on(auth_client.list_api_keys(None)).unwrap();
+
+    assert!(keys.is_empty());
+    assert_eq!(observed_team_uid.lock().unwrap().as_deref(), None);
+    request.assert();
 }

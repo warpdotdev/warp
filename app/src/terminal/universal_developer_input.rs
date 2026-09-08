@@ -10,9 +10,9 @@ use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::contrast::{
-    foreground_color_with_minimum_contrast, MinimumAllowedContrast,
+    MinimumAllowedContrast, foreground_color_with_minimum_contrast,
 };
-use warp_core::ui::color::{coloru_with_opacity, Opacity, Rgb};
+use warp_core::ui::color::{Opacity, Rgb, coloru_with_opacity};
 use warp_core::ui::theme;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -26,22 +26,24 @@ use warpui::ui_components::segmented_control::{
 };
 use warpui::{
     AppContext, Element, Entity, EntityId, ModelHandle, SingletonEntity as _, TypedActionView,
-    View, ViewAsRef, ViewContext, ViewHandle,
+    View, ViewAsRef, ViewContext, ViewHandle, WeakViewHandle,
 };
 
+use crate::BlocklistAIHistoryModel;
+use crate::ai::AIRequestUsageModel;
 use crate::ai::blocklist::block::cli_controller::CLISubagentController;
-use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::prompt::PromptIconButtonTheme;
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
 use crate::ai::blocklist::{
     BlocklistAIHistoryEvent, BlocklistAIInputModel, InputConfig, InputType,
 };
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::AIRequestUsageModel;
 use crate::cloud_object::model::generic_string_model::StringModel;
 use crate::network::NetworkStatus;
 #[cfg(not(target_family = "wasm"))]
 use crate::search::ai_context_menu::view::AIContextMenu;
+use crate::server::ids::ServerId;
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::InputSettings;
 use crate::settings::{AISettings, AISettingsChangedEvent};
@@ -53,8 +55,8 @@ use crate::terminal::model::block::BlockMetadata;
 use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::profile_model_selector::{
-    calculate_max_profile_name_width, calculate_scaled_font_size, ProfileModelSelector,
-    ProfileModelSelectorEvent,
+    ProfileModelSelector, ProfileModelSelectorEvent, calculate_max_profile_name_width,
+    calculate_scaled_font_size,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::shared_session::permissions_manager::SessionPermissionsManager;
@@ -63,8 +65,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, NakedTheme, TooltipAlignment,
 };
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::BlocklistAIHistoryModel;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 pub enum AtContextMenuDisabledReason {
     #[cfg(target_family = "wasm")]
@@ -194,6 +195,7 @@ const BLURRED_OPACITY: Opacity = 50;
 // This is used for determining whether the selector should be rendered as full or compact
 fn calculate_profile_model_selector_threshold(
     terminal_view_id: EntityId,
+    team_uid: Option<ServerId>,
     appearance: &Appearance,
     ctx: &AppContext,
 ) -> f32 {
@@ -212,11 +214,12 @@ fn calculate_profile_model_selector_threshold(
         .em_width(appearance.monospace_font_family(), scaled_font_size);
 
     let llm_preferences = LLMPreferences::as_ref(ctx);
-    let active_llm = llm_preferences.get_active_base_model(ctx, Some(terminal_view_id));
+    let active_llm =
+        llm_preferences.get_active_base_model_for_team_uid(team_uid, ctx, Some(terminal_view_id));
     let model_name_char_count = active_llm.menu_display_name().chars().count() as f32;
     let model_text_width = model_name_char_count * em_width;
 
-    let result = if has_multiple_profiles {
+    if has_multiple_profiles {
         let profile_name_char_count = AIExecutionProfilesModel::as_ref(ctx)
             .active_profile(Some(terminal_view_id), ctx)
             .data()
@@ -229,8 +232,7 @@ fn calculate_profile_model_selector_threshold(
         font_size * 20.0 + profile_text_width + model_text_width
     } else {
         20.0 * font_size + base_constant + model_text_width
-    };
-    result
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +293,7 @@ impl CachedUIState {
 
 pub struct UniversalDeveloperInputButtonBar {
     terminal_view_id: EntityId,
+    view_handle: WeakViewHandle<Self>,
     mic_button: ViewHandle<ActionButton>,
     at_button: ViewHandle<ActionButton>,
     file_button: ViewHandle<ActionButton>,
@@ -597,6 +600,7 @@ impl UniversalDeveloperInputButtonBar {
 
         let mut me = Self {
             terminal_view_id,
+            view_handle: ctx.handle(),
             mic_button: mic_button_view,
             at_button: at_button_view,
             file_button: file_button_view,
@@ -778,6 +782,14 @@ impl UniversalDeveloperInputButtonBar {
         self.profile_model_selector_full.as_ref(ctx).is_open()
             || self.profile_model_selector_compact.as_ref(ctx).is_open()
     }
+
+    fn team_uid(&self, app: &AppContext) -> Option<ServerId> {
+        self.view_handle.window_id(app).and_then(|window_id| {
+            UserWorkspaces::as_ref(app)
+                .team_context_for_window(window_id)
+                .team_uid()
+        })
+    }
 }
 
 // Implement Entity trait for UniversalDeveloperInputButtonBar
@@ -865,8 +877,12 @@ impl View for UniversalDeveloperInputButtonBar {
             buttons.finish()
         };
 
-        let compact_threshold =
-            calculate_profile_model_selector_threshold(self.terminal_view_id, appearance, app);
+        let compact_threshold = calculate_profile_model_selector_threshold(
+            self.terminal_view_id,
+            self.team_uid(app),
+            appearance,
+            app,
+        );
         let content = SizeConstraintSwitch::new(
             // We only need to add left padding to the full profile model selector because the
             // compact selector icons follow the UDI button styling with ~4px margin horizontally.

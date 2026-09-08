@@ -15,6 +15,29 @@ fn test_prompt_chip_log_filename_uses_channel_logfile_stem() {
 }
 
 #[test]
+fn prompt_chip_log_path_stays_beside_resolved_frontend_log() {
+    for (active_log, expected_sidecar) in [
+        (
+            "/tmp/warp-logs/warp_dev.log",
+            "/tmp/warp-logs/warp_dev.prompt_chips.log",
+        ),
+        (
+            "/tmp/warp-logs/warp-cli/warp_preview.log",
+            "/tmp/warp-logs/warp-cli/warp_preview.prompt_chips.log",
+        ),
+        (
+            "/tmp/warp-logs/oz/warp.log",
+            "/tmp/warp-logs/oz/warp.prompt_chips.log",
+        ),
+    ] {
+        assert_eq!(
+            prompt_chip_log_file_path(std::path::Path::new(active_log)).unwrap(),
+            std::path::PathBuf::from(expected_sidecar)
+        );
+    }
+}
+
+#[test]
 fn test_format_log_entry_uses_explicit_empty_and_missing_markers() {
     let entry = format_log_entry(&ChipCommandLogEntry {
         chip_kind: &ContextChipKind::GithubPullRequest,

@@ -1,5 +1,5 @@
 pub mod util;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 pub use util::{action_type_to_gql_action_type, object_action_history_from_gql};
 use warp_graphql::generic_string_object::GenericStringObjectFormat;
 use warp_graphql::mutations::update_generic_string_object::{

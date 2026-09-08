@@ -1,14 +1,13 @@
-use warp_core::send_telemetry_from_ctx;
 use warpui::{SingletonEntity, UpdateView};
 
 use super::{
-    fork_label_for_query, mark_feature_used_and_write_to_user_defaults, AIAgentExchangeId,
-    AIConversationId, AgentModeRewindEntrypoint, AppContext, BlocklistAIHistoryModel, ChannelState,
-    ClipboardContent, ContextMenuAction, ContextMenuInfo, ContextMenuState, ContextMenuType,
-    EntityId, FeatureFlag, ForkAIConversationParams, ForkFromExchange,
-    ForkedConversationDestination, MenuItem, MenuItemFields, RichContentLink,
-    ServerConversationToken, ServerOutputId, ShareableObject, TelemetryEvent, TerminalAction,
-    TerminalModel, TerminalView, Tip, TipHint, Vector2F, ViewContext, CONTEXT_MENU_WIDTH,
+    AIAgentExchangeId, AIConversationId, AgentModeRewindEntrypoint, AppContext,
+    BlocklistAIHistoryModel, CONTEXT_MENU_WIDTH, ChannelState, ClipboardContent, ContextMenuAction,
+    ContextMenuState, ContextMenuType, EntityId, FeatureFlag, ForkAIConversationParams,
+    ForkFromExchange, ForkedConversationDestination, MenuItem, MenuItemFields, RichContentLink,
+    ServerConversationToken, ServerOutputId, ShareableObject, TerminalAction, TerminalModel,
+    TerminalView, Tip, TipHint, Vector2F, ViewContext, fork_label_for_query,
+    mark_feature_used_and_write_to_user_defaults,
 };
 
 impl TerminalView {
@@ -115,6 +114,27 @@ impl TerminalView {
                 MenuItemFields::new(String::from("Copy git branch"))
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::CopyAgentGitBranch { ai_block_view_id },
+                    ))
+                    .into_item(),
+            );
+        }
+        let has_query_timestamp = self.rich_content_views.iter().any(|rich_content| {
+            rich_content
+                .ai_block_metadata()
+                .filter(|metadata| metadata.ai_block_handle.id() == ai_block_view_id)
+                .is_some_and(|metadata| {
+                    metadata
+                        .ai_block_handle
+                        .as_ref(ctx)
+                        .query_sent_at(ctx)
+                        .is_some()
+                })
+        });
+        if has_query_timestamp {
+            items.push(
+                MenuItemFields::new("Copy timestamp")
+                    .with_on_select_action(TerminalAction::ContextMenu(
+                        ContextMenuAction::CopyAIBlockTimestamp { ai_block_view_id },
                     ))
                     .into_item(),
             );
@@ -232,12 +252,7 @@ impl TerminalView {
         // Prefer loaded conversation data when available.
         history_model
             .conversation(&conversation_id)
-            .and_then(|conversation| {
-                conversation
-                    .server_conversation_token()
-                    .or_else(|| conversation.forked_from_server_conversation_token())
-                    .cloned()
-            })
+            .and_then(|conversation| conversation.debugging_server_conversation_token().cloned())
             .or_else(|| {
                 // Restored entries may only have server metadata loaded.
                 history_model
@@ -297,11 +312,7 @@ impl TerminalView {
     ) -> Vec<(String, ContextMenuAction)> {
         let conversation_token = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&ai_conversation_id)
-            .and_then(|convo| {
-                convo
-                    .server_conversation_token()
-                    .or_else(|| convo.forked_from_server_conversation_token())
-            });
+            .and_then(|conversation| conversation.debugging_server_conversation_token());
 
         let Some(conversation_token) = conversation_token else {
             return Vec::new();
@@ -506,14 +517,6 @@ impl TerminalView {
         ctx.focus(&self.context_menu);
         ctx.notify();
 
-        send_telemetry_from_ctx!(
-            TelemetryEvent::OpenContextMenu {
-                context_menu_info: ContextMenuInfo {
-                    menu_type: menu_state.menu_type,
-                }
-            },
-            ctx
-        );
         self.tips_completed.update(ctx, |tips, ctx| {
             mark_feature_used_and_write_to_user_defaults(
                 Tip::Hint(TipHint::BlockAction),

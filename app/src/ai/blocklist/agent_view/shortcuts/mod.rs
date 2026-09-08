@@ -154,33 +154,31 @@ pub fn render_agent_shortcuts_view(
     ));
 
     // Code review is not available for cloud agents.
-    if !context.is_cloud_agent {
-        if let Some(keystroke) = keybinding_name_to_keystroke(TOGGLE_RIGHT_PANEL_BINDING_NAME, app)
-        {
-            shortcuts.push(render_shortcut(
-                ShortcutProps {
-                    keystroke,
-                    text: "open code review".into(),
-                    ..Default::default()
-                },
-                app,
-            ));
-        }
+    if !context.is_cloud_agent
+        && let Some(keystroke) = keybinding_name_to_keystroke(TOGGLE_RIGHT_PANEL_BINDING_NAME, app)
+    {
+        shortcuts.push(render_shortcut(
+            ShortcutProps {
+                keystroke,
+                text: "open code review".into(),
+                ..Default::default()
+            },
+            app,
+        ));
     }
 
-    if FeatureFlag::AgentViewConversationListView.is_enabled() {
-        if let Some(keystroke) =
+    if FeatureFlag::AgentViewConversationListView.is_enabled()
+        && let Some(keystroke) =
             keybinding_name_to_keystroke(TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, app)
-        {
-            shortcuts.push(render_shortcut(
-                ShortcutProps {
-                    keystroke,
-                    text: "toggle conversation list".into(),
-                    ..Default::default()
-                },
-                app,
-            ));
-        }
+    {
+        shortcuts.push(render_shortcut(
+            ShortcutProps {
+                keystroke,
+                text: "toggle conversation list".into(),
+                ..Default::default()
+            },
+            app,
+        ));
     }
 
     shortcuts.push(render_shortcut(
@@ -208,19 +206,18 @@ pub fn render_agent_shortcuts_view(
         app,
     ));
 
-    if !hide_cloud_zero_state_items {
-        if let Some(keystroke) =
+    if !hide_cloud_zero_state_items
+        && let Some(keystroke) =
             keybinding_name_to_keystroke(TOGGLE_AUTOEXECUTE_MODE_KEYBINDING, app)
-        {
-            shortcuts.push(render_shortcut(
-                ShortcutProps {
-                    keystroke,
-                    text: "toggle auto-accept".into(),
-                    ..Default::default()
-                },
-                app,
-            ));
-        }
+    {
+        shortcuts.push(render_shortcut(
+            ShortcutProps {
+                keystroke,
+                text: "toggle auto-accept".into(),
+                ..Default::default()
+            },
+            app,
+        ));
     }
 
     shortcuts.push(render_shortcut(

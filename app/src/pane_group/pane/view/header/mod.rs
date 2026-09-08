@@ -1,10 +1,11 @@
 use std::fmt::Debug;
 
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use sharing::SharedPaneContent;
 use warp_core::features::FeatureFlag;
 use warp_core::settings::Setting;
+use warp_errors::report_error;
 use warpui::elements::{
     AcceptedByDropTarget, Align, Border, ChildAnchor, Clipped, ConstrainedBox, Container,
     CornerRadius, CrossAxisAlignment, Dismiss, Draggable, DraggableState, Empty, Flex, Hoverable,
@@ -18,8 +19,8 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
-use super::header_content::{HeaderContent, HeaderRenderContext, StandardHeaderOptions};
 use super::PaneDropTargetData;
+use super::header_content::{HeaderContent, HeaderRenderContext, StandardHeaderOptions};
 use crate::appearance::Appearance;
 use crate::menu::{Menu, MenuItem};
 use crate::pane_group::focus_state::{PaneFocusHandle, PaneGroupFocusEvent};
@@ -617,7 +618,7 @@ impl<P: BackingView> PaneHeader<P> {
         );
         let should_display_overflow_menu_button = !self.overflow_menu.as_ref(app).is_empty();
 
-        let hoverable = Hoverable::new(
+        (Hoverable::new(
             self.mouse_state_handles.header_hover_handle.clone(),
             |hover_state| {
                 // Determine if icons should be shown based on hover state and options.
@@ -663,17 +664,14 @@ impl<P: BackingView> PaneHeader<P> {
                         .finish();
                 title_row.add_child(Shrinkable::new(1., title_text).finish());
 
-                if let Some(secondary) = &title_secondary {
-                    if !secondary.is_empty() {
-                        let secondary_text = Text::new_inline(
-                            secondary.clone(),
-                            appearance.ui_font_family(),
-                            font_size,
-                        )
-                        .with_color(font_color.into())
-                        .finish();
-                        title_row.add_child(secondary_text);
-                    }
+                if let Some(secondary) = &title_secondary
+                    && !secondary.is_empty()
+                {
+                    let secondary_text =
+                        Text::new_inline(secondary.clone(), appearance.ui_font_family(), font_size)
+                            .with_color(font_color.into())
+                            .finish();
+                    title_row.add_child(secondary_text);
                 }
 
                 // If a max width is set, constrain the title to that width.
@@ -743,9 +741,7 @@ impl<P: BackingView> PaneHeader<P> {
                 .finish()
             },
         )
-        .finish();
-
-        hoverable
+        .finish()) as _
     }
 }
 
@@ -966,8 +962,9 @@ impl<P: BackingView> TypedActionView for PaneHeader<P> {
                             });
                         }
                     } else {
-                        log::error!(
-                            "Attempting to move to pane that does not exist with id: {target_id:?}"
+                        report_error!(
+                            "Attempting to move to pane that does not exist",
+                            extra: { "target_id" => ?target_id }
                         );
                     }
                 }

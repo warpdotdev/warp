@@ -1,3 +1,3 @@
 mod view;
 
-pub use view::{init, AutoHandoffSleepModal, AutoHandoffSleepModalEvent};
+pub use view::{AutoHandoffSleepModal, AutoHandoffSleepModalEvent, init};

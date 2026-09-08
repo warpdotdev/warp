@@ -10,7 +10,7 @@ pub use view::{RewindMenuEvent, RewindMenuView};
 use warpui::keymap::Keystroke;
 
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, InlineMenuAction, InlineMenuMessageArgs, InlineMenuType,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType, default_navigation_message_items,
 };
 use crate::terminal::input::message_bar::{Message, MessageItem};
 

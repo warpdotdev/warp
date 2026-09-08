@@ -24,8 +24,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use ai::document::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use base64::Engine as _;
-use chrono::Duration;
+use chrono::{DateTime, Duration, Local};
 use cli_controller::{CLISubagentController, CLISubagentEvent};
 use find::FindState;
 use indexmap::IndexMap;
@@ -37,27 +38,30 @@ use pathfinder_geometry::vector::vec2f;
 pub use pending_user_query_block::{PendingUserQueryBlock, PendingUserQueryBlockEvent};
 #[cfg(not(target_family = "wasm"))]
 use repo_metadata::repositories::DetectedRepositories;
-use secret_redaction::*;
+use rustc_hash::FxHashSet;
 use serde::Serialize;
 use settings::Setting as _;
+use string_offset::StringRange;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warp_editor::content::buffer::InitialBufferState;
 #[cfg(feature = "local_fs")]
 use warp_editor::content::edit::resolve_asset_source_relative_to_directory;
 use warp_editor::render::element::VerticalExpansionBehavior;
+use warp_errors::{report_error, report_if_error};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::path::ShellFamily;
-use warpui::assets::asset_cache::AssetCache;
+use warpui::assets::asset_cache::{AssetCache, AssetSource};
+use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    get_rich_content_position_id, ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize,
-    MouseStateHandle, SecretRange, SelectionBound, SelectionHandle, TableStateHandle,
+    ClippedScrollStateHandle, MainAxisAlignment, MainAxisSize, MouseStateHandle, SelectionBound,
+    SelectionHandle, TableStateHandle, get_rich_content_position_id,
 };
 use warpui::image_cache::ImageType;
 use warpui::keymap::FixedBinding;
-use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::text::SelectionType;
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::ui_components::components::{UiComponent, UiComponentStyles};
@@ -67,9 +71,8 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-#[cfg(feature = "agent_mode_debug")]
-use self::code_diff_view::FileDiff;
 use self::model::{AIBlockModel, AIBlockModelHelper};
+use self::secret_redaction::*;
 use super::action_model::{AIActionStatus, BlocklistAIActionEvent, RequestFileEditsFormatKind};
 use super::code_block::CodeSnippetButtonHandles;
 use super::controller::ClientIdentifiers;
@@ -95,12 +98,11 @@ use crate::ai::agent::{
     AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
     CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
     MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseResult, ServerOutputId,
-    SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult, SuggestedLoggingId,
-    SummarizationType, TodoOperation,
+    RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource, SearchCodebaseResult,
+    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
+    SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
-use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::NewConversationDecision;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewEntryOrigin};
@@ -108,6 +110,8 @@ use crate::ai::blocklist::block::keyboard_navigable_buttons::{
     KeyboardNavigableButtonBuilder, KeyboardNavigableButtons,
 };
 use crate::ai::blocklist::context_model::AttachmentType;
+#[cfg(feature = "agent_mode_debug")]
+use crate::ai::blocklist::diff_types::FileDiff;
 use crate::ai::blocklist::inline_action::ask_user_question_view::{
     self, AskUserQuestionView, AskUserQuestionViewEvent,
 };
@@ -116,6 +120,9 @@ use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::{
 };
 use crate::ai::blocklist::inline_action::code_diff_view;
 use crate::ai::blocklist::inline_action::code_diff_view::convert_file_edits_to_file_diffs;
+use crate::ai::blocklist::inline_action::gemini_enterprise_credentials_error::{
+    GeminiEnterpriseCredentialsErrorEvent, GeminiEnterpriseCredentialsErrorView,
+};
 use crate::ai::blocklist::inline_action::requested_command::{
     self, RequestedActionViewType, RequestedCommand, RequestedCommandView,
     RequestedCommandViewEvent,
@@ -147,6 +154,7 @@ use crate::ai::get_relevant_files::controller::{
 #[cfg(feature = "local_fs")]
 use crate::ai::skills::SkillOpenOrigin;
 use crate::ai::skills::{SkillManager, SkillTelemetryEvent};
+use crate::ai::stored_screenshots::stored_screenshot_asset_source;
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::auth::{AuthStateProvider, UserUid};
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -154,17 +162,18 @@ use crate::cloud_object::model::persistence::CloudModel;
 use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor;
 use crate::code::editor::view::{CodeEditorEvent, CodeEditorRenderOptions, CodeEditorView};
 use crate::code::editor_management::CodeSource;
+use crate::code_review::CodeReviewTelemetryEvent;
 use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
 use crate::code_review::comments::{
-    attach_pending_imported_comments, convert_insert_review_comments, AttachedReviewComment,
-    CommentId, CommentOrigin,
+    AttachedReviewComment, CommentId, CommentOrigin, attach_pending_imported_comments,
+    convert_insert_review_comments,
 };
 use crate::code_review::telemetry_event::CodeReviewPaneEntrypoint;
-use crate::code_review::CodeReviewTelemetryEvent;
 use crate::editor::InteractionState;
 use crate::notebooks::editor::model::FileLinkResolutionContext;
 use crate::notebooks::editor::view::{EditorViewEvent, RichTextEditorView};
 use crate::server::ids::SyncId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::{
     AgentModeRewindEntrypoint, AutonomySettingToggleSource, InteractionSource, TelemetryEvent,
 };
@@ -175,12 +184,12 @@ use crate::settings::{
 };
 use crate::settings_view::SettingsSection;
 use crate::terminal::find::TerminalFindModel;
+use crate::terminal::model::BlockId;
 use crate::terminal::model::secrets::RichContentSecretTooltipInfo;
 use crate::terminal::model::session::active_session::{ActiveSession, ActiveSessionEvent};
-use crate::terminal::model::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::safe_mode_settings::{
-    get_secret_obfuscation_mode, SafeModeSettings, SafeModeSettingsChangedEvent,
+    SafeModeSettings, SafeModeSettingsChangedEvent, get_secret_obfuscation_mode,
 };
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::{
@@ -190,20 +199,21 @@ use crate::terminal::{ShellLaunchData, TerminalModel, TerminalView};
 use crate::ui_components::icons::Icon;
 use crate::util::link_detection::*;
 #[cfg(feature = "local_fs")]
-use crate::util::openable_file_type::{is_supported_image_file, FileTarget};
+use crate::util::openable_file_type::{FileTarget, is_supported_image_file};
+use crate::util::time_format::format_message_timestamp;
+use crate::view_components::DismissibleToast;
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
     SecondaryTheme,
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
 use crate::view_components::find::FindEvent;
-use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
-    report_error, report_if_error, send_telemetry_from_ctx, AIAgentTodoList, Appearance, FileEdit,
-    LLMPreferences, PrivacySettings, ToastStack,
+    AIAgentTodoList, Appearance, FileEdit, LLMPreferences, PrivacySettings, ToastStack,
+    send_telemetry_from_ctx,
 };
 
 /// The default display name used for the user if they have no associated display name.
@@ -269,14 +279,13 @@ fn user_avatar_info_for_conversation_creator(
         };
     }
 
-    if let Some(creator_uid) = creator_uid {
-        if let Some(profile) = UserProfiles::as_ref(app).profile_for_uid(UserUid::new(creator_uid))
-        {
-            return UserAvatarInfo {
-                display_name: profile.displayable_identifier(),
-                profile_image_path: non_empty_photo_url(&profile.photo_url),
-            };
-        }
+    if let Some(creator_uid) = creator_uid
+        && let Some(profile) = UserProfiles::as_ref(app).profile_for_uid(UserUid::new(creator_uid))
+    {
+        return UserAvatarInfo {
+            display_name: profile.displayable_identifier(),
+            profile_image_path: non_empty_photo_url(&profile.photo_url),
+        };
     }
 
     fallback
@@ -450,7 +459,6 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handles per citation.
     /// A given citation should only appear once per block.
     footer_citation_chip_handles: HashMap<AIAgentCitation, MouseStateHandle>,
-    orchestration_navigation_card_handles: HashMap<AIAgentActionId, MouseStateHandle>,
     /// Persistent mouse-state handles per received-message transcript row,
     /// used by the clickable sender avatar.
     pub(super) transcript_avatar_handles: HashMap<MessageId, MouseStateHandle>,
@@ -470,6 +478,7 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the overflow menu button
     overflow_menu_handle: MouseStateHandle,
+    query_timestamp_tooltip_handle: MouseStateHandle,
 
     menu_accept_button_handle: MouseStateHandle,
     menu_reject_button_handle: MouseStateHandle,
@@ -481,6 +490,9 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the invalid API key button
     invalid_api_key_button_handle: MouseStateHandle,
+
+    /// Mouse state handle for the Subscribe button shown on the out-of-credits error
+    subscribe_button_handle: MouseStateHandle,
 
     /// Mouse state handle for AI document created block
     ai_document_handle: MouseStateHandle,
@@ -878,7 +890,6 @@ fn default_collapsible_state_for_orchestration_action(
     display_mode: OrchestrationMessageDisplayMode,
 ) -> Option<CollapsibleElementState> {
     match action {
-        AIAgentActionType::StartAgent { .. } => Some(CollapsibleElementState::default()),
         AIAgentActionType::SendMessageToAgent { .. } => {
             Some(default_orchestration_collapsible_state(
                 display_mode.should_expand_agent_message_body(),
@@ -904,6 +915,11 @@ fn default_orchestration_collapsible_state(expanded: bool) -> CollapsibleElement
 
 pub struct AIBlock {
     model: Rc<dyn AIBlockModel<View = AIBlock>>,
+
+    /// Cached result of `model.request_type(app).is_passive()`. Safe to cache because whether a
+    /// conversation is passive or active is fixed at exchange creation and never changes for the
+    /// lifetime of the block (see `is_passive_conversation`).
+    is_passive: bool,
     terminal_model: Arc<FairMutex<TerminalModel>>,
     client_ids: ClientIdentifiers,
     profile_image_path: Option<String>,
@@ -933,7 +949,7 @@ pub struct AIBlock {
     context_model: ModelHandle<BlocklistAIContextModel>,
 
     /// The IDs of requested blocking actions rendered in this block.
-    requested_action_ids: HashSet<AIAgentActionId>,
+    requested_action_ids: FxHashSet<AIAgentActionId>,
 
     /// Map from a requested command action ID to its view handle and status.
     requested_commands: HashMap<AIAgentActionId, RequestedCommand>,
@@ -982,6 +998,11 @@ pub struct AIBlock {
     /// This is only set to Some if no new content is expected to be received and all
     /// requested actions and requested commands are completed or cancelled.
     finish_reason: Option<FinishReason>,
+
+    /// `true` while agent-view Cmd-Up/Cmd-Down transcript navigation targets this block's user
+    /// query. Renders a navigation ring around the query row so the stop stays visibly
+    /// identifiable even when the viewport doesn't move.
+    is_agent_transcript_navigation_target: bool,
 
     directory_context: DirectoryContext,
     view_id: EntityId,
@@ -1041,6 +1062,15 @@ pub struct AIBlock {
     /// Per-action button components for "View screenshot" buttons on UseComputer actions.
     view_screenshot_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
 
+    /// Per-action button components for "Open recording" buttons on StopRecording actions.
+    open_recording_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
+
+    /// Whether this block's output contains recording-related actions
+    /// (StartRecording/StopRecording/UseComputer). Computed on output updates so
+    /// rendering can skip the conversation-wide recording span derivation for
+    /// unrelated blocks.
+    has_recording_related_actions: bool,
+
     /// Stores the last command that was right-clicked by a child component.
     /// When set, CopyCommand will copy this specific command instead of all commands.
     last_right_clicked_command: Option<String>,
@@ -1057,6 +1087,9 @@ pub struct AIBlock {
 
     /// View for AWS Bedrock credentials error, created lazily when the error occurs.
     aws_bedrock_credentials_error_view: Option<ViewHandle<AwsBedrockCredentialsErrorView>>,
+    /// View for Gemini Enterprise credentials errors, created lazily when the error occurs.
+    gemini_enterprise_credentials_error_view:
+        Option<ViewHandle<GeminiEnterpriseCredentialsErrorView>>,
 
     imported_comments: HashMap<AIAgentActionId, ImportedCommentGroup>,
     has_imported_comments: bool,
@@ -1084,6 +1117,23 @@ struct EmbeddedCodeEditorView {
     view: ViewHandle<CodeEditorView>,
     language: Option<ProgrammingLanguage>,
     length: usize,
+}
+/// Builds the authenticated Oz run-page URL for a recording artifact.
+///
+/// The task ID is assigned to the conversation by the server when the run
+/// starts, while the artifact UID comes directly from the StopRecording action.
+/// When either value is unavailable, callers should fall back to the signed
+/// artifact download URL.
+fn recording_artifact_view_url(
+    task_id: Option<AmbientAgentTaskId>,
+    artifact_uid: &str,
+) -> Option<String> {
+    let task_id = task_id?;
+    Some(format!(
+        "{}/runs/{task_id}?artifact={}",
+        ChannelState::oz_root_url(),
+        urlencoding::encode(artifact_uid),
+    ))
 }
 
 impl AIBlock {
@@ -1176,7 +1226,8 @@ impl AIBlock {
                     ctx.notify();
                 }
                 AISettingsChangedEvent::ThinkingDisplayMode { .. }
-                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. } => {
+                | AISettingsChangedEvent::OrchestrationMessageDisplayMode { .. }
+                | AISettingsChangedEvent::UsageDisplayUnit { .. } => {
                     ctx.notify();
                 }
                 _ => {}
@@ -1235,10 +1286,10 @@ impl AIBlock {
         });
 
         ctx.subscribe_to_model(&get_relevant_files_controller, |me, _, event, ctx| {
-            if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event {
-                if me.requested_action_ids.contains(action_id) {
-                    ctx.notify();
-                }
+            if let GetRelevantFilesControllerEvent::Success { action_id, .. } = event
+                && me.requested_action_ids.contains(action_id)
+            {
+                ctx.notify();
             }
         });
 
@@ -1263,13 +1314,11 @@ impl AIBlock {
 
                 if let (Some(server_conversation_token), Some(server_output_id)) =
                     (server_conversation_token, server_output_id)
+                    && request_id.eq(server_output_id.to_string().as_str())
+                    && server_conversation_id.eq(server_conversation_token.as_str())
                 {
-                    if request_id.eq(server_output_id.to_string().as_str())
-                        && server_conversation_id.eq(server_conversation_token.as_str())
-                    {
-                        me.request_refunded_count = Some(*requests_refunded);
-                        ctx.notify();
-                    }
+                    me.request_refunded_count = Some(*requests_refunded);
+                    ctx.notify();
                 }
             }
         });
@@ -1452,8 +1501,11 @@ impl AIBlock {
             comment_states.insert(id, state);
         }
 
+        let is_passive = model.request_type(ctx).is_passive();
+
         let mut me = Self {
             model,
+            is_passive,
             terminal_model,
             client_ids,
             profile_image_path: user_avatar_info.profile_image_path,
@@ -1473,6 +1525,7 @@ impl AIBlock {
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
+            is_agent_transcript_navigation_target: false,
             directory_context: DirectoryContext { pwd, home_dir },
             view_id: ctx.view_id(),
             detected_links_state,
@@ -1508,11 +1561,14 @@ impl AIBlock {
             disable_rule_suggestions_button,
             rewind_button,
             view_screenshot_buttons: Default::default(),
+            open_recording_buttons: Default::default(),
+            has_recording_related_actions: false,
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
             agent_view_controller,
             ambient_agent_view_model,
             aws_bedrock_credentials_error_view: None,
+            gemini_enterprise_credentials_error_view: None,
             imported_comments: Default::default(),
             has_imported_comments: false,
             run_agents_card_views: Default::default(),
@@ -1543,6 +1599,7 @@ impl AIBlock {
             }
             AIBlockOutputStatus::Failed { error, .. } => {
                 me.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
+                me.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
                 me.finish(FinishReason::Error, ctx);
             }
             AIBlockOutputStatus::Cancelled { .. } => {
@@ -1793,7 +1850,7 @@ impl AIBlock {
             .unwrap_or(false);
 
         if !conversation_contains_exchange {
-            log::error!(
+            report_error!(
                 "Reassigning AIBlock to a new conversation but the new conversation does not contain the AI exchange"
             );
             return;
@@ -1801,6 +1858,7 @@ impl AIBlock {
 
         self.client_ids.conversation_id = new_conversation_id;
         self.model = new_model;
+        self.is_passive = self.model.request_type(ctx).is_passive();
         let user_avatar_info = user_avatar_info_for_ai_block(self.model.as_ref(), ctx);
         self.profile_image_path = user_avatar_info.profile_image_path;
         self.user_display_name = user_avatar_info.display_name;
@@ -1860,6 +1918,7 @@ impl AIBlock {
         match status {
             AIBlockOutputStatus::Pending => {
                 self.requested_action_ids.clear();
+                self.has_recording_related_actions = false;
                 self.secret_redaction_state.reset();
             }
             AIBlockOutputStatus::PartiallyReceived { output } => {
@@ -1891,6 +1950,7 @@ impl AIBlock {
                     let output = output.get();
                     self.handle_updated_output(&output, ctx);
                 }
+                self.notify_run_agents_card_views(ctx);
                 self.spawn_link_detection(ctx);
                 self.finish(FinishReason::Cancelled, ctx);
 
@@ -1927,6 +1987,8 @@ impl AIBlock {
                     ctx
                 );
                 self.maybe_create_aws_bedrock_credentials_error_view(&error, ctx);
+                self.maybe_create_gemini_enterprise_credentials_error_view(&error, ctx);
+                self.notify_run_agents_card_views(ctx);
                 // There are no actions to be taken in this block, it is finished.
                 self.finish(FinishReason::Error, ctx);
             }
@@ -1945,6 +2007,22 @@ impl AIBlock {
             }
         }
 
+        let has_recording_related_actions = output.actions().any(|action| {
+            matches!(
+                &action.action,
+                AIAgentActionType::StartRecording { .. }
+                    | AIAgentActionType::StopRecording { .. }
+                    | AIAgentActionType::UseComputer(_)
+            )
+        });
+        if self.has_recording_related_actions || has_recording_related_actions {
+            let conversation_id = self.client_ids.conversation_id;
+            self.action_model.update(ctx, |action_model, _ctx| {
+                action_model.invalidate_recording_spans(conversation_id);
+            });
+        }
+        self.has_recording_related_actions = has_recording_related_actions;
+
         if FeatureFlag::WebSearchUI.is_enabled() {
             // Handle WebSearch messages
             self.handle_web_search_messages(&output.messages, ctx);
@@ -1957,10 +2035,10 @@ impl AIBlock {
 
         self.fetch_conversation_search_agent_run_titles(output, ctx);
 
+        let new_action_ids: FxHashSet<AIAgentActionId> =
+            output.actions().map(|action| action.id.clone()).collect();
         for action in output.actions() {
-            let new_action_ids: HashSet<AIAgentActionId> =
-                output.actions().map(|action| action.id.clone()).collect();
-
+            let new_action_ids = new_action_ids.clone();
             #[cfg(feature = "integration_tests")]
             {
                 // Log action IDs that were cached from a previous version of `output` that are not
@@ -2012,12 +2090,6 @@ impl AIBlock {
                     },
                 );
             }
-            if matches!(&action.action, AIAgentActionType::StartAgent { .. }) {
-                self.state_handles
-                    .orchestration_navigation_card_handles
-                    .entry(action.id.clone())
-                    .or_default();
-            }
 
             if matches!(
                 &action.action,
@@ -2036,6 +2108,12 @@ impl AIBlock {
             // Ensure a button component exists for UseComputer actions.
             if matches!(&action.action, AIAgentActionType::UseComputer(_)) {
                 self.view_screenshot_buttons
+                    .entry(action.id.clone())
+                    .or_default();
+            }
+
+            if matches!(&action.action, AIAgentActionType::StopRecording { .. }) {
+                self.open_recording_buttons
                     .entry(action.id.clone())
                     .or_default();
             }
@@ -2089,8 +2167,10 @@ impl AIBlock {
                     };
                     self.handle_mcp_tool_stream_update(
                         action_id,
+                        name,
                         &command_text,
                         display_input,
+                        *server_id,
                         ctx,
                     );
                 }
@@ -2545,27 +2625,25 @@ impl AIBlock {
         }
 
         // Only show the agent mode workflow if there are no rules.
-        if FeatureFlag::SuggestedAgentModeWorkflows.is_enabled() && self.suggested_rules.is_empty()
+        if FeatureFlag::SuggestedAgentModeWorkflows.is_enabled()
+            && self.suggested_rules.is_empty()
+            && let Some(workflow) = suggestions.agent_mode_workflows.first()
         {
-            if let Some(workflow) = suggestions.agent_mode_workflows.first() {
-                let workflow_view = ctx.add_typed_action_view(|ctx| {
-                    SuggestionChipView::new_agent_mode_workflow_chip(workflow.clone(), ctx)
-                });
-                ctx.subscribe_to_view(&workflow_view, |_me, _view, event, ctx| match event {
-                    SuggestedChipViewEvent::OpenWorkflow { sync_id } => {
-                        ctx.emit(AIBlockEvent::OpenWorkflow { sync_id: *sync_id });
-                    }
-                    SuggestedChipViewEvent::ShowSuggestedAgentModeWorkflowModal {
-                        workflow_and_id,
-                    } => {
-                        ctx.emit(AIBlockEvent::OpenSuggestedAgentModeWorkflowModal {
-                            workflow_and_id: workflow_and_id.clone(),
-                        });
-                    }
-                    _ => {}
-                });
-                self.suggested_agent_mode_workflow = Some(workflow_view);
-            }
+            let workflow_view = ctx.add_typed_action_view(|ctx| {
+                SuggestionChipView::new_agent_mode_workflow_chip(workflow.clone(), ctx)
+            });
+            ctx.subscribe_to_view(&workflow_view, |_me, _view, event, ctx| match event {
+                SuggestedChipViewEvent::OpenWorkflow { sync_id } => {
+                    ctx.emit(AIBlockEvent::OpenWorkflow { sync_id: *sync_id });
+                }
+                SuggestedChipViewEvent::ShowSuggestedAgentModeWorkflowModal { workflow_and_id } => {
+                    ctx.emit(AIBlockEvent::OpenSuggestedAgentModeWorkflowModal {
+                        workflow_and_id: workflow_and_id.clone(),
+                    });
+                }
+                _ => {}
+            });
+            self.suggested_agent_mode_workflow = Some(workflow_view);
         }
 
         for action in output.actions() {
@@ -2678,6 +2756,10 @@ impl AIBlock {
 
         let shell_type = self.active_session.as_ref(ctx).shell_type(ctx);
         let escape_char = shell_type.map(|s| ShellFamily::from(s).escape_char());
+        let autonomy_allowed = {
+            let scope = self.controller.as_ref(ctx).team_context(ctx);
+            is_agent_mode_autonomy_allowed(&scope, ctx)
+        };
 
         for (requested_command_action_id, command, is_read_only, is_risky) in
             output.actions().filter_map(|action| {
@@ -2703,8 +2785,9 @@ impl AIBlock {
                 }
             })
         {
-            if is_agent_mode_autonomy_allowed(ctx) {
+            if autonomy_allowed {
                 let autoexecute_decision = escape_char.map(|escape_char| {
+                    let scope = self.controller.as_ref(ctx).team_context(ctx);
                     BlocklistAIPermissions::as_ref(ctx).can_autoexecute_command(
                         &self.client_ids.conversation_id,
                         command,
@@ -2712,6 +2795,7 @@ impl AIBlock {
                         is_read_only,
                         is_risky,
                         Some(self.terminal_view_id),
+                        &scope,
                         ctx,
                     )
                 });
@@ -2774,15 +2858,14 @@ impl AIBlock {
             }
 
             for citation in &output.citations {
-                if is_command_copied_from_document(command, citation, shell_type, ctx) {
-                    if let Some(requested_command) =
+                if is_command_copied_from_document(command, citation, shell_type, ctx)
+                    && let Some(requested_command) =
                         self.requested_commands.get(requested_command_action_id)
-                    {
-                        requested_command.view.update(ctx, |view, ctx| {
-                            view.update_copied_from_citation(citation);
-                            ctx.notify();
-                        });
-                    }
+                {
+                    requested_command.view.update(ctx, |view, ctx| {
+                        view.update_copied_from_citation(citation);
+                        ctx.notify();
+                    });
                 }
             }
         }
@@ -2791,7 +2874,7 @@ impl AIBlock {
             .actions()
             .filter_map(|action| (action.is_get_relevant_files()).then_some(&action.id))
         {
-            if is_agent_mode_autonomy_allowed(ctx)
+            if autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
             {
                 // Try to show the speedbump for codebase search.
@@ -2824,7 +2907,7 @@ impl AIBlock {
             let is_file_access =
                 action.is_get_specific_files() || action.is_grep() || action.is_file_glob();
             if is_file_access {
-                if is_agent_mode_autonomy_allowed(ctx)
+                if autonomy_allowed
                     && *AISettings::as_ref(ctx).should_show_agent_mode_autoread_files_speedbump
                 {
                     // Try to show the speedbump for autoread files setting
@@ -2850,7 +2933,7 @@ impl AIBlock {
             } else if matches!(action.action, AIAgentActionType::AskUserQuestion { .. })
                 && !self.model.is_restored()
                 && FeatureFlag::AskUserQuestion.is_enabled()
-                && is_agent_mode_autonomy_allowed(ctx)
+                && autonomy_allowed
                 && *AISettings::as_ref(ctx).should_show_agent_mode_ask_user_question_speedbump
             {
                 self.autonomy_setting_speedbump =
@@ -2890,16 +2973,16 @@ impl AIBlock {
         }
 
         // This is used to trigger the theme chooser opening when the theme chooser onboarding block is active.
-        if let Some(text_message) = output.text_from_agent_output().last() {
-            if text_message.sections.iter().any(|section| {
+        if let Some(text_message) = output.text_from_agent_output().last()
+            && text_message.sections.iter().any(|section| {
                 if let AIAgentTextSection::PlainText { text } = section {
                     text.text().contains("The matrix theme is now available at")
                 } else {
                     false
                 }
-            }) {
-                ctx.emit(AIBlockEvent::OpenThemeChooser);
-            }
+            })
+        {
+            ctx.emit(AIBlockEvent::OpenThemeChooser);
         }
         if self.requested_action_ids.is_empty() {
             // There are no actions to be taken in this block, it is finished.
@@ -2939,12 +3022,14 @@ impl AIBlock {
             //
             // These correspond to AI blocks with a successfully received suggested code diff or
             // unit test suggestion.
-            !self.model.request_type(app).is_passive()
+            !self.is_passive
         }
     }
 
-    pub fn is_passive_conversation(&self, app: &AppContext) -> bool {
-        self.model.request_type(app).is_passive()
+    /// Returns `true` if this block's conversation was started from a passive entrypoint (e.g. a
+    /// suggested code diff or unit test suggestion), as opposed to a directly-issued user query.
+    pub fn is_passive_conversation(&self) -> bool {
+        self.is_passive
     }
 
     fn handle_code_section_stream_update(
@@ -3145,7 +3230,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -3167,9 +3254,6 @@ impl AIBlock {
             .action_model
             .as_ref(ctx)
             .request_file_edits_executor(ctx);
-        executor.update(ctx, |executor, _| {
-            executor.register_requested_edits(action_id, &view);
-        });
 
         // If the diff is being viewed in a shared session (read-only mode), populate diffs from the payload.
         if self.action_model.as_ref(ctx).is_view_only() {
@@ -3182,12 +3266,28 @@ impl AIBlock {
             view.update(ctx, |diff_view, ctx| {
                 diff_view.set_candidate_diffs(file_diffs, ctx);
             });
+        } else {
+            // Register the review view as the action's diff storage: the
+            // executor seeds it with the resolved diffs when preprocess
+            // completes and drives its save at execute time.
+            //
+            // View-only (shared-session viewer) diffs must not be registered:
+            // registration wires the view into the persistence flow, and a
+            // spectator's view must never become the surface that writes the
+            // edits to disk.
+            executor.update(ctx, |executor, _| {
+                executor.register_requested_edits(action_id, Box::new(view.downgrade()));
+            });
         }
 
         let action_id_clone = action_id.clone();
         ctx.subscribe_to_view(&view, move |me, view, event, ctx| {
             match event {
                 CodeDiffViewEvent::TryAccept => {
+                    // The executor drives the save through the registered
+                    // diff storage at execute time, pulling the (possibly
+                    // edited) final content from the view's editor buffers.
+                    view.update(ctx, |view, ctx| view.send_malformed_line_telemetry(ctx));
                     me.action_model.update(ctx, |action_model, ctx| {
                         action_model.execute_action(
                             &action_id_clone,
@@ -3391,7 +3491,7 @@ impl AIBlock {
                     match action_status {
                         Some(AIActionStatus::Finished(result)) => {
                             if result.result.is_successful() {
-                                CodeDiffState::Accepted(None)
+                                CodeDiffState::Accepted
                             } else {
                                 // For other finished states, default to rejected
                                 CodeDiffState::Rejected
@@ -3562,15 +3662,19 @@ impl AIBlock {
     fn handle_mcp_tool_stream_update(
         &mut self,
         action_id: &AIAgentActionId,
+        tool_name: &str,
         command_text: &str,
         mcp_args: serde_json::Value,
+        server_id: Option<uuid::Uuid>,
         ctx: &mut ViewContext<Self>,
     ) {
         match self.requested_mcp_tools.get_mut(action_id) {
             Some(requested_mcp_tool) => {
                 requested_mcp_tool.view.update(ctx, |view, ctx| {
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_tool_name(tool_name);
                     view.update_mcp_request(mcp_args);
+                    view.update_mcp_server_id(server_id);
                     ctx.notify();
                 });
             }
@@ -3591,7 +3695,9 @@ impl AIBlock {
                         ctx,
                     );
                     view.apply_streamed_update(command_text, ctx);
+                    view.update_mcp_tool_name(tool_name);
                     view.update_mcp_request(mcp_args);
+                    view.update_mcp_server_id(server_id);
                     view
                 });
                 let action_id_clone = action_id.clone();
@@ -3755,11 +3861,12 @@ impl AIBlock {
             }
             AskUserQuestionViewEvent::SpeedbumpPermissionChanged(permission) => {
                 let permission = *permission;
-                let profile_id = *AIExecutionProfilesModel::as_ref(ctx)
+                let profile_id = AIExecutionProfilesModel::as_ref(ctx)
                     .active_profile(Some(self.terminal_view_id), ctx)
-                    .id();
+                    .id()
+                    .clone();
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.set_ask_user_question(profile_id, permission, ctx);
+                    model.set_ask_user_question(&profile_id, permission, ctx);
                 });
                 send_telemetry_from_ctx!(
                     TelemetryEvent::ChangedAgentModeAskUserQuestionPermission {
@@ -3809,6 +3916,7 @@ impl AIBlock {
                 document.title.clone()
             };
 
+            let will_auto_open = !opened_first;
             let (document_id, created_new) = model_handle.update(ctx, |model, model_ctx| {
                 let (document_id, created_new) = model
                     .get_or_create_streaming_document_for_create_documents(
@@ -3818,6 +3926,7 @@ impl AIBlock {
                         &title,
                         document.content.clone(),
                         file_link_resolution_context.clone(),
+                        will_auto_open,
                         model_ctx,
                     );
                 if !created_new {
@@ -3831,7 +3940,7 @@ impl AIBlock {
                 (document_id, created_new)
             });
 
-            if created_new && !opened_first {
+            if created_new && will_auto_open {
                 ctx.emit(AIBlockEvent::OpenAIDocumentPane {
                     document_id,
                     document_version: AIDocumentVersion::default(),
@@ -4066,7 +4175,9 @@ impl AIBlock {
                 ctx.emit(AIBlockEvent::RunAwsLoginCommand);
             }
             AwsBedrockCredentialsErrorEvent::ConfigureLoginCommand => {
-                ctx.dispatch_typed_action(&WorkspaceAction::ShowSettingsPageWithSearch {
+                // Defer so Workspace is not opened while AIBlock is still mid-subscription.
+                // Synchronous dispatch here can panic with "Circular view update".
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
                     search_query: "aws bedrock".to_string(),
                     section: Some(SettingsSection::WarpAgent),
                 });
@@ -4077,6 +4188,47 @@ impl AIBlock {
         ctx.notify();
     }
 
+    fn maybe_create_gemini_enterprise_credentials_error_view(
+        &mut self,
+        error: &RenderableAIError,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !matches!(
+            error,
+            RenderableAIError::GeminiEnterpriseCredentialsExpiredOrInvalid
+        ) {
+            return;
+        }
+        if let Some(view) = &self.gemini_enterprise_credentials_error_view {
+            view.update(ctx, |view, ctx| view.reset(ctx));
+            return;
+        }
+
+        let view = ctx.add_typed_action_view(GeminiEnterpriseCredentialsErrorView::new);
+        ctx.subscribe_to_view(&view, |_me, _view, event, ctx| match event {
+            GeminiEnterpriseCredentialsErrorEvent::RefreshCredentials => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    use ai::api_keys::ApiKeyManager;
+
+                    ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                        crate::ai::geap_credentials::force_refresh_geap_credentials(manager, ctx);
+                    });
+                }
+            }
+            GeminiEnterpriseCredentialsErrorEvent::OpenSettings => {
+                // Defer so Workspace is not opened while AIBlock is still mid-subscription.
+                // Synchronous dispatch here can panic with "Circular view update".
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::ShowSettingsPageWithSearch {
+                    search_query: "gemini enterprise".to_string(),
+                    section: Some(SettingsSection::WarpAgent),
+                });
+            }
+        });
+
+        self.gemini_enterprise_credentials_error_view = Some(view);
+        ctx.notify();
+    }
     pub fn accept_pending_unit_test_suggestion(
         &mut self,
         interaction_source: InteractionSource,
@@ -4223,7 +4375,9 @@ impl AIBlock {
                     .show_code_suggestion_speedbump
                     .set_value(false, ctx)
                 {
-                    log::error!("Failed to persist 'Show code suggestion speedbump' setting: {e}");
+                    report_error!(
+                        e.context("Failed to persist 'Show code suggestion speedbump' setting")
+                    );
                 }
             });
         }
@@ -4323,11 +4477,11 @@ impl AIBlock {
             return;
         };
 
-        if let Some(state) = self.collapsible_block_states.get_mut(message_id) {
-            if let CollapsibleExpansionState::Collapsed = state.expansion_state {
-                state.expand();
-                ctx.notify();
-            }
+        if let Some(state) = self.collapsible_block_states.get_mut(message_id)
+            && let CollapsibleExpansionState::Collapsed = state.expansion_state
+        {
+            state.expand();
+            ctx.notify();
         }
     }
 }
@@ -4358,12 +4512,33 @@ impl AIBlock {
         self.model.status(app)
     }
 
+    pub fn query_sent_at(&self, app: &AppContext) -> Option<DateTime<Local>> {
+        self.model.query_sent_at(app)
+    }
+
     /// Returns `true` if this AI block contains user input.
     pub fn has_user_input(&self, app: &AppContext) -> bool {
         self.model
             .inputs_to_render(app)
             .iter()
             .any(|input| input.display_query().is_some())
+    }
+
+    /// `true` while agent-view transcript navigation targets this block's user query.
+    pub fn is_agent_transcript_navigation_target(&self) -> bool {
+        self.is_agent_transcript_navigation_target
+    }
+
+    /// Flags or unflags this block as the transcript navigation target.
+    pub fn set_agent_transcript_navigation_target(
+        &mut self,
+        is_target: bool,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if self.is_agent_transcript_navigation_target != is_target {
+            self.is_agent_transcript_navigation_target = is_target;
+            ctx.notify();
+        }
     }
 
     /// `true` if the AI block is "finished".
@@ -4472,8 +4647,10 @@ impl AIBlock {
                             ..
                         } if speedbump_action_id == action_id && *shown.lock() => {
                             BlocklistAIPermissions::handle(ctx).update(ctx, |permissions, ctx| {
-                                report_if_error!(permissions
-                                    .set_should_autoexecute_readonly_commands(*checked, ctx));
+                                report_if_error!(
+                                    permissions
+                                        .set_should_autoexecute_readonly_commands(*checked, ctx)
+                                );
                             });
                         }
                         AutonomySettingSpeedbump::ShouldShowForFileAccess {
@@ -4525,8 +4702,20 @@ impl AIBlock {
                                     permission,
                                     AgentModeCodingPermissionsType::AllowReadingSpecificFiles
                                 ) {
-                                    report_if_error!(permissions
-                                        .add_filepath_to_code_read_allowlist(root_repo_path, ctx));
+                                    let profile_id = AIExecutionProfilesModel::as_ref(ctx)
+                                        .active_profile(Some(me.terminal_view_id), ctx)
+                                        .id()
+                                        .clone();
+                                    AIExecutionProfilesModel::handle(ctx).update(
+                                        ctx,
+                                        |profiles, ctx| {
+                                            profiles.add_to_directory_allowlist(
+                                                &profile_id,
+                                                &root_repo_path,
+                                                ctx,
+                                            );
+                                        },
+                                    );
                                 }
                             });
                         }
@@ -4829,11 +5018,11 @@ impl AIBlock {
         // If there's a blocking passive code diff, focus that.
         // We special case this since get_pending_action only focuses on active conversations,
         // and passive code diffs are not part of an active conversation, when they initially appear.
-        if self.model.request_type(ctx).is_passive_code_diff() {
-            if let Some(diff) = self.find_undismissed_code_diff(ctx) {
-                ctx.focus(&diff.view);
-                return;
-            }
+        if self.model.request_type(ctx).is_passive_code_diff()
+            && let Some(diff) = self.find_undismissed_code_diff(ctx)
+        {
+            ctx.focus(&diff.view);
+            return;
         }
 
         if self
@@ -5100,13 +5289,24 @@ impl AIBlock {
     }
 
     pub fn dismiss_ai_tooltips(&mut self, ctx: &mut ViewContext<Self>) {
-        self.detected_links_state.link_location_open_tooltip = None;
-        ctx.emit(AIBlockEvent::DismissLinkTooltip);
-        self.secret_redaction_state.dismiss_tooltip();
-        ctx.emit(AIBlockEvent::DismissSecretTooltip);
+        let dismissed_link_tooltip = self
+            .detected_links_state
+            .link_location_open_tooltip
+            .take()
+            .is_some();
+        if dismissed_link_tooltip {
+            ctx.emit(AIBlockEvent::DismissLinkTooltip);
+        }
+
+        let dismissed_secret_tooltip = self.secret_redaction_state.dismiss_tooltip();
+        if dismissed_secret_tooltip {
+            ctx.emit(AIBlockEvent::DismissSecretTooltip);
+        }
+
+        let mut dismissed_search_tooltip = false;
         for search_view in self.search_codebase_view.values() {
             search_view.update(ctx, |view, ctx| {
-                view.clear_link_tooltip(ctx);
+                dismissed_search_tooltip |= view.clear_link_tooltip(ctx);
             });
         }
 
@@ -5118,8 +5318,9 @@ impl AIBlock {
         {
             button_handles.reset_hover_state_on_focus_change();
         }
-
-        ctx.notify();
+        if dismissed_link_tooltip || dismissed_secret_tooltip || dismissed_search_tooltip {
+            ctx.notify();
+        }
     }
 
     fn open_link(
@@ -5181,7 +5382,7 @@ impl AIBlock {
     fn show_secret_tooltip(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         ctx: &mut ViewContext<Self>,
     ) {
         if let Some(hoverable_secret) = self
@@ -5205,7 +5406,7 @@ impl AIBlock {
     pub fn set_secret_redaction_state(
         &mut self,
         location: &TextLocation,
-        secret_range: &SecretRange,
+        secret_range: &StringRange,
         is_obfuscated: bool,
     ) {
         self.secret_redaction_state
@@ -5395,16 +5596,16 @@ impl AIBlock {
                 .map(|a| a.id.clone())
         };
 
-        if let Some(action_id) = pending_action_id {
-            if let Some(requested_command) = self.requested_commands.get(&action_id) {
-                let command_text = requested_command
-                    .view
-                    .update(ctx, |view, ctx| view.commit_and_get_command_text(ctx));
-                self.action_model.update(ctx, |action_model, ctx| {
-                    action_model.handle_requested_command_accepted(&action_id, command_text, ctx);
-                });
-                ctx.notify();
-            }
+        if let Some(action_id) = pending_action_id
+            && let Some(requested_command) = self.requested_commands.get(&action_id)
+        {
+            let command_text = requested_command
+                .view
+                .update(ctx, |view, ctx| view.commit_and_get_command_text(ctx));
+            self.action_model.update(ctx, |action_model, ctx| {
+                action_model.handle_requested_command_accepted(&action_id, command_text, ctx);
+            });
+            ctx.notify();
         }
     }
     /// Accepts the latest pending (blocked) requested MCP tool call, if any.
@@ -5416,13 +5617,13 @@ impl AIBlock {
                 .map(|a| a.id.clone())
         };
 
-        if let Some(action_id) = pending_action_id {
-            if self.requested_mcp_tools.contains_key(&action_id) {
-                self.action_model.update(ctx, |action_model, ctx| {
-                    action_model.execute_action(&action_id, self.client_ids.conversation_id, ctx);
-                });
-                ctx.notify();
-            }
+        if let Some(action_id) = pending_action_id
+            && self.requested_mcp_tools.contains_key(&action_id)
+        {
+            self.action_model.update(ctx, |action_model, ctx| {
+                action_model.execute_action(&action_id, self.client_ids.conversation_id, ctx);
+            });
+            ctx.notify();
         }
     }
 
@@ -5515,20 +5716,19 @@ impl AIBlock {
 
         // Get the model name from the input metadata.
         let mut model_name = LLMPreferences::as_ref(app)
-            .get_llm_info(base_model_id)
+            .get_llm_info(base_model_id, app)
             .map(|info| info.display_name.clone())
             .unwrap_or_default();
 
         // If the input model is "auto", always display that, otherwise use the actual output model if available.
         if model_name != "auto" {
             let model_id = self.model.model_id(app);
-            if let Some(model_id) = model_id {
-                if let Some(output_model_name) = LLMPreferences::as_ref(app)
-                    .get_llm_info(&model_id)
+            if let Some(model_id) = model_id
+                && let Some(output_model_name) = LLMPreferences::as_ref(app)
+                    .get_llm_info(&model_id, app)
                     .map(|info| info.display_name.clone())
-                {
-                    model_name = output_model_name;
-                }
+            {
+                model_name = output_model_name;
             }
         }
         model_name
@@ -5683,17 +5883,16 @@ impl AIBlock {
             .action_model
             .as_ref(app)
             .get_finished_action_results(conversation.id())
-        {
-            if finished_action_results.iter().any(|result| {
+            && finished_action_results.iter().any(|result| {
                 matches!(
                     result.result,
                     AIAgentActionResultType::RequestFileEdits(
                         RequestFileEditsResult::Success { .. }
                     )
                 )
-            }) {
-                return true;
-            }
+            })
+        {
+            return true;
         }
 
         // Otherwise, we also check all past exchanges since the last user query for accepted file edits.
@@ -6135,7 +6334,7 @@ pub enum AIBlockAction {
         location: TextLocation,
     },
     ChangedHoverOnSecret {
-        secret_range: SecretRange,
+        secret_range: StringRange,
         location: TextLocation,
         is_hovering: bool,
     },
@@ -6144,7 +6343,7 @@ pub enum AIBlockAction {
         location: TextLocation,
     },
     OpenSecretTooltip {
-        secret_range: SecretRange,
+        secret_range: StringRange,
         location: TextLocation,
     },
     OpenCitation(AIAgentCitation),
@@ -6178,6 +6377,7 @@ pub enum AIBlockAction {
     /// Copy the content from the previous user query.
     /// Note that this block may not have the user query.
     CopyQuery,
+    CopyTimestamp,
     /// Copy all AI output from the previous user query to the next user query.
     /// Note that this contains more than just this block, since from the user perspective everything after the user query appears like one block.
     CopyOutput,
@@ -6233,6 +6433,53 @@ pub enum AIBlockAction {
     OpenCommentInGitHub {
         url: String,
     },
+    OpenRecordingArtifact {
+        artifact_uid: String,
+    },
+}
+
+#[cfg(feature = "local_fs")]
+fn open_code_action_event(
+    source: &CodeSource,
+    layout: crate::util::file::external_editor::settings::EditorLayout,
+) -> AIBlockEvent {
+    match source {
+        CodeSource::Link {
+            path, range_start, ..
+        } => AIBlockEvent::OpenDetectedFilePath {
+            absolute_path: path.clone(),
+            line_and_column_num: *range_start,
+            target_override: None,
+        },
+        _ => AIBlockEvent::OpenCodeInWarp {
+            source: source.clone(),
+            layout,
+        },
+    }
+}
+
+/// The raw-asset cache ID under which a UseComputer action's screenshot bytes are stored.
+fn screenshot_asset_id(action_id: &AIAgentActionId) -> String {
+    format!("screenshot-{action_id}")
+}
+
+/// Opens the lightbox over the given screenshot asset sources.
+fn open_screenshot_lightbox(
+    sources: Vec<AssetSource>,
+    initial_index: usize,
+    ctx: &mut ViewContext<AIBlock>,
+) {
+    let images = sources
+        .into_iter()
+        .map(|asset_source| ui_components::lightbox::LightboxImage {
+            source: ui_components::lightbox::LightboxImageSource::Resolved { asset_source },
+            description: None,
+        })
+        .collect();
+    ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
+        images,
+        initial_index,
+    });
 }
 
 impl TypedActionView for AIBlock {
@@ -6244,15 +6491,14 @@ impl TypedActionView for AIBlock {
                 message_id,
                 pinned_to_bottom,
             } => {
-                if let Some(state) = self.collapsible_block_states.get_mut(message_id) {
-                    if let CollapsibleExpansionState::Expanded {
+                if let Some(state) = self.collapsible_block_states.get_mut(message_id)
+                    && let CollapsibleExpansionState::Expanded {
                         scroll_pinned_to_bottom,
                         ..
                     } = &mut state.expansion_state
-                    {
-                        *scroll_pinned_to_bottom = *pinned_to_bottom;
-                        ctx.notify();
-                    }
+                {
+                    *scroll_pinned_to_bottom = *pinned_to_bottom;
+                    ctx.notify();
                 }
             }
             AIBlockAction::ContinueConversation => {
@@ -6358,13 +6604,15 @@ impl TypedActionView for AIBlock {
                     .last()
                     .map(|action| action.id.clone());
                 if let Some(run_agents_id) = run_agents_id {
-                    if let Some(card_view) = self.run_agents_card_views.get(&run_agents_id).cloned()
-                    {
-                        card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
-                    } else {
-                        log::warn!(
-                            "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
-                        );
+                    match self.run_agents_card_views.get(&run_agents_id).cloned() {
+                        Some(card_view) => {
+                            card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
+                        }
+                        _ => {
+                            log::warn!(
+                                "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
+                            );
+                        }
                     }
                 } else {
                     self.action_model.update(ctx, |action_model, ctx| {
@@ -6489,9 +6737,11 @@ impl TypedActionView for AIBlock {
                     }
                 });
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .rule_suggestions_enabled_internal
-                        .set_value(false, ctx));
+                    report_if_error!(
+                        settings
+                            .rule_suggestions_enabled_internal
+                            .set_value(false, ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -6615,19 +6865,18 @@ impl TypedActionView for AIBlock {
                     return;
                 }
 
-                if matches!(rating, AIBlockResponseRating::Negative) {
-                    if let Some(output_id) = output_id.clone() {
-                        let request_usage_model = AIRequestUsageModel::handle(ctx);
-                        request_usage_model.update(ctx, |request_usage_model, ctx| {
-                            request_usage_model
-                                .provide_negative_feedback_response_for_ai_conversation(
-                                    self.client_ids.conversation_id,
-                                    output_id.to_string(),
-                                    self.client_ids.client_exchange_id,
-                                    ctx,
-                                );
-                        });
-                    }
+                if matches!(rating, AIBlockResponseRating::Negative)
+                    && let Some(output_id) = output_id.clone()
+                {
+                    let request_usage_model = AIRequestUsageModel::handle(ctx);
+                    request_usage_model.update(ctx, |request_usage_model, ctx| {
+                        request_usage_model.provide_negative_feedback_response_for_ai_conversation(
+                            self.client_ids.conversation_id,
+                            output_id.to_string(),
+                            self.client_ids.client_exchange_id,
+                            ctx,
+                        );
+                    });
                 }
 
                 let window_id = ctx.window_id();
@@ -6657,6 +6906,14 @@ impl TypedActionView for AIBlock {
                 let prompt_text = self.get_preceding_user_query(ctx);
                 ctx.clipboard()
                     .write(ClipboardContent::plain_text(prompt_text));
+            }
+            AIBlockAction::CopyTimestamp => {
+                if let Some(timestamp) = self.query_sent_at(ctx) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(format_message_timestamp(
+                            &timestamp,
+                        )));
+                }
             }
             AIBlockAction::CopyOutput => {
                 // Copy all AI output from preceding user query until the next user query
@@ -6733,12 +6990,10 @@ impl TypedActionView for AIBlock {
 
                 #[cfg(feature = "local_fs")]
                 {
-                    ctx.emit(AIBlockEvent::OpenCodeInWarp {
-                        source: source.clone(),
-                        layout: *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
-                            .open_file_layout
-                            .value(),
-                    })
+                    let layout = *crate::util::file::external_editor::EditorSettings::as_ref(ctx)
+                        .open_file_layout
+                        .value();
+                    ctx.emit(open_code_action_event(source, layout));
                 }
             }
             AIBlockAction::ToggleTodoListExpanded(id) => {
@@ -6779,20 +7034,20 @@ impl TypedActionView for AIBlock {
                 action_id,
                 comment_index,
             } => {
-                if let Some(group) = self.imported_comments.get_mut(action_id) {
-                    if let Some(card) = group.card_mut(*comment_index) {
-                        card.toggle_collapsed();
-                        let is_collapsed = card.is_collapsed();
-                        if let Some(state) = group.element_states.get(*comment_index) {
-                            let icon = if is_collapsed {
-                                Icon::ChevronRight
-                            } else {
-                                Icon::ChevronDown
-                            };
-                            state.chevron_button.update(ctx, |button, ctx| {
-                                button.set_icon(Some(icon), ctx);
-                            });
-                        }
+                if let Some(group) = self.imported_comments.get_mut(action_id)
+                    && let Some(card) = group.card_mut(*comment_index)
+                {
+                    card.toggle_collapsed();
+                    let is_collapsed = card.is_collapsed();
+                    if let Some(state) = group.element_states.get(*comment_index) {
+                        let icon = if is_collapsed {
+                            Icon::ChevronRight
+                        } else {
+                            Icon::ChevronDown
+                        };
+                        state.chevron_button.update(ctx, |button, ctx| {
+                            button.set_icon(Some(icon), ctx);
+                        });
                     }
                 }
             }
@@ -6820,6 +7075,42 @@ impl TypedActionView for AIBlock {
             AIBlockAction::OpenCommentInGitHub { url } => {
                 ctx.open_url(url);
             }
+            AIBlockAction::OpenRecordingArtifact { artifact_uid } => {
+                let conversation_id = self.client_ids.conversation_id;
+                let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.task_id());
+                if let Some(url) = recording_artifact_view_url(task_id, artifact_uid) {
+                    ctx.open_url(&url);
+                    return;
+                }
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+                let artifact_uid = artifact_uid.clone();
+                let artifact_uid_for_error = artifact_uid.clone();
+                ctx.spawn(
+                    async move { ai_client.get_artifact_download(&artifact_uid).await },
+                    move |_, result, ctx| match result {
+                        Ok(artifact) => {
+                            ctx.open_url(artifact.download_url());
+                        }
+                        Err(error) => {
+                            log::warn!(
+                                "Failed to prepare recording artifact {artifact_uid_for_error}: {error:#}"
+                            );
+                            let window_id = ctx.window_id();
+                            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                                toast_stack.add_ephemeral_toast(
+                                    DismissibleToast::error(
+                                        "Failed to open recording.".to_string(),
+                                    ),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                    },
+                );
+            }
             AIBlockAction::ViewScreenshot { action_id } => {
                 // Collect all UseComputer action IDs across the entire conversation
                 // so the lightbox can navigate between their screenshots.
@@ -6832,12 +7123,12 @@ impl TypedActionView for AIBlock {
                         .flat_map(|c| c.use_computer_action_ids())
                         .collect();
 
-                // Build lightbox images for each action that has a screenshot result.
+                let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+
                 // We Arc::clone the result each iteration to release the immutable
                 // borrow on ctx, allowing the mutable AssetCache update in the same
                 // loop body. Arc::clone is just a refcount bump (no data copied).
-                let mut screenshot_action_ids: Vec<&AIAgentActionId> = Vec::new();
-                let mut images: Vec<ui_components::lightbox::LightboxImage> = Vec::new();
+                let mut screenshot_sources: Vec<(AIAgentActionId, AssetSource)> = Vec::new();
                 for action_id in &use_computer_action_ids {
                     let Some(result) = self
                         .action_model
@@ -6848,46 +7139,50 @@ impl TypedActionView for AIBlock {
                         continue;
                     };
                     let AIAgentActionResultType::UseComputer(
-                        crate::ai::agent::UseComputerResult::Success(computer_use::ActionResult {
-                            screenshot: Some(screenshot),
-                            ..
-                        }),
+                        crate::ai::agent::UseComputerResult::Success { screenshot, .. },
                     ) = &result.result
                     else {
                         continue;
                     };
-                    let asset_id = format!("screenshot-{action_id}");
-                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                        asset_cache.insert_raw_asset_bytes::<ImageType>(
-                            asset_id.clone(),
-                            &screenshot.data,
-                            ctx,
-                        );
-                    });
-                    images.push(ui_components::lightbox::LightboxImage {
-                        source: ui_components::lightbox::LightboxImageSource::Resolved {
-                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
-                                id: asset_id,
-                            },
-                        },
-                        description: None,
-                    });
-                    screenshot_action_ids.push(action_id);
+                    match screenshot {
+                        Some(ScreenshotSource::Inline(screenshot)) => {
+                            let asset_id = screenshot_asset_id(action_id);
+                            AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
+                                asset_cache.insert_raw_asset_bytes::<ImageType>(
+                                    asset_id.clone(),
+                                    &screenshot.data,
+                                    ctx,
+                                );
+                            });
+                            screenshot_sources
+                                .push((action_id.clone(), AssetSource::Raw { id: asset_id }));
+                        }
+                        Some(ScreenshotSource::Stored { stored_ref, .. }) => {
+                            screenshot_sources.push((
+                                action_id.clone(),
+                                stored_screenshot_asset_source(
+                                    stored_ref.clone(),
+                                    ai_client.clone(),
+                                ),
+                            ));
+                        }
+                        None => {}
+                    }
                 }
 
-                if images.is_empty() {
+                if screenshot_sources.is_empty() {
                     return;
                 }
 
-                let initial_index = screenshot_action_ids
+                let initial_index = screenshot_sources
                     .iter()
-                    .position(|id| *id == action_id)
+                    .position(|(id, _)| id == action_id)
                     .unwrap_or(0);
-
-                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
-                    images,
-                    initial_index,
-                });
+                let sources = screenshot_sources
+                    .into_iter()
+                    .map(|(_, source)| source)
+                    .collect();
+                open_screenshot_lightbox(sources, initial_index, ctx);
             }
             AIBlockAction::OpenSubmittedAttachmentLightbox { image_index } => {
                 let decoded_images = self
@@ -6991,15 +7286,15 @@ impl AIBlock {
         let active_config = {
             let history = crate::BlocklistAIHistoryModel::as_ref(ctx);
             let conv = history.conversation(&self.client_ids.conversation_id);
-            let result = if !request.plan_id.is_empty() {
+
+            if !request.plan_id.is_empty() {
                 conv.and_then(|conv| {
                     conv.orchestration_config_for_plan(&request.plan_id)
                         .map(|(config, status)| (config.clone(), status))
                 })
             } else {
                 None
-            };
-            result
+            }
         };
 
         let action_id_clone = action_id.clone();
@@ -7025,6 +7320,17 @@ impl AIBlock {
             }
         });
         self.run_agents_card_views.insert(action_id.clone(), view);
+    }
+
+    /// Re-renders the orchestrate cards after the block's output stream ends
+    /// without succeeding. A `RunAgents` tool call that was still streaming at
+    /// that point never reaches the action queue, so it produces no action
+    /// result and no event of its own; without this nudge its card would keep
+    /// rendering the "Configuring agents…" placeholder forever.
+    fn notify_run_agents_card_views(&self, ctx: &mut ViewContext<Self>) {
+        for view in self.run_agents_card_views.values().cloned().collect_vec() {
+            view.update(ctx, |_, ctx| ctx.notify());
+        }
     }
 }
 #[cfg(test)]

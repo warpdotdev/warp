@@ -1,5 +1,7 @@
+use std::cmp::Ordering;
 use std::path::PathBuf;
 
+use ai::agent::action::ReviewCommentThreadItem;
 use chrono::{DateTime, Local};
 
 use super::comment::{ImportedCommentDetails, LineDiffContent};
@@ -49,6 +51,28 @@ impl PendingImportedReviewComment {
         let mut details = self.github_details.clone();
         details.github_parent_id = None;
         details
+    }
+}
+
+impl ReviewCommentThreadItem for PendingImportedReviewComment {
+    fn comment_id(&self) -> &str {
+        self.github_comment_id()
+    }
+
+    fn parent_comment_id(&self) -> Option<&str> {
+        self.github_parent_comment_id()
+    }
+
+    fn author(&self) -> &str {
+        self.author()
+    }
+
+    fn body(&self) -> &str {
+        &self.body
+    }
+
+    fn compare_last_modified(&self, other: &Self) -> Ordering {
+        self.last_update_time.cmp(&other.last_update_time)
     }
 }
 

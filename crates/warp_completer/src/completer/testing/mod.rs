@@ -19,10 +19,10 @@ use crate::completer::{
     CommandOutput, CompletionContext, Description, EngineDirEntry, EngineFileType,
     GeneratorContext, PathCompletionContext, Suggestion, TopLevelCommandCaseSensitivity,
 };
+use crate::signatures::CommandRegistry;
 use crate::signatures::testing::{
     TEST_ALIAS_COMMAND, TEST_GENERATOR_1_COMMAND, TEST_GENERATOR_2_COMMAND,
 };
-use crate::signatures::CommandRegistry;
 
 impl EngineDirEntry {
     pub fn test_file(file_name: &str) -> Self {

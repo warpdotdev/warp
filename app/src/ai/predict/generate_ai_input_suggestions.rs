@@ -12,8 +12,8 @@ use parking_lot::FairMutex;
 use serde::{Deserialize, Serialize};
 
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
-use crate::terminal::model::block::BlockState;
 use crate::terminal::TerminalModel;
+use crate::terminal::model::block::BlockState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandContext {

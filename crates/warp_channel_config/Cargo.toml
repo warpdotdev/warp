@@ -1,6 +1,6 @@
 [package]
 name = "warp_channel_config"
-edition = "2021"
+edition = "2024"
 description = "Loads per-channel ChannelConfig for Warp's channel binaries"
 authors.workspace = true
 publish.workspace = true

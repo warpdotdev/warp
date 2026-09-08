@@ -222,3 +222,174 @@ fn test_read_skills_nonexistent_directory() {
 
     assert_eq!(skills.len(), 0);
 }
+
+// ============================================================================
+// Tests for parse_skills_dirs_env
+// ============================================================================
+
+#[test]
+#[serial_test::serial]
+fn test_parse_skills_dirs_env_unset_returns_empty() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+    let dirs = super::parse_skills_dirs_env();
+    assert!(dirs.is_empty());
+}
+
+#[test]
+#[serial_test::serial]
+fn test_parse_skills_dirs_env_empty_value_returns_empty() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WARP_SKILL_DIRS", "") };
+    let dirs = super::parse_skills_dirs_env();
+    assert!(dirs.is_empty());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+}
+
+#[test]
+#[serial_test::serial]
+fn test_parse_skills_dirs_env_single_path() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WARP_SKILL_DIRS", "/foo/bar/skills") };
+    let dirs = super::parse_skills_dirs_env();
+    assert_eq!(dirs, vec![std::path::PathBuf::from("/foo/bar/skills")]);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+}
+
+#[test]
+#[serial_test::serial]
+fn test_parse_skills_dirs_env_multiple_paths() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WARP_SKILL_DIRS", "/a/skills,/b/skills,/c/skills") };
+    let dirs = super::parse_skills_dirs_env();
+    assert_eq!(
+        dirs,
+        vec![
+            std::path::PathBuf::from("/a/skills"),
+            std::path::PathBuf::from("/b/skills"),
+            std::path::PathBuf::from("/c/skills"),
+        ]
+    );
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+}
+
+#[test]
+#[serial_test::serial]
+fn test_parse_skills_dirs_env_trims_whitespace_and_drops_blanks() {
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("WARP_SKILL_DIRS", " /a/skills , , /b/skills ") };
+    let dirs = super::parse_skills_dirs_env();
+    assert_eq!(
+        dirs,
+        vec![
+            std::path::PathBuf::from("/a/skills"),
+            std::path::PathBuf::from("/b/skills"),
+        ]
+    );
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("WARP_SKILL_DIRS") };
+}
+
+// ============================================================================
+// Tests for read_skills_for_skills_dirs
+// ============================================================================
+
+/// Helper: write a minimal SKILL.md into `<dir>/<name>/SKILL.md`.
+fn write_flat_skill(dir: &Path, name: &str) {
+    let skill_dir = dir.join(name);
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: Skill {name}\n---\n\n# {name}\nContent.\n"),
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_read_skills_for_skills_dirs_marks_scope_home() {
+    use crate::skills::SkillScope;
+
+    let temp = tempdir().unwrap();
+    let skills_dir = temp.path().to_path_buf();
+    write_flat_skill(&skills_dir, "my-skill");
+
+    let skills = super::read_skills_for_skills_dirs(&[skills_dir]);
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "my-skill");
+    assert_eq!(
+        skills[0].scope,
+        SkillScope::Home,
+        "env-dir skill must be Home-scoped"
+    );
+}
+
+#[test]
+fn test_read_skills_for_skills_dirs_multiple_dirs() {
+    let temp1 = tempdir().unwrap();
+    let temp2 = tempdir().unwrap();
+    write_flat_skill(temp1.path(), "skill-a");
+    write_flat_skill(temp2.path(), "skill-b");
+
+    let dirs = vec![temp1.path().to_path_buf(), temp2.path().to_path_buf()];
+    let skills = super::read_skills_for_skills_dirs(&dirs);
+    assert_eq!(skills.len(), 2);
+    let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"skill-a"));
+    assert!(names.contains(&"skill-b"));
+}
+
+#[test]
+fn test_read_skills_for_skills_dirs_skips_nonexistent() {
+    let dirs = vec![std::path::PathBuf::from("/nonexistent/skills")];
+    let skills = super::read_skills_for_skills_dirs(&dirs);
+    assert!(skills.is_empty());
+}
+
+#[test]
+fn test_read_skills_for_skills_dirs_empty_dirs_list() {
+    let skills = super::read_skills_for_skills_dirs(&[]);
+    assert!(skills.is_empty());
+}
+
+// ============================================================================
+// Tests for resolve_skills_dirs
+// ============================================================================
+
+#[test]
+fn test_resolve_skills_dirs_absolute_entries_pass_through() {
+    let dirs = vec![PathBuf::from("/a/skills"), PathBuf::from("/b/skills")];
+    let resolved = super::resolve_skills_dirs(Path::new("/env/workdir"), dirs.clone());
+    assert_eq!(resolved, dirs);
+}
+
+#[test]
+fn test_resolve_skills_dirs_relative_entries_join_base() {
+    let dirs = vec![PathBuf::from("skills"), PathBuf::from("nested/more-skills")];
+    let resolved = super::resolve_skills_dirs(Path::new("/env/workdir"), dirs);
+    assert_eq!(
+        resolved,
+        vec![
+            PathBuf::from("/env/workdir/skills"),
+            PathBuf::from("/env/workdir/nested/more-skills"),
+        ]
+    );
+}
+
+#[test]
+fn test_resolve_skills_dirs_mixed_entries() {
+    let dirs = vec![
+        PathBuf::from("relative/skills"),
+        PathBuf::from("/absolute/skills"),
+    ];
+    let resolved = super::resolve_skills_dirs(Path::new("/env/workdir"), dirs);
+    assert_eq!(
+        resolved,
+        vec![
+            PathBuf::from("/env/workdir/relative/skills"),
+            PathBuf::from("/absolute/skills"),
+        ]
+    );
+}

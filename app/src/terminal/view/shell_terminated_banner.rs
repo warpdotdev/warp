@@ -3,8 +3,8 @@ use std::cell::RefCell;
 
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::builder::UiBuilder;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::WarpTheme;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::*;
 use warpui::text_layout::ClipConfig;

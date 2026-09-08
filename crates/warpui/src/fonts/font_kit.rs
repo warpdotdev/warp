@@ -9,7 +9,7 @@ use font_kit::font::Font;
 use font_kit::hinting::HintingOptions;
 use pathfinder_geometry::rect::RectI;
 use pathfinder_geometry::transform2d::Transform2F;
-use pathfinder_geometry::vector::{vec2i, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2i};
 use warpui_core::fonts::canvas::RasterFormat;
 use warpui_core::fonts::{
     FontId, GlyphId, Properties, RasterizedGlyph, Style, SubpixelAlignment, Weight,

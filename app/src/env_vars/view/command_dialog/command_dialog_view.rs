@@ -92,7 +92,7 @@ impl EnvVarCommandDialog {
                     autogrow: true,
                     propagate_and_no_op_vertical_navigation_keys:
                         PropagateAndNoOpNavigationKeys::Always,
-                    supports_vim_mode: false,
+                    supports_vim_mode: true,
                     single_line: false,
                     ..Default::default()
                 };

@@ -4,9 +4,12 @@ use warp_core::ui::icons::Icon;
 use warpui::elements::{ConstrainedBox, Container, Highlight, Text};
 use warpui::fonts::{Properties, Weight};
 use warpui::text_layout::ClipConfig;
-use warpui::{AppContext, Element, Entity, ModelContext, ModelHandle, SingletonEntity as _};
+use warpui::{
+    AppContext, Element, Entity, ModelContext, ModelHandle, SingletonEntity as _, WindowId,
+};
 
 use crate::appearance::Appearance;
+use crate::cloud_object::CloudObject;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::search::command_palette::warp_drive;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
@@ -15,11 +18,12 @@ use crate::search::result_renderer::ItemHighlightState;
 use crate::search::{SearchItem, SyncDataSource};
 use crate::server::ids::SyncId;
 use crate::terminal::input::inline_menu::{
-    default_navigation_message_items, styles as inline_styles, InlineMenuAction,
-    InlineMenuMessageArgs, InlineMenuType,
+    InlineMenuAction, InlineMenuMessageArgs, InlineMenuType, default_navigation_message_items,
+    styles as inline_styles,
 };
 use crate::terminal::input::message_bar::Message;
 use crate::workflows::CloudWorkflow;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 #[derive(Clone, Debug)]
 pub struct AcceptPrompt {
@@ -36,18 +40,36 @@ impl InlineMenuAction for AcceptPrompt {
 
 pub struct PromptsMenuDataSource {
     warp_drive_data_source: ModelHandle<warp_drive::DataSource>,
+    window_id: WindowId,
 }
 
 impl PromptsMenuDataSource {
-    pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+    pub fn new(window_id: WindowId, ctx: &mut ModelContext<Self>) -> Self {
         // Ideally this would be a full-text searching but full text searching is slow, and
         // currently its implementation is not well-setup for async use.
         //
         // TODO(zachbai): Revert to full-text search and make this an `AsyncDataSource`.
-        let warp_drive_data_source = ctx.add_model(warp_drive::DataSource::new_fuzzy);
+        let warp_drive_data_source =
+            ctx.add_model(|ctx| warp_drive::DataSource::new_fuzzy(window_id, ctx));
         Self {
             warp_drive_data_source,
+            window_id,
         }
+    }
+
+    /// The short-query paths read the cloud model directly instead of going through
+    /// `warp_drive_data_source`, so they restrict it to the window's spaces themselves.
+    fn prompts_in_window<'a>(
+        &self,
+        app: &'a AppContext,
+    ) -> impl Iterator<Item = &'a CloudWorkflow> {
+        let spaces = UserWorkspaces::as_ref(app).spaces_for_window(self.window_id, app);
+        CloudModel::as_ref(app)
+            .get_all_active_workflows()
+            .filter(move |workflow| {
+                !workflow.model().data.is_command_workflow()
+                    && spaces.contains(&workflow.space(app))
+            })
     }
 }
 
@@ -62,10 +84,8 @@ impl SyncDataSource for PromptsMenuDataSource {
         let query_text = query.text.trim();
 
         if query_text.is_empty() {
-            let cloud_workflows = CloudModel::as_ref(app).get_all_active_workflows();
-
-            return Ok(cloud_workflows
-                .filter(|workflow| !workflow.model().data.is_command_workflow())
+            return Ok(self
+                .prompts_in_window(app)
                 .map(|workflow| QueryResult::from(PromptSearchItem::from_workflow(workflow)))
                 .collect());
         }
@@ -74,15 +94,14 @@ impl SyncDataSource for PromptsMenuDataSource {
         // search to avoid missing valid results while still filtering the list.
         if query_text.chars().count() == 1 {
             let query_char = query_text.chars().next().unwrap();
-            let cloud_workflows = CloudModel::as_ref(app).get_all_active_workflows();
 
-            return Ok(cloud_workflows
+            return Ok(self
+                .prompts_in_window(app)
                 .filter(|workflow| {
-                    !workflow.model().data.is_command_workflow()
-                        && workflow
-                            .model()
-                            .data
-                            .name_starts_with_char_ignore_case(query_char)
+                    workflow
+                        .model()
+                        .data
+                        .name_starts_with_char_ignore_case(query_char)
                 })
                 .map(|workflow| QueryResult::from(PromptSearchItem::from_workflow(workflow)))
                 .collect());
@@ -191,13 +210,13 @@ impl SearchItem for PromptSearchItem {
                 .with_color(primary_text_color.into())
                 .with_clip(ClipConfig::ellipsis());
 
-        if let Some(name_match) = &self.name_match_result {
-            if !name_match.matched_indices.is_empty() {
-                name_text = name_text.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    name_match.matched_indices.clone(),
-                );
-            }
+        if let Some(name_match) = &self.name_match_result
+            && !name_match.matched_indices.is_empty()
+        {
+            name_text = name_text.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                name_match.matched_indices.clone(),
+            );
         }
 
         name_text.finish()
@@ -227,3 +246,7 @@ impl SearchItem for PromptSearchItem {
         format!("Prompt: {}", self.name)
     }
 }
+
+#[cfg(test)]
+#[path = "data_source_tests.rs"]
+mod tests;

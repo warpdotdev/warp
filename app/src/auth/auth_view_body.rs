@@ -3,6 +3,7 @@ use lazy_static::lazy_static;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::DEFAULT_COMMAND_PALETTE_FONT_SIZE;
 use warp_core::ui::builder::UiBuilder;
+use warp_errors::report_error;
 use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::clipboard::ClipboardContent;
 use warpui::color::ColorU;
@@ -18,14 +19,14 @@ use warpui::{
     ViewContext, ViewHandle,
 };
 
+use super::AuthStateProvider;
 use super::auth_manager::AuthManager;
 use super::auth_view_modal::AuthViewVariant;
 use super::auth_view_shared_helpers::{
-    action_button_color_and_variant, render_offline_info_overlay_body, render_overlay,
-    render_privacy_settings_overlay_body, render_square_logo, PrivacySettingsActions,
-    PrivacySettingsHandles,
+    PrivacySettingsActions, PrivacySettingsHandles, action_button_color_and_variant,
+    render_offline_info_overlay_body, render_overlay, render_privacy_settings_overlay_body,
+    render_square_logo,
 };
-use super::AuthStateProvider;
 use crate::appearance::Appearance;
 use crate::auth::auth_view_shared_helpers::render_offline_contents;
 use crate::editor::{
@@ -38,7 +39,7 @@ use crate::server::telemetry::{AnonymousUserSignupEntrypoint, LoginEventSource, 
 use crate::settings::{AISettings, PrivacySettings};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::color::{darken, lighten};
-use crate::{report_error, send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
 
 const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
 
@@ -603,7 +604,7 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::RequireLoginCloseable  => {
+            AuthViewVariant::RequireLoginCloseable => {
                 "In order to use Warp’s AI features or collaborate with others, please create an account."
             }
             AuthViewVariant::HitDriveObjectLimitCloseable => {
@@ -805,13 +806,10 @@ impl AuthViewBody {
 
         let mut contents = vec![logo, header, hint];
 
-        let auth_token = Container::new(
-            if let Some(auth_token_input) = self.render_auth_token_input(appearance) {
-                auth_token_input
-            } else {
-                self.render_auth_token_suggest(ui_builder)
-            },
-        )
+        let auth_token = Container::new(match self.render_auth_token_input(appearance) {
+            Some(auth_token_input) => auth_token_input,
+            _ => self.render_auth_token_suggest(ui_builder),
+        })
         .with_margin_top(AUTH_MODAL_GAP)
         .finish();
 

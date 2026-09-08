@@ -1,6 +1,6 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 
 use super::{
     AfterLayoutContext, AppContext, DropShadow, Element, EventContext, Fill, LayoutContext, Margin,
@@ -381,6 +381,11 @@ impl Element for Container {
     #[cfg(any(test, feature = "test-util"))]
     fn debug_text_content(&self) -> Option<String> {
         self.child.debug_text_content()
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<crate::EntityId> {
+        self.child.debug_child_view_ids()
     }
 }
 

@@ -16,6 +16,9 @@ use warpui::{App, EntityId, ModelHandle, SingletonEntity};
 use super::{BlocklistAIContextModel, PendingAttachment, PendingFile};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIAgentContext, ImageContext};
+use crate::ai::agent_conversations_model::{
+    AgentConversationEntry, AgentConversationListEntryState, AgentConversationListPolicy,
+};
 use crate::ai::blocklist::agent_view::{AgentViewEntryOrigin, EnterAgentViewError};
 use crate::ai::blocklist::conversation_selection::{
     ConversationSelection, ConversationSelectionEvent,
@@ -66,6 +69,16 @@ impl TestConversationSelection {
             terminal_surface_id,
             selected_conversation_id: None,
         }
+    }
+}
+
+impl AgentConversationListPolicy for TestConversationSelection {
+    fn classify_entry(
+        &self,
+        _: &AgentConversationEntry,
+        _: &warpui::AppContext,
+    ) -> AgentConversationListEntryState {
+        AgentConversationListEntryState::Unavailable
     }
 }
 
@@ -177,6 +190,7 @@ fn repository_context_reads_github_repo_model() {
                 Some(RepositoryInfo {
                     name: "warp-internal".to_owned(),
                     owner: Some("warpdotdev".to_owned()),
+                    host: Some("github.com".to_owned()),
                 }),
                 ctx,
             );
@@ -192,6 +206,7 @@ fn repository_context_reads_github_repo_model() {
                 Some(AIAgentContext::Repository {
                     name: "warp-internal".to_owned(),
                     owner: Some("warpdotdev".to_owned()),
+                    host: Some("github.com".to_owned()),
                 })
             );
         });
@@ -369,6 +384,7 @@ fn repository_context_from_repository_info_converts_to_agent_context() {
     let repository_info = RepositoryInfo {
         name: "warp-internal".to_owned(),
         owner: Some("warpdotdev".to_owned()),
+        host: Some("github.com".to_owned()),
     };
 
     assert_eq!(
@@ -376,12 +392,13 @@ fn repository_context_from_repository_info_converts_to_agent_context() {
         AIAgentContext::Repository {
             name: "warp-internal".to_owned(),
             owner: Some("warpdotdev".to_owned()),
+            host: Some("github.com".to_owned()),
         }
     );
 }
 
 #[test]
-fn pull_request_context_from_pr_info_excludes_url() {
+fn pull_request_context_from_pr_info_includes_url() {
     let pr_info = PrInfo {
         number: 123,
         url: "https://github.com/warpdotdev/warp/pull/123".to_owned(),
@@ -397,6 +414,7 @@ fn pull_request_context_from_pr_info_excludes_url() {
             state: "OPEN".to_owned(),
             draft: true,
             base_branch: "main".to_owned(),
+            url: "https://github.com/warpdotdev/warp/pull/123".to_owned(),
         })
     );
 }
@@ -462,6 +480,7 @@ fn pull_request_context_reads_github_repo_model() {
                     state: "OPEN".to_owned(),
                     draft: false,
                     base_branch: "main".to_owned(),
+                    url: "https://github.com/warpdotdev/warp/pull/123".to_owned(),
                 })
             );
         });

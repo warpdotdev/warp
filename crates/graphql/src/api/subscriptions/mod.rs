@@ -2,12 +2,12 @@ pub mod get_warp_drive_updates;
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_channel::Sender;
 use cynic::{QueryFragment, QueryVariables, StreamingOperation as CynicStreamingOperation};
 use futures::StreamExt as _;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 const PROTOCOL: &str = "graphql-transport-ws";
 

@@ -124,11 +124,7 @@ impl SearchItem for CodeSearchItem {
                 .filter_map(|&i| {
                     let adjusted_i = if let Some(symbol_type) = &self.code_symbol.symbol.type_prefix
                     {
-                        if i < symbol_type.len() {
-                            i
-                        } else {
-                            i + 1
-                        }
+                        if i < symbol_type.len() { i } else { i + 1 }
                     } else {
                         i
                     };

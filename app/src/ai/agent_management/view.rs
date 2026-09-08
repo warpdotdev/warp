@@ -10,8 +10,8 @@ use settings::Setting;
 use siphasher::sip::SipHasher;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{
     NewScrollableElement, ScrollableAppearance, SingleAxisConfig,
@@ -53,7 +53,7 @@ use crate::ai::agent_management::details_action_buttons::{
 use crate::ai::agent_management::telemetry::{
     AgentManagementTelemetryEvent, ArtifactType, FilterType, OpenedFrom,
 };
-use crate::ai::ambient_agents::{cancel_task_with_toast, AgentSource};
+use crate::ai::ambient_agents::{AgentSource, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::format_credits;
 use crate::ai::conversation_details_panel::{
@@ -70,6 +70,7 @@ use crate::editor::{
 };
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::ai::AISettings;
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
@@ -89,8 +90,8 @@ use crate::workflows::WorkflowType;
 use crate::workspace::{
     ForkedConversationDestination, RestoreConversationLayout, ToastStack, WorkspaceAction,
 };
-use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::{send_telemetry_from_ctx, AgentModeEntrypoint};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
+use crate::{AgentModeEntrypoint, send_telemetry_from_ctx};
 
 lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
@@ -144,6 +145,7 @@ struct CardState {
 }
 
 pub struct AgentManagementView {
+    view_handle: WeakViewHandle<Self>,
     list_state: ListState<()>,
     loading_icon_mouse_state: MouseStateHandle,
     scroll_state: ScrollStateHandle,
@@ -211,6 +213,18 @@ impl AgentManagementView {
             &AgentConversationsModel::handle(ctx),
             Self::handle_agent_management_model_event,
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::WindowTeamChanged { window_id }
+                    if *window_id == ctx.window_id()
+            ) {
+                me.trigger_filter_fetch(ctx);
+                me.update_creator_dropdown(ctx);
+                me.update_environment_dropdown(ctx);
+                me.get_tasks_from_model(ctx);
+            }
+        });
 
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
@@ -219,7 +233,8 @@ impl AgentManagementView {
             },
         );
 
-        let list_state = Self::construct_fresh_list_state(ctx.handle());
+        let view_handle = ctx.handle();
+        let list_state = Self::construct_fresh_list_state(view_handle.clone());
 
         let all_filter_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("All", NakedTheme)
@@ -343,6 +358,7 @@ impl AgentManagementView {
         ctx.subscribe_to_view(&details_panel, Self::handle_details_panel_event);
 
         let mut view = Self {
+            view_handle,
             list_state,
             scroll_state: ScrollStateHandle::default(),
             items: Vec::new(),
@@ -377,9 +393,6 @@ impl AgentManagementView {
         view.sync_with_loaded_filters(ctx);
         view.update_creator_dropdown(ctx);
         view.update_environment_dropdown(ctx);
-
-        // Trigger server fetch if persisted filters differ from defaults
-        // (team tasks are not loaded at startup, so we need to fetch them)
         if view.filters != AgentManagementFilters::default() {
             view.trigger_filter_fetch(ctx);
         }
@@ -390,7 +403,8 @@ impl AgentManagementView {
 
     fn get_view_state(&self, app: &AppContext) -> ViewState {
         let model = AgentConversationsModel::as_ref(app);
-        let has_items = model.has_items();
+        let scope = UserWorkspaces::as_ref(app).team_context(&self.view_handle, app);
+        let has_items = model.has_items(&scope, app);
 
         // If loading with zero items, show skeleton cards
         // If loading with items, show list of interactive conversations (with loading indicator in header)
@@ -774,7 +788,8 @@ impl AgentManagementView {
     /// set of tasks.
     fn update_environment_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
         let model = AgentConversationsModel::as_ref(ctx);
-        let envs = model.get_all_environment_ids_and_names(ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx);
+        let envs = model.get_all_environment_ids_and_names(&scope, ctx);
 
         let selected_name = match &self.filters.environment {
             EnvironmentFilter::All => Some("All".to_string()),
@@ -824,7 +839,8 @@ impl AgentManagementView {
     }
 
     fn update_creator_dropdown(&mut self, ctx: &mut ViewContext<Self>) {
-        let creators = AgentConversationsModel::as_ref(ctx).get_all_creators(ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx);
+        let creators = AgentConversationsModel::as_ref(ctx).get_all_creators(&scope, ctx);
         let creator_filter_name = match &self.filters.creator {
             CreatorFilter::All => "All",
             CreatorFilter::Specific { name, .. } => name,
@@ -880,8 +896,10 @@ impl AgentManagementView {
             .map(|uid| uid.as_string());
         if let Some(uid) = current_user_uid {
             let filters = self.filters.clone();
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            let request_team_scope = RequestTeamScope::from_scope(&scope);
             AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
-                model.fetch_tasks_for_filters(&filters, &uid, ctx);
+                model.fetch_tasks_for_filters(&filters, &uid, request_team_scope, ctx);
             });
         }
     }
@@ -950,9 +968,10 @@ impl AgentManagementView {
 
         // Get sorted tasks and conversations from model
         let model = AgentConversationsModel::as_ref(ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx);
         let search_query = self.search_query.trim().to_lowercase();
         let cards: Vec<CardData> = model
-            .get_entries(&self.filters, ctx)
+            .get_entries(&self.filters, &scope, ctx)
             .into_iter()
             .filter(|entry| {
                 if search_query.is_empty() {
@@ -1004,42 +1023,48 @@ impl AgentManagementView {
             self.list_state.add_item();
             let card_key = card.item_id.as_key();
 
-            if let Some(mut existing) = old_items.remove(&card_key) {
-                // Update artifacts view if it exists, or create if needed
-                if should_show_artifacts(&card.artifacts) {
-                    if let Some(view) = &existing.artifact_buttons_view {
-                        view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
+            match old_items.remove(&card_key) {
+                Some(mut existing) => {
+                    // Update artifacts view if it exists, or create if needed
+                    if should_show_artifacts(&card.artifacts) {
+                        if let Some(view) = &existing.artifact_buttons_view {
+                            view.update(ctx, |v, ctx| v.update_artifacts(&card.artifacts, ctx));
+                        } else {
+                            existing.artifact_buttons_view =
+                                Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                        }
                     } else {
-                        existing.artifact_buttons_view =
-                            Some(self.create_artifact_buttons_view(&card.artifacts, ctx));
+                        existing.artifact_buttons_view = None;
                     }
-                } else {
-                    existing.artifact_buttons_view = None;
+
+                    existing.action_buttons_view.update(ctx, |row, ctx| {
+                        row.set_config(card.action_buttons_config, ctx)
+                    });
+
+                    new_items.push(existing);
                 }
+                _ => {
+                    let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
+                        Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
+                    } else {
+                        None
+                    };
+                    let action_buttons_view = self.create_action_buttons_view(
+                        card.item_id,
+                        card.action_buttons_config,
+                        ctx,
+                    );
 
-                existing.action_buttons_view.update(ctx, |row, ctx| {
-                    row.set_config(card.action_buttons_config, ctx)
-                });
-
-                new_items.push(existing);
-            } else {
-                let artifact_buttons_view = if should_show_artifacts(&card.artifacts) {
-                    Some(self.create_artifact_buttons_view(&card.artifacts, ctx))
-                } else {
-                    None
-                };
-                let action_buttons_view =
-                    self.create_action_buttons_view(card.item_id, card.action_buttons_config, ctx);
-
-                new_items.push(CardState {
-                    hover_state: MouseStateHandle::default(),
-                    avatar_hover_state: MouseStateHandle::default(),
-                    session_status_hover_state: MouseStateHandle::default(),
-                    action_buttons_hover_state: MouseStateHandle::default(),
-                    artifact_buttons_view,
-                    action_buttons_view,
-                    item_id: card.item_id,
-                });
+                    new_items.push(CardState {
+                        hover_state: MouseStateHandle::default(),
+                        avatar_hover_state: MouseStateHandle::default(),
+                        session_status_hover_state: MouseStateHandle::default(),
+                        action_buttons_hover_state: MouseStateHandle::default(),
+                        artifact_buttons_view,
+                        action_buttons_view,
+                        item_id: card.item_id,
+                    });
+                }
             }
         }
 
@@ -1525,22 +1550,22 @@ impl AgentManagementView {
                 .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)));
 
             let mut stack = Stack::new().with_child(container.finish());
-            if state.is_hovered() {
-                if let Some(tooltip_text) = tooltip_text_opt {
-                    let tooltip = ui_builder
-                        .tool_tip(tooltip_text.to_string())
-                        .build()
-                        .finish();
-                    stack.add_positioned_overlay_child(
-                        tooltip,
-                        OffsetPositioning::offset_from_parent(
-                            vec2f(0., -4.),
-                            ParentOffsetBounds::WindowByPosition,
-                            ParentAnchor::TopMiddle,
-                            ChildAnchor::BottomMiddle,
-                        ),
-                    );
-                }
+            if state.is_hovered()
+                && let Some(tooltip_text) = tooltip_text_opt
+            {
+                let tooltip = ui_builder
+                    .tool_tip(tooltip_text.to_string())
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(
+                    tooltip,
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(0., -4.),
+                        ParentOffsetBounds::WindowByPosition,
+                        ParentAnchor::TopMiddle,
+                        ChildAnchor::BottomMiddle,
+                    ),
+                );
             }
             stack.finish()
         })
@@ -1798,30 +1823,30 @@ impl AgentManagementView {
         }
 
         let availability = HarnessAvailabilityModel::as_ref(app);
-        if availability.should_show_harness_selector() {
-            if let Some(harness) = entry.display.harness {
-                metadata_parts.push(format!(
-                    "Harness: {}",
-                    availability.display_name_for(harness)
-                ));
-            }
+        if availability.should_show_harness_selector()
+            && let Some(harness) = entry.display.harness
+        {
+            metadata_parts.push(format!(
+                "Harness: {}",
+                availability.display_name_for(harness)
+            ));
         }
 
         if let Some(executor) = &entry.display.executor {
             let same_as_creator =
                 executor.uid.is_some() && executor.uid == entry.display.creator.uid;
-            if !same_as_creator {
-                if let Some(name) = executor.name.as_deref().or(executor.uid.as_deref()) {
-                    let label = if executor
-                        .principal_type
-                        .is_some_and(|pt| pt.is_service_account())
-                    {
-                        "Agent"
-                    } else {
-                        "Executor"
-                    };
-                    metadata_parts.push(format!("{label}: {name}"));
-                }
+            if !same_as_creator
+                && let Some(name) = executor.name.as_deref().or(executor.uid.as_deref())
+            {
+                let label = if executor
+                    .principal_type
+                    .is_some_and(|pt| pt.is_service_account())
+                {
+                    "Agent"
+                } else {
+                    "Executor"
+                };
+                metadata_parts.push(format!("{label}: {name}"));
             }
         }
 
@@ -1894,7 +1919,9 @@ impl AgentManagementView {
             .as_ref(app)
             .is_loading();
 
-        let is_on_team = UserWorkspaces::as_ref(app).current_team().is_some();
+        let is_on_team = UserWorkspaces::as_ref(app)
+            .team_for_view_handle(&self.view_handle, app)
+            .is_some();
 
         let size_switch_threshold = MEDIUM_SIZE_SWITCH_THRESHOLD * appearance.monospace_ui_scalar();
 

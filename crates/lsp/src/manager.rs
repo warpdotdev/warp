@@ -102,18 +102,18 @@ impl LspManagerModel {
         let path_lang = LanguageId::from_path(path)?;
 
         // First check if this is an external file that was registered via goto-definition
-        if let Some(server_id) = self.external_file_servers.get(path) {
-            if let Some(server) = self.server_by_id(*server_id, ctx) {
-                // Validate that the server supports this file's language
-                if server.as_ref(ctx).supports_language(&path_lang) {
-                    return Some(server);
-                }
-                log::debug!(
-                    "External file server for {} does not support language {:?}, falling back to workspace lookup",
-                    path.display(),
-                    path_lang
-                );
+        if let Some(server_id) = self.external_file_servers.get(path)
+            && let Some(server) = self.server_by_id(*server_id, ctx)
+        {
+            // Validate that the server supports this file's language
+            if server.as_ref(ctx).supports_language(&path_lang) {
+                return Some(server);
             }
+            log::debug!(
+                "External file server for {} does not support language {:?}, falling back to workspace lookup",
+                path.display(),
+                path_lang
+            );
         }
 
         // Then try workspace-based lookup

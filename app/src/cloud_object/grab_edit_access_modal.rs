@@ -7,7 +7,7 @@ use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewCon
 
 use crate::appearance::Appearance;
 use crate::ui_components::buttons::close_button;
-use crate::ui_components::dialog::{dialog_styles, Dialog};
+use crate::ui_components::dialog::{Dialog, dialog_styles};
 
 const EDIT_ANYWAY_CTA_LABEL: &str = "Edit anyway";
 const CANCEL_CTA_LABEL: &str = "Cancel";

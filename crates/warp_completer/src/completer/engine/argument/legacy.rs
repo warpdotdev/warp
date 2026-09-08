@@ -15,7 +15,7 @@ use warp_util::path::ShellFamily;
 use super::add_extra_positional;
 use crate::completer::context::CompletionContext;
 use crate::completer::engine::path::{
-    sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to, EngineFileType,
+    EngineFileType, sorted_cd_directories, sorted_directories_relative_to, sorted_paths_relative_to,
 };
 use crate::completer::engine::{self};
 use crate::completer::matchers::MatchStrategy;
@@ -24,10 +24,10 @@ use crate::completer::suggest::{
 };
 use crate::completer::{CommandExitStatus, GeneratorContext, LocationType};
 use crate::meta::{Span, Spanned};
-use crate::parsers::hir::{Command, ShellCommand};
 use crate::parsers::ArgumentError::{
     MissingMandatoryPositional, MissingValueForName, UnexpectedArgument,
 };
+use crate::parsers::hir::{Command, FlagType, NamedArgument, ShellCommand};
 use crate::parsers::{
     ClassifiedCommand, ParseError, ParseErrorReason, ParsedToken, SignatureAtTokenIndex,
 };
@@ -48,44 +48,44 @@ pub async fn complete(
 
     // True if and only if we called the complete function.
     let mut arg_has_spec = false;
-    if let Some(found_signature) = found_signature {
-        if let Command::Classified(mut shell_command) = classified_command.command {
-            suggestions = match classified_command.error {
-                Some(error) => {
-                    let (results, complete_called) = suggestions_for_parse_error(
-                        error,
-                        &mut shell_command,
-                        tokens_from_command,
-                        &classified_command.env_vars,
-                        session_env_vars,
-                        &location.span,
-                        found_signature.signature,
-                        found_signature.dynamic_completion_data,
-                        line,
-                        options,
-                        ctx,
-                    )
-                    .await;
-                    arg_has_spec = complete_called;
-                    results
-                }
-                None => {
-                    let (results, complete_called) = suggestions_for_last_argument(
-                        &mut shell_command,
-                        tokens_from_command,
-                        line.ends_with(char::is_whitespace),
-                        &classified_command.env_vars,
-                        session_env_vars,
-                        &location.span,
-                        found_signature.signature,
-                        found_signature.dynamic_completion_data,
-                        options,
-                        ctx,
-                    )
-                    .await;
-                    arg_has_spec = complete_called;
-                    results
-                }
+    if let Some(found_signature) = found_signature
+        && let Command::Classified(mut shell_command) = classified_command.command
+    {
+        suggestions = match classified_command.error {
+            Some(error) => {
+                let (results, complete_called) = suggestions_for_parse_error(
+                    error,
+                    &mut shell_command,
+                    tokens_from_command,
+                    &classified_command.env_vars,
+                    session_env_vars,
+                    &location.span,
+                    found_signature.signature,
+                    found_signature.dynamic_completion_data,
+                    line,
+                    options,
+                    ctx,
+                )
+                .await;
+                arg_has_spec = complete_called;
+                results
+            }
+            None => {
+                let (results, complete_called) = suggestions_for_last_argument(
+                    &mut shell_command,
+                    tokens_from_command,
+                    line.ends_with(char::is_whitespace),
+                    &classified_command.env_vars,
+                    session_env_vars,
+                    &location.span,
+                    found_signature.signature,
+                    found_signature.dynamic_completion_data,
+                    options,
+                    ctx,
+                )
+                .await;
+                arg_has_spec = complete_called;
+                results
             }
         }
     }
@@ -98,17 +98,16 @@ pub async fn complete(
             options.fallback_strategy,
             CompletionsFallbackStrategy::FilePaths
         )
+        && let Some(path_completion_context) = ctx.path_completion_context()
     {
-        if let Some(path_completion_context) = ctx.path_completion_context() {
-            suggestions = sorted_paths_relative_to(
-                parsed_argument,
-                options.match_strategy,
-                path_completion_context,
-            )
-            .await
-            .into_iter()
-            .collect();
-        }
+        suggestions = sorted_paths_relative_to(
+            parsed_argument,
+            options.match_strategy,
+            path_completion_context,
+        )
+        .await
+        .into_iter()
+        .collect();
     }
 
     suggestions
@@ -356,6 +355,7 @@ async fn suggestions_for_last_argument(
                     command_env_vars,
                     session_env_vars,
                     last_named_arg.item.name,
+                    option_value_index(shell_command, &last_named_arg),
                     last_named_arg.item.parsed_token,
                     options,
                     ctx,
@@ -388,6 +388,7 @@ async fn suggestions_for_last_argument(
                 command_env_vars,
                 session_env_vars,
                 last_named_arg.item.name,
+                option_value_index(shell_command, &last_named_arg),
                 last_named_arg.item.parsed_token,
                 options,
                 ctx,
@@ -400,6 +401,30 @@ async fn suggestions_for_last_argument(
     (results, true)
 }
 
+/// The index, within its option's declared arguments, of the value currently being completed.
+///
+/// The parser emits one `Flag` per consumed option value, all sharing the flag token's
+/// `name_span`, so the position is the count of that option instance's values up to and including
+/// the one being completed. Keying on `name_span` (not just the flag name) keeps a repeated
+/// single-argument option like `-c a=b -c d=e` from being counted as one multi-valued option.
+fn option_value_index(shell_command: &ShellCommand, completed: &Spanned<NamedArgument>) -> usize {
+    let Some(flags) = shell_command.args.flags.as_ref() else {
+        return 0;
+    };
+    flags
+        .iter()
+        .filter(|flag| {
+            flag.name.as_str() == completed.item.name
+                && flag.name_span == completed.item.name_span
+                && match &flag.flag_type {
+                    FlagType::Argument { value } => value.span.end() <= completed.span.end(),
+                    FlagType::NoArgument => false,
+                }
+        })
+        .count()
+        .saturating_sub(1)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn complete_option(
     signature: &Signature,
@@ -409,17 +434,28 @@ async fn complete_option(
     command_env_vars: &[String],
     session_env_vars: Option<&HashMap<String, String>>,
     option_name: &str,
+    value_index: usize,
     parsed_token: &ParsedToken,
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
 ) -> Vec<MatchedSuggestion> {
-    let last_argument = signature
+    let argument = signature
         .options()
         .iter()
         .find(|opt| opt.has_name(option_name))
-        .and_then(|opt| opt.arguments().last());
+        .and_then(|opt| {
+            let arguments = opt.arguments();
+            match arguments
+                .iter()
+                .enumerate()
+                .find(|(idx, arg)| *idx <= value_index && arg.is_variadic())
+            {
+                Some((_, arg)) => Some(arg),
+                None => arguments.get(value_index),
+            }
+        });
 
-    match last_argument {
+    match argument {
         None => Default::default(),
         Some(argument) => {
             generate_suggestions_for_argument(
@@ -457,39 +493,39 @@ async fn complete_positional(
     // command.
     let mut suggest_subcommands = true;
 
-    if let Some(positionals) = &shell_command.args.positionals.as_ref() {
-        if !arguments.is_empty() {
-            let positional_index = positionals.len() - 1;
+    if let Some(positionals) = &shell_command.args.positionals.as_ref()
+        && !arguments.is_empty()
+    {
+        let positional_index = positionals.len() - 1;
 
-            let arg = match arguments
-                .iter()
-                .enumerate()
-                .find(|(idx, arg)| idx <= &positional_index && arg.is_variadic())
-            {
-                None => arguments.get(positionals.len() - 1),
-                Some((_, arg)) => {
-                    // If the argument is required, we shouldn't continue to suggest subcommands. If
-                    // the argument is optional, we will show completions for the current argument
-                    // and possible subcommands for the current command.
-                    suggest_subcommands = !arg.is_required();
-                    Some(arg)
-                }
-            };
-
-            if let Some(arg) = arg {
-                suggestions = generate_suggestions_for_argument(
-                    arg,
-                    parsed_token,
-                    tokens_from_command,
-                    command_env_vars,
-                    session_env_vars,
-                    has_trailing_whitespace,
-                    dynamic_completion_data,
-                    options,
-                    ctx,
-                )
-                .await;
+        let arg = match arguments
+            .iter()
+            .enumerate()
+            .find(|(idx, arg)| idx <= &positional_index && arg.is_variadic())
+        {
+            None => arguments.get(positionals.len() - 1),
+            Some((_, arg)) => {
+                // If the argument is required, we shouldn't continue to suggest subcommands. If
+                // the argument is optional, we will show completions for the current argument
+                // and possible subcommands for the current command.
+                suggest_subcommands = !arg.is_required();
+                Some(arg)
             }
+        };
+
+        if let Some(arg) = arg {
+            suggestions = generate_suggestions_for_argument(
+                arg,
+                parsed_token,
+                tokens_from_command,
+                command_env_vars,
+                session_env_vars,
+                has_trailing_whitespace,
+                dynamic_completion_data,
+                options,
+                ctx,
+            )
+            .await;
         }
     }
 
@@ -623,7 +659,7 @@ async fn generate_suggestions_for_argument_type(
     matcher: MatchStrategy,
     dynamic_completion_data: Option<&DynamicCompletionData>,
     ctx: &dyn CompletionContext,
-) -> impl IntoIterator<Item = MatchedSuggestion> {
+) -> impl IntoIterator<Item = MatchedSuggestion> + use<> {
     match argument_type {
         ArgumentType::Suggestion(suggestion) => {
             let warp_suggestion: Suggestion = suggestion.clone().into();

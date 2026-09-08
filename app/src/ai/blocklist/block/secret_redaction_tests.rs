@@ -4,19 +4,19 @@ use warpui::elements::Text;
 use warpui::fonts::FamilyId;
 
 use super::*;
-use crate::terminal::model::secrets::{self, SecretLevel};
+use crate::terminal::model::secrets::{self, SecretLevel, merge_sorted_ranges_with_levels};
 
 #[test]
 fn test_merge_no_ranges() {
-    let ranges: Vec<(SecretRange, SecretLevel)> = vec![];
+    let ranges: Vec<(StringRange, SecretLevel)> = vec![];
     let result = merge_sorted_ranges_with_levels(ranges);
-    assert_eq!(result, Vec::<(SecretRange, SecretLevel)>::new());
+    assert_eq!(result, Vec::<(StringRange, SecretLevel)>::new());
 }
 
 #[test]
 fn test_merge_single_range() {
-    let ranges: Vec<(SecretRange, SecretLevel)> = vec![(
-        SecretRange {
+    let ranges: Vec<(StringRange, SecretLevel)> = vec![(
+        StringRange {
             char_range: 0..5,
             byte_range: 0..5,
         },
@@ -26,7 +26,7 @@ fn test_merge_single_range() {
     assert_eq!(
         result,
         vec![(
-            SecretRange {
+            StringRange {
                 char_range: 0..5,
                 byte_range: 0..5,
             },
@@ -39,21 +39,21 @@ fn test_merge_single_range() {
 fn test_merge_non_overlapping_ranges() {
     let ranges = vec![
         (
-            SecretRange {
+            StringRange {
                 char_range: 0..3,
                 byte_range: 0..3,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 5..8,
                 byte_range: 5..8,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 10..15,
                 byte_range: 10..15,
             },
@@ -65,21 +65,21 @@ fn test_merge_non_overlapping_ranges() {
         result,
         vec![
             (
-                SecretRange {
+                StringRange {
                     char_range: 0..3,
                     byte_range: 0..3,
                 },
                 SecretLevel::User
             ),
             (
-                SecretRange {
+                StringRange {
                     char_range: 5..8,
                     byte_range: 5..8,
                 },
                 SecretLevel::User
             ),
             (
-                SecretRange {
+                StringRange {
                     char_range: 10..15,
                     byte_range: 10..15,
                 },
@@ -93,14 +93,14 @@ fn test_merge_non_overlapping_ranges() {
 fn test_merge_overlapping_ranges() {
     let ranges = vec![
         (
-            SecretRange {
+            StringRange {
                 char_range: 0..5,
                 byte_range: 0..5,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 3..10,
                 byte_range: 3..10,
             },
@@ -111,7 +111,7 @@ fn test_merge_overlapping_ranges() {
     assert_eq!(
         result,
         vec![(
-            SecretRange {
+            StringRange {
                 char_range: 0..10,
                 byte_range: 0..10,
             },
@@ -124,14 +124,14 @@ fn test_merge_overlapping_ranges() {
 fn test_merge_adjacent_ranges() {
     let ranges = vec![
         (
-            SecretRange {
+            StringRange {
                 char_range: 0..5,
                 byte_range: 0..5,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 5..10,
                 byte_range: 5..10,
             },
@@ -142,7 +142,7 @@ fn test_merge_adjacent_ranges() {
     assert_eq!(
         result,
         vec![(
-            SecretRange {
+            StringRange {
                 char_range: 0..10,
                 byte_range: 0..10,
             },
@@ -155,42 +155,42 @@ fn test_merge_adjacent_ranges() {
 fn test_merge_complex_merge() {
     let ranges = vec![
         (
-            SecretRange {
+            StringRange {
                 char_range: 1..3,
                 byte_range: 1..3,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 2..5,
                 byte_range: 2..5,
             },
             SecretLevel::Enterprise,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 6..8,
                 byte_range: 6..8,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 7..10,
                 byte_range: 7..10,
             },
             SecretLevel::Enterprise,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 12..15,
                 byte_range: 12..15,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 14..18,
                 byte_range: 14..18,
             },
@@ -202,21 +202,21 @@ fn test_merge_complex_merge() {
         result,
         vec![
             (
-                SecretRange {
+                StringRange {
                     char_range: 1..5,
                     byte_range: 1..5,
                 },
                 SecretLevel::Enterprise
             ),
             (
-                SecretRange {
+                StringRange {
                     char_range: 6..10,
                     byte_range: 6..10,
                 },
                 SecretLevel::Enterprise
             ),
             (
-                SecretRange {
+                StringRange {
                     char_range: 12..18,
                     byte_range: 12..18,
                 },
@@ -230,21 +230,21 @@ fn test_merge_complex_merge() {
 fn test_merge_ranges_with_same_start() {
     let ranges = vec![
         (
-            SecretRange {
+            StringRange {
                 char_range: 1..5,
                 byte_range: 1..5,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 1..3,
                 byte_range: 1..3,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 1..4,
                 byte_range: 1..4,
             },
@@ -255,7 +255,7 @@ fn test_merge_ranges_with_same_start() {
     assert_eq!(
         result,
         vec![(
-            SecretRange {
+            StringRange {
                 char_range: 1..5,
                 byte_range: 1..5,
             },
@@ -268,21 +268,21 @@ fn test_merge_ranges_with_same_start() {
 fn test_merge_ranges_with_same_end() {
     let ranges = vec![
         (
-            SecretRange {
+            StringRange {
                 char_range: 0..5,
                 byte_range: 0..5,
             },
             SecretLevel::User,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 2..5,
                 byte_range: 2..5,
             },
             SecretLevel::Enterprise,
         ),
         (
-            SecretRange {
+            StringRange {
                 char_range: 3..5,
                 byte_range: 3..5,
             },
@@ -293,7 +293,7 @@ fn test_merge_ranges_with_same_end() {
     assert_eq!(
         result,
         vec![(
-            SecretRange {
+            StringRange {
                 char_range: 0..5,
                 byte_range: 0..5,
             },
@@ -330,7 +330,7 @@ fn test_detect_secrets_single_secret_custom() {
     let detected_secrets = find_secrets_in_text(text);
     assert_eq!(
         detected_secrets,
-        vec![SecretRange {
+        vec![StringRange {
             char_range: 4..8,
             byte_range: 4..8,
         }]
@@ -353,7 +353,7 @@ fn test_detect_secrets_single_secret_custom_with_multibyte() {
     // The Chinese secret "秘密" starts at character index 4 and ends at character index 6
     assert_eq!(
         detected_secrets,
-        vec![SecretRange {
+        vec![StringRange {
             char_range: 4..6,
             byte_range: 4..10, // multibyte chars take multiple bytes
         }]
@@ -382,19 +382,19 @@ fn test_detect_secrets_multiple_secrets() {
     assert_eq!(
         detected_secrets,
         vec![
-            SecretRange {
+            StringRange {
                 char_range: 0..4,
                 byte_range: 0..4,
             },
-            SecretRange {
+            StringRange {
                 char_range: 5..45,
                 byte_range: 5..45,
             },
-            SecretRange {
+            StringRange {
                 char_range: 54..89,
                 byte_range: 54..89,
             },
-            SecretRange {
+            StringRange {
                 char_range: 100..132,
                 byte_range: 100..132,
             }
@@ -427,7 +427,7 @@ fn test_add_secret_redaction_to_text_with_redaction() {
         line_index: 0,
     };
 
-    let secret_range = SecretRange {
+    let secret_range = StringRange {
         char_range: 18..27, // "secret123"
         byte_range: 18..27,
     };
@@ -459,7 +459,7 @@ fn test_add_secret_redaction_to_text_with_multibyte_characters() {
     };
 
     // Range for the secret "码1234" in the multibyte text.
-    let secret_range = SecretRange {
+    let secret_range = StringRange {
         char_range: 9..14,  // "码1234"
         byte_range: 23..30, // Byte range will be larger due to multibyte characters
     };
@@ -496,7 +496,7 @@ fn test_detect_secrets_case_sensitive() {
     let detected_secrets = find_secrets_in_text(text);
     assert_eq!(
         detected_secrets,
-        vec![SecretRange {
+        vec![StringRange {
             char_range: 4..8,
             byte_range: 4..8,
         }]
@@ -524,11 +524,11 @@ fn test_detect_secrets_case_insensitive_opt_in() {
     assert_eq!(
         detected_secrets,
         vec![
-            SecretRange {
+            StringRange {
                 char_range: 4..8,
                 byte_range: 4..8,
             },
-            SecretRange {
+            StringRange {
                 char_range: 13..17,
                 byte_range: 13..17,
             }
@@ -551,7 +551,7 @@ fn test_detect_secrets_default_regex_case_sensitivity() {
     let detected_secrets = find_secrets_in_text(text);
     assert_eq!(
         detected_secrets,
-        vec![SecretRange {
+        vec![StringRange {
             char_range: 10..42,
             byte_range: 10..42,
         }]
@@ -569,11 +569,11 @@ fn test_detect_secrets_default_regex_case_sensitivity() {
     assert_eq!(
         detected_secrets,
         vec![
-            SecretRange {
+            StringRange {
                 char_range: 10..42,
                 byte_range: 10..42,
             },
-            SecretRange {
+            StringRange {
                 char_range: 43..75,
                 byte_range: 43..75,
             }
@@ -602,11 +602,11 @@ fn test_detect_and_redact_custom_multibyte_secrets() {
     assert_eq!(
         detected_secrets,
         vec![
-            SecretRange {
+            StringRange {
                 char_range: 3..10, // "テストファイル"
                 byte_range: 9..30, // Multibyte character byte range
             },
-            SecretRange {
+            StringRange {
                 char_range: 14..18, // "ABCD"
                 byte_range: 40..44,
             }

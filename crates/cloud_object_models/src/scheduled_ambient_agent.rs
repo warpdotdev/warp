@@ -7,6 +7,7 @@ use cloud_objects::ids::GenericStringObjectId;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use warp_cli::agent::Harness;
 
+use crate::cloud_environment::SourceRepo;
 use crate::{JsonModel, JsonSerializer};
 
 /// Runtime configuration snapshot for agent execution.
@@ -58,6 +59,10 @@ pub struct AgentConfigSnapshot {
     /// Authentication secrets for third-party harnesses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_auth_secrets: Option<HarnessAuthSecretsConfig>,
+    /// Extra repositories the worker should clone in addition to the environment's repos.
+    /// This is server-populated for per-task sources such as a GitHub webhook's origin repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_source_repos: Option<Vec<SourceRepo>>,
 }
 
 /// Configuration for a third-party execution harness.
@@ -144,6 +149,7 @@ impl AgentConfigSnapshot {
             computer_use_enabled,
             harness,
             harness_auth_secrets,
+            additional_source_repos,
         } = self;
 
         name.is_none()
@@ -158,6 +164,7 @@ impl AgentConfigSnapshot {
             && computer_use_enabled.is_none()
             && harness.is_none()
             && harness_auth_secrets.is_none()
+            && additional_source_repos.is_none()
     }
 }
 
@@ -211,3 +218,7 @@ pub type ServerScheduledAmbientAgent =
     GenericServerObject<GenericStringObjectId, CloudScheduledAmbientAgentModel>;
 
 pub type AgentConfigMap = HashMap<String, serde_json::Value>;
+
+#[cfg(test)]
+#[path = "scheduled_ambient_agent_tests.rs"]
+mod tests;

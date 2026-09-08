@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::Parser;
 use warp_cli::WorkerCommand;
-use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 use warp_core::AppId;
+use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpServerConfig};
 
 #[derive(Debug, Default, Parser, Clone)]
 #[command(name = "warp-integration")]
@@ -58,7 +58,7 @@ pub fn main() -> Result<()> {
                 // GUI application), do so.  This must occur before init_logging, as the
                 // terminal server sets up its own logger, and attempting to set a second
                 // logger leads to a panic.
-                warp::terminal::local_tty::server::run_terminal_server(args);
+                warp::terminal::local_tty::run_terminal_server(args);
                 return Ok(());
             }
             #[cfg(not(target_family = "wasm"))]

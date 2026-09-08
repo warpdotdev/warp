@@ -5,9 +5,9 @@ use warp::integration_testing::terminal::wait_until_bootstrapped_single_pane_for
 use warp::integration_testing::view_getters::{pane_group_view, workspace_view};
 use warp::workspace::WorkspaceAction;
 use warpui_core::integration::TestStep;
-use warpui_core::{async_assert, async_assert_eq, App};
+use warpui_core::{App, async_assert, async_assert_eq};
 
-use super::{new_builder, Builder};
+use super::{Builder, new_builder};
 use crate::util::write_all_rc_files_for_test;
 
 fn open_file_tree_panel(app: &mut App) {
@@ -169,11 +169,11 @@ pub fn test_file_tree_open_in_new_tab() -> Builder {
                             })
                         });
 
-                        if let Some(title) = title {
-                            if config_regex.is_match(&title) {
-                                found = true;
-                                break;
-                            }
+                        if let Some(title) = title
+                            && config_regex.is_match(&title)
+                        {
+                            found = true;
+                            break;
                         }
                     }
 

@@ -15,11 +15,12 @@ use warpui::presenter::ChildView;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 
 use super::{
-    DynamicEnumSuggestionStatus, Input, InputAction, MenuPositioning, DYNAMIC_ENUM_FAILURE_MESSAGE,
-    DYNAMIC_ENUM_GENERATE_MESSAGE, DYNAMIC_ENUM_HORIZONTAL_TEXT_PADDING,
-    DYNAMIC_ENUM_MENU_HEIGHT_OFFSET, DYNAMIC_ENUM_MENU_PADDING, DYNAMIC_ENUM_NO_RESULTS_MESSAGE,
-    DYNAMIC_ENUM_PENDING_MESSAGE, DYNAMIC_ENUM_RUN_MESSAGE, HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT,
-    RUN_DYNAMIC_ENUM_COMMAND_KEYSTROKE, TERMINAL_VIEW_PADDING_LEFT,
+    DYNAMIC_ENUM_FAILURE_MESSAGE, DYNAMIC_ENUM_GENERATE_MESSAGE,
+    DYNAMIC_ENUM_HORIZONTAL_TEXT_PADDING, DYNAMIC_ENUM_MENU_HEIGHT_OFFSET,
+    DYNAMIC_ENUM_MENU_PADDING, DYNAMIC_ENUM_NO_RESULTS_MESSAGE, DYNAMIC_ENUM_PENDING_MESSAGE,
+    DYNAMIC_ENUM_RUN_MESSAGE, DynamicEnumSuggestionStatus, HISTORY_DETAILS_VIEW_WIDTH_REQUIREMENT,
+    Input, InputAction, MenuPositioning, RUN_DYNAMIC_ENUM_COMMAND_KEYSTROKE,
+    TERMINAL_VIEW_PADDING_LEFT,
 };
 use crate::appearance::Appearance;
 use crate::input_suggestions::{
@@ -212,7 +213,7 @@ impl Input {
                 )
                 .with_dragbar_side(DragBarSide::Right)
                 .with_dragbar_offset(7.0)
-                .with_bounds_callback(Box::new(|window_size| (200.0, window_size.x())))
+                .with_bounds_callback(Box::new(|window_size| (200.0, window_size.x().max(200.0))))
                 .on_resize(move |ctx, _| {
                     ctx.notify();
                 })
@@ -245,7 +246,7 @@ impl Input {
                     horizontal_resizable,
                 )
                 .with_dragbar_side(dragbar_side)
-                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y())))
+                .with_bounds_callback(Box::new(|window_size| (100.0, window_size.y().max(100.0))))
                 .on_resize(move |ctx, _| {
                     ctx.notify();
                 })

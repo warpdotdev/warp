@@ -42,7 +42,7 @@ Both. When you open a PR, Oz is auto-assigned and produces an initial review. On
 
 ### My PR has been sitting without review — what do I do?
 
-After you push changes that address Oz's feedback, comment `/oz-review` on the PR (up to three times per PR) to request a re-review. If something looks stuck or you've used your re-reviews, mention **@oss-maintainers** to escalate to the team.
+After you push changes that address Oz's feedback, comment `/warp-agent-review` on the PR (up to three times per PR) to request a re-review. If something looks stuck or you've used your re-reviews, mention **@oss-maintainers** to escalate to the team.
 
 ### What's the difference between a contributor and a collaborator?
 

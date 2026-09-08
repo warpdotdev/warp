@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 pub mod root_view;
 
 extern crate warpui;
 use rust_embed::RustEmbed;
-use warpui::{platform, AssetProvider};
+use warpui::{AssetProvider, platform};
 
 #[derive(Clone, Copy, RustEmbed)]
 #[folder = "examples/assets"]

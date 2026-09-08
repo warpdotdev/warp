@@ -27,15 +27,21 @@ fn strict_params_serialize_without_synthetic_discriminators() {
         ActionKind::TabCreate,
         TabCreateParams {
             tab_type: Some(TabType::Agent),
-            shell: Some("zsh".to_owned()),
         },
     )
     .expect("tab.create params serialize");
-    assert_eq!(
-        action.params,
-        serde_json::json!({ "tab_type": "agent", "shell": "zsh" })
-    );
+    assert_eq!(action.params, serde_json::json!({ "tab_type": "agent" }));
     assert!(action.params.get("type").is_none());
+    assert!(action.params.get("shell").is_none());
+
+    let action = Action {
+        kind: ActionKind::TabCreate,
+        params: serde_json::json!({ "tab_type": "terminal", "shell": "zsh" }),
+    };
+    let error = action
+        .params_as::<TabCreateParams>()
+        .expect_err("shell is not an accepted tab.create parameter");
+    assert_eq!(error.code, ErrorCode::InvalidParams);
 }
 
 #[test]

@@ -40,8 +40,8 @@ use crate::rendering::{GPUPowerPreference, OnGPUDeviceSelected};
 use crate::text_layout::{ClipConfig, Line, StyleAndFont, TextAlignment, TextFrame};
 use crate::windowing::WindowCallbacks;
 use crate::{
-    geometry, rendering, AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx,
-    OptionalPlatformWindow, Scene, WindowId,
+    AppContext, ApplicationBundleInfo, Clipboard, DisplayId, DisplayIdx, OptionalPlatformWindow,
+    Scene, WindowId, geometry, rendering,
 };
 
 #[cfg(not(target_family = "wasm"))]
@@ -194,7 +194,8 @@ pub trait Delegate: 'static {
 
     fn system_theme(&self) -> SystemTheme;
 
-    fn open_url(&self, url: &str);
+    /// Opens a URL in its default system handler and returns whether the launch request succeeded.
+    fn open_url(&self, url: &str) -> bool;
 
     /// Opens an absolute file path with native system API.
     fn open_file_path(&self, path: &Path);
@@ -216,7 +217,7 @@ pub trait Delegate: 'static {
 
     /// Retrieve the absolute path of given application's bundle and its executable.
     fn application_bundle_info(&self, bundle_identifier: &str)
-        -> Option<ApplicationBundleInfo<'_>>;
+    -> Option<ApplicationBundleInfo<'_>>;
 
     /// Create a window showing a modal dialog native to the platform. The modal will synchronously
     /// block all other interactions with the app until dismissed. The [`ModalId`] is a handle to
@@ -579,6 +580,14 @@ pub trait WindowManager {
     /// a platform that allows the app to run without any open windows.
     fn activate_app(&self, last_active_window: Option<WindowId>) -> Option<WindowId>;
     fn show_window_and_focus_app(&self, window_id: WindowId, behavior: WindowFocusBehavior);
+
+    /// Returns the window most recently passed to `show_window_and_focus_app`. The `test`
+    /// platform is the only implementor that tracks this, since it otherwise has no way to
+    /// observe focus changes; other platforms report focus via `active_window_id` instead.
+    fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        None
+    }
+
     fn hide_app(&self);
     fn hide_window(&self, window_id: WindowId);
     fn set_window_bounds(&self, window_id: WindowId, bound: RectF);

@@ -21,7 +21,7 @@ use crate::settings::PrivacySettings;
 use crate::terminal::model::session::{IsSSHWrapperSession, SessionInfo};
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::warpify::settings::{SshExtensionInstallMode, WarpifySettings};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// Per-SSH-init state machine. Encoding the state as an enum makes invalid
 /// transitions unrepresentable and ensures the `SessionInfo` stash cannot be
@@ -178,12 +178,15 @@ impl<T: EventLoopSender> RemoteServerController<T> {
     /// Extracts the `SessionInfo` from the stash and writes the bootstrap
     /// script to the PTY via `PtyController::initialize_shell`.
     fn flush_stashed_bootstrap(&mut self, session_info: SessionInfo, ctx: &mut ModelContext<Self>) {
-        if let Some(pty) = self.pty_controller.upgrade(ctx) {
-            pty.update(ctx, |pty, ctx| {
-                pty.initialize_shell(&session_info, ctx);
-            });
-        } else {
-            log::warn!("Remote server PtyController dropped before bootstrap could be flushed");
+        match self.pty_controller.upgrade(ctx) {
+            Some(pty) => {
+                pty.update(ctx, |pty, ctx| {
+                    pty.initialize_shell(&session_info, ctx);
+                });
+            }
+            _ => {
+                log::warn!("Remote server PtyController dropped before bootstrap could be flushed");
+            }
         }
     }
 

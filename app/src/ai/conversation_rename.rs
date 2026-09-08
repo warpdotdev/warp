@@ -11,8 +11,7 @@ const CONVERSATION_TITLE_MAX_CHARS: usize = 500;
 const EMPTY_TITLE_MESSAGE: &str = "Please provide a conversation title";
 const EMPTY_CONVERSATION_MESSAGE: &str = "You can't rename an empty conversation";
 const CONVERSATION_NOT_FOUND_MESSAGE: &str = "Conversation not found";
-const NOT_SYNCED_MESSAGE: &str =
-    "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again.";
+const NOT_SYNCED_MESSAGE: &str = "Your conversation hasn't synced to the cloud yet. Try sending another message, then rename it again.";
 const RENAME_IN_PROGRESS_MESSAGE: &str = "A rename is already in progress for this conversation";
 const CONVERSATION_NOT_READY_MESSAGE: &str =
     "Your conversation is still syncing. Try renaming it again in a moment.";

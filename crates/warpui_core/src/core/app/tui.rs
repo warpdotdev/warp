@@ -1,11 +1,11 @@
 //! The TUI-backend half of the `AppContext` API: TUI view/window creation and
 //! TUI view rendering, available when compiled with `tui` feature.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use super::{
-    autotracking, AddWindowOptions, AppContext, StoredView, TypedActionView, ViewContext,
-    ViewHandle, Window,
+    AddWindowOptions, AppContext, StoredView, TypedActionView, ViewContext, ViewHandle, Window,
+    autotracking,
 };
 use crate::keymap::{BindingLens, IsBindingValid};
 use crate::{EntityId, WindowId};

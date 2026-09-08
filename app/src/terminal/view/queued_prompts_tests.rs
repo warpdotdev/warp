@@ -12,10 +12,10 @@ use warp_cli::agent::Harness;
 use warpui::platform::WindowStyle;
 use warpui::{App, SingletonEntity, TypedActionView, ViewContext, ViewHandle};
 
+use super::TerminalView;
 use super::queued_prompts_panel::{
     QueuedPromptsPanelAction, QueuedPromptsPanelEvent, QueuedPromptsPanelView,
 };
-use super::TerminalView;
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::{ImageContext, UserQueryMode};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -29,11 +29,17 @@ use crate::ai::blocklist::{
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::ai::SpawnAgentRequest;
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
+use crate::workspaces::user_workspaces::TeamlessScopeForTest;
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+}
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
@@ -97,7 +103,7 @@ fn cloud_spawn_request(prompt: &str) -> SpawnAgentRequest {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(false),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -120,7 +126,7 @@ fn promptless_cloud_spawn_request() -> SpawnAgentRequest {
         mode: UserQueryMode::Normal,
         config: None,
         title: None,
-        team: None,
+        team: Some(false),
         agent_identity_uid: None,
         skill: None,
         attachments: vec![],
@@ -219,7 +225,11 @@ fn dispatched_cloud_prompt_uses_locked_queue_row_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("write tests"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("write tests"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
             view.handle_ambient_agent_event(&AmbientAgentViewModelEvent::DispatchedAgent, ctx);
 
@@ -363,9 +373,11 @@ fn failed_event_removes_locked_queue_row_without_cloud_mode_setup_v2() {
                 },
                 ctx,
             );
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
         });
     });
 }
@@ -385,7 +397,11 @@ fn cloud_setup_enter_queues_followup_input_when_v2_is_enabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
 
             view.input.update(ctx, |input, ctx| {
@@ -421,7 +437,11 @@ fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        request_team_scope(),
+                        ctx,
+                    );
                     model.set_harness(Harness::Claude, ctx);
                 });
 
@@ -430,9 +450,11 @@ fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
                 input.input_enter(ctx);
             });
 
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
             assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "do not queue this");
         });
     });
@@ -496,7 +518,11 @@ fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
 
             view.input.update(ctx, |input, ctx| {
@@ -504,9 +530,11 @@ fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
                 input.input_enter(ctx);
             });
 
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
             assert_eq!(view.input.as_ref(ctx).buffer_text(ctx), "blocked prompt");
         });
     });
@@ -616,7 +644,11 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(promptless_cloud_spawn_request(), ctx);
+                    model.spawn_agent_with_request(
+                        promptless_cloud_spawn_request(),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.append(
@@ -650,9 +682,11 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
 
         assert_eq!(sent_prompts.borrow().as_slice(), ["queued during setup"]);
         terminal.read(&app, |_, ctx| {
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
         });
     });
 }
@@ -675,7 +709,11 @@ fn promptless_setup_complete_with_initial_prompt_does_not_drain_queue() {
             view.ambient_agent_view_model()
                 .expect("cloud terminal should have an ambient model")
                 .update(ctx, |model, ctx| {
-                    model.spawn_agent_with_request(cloud_spawn_request("initial prompt"), ctx);
+                    model.spawn_agent_with_request(
+                        cloud_spawn_request("initial prompt"),
+                        request_team_scope(),
+                        ctx,
+                    );
                 });
             QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
                 model.append(
@@ -1288,9 +1326,11 @@ fn enqueue_followup_prompt_falls_back_to_pending_block_when_v2_is_disabled() {
                 ctx,
             );
 
-            assert!(QueuedQueryModel::as_ref(ctx)
-                .queue(conversation_id)
-                .is_empty());
+            assert!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(conversation_id)
+                    .is_empty()
+            );
             assert!(view.queued_prompt_callback.is_some());
             assert!(view.pending_user_query_view_id.is_some());
         });
@@ -1470,6 +1510,40 @@ fn send_now_disabled_for_all_rows_while_initial_cloud_mode_row_is_present() {
                 panel.send_now_button_disabled_for_test(followup_id, ctx),
                 Some(false)
             );
+        });
+    });
+}
+
+#[test]
+fn copying_locked_initial_cloud_mode_prompt_copies_full_prompt_to_clipboard() {
+    // The locked initial cloud-mode prompt can't be edited or deleted, so its row offers a Copy
+    // action instead. Firing it (the same action the Copy button dispatches) puts the full,
+    // untruncated prompt — long, multiline content included — on the clipboard and leaves the row
+    // in the queue.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+
+        let (panel, conversation_id, _) = build_panel_with_active_conversation(&mut app);
+
+        let long_prompt = format!("line one\nline two\n{}", "x".repeat(1000));
+        let long_prompt_for_assert = long_prompt.clone();
+        let initial_id = QueuedQueryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.append(
+                conversation_id,
+                QueuedQuery::new(long_prompt, QueuedQueryOrigin::InitialCloudMode),
+                ctx,
+            )
+        });
+
+        panel.update(&mut app, |panel, ctx| {
+            panel.handle_action(&QueuedPromptsPanelAction::CopyRow(initial_id), ctx);
+        });
+
+        app.update(|ctx| {
+            assert_eq!(ctx.clipboard().read().plain_text, long_prompt_for_assert);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |model, _| {
+            assert_eq!(model.queue(conversation_id).len(), 1);
         });
     });
 }

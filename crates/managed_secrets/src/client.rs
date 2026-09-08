@@ -48,10 +48,16 @@ pub enum SecretOwner {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait ManagedSecretsClient: 'static + Send + Sync {
-    async fn get_managed_secret_configs(&self) -> Result<ManagedSecretConfigs>;
+    type RequestScope: Send + Sync + 'static;
+
+    async fn get_managed_secret_configs(
+        &self,
+        request_scope: &Self::RequestScope,
+    ) -> Result<ManagedSecretConfigs>;
 
     async fn create_managed_secret(
         &self,
+        request_scope: &Self::RequestScope,
         owner: SecretOwner,
         name: String,
         secret_type: ManagedSecretType,
@@ -59,22 +65,29 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
         description: Option<String>,
     ) -> Result<ManagedSecret>;
 
-    async fn delete_managed_secret(&self, owner: SecretOwner, name: String) -> Result<()>;
+    async fn delete_managed_secret(
+        &self,
+        request_scope: &Self::RequestScope,
+        owner: SecretOwner,
+        name: String,
+    ) -> Result<()>;
 
     async fn update_managed_secret(
         &self,
+        request_scope: &Self::RequestScope,
         owner: SecretOwner,
         name: String,
         encrypted_value: Option<String>,
         description: Option<String>,
     ) -> Result<ManagedSecret>;
 
-    async fn list_secrets(&self) -> Result<Vec<ManagedSecret>>;
+    async fn list_secrets(&self, request_scope: &Self::RequestScope) -> Result<Vec<ManagedSecret>>;
 
     /// List managed secrets that authenticate the given harness.
     /// Returns an empty list for harnesses that do not use auth secrets (e.g. Oz).
     async fn list_harness_auth_secrets(
         &self,
+        request_scope: &Self::RequestScope,
         harness: warp_graphql::ai::AgentHarness,
     ) -> Result<Vec<ManagedSecret>>;
 

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use string_offset::CharOffset;
 use time::Lamport;
 
-use super::{time, Buffer};
+use super::{Buffer, time};
 
 #[derive(Clone, Eq, PartialEq, Debug, Hash, Serialize, Deserialize)]
 pub enum Anchor {

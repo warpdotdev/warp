@@ -6,19 +6,19 @@ mod text_layout_system;
 use std::hash::Hash;
 
 use anyhow::{Error, Result};
+use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
 use enum_iterator::Sequence;
 use markdown_parser::weight::CustomWeight;
 use ordered_float::OrderedFloat;
 use pathfinder_geometry::rect::{RectF, RectI};
-use pathfinder_geometry::vector::{vec2f, Vector2F, Vector2I};
+use pathfinder_geometry::vector::{Vector2F, Vector2I, vec2f};
 use serde::{Deserialize, Serialize};
 pub use text_layout_system::TextLayoutSystem;
 
 use crate::scene::GlyphKey;
-use crate::{platform, rendering, SingletonEntity};
+use crate::{SingletonEntity, platform, rendering};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Sequence, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema_gen", derive(schemars::JsonSchema))]
@@ -127,7 +127,7 @@ pub use external_fallback::{ExternalFontFamily, FallbackFontEvent, FallbackFontM
 pub(crate) use external_fallback::{FontBytes, RequestedFallbackFontSource};
 pub use metrics::Metrics;
 #[cfg(not(target_family = "wasm"))]
-use {futures_util::future::BoxFuture, futures_util::FutureExt};
+use {futures_util::FutureExt, futures_util::future::BoxFuture};
 
 pub type GlyphId = u32;
 
@@ -312,14 +312,13 @@ impl Cache {
     pub fn get_or_load_system_font(&mut self, font_family: &str) -> Result<FamilyId> {
         match self.family_id_for_name(font_family) {
             Some(id) => {
-                if let Some(available_system_fonts) = self.available_system_fonts.as_mut() {
-                    if let Some(entry) =
+                if let Some(available_system_fonts) = self.available_system_fonts.as_mut()
+                    && let Some(entry) =
                         available_system_fonts.iter_mut().find(|(family_id, data)| {
                             data.family_name == font_family && family_id.is_none()
                         })
-                    {
-                        entry.0 = Some(id);
-                    }
+                {
+                    entry.0 = Some(id);
                 }
                 Ok(id)
             }
@@ -509,12 +508,21 @@ impl Cache {
         let (glyph_id, _) = self
             .glyph_for_char(font_id, 'm', false)
             .expect("we verify in Config::new that the font has an 'm' glyph");
-        let bounds = self
-            .glyph_typographic_bounds(font_id, font_size, glyph_id)
-            .expect(
-            "we verify in Config::new that we can measure the typographic bounds of the 'm' glyph",
-        );
-        bounds.width()
+        // Some Windows fonts map 'm' with a horizontal advance but no outline bounding box.
+        match self.glyph_typographic_bounds(font_id, font_size, glyph_id) {
+            Ok(bounds) => bounds.width(),
+            Err(_) => match self.glyph_advance(font_id, font_size, glyph_id) {
+                Ok(advance) if advance.x().is_finite() && advance.x() > 0.0 => advance.x(),
+                advance => {
+                    log::warn!(
+                        "[em_width] 'm' glyph has no usable horizontal advance; falling back to \
+                         font_size font_id={font_id:?} font_size={font_size} advance={advance:?}"
+                    );
+                    // Scroll converts pixels with `/ em_width`; keep a positive width.
+                    font_size.max(1.0)
+                }
+            },
+        }
     }
 
     pub(crate) fn remove_glyphs_by_char_entry(&mut self, key: (FontId, char)) {

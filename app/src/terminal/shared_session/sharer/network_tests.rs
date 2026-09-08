@@ -1,33 +1,36 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_channel::Sender;
+use byte_unit::Byte;
 use futures_util::stream::AbortHandle;
 use instant::Instant;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
-    SessionId,
+    SelectionUpdate, SessionId,
 };
 use session_sharing_protocol::sharer::{
     DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
 };
 use warp_server_client::iap::IapManager;
+use warpui::r#async::FutureExt as _;
 use warpui::{App, ModelHandle};
 use websocket::{Message, WebsocketMessage as _};
 
 use super::{
-    startup_max_attempts, Network, PtyBytesBatchStatus, Stage, StartupFailure, StartupRetryState,
-    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS,
+    AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    Stage, StartupFailure, StartupRetryState, share_with_team_uid_for_init_payload,
+    startup_max_attempts,
 };
-use crate::auth::auth_manager::AuthManager;
 use crate::auth::AuthStateProvider;
-use crate::editor::ReplicaId;
+use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
-use crate::terminal::shared_session::{
-    SharedSessionScrollbackType, SharedSessionSource, MAX_BYTES_SHAREABLE,
-};
 use crate::terminal::TerminalModel;
+use crate::terminal::shared_session::{
+    MAX_BYTES_SHAREABLE, SELECTION_THROTTLE_PERIOD, SharedSessionSource,
+};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -40,6 +43,26 @@ fn is_upstream_message_pty_bytes_read(
         event_no,
         event_type: OrderedTerminalEventType::PtyBytesRead { bytes },
     }) if event_no == expected_event_no && bytes == compressed_bytes)
+}
+
+#[test]
+fn test_share_with_team_uid_for_init_payload_includes_team_scoped_view() {
+    let team_uid = crate::server::ids::ServerId::from(123);
+    let scope = crate::workspaces::user_workspaces::TeamContextForOperation::new_for_test(team_uid);
+    assert_eq!(
+        share_with_team_uid_for_init_payload(&scope),
+        Some(String::from(team_uid))
+    );
+}
+
+#[test]
+fn test_share_with_team_uid_for_init_payload_omits_personal_view() {
+    assert_eq!(
+        share_with_team_uid_for_init_payload(
+            &crate::workspaces::user_workspaces::TeamlessScopeForTest,
+        ),
+        None
+    );
 }
 
 #[test]
@@ -67,16 +90,16 @@ fn test_startup_failure_retryability() {
         .is_retryable()
     );
 
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::ScrollbackTooLarge {}
-    )
-    .is_retryable());
-    assert!(!StartupFailure::ServerRejected(
-        FailedToInitializeSessionReason::NoUserQuotaRemaining {
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::ScrollbackTooLarge {})
+            .is_retryable()
+    );
+    assert!(
+        !StartupFailure::ServerRejected(FailedToInitializeSessionReason::NoUserQuotaRemaining {
             quota_type: QuotaType::SessionsCreated,
-        }
-    )
-    .is_retryable());
+        })
+        .is_retryable()
+    );
     assert!(
         !StartupFailure::ServerRejected(FailedToInitializeSessionReason::UserNotFound)
             .is_retryable()
@@ -163,12 +186,25 @@ fn is_upstream_message_command_executed(
     }) if *event_no == expected_event_no)
 }
 
+fn is_upstream_message_selection_update(
+    message: UpstreamMessage,
+    expected_event_no: usize,
+    expected_selection: Selection,
+) -> bool {
+    matches!(
+        message,
+        UpstreamMessage::UpdateSelection(SelectionUpdate {
+            selection,
+            event_no,
+        }) if event_no == expected_event_no.into() && selection == expected_selection
+    )
+}
+
 fn create_network(
     app: &mut App,
     session_initialized: bool,
 ) -> (ModelHandle<Network>, Sender<OrderedTerminalEventType>) {
     let (ordered_events_tx, ordered_events_rx) = async_channel::unbounded();
-    let scrollback_type = SharedSessionScrollbackType::None;
     let active_prompt = ActivePrompt::default();
     let terminal_model = Arc::new(FairMutex::new(TerminalModel::mock(None, None)));
 
@@ -176,10 +212,9 @@ fn create_network(
         Network::new_for_test(
             terminal_model,
             ordered_events_rx,
-            scrollback_type,
             active_prompt,
             Selection::None,
-            ReplicaId::random(),
+            Byte::from_u64(MAX_BYTES_SHAREABLE as u64),
             ctx,
         )
     });
@@ -379,12 +414,11 @@ fn test_handle_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        // Use a generous tick budget: this is the only test that waits on the real
-        // ~50ms PTY batch timer to fire, and the default assert_eventually! budget
-        // (~100ms) is too tight on Windows, where coarse timer granularity (~15.6ms)
-        // plus loaded single-threaded-executor CI intermittently pushes the flush
-        // past it. The larger budget keeps the real batch-timer path under test while
-        // eliminating the flake.
+        // The test executor uses real (async_io) timers with no mock clock, so this
+        // test relies on the batch timer actually firing. Under test builds
+        // PTY_READS_BATCH_THRESHOLD is larger than the ~50ms production value so the
+        // transient `Batching` state below is reliably observable instead of racing the
+        // timer under coarse scheduler granularity (which flaked on Windows CI).
         assert_eventually!(
             200 =>
             network.read(&app, |network, _ctx| {
@@ -393,14 +427,16 @@ fn test_handle_pty_read_event_while_not_batching() {
             "Batching status should be batching"
         );
 
-        // When the timer is done, the accumulated event should be sent to the server.
-        assert_eventually!(
-            200 =>
-            ws_proxy_rx.len() == 1,
-            "Accumulated event should be sent to the server"
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // When the batch timer fires, the accumulated event is flushed to the server.
+        // Await the flush directly rather than polling a fixed tick budget, but bound the
+        // wait (generously, relative to the test-build batch threshold) so a regression in
+        // the timer/flush path fails this test promptly instead of hanging until the CI
+        // timeout.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(PTY_READS_BATCH_THRESHOLD * 20)
+            .await
+            .expect("Accumulated event should be flushed before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -412,6 +448,25 @@ fn test_handle_pty_read_event_while_not_batching() {
             assert!(matches!(network.pty_bytes_batch_status, PtyBytesBatchStatus::NotBatching { last_sent_at } if last_sent_at > init_time));
         });
     });
+}
+
+/// Waits until the mock terminal model reports its active block as bootstrapped.
+///
+/// `start_ordered_terminal_events_listener` silently drops ordered events until this is
+/// true, so callers must wait for it instead of racing it: sending an event beforehand can
+/// flake if the listener task hasn't observed the bootstrapped state yet. Uses the same
+/// generous 2s budget as the `recv()` timeouts below it, rather than the default
+/// `assert_eventually!` tick budget, so this wait can't reintroduce a fixed-window race of
+/// its own.
+async fn wait_for_bootstrapped(network: &ModelHandle<Network>, app: &App) {
+    assert_eventually!(
+        400 =>
+        network.read(app, |network, _ctx| network
+            .model
+            .lock()
+            .is_active_block_bootstrapped()),
+        "Mock terminal model should report the active block as bootstrapped"
+    );
 }
 
 #[test]
@@ -429,6 +484,8 @@ fn test_handle_non_pty_read_event_while_batching() {
             };
         });
 
+        wait_for_bootstrapped(&network, &app).await;
+
         // Send a non PtyBytesRead event to the Network model.
         let event = OrderedTerminalEventType::CommandExecutionStarted {
             participant_id: Default::default(),
@@ -438,14 +495,14 @@ fn test_handle_non_pty_read_event_while_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
-            "Two messages should be sent to the server; got {}",
-            ws_proxy_rx.len()
-        );
-
+        // Await each flush directly rather than polling a fixed tick budget, so a scheduling
+        // delay under load can't race a fixed timeout window (which flaked on Windows CI).
         // Make sure that we flush the PtyBytesRead message first.
-        let item = ws_proxy_rx.recv().await;
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("PtyBytesRead flush message should be sent before the timeout");
         assert!(is_upstream_message_pty_bytes_read(
             item.unwrap(),
             0,
@@ -453,8 +510,14 @@ fn test_handle_non_pty_read_event_while_batching() {
         ));
 
         // And that the non PtyBytesRead message follows suit.
-        let item = ws_proxy_rx.recv().await;
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Non-PtyBytesRead message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 1));
+
+        assert_eq!(ws_proxy_rx.len(), 0);
 
         // The batching status should be reset.
         network.read(&app, |network, _ctx| {
@@ -477,6 +540,8 @@ fn test_handle_non_pty_read_event_while_not_batching() {
             }
         });
 
+        wait_for_bootstrapped(&network, &app).await;
+
         // Send a non PtyBytesRead event to the Network model.
         let event = OrderedTerminalEventType::CommandExecutionStarted {
             participant_id: Default::default(),
@@ -486,13 +551,13 @@ fn test_handle_non_pty_read_event_while_not_batching() {
             .try_send(event)
             .expect("Can send event over ordered_events_tx");
 
-        assert_eventually!(
-            ws_proxy_rx.len() == 1,
-            "One message should be sent to the server; got {}",
-            ws_proxy_rx.len()
-        );
-
-        let item = ws_proxy_rx.recv().await;
+        // Await the flush directly rather than polling a fixed tick budget; see
+        // test_handle_non_pty_read_event_while_batching for why.
+        let item = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Message should be sent before the timeout");
         assert!(is_upstream_message_command_executed(&item.unwrap(), 0));
 
         // The batching status should be unchanged.
@@ -548,7 +613,6 @@ fn test_selection_updates_throttled_and_duplicates_ignored() {
         let ws_proxy_rx = network.read(&app, |network, _ctx| network.ws_proxy_rx.clone());
 
         assert_eq!(ws_proxy_rx.len(), 0);
-        // Rapid fire selection updates. Only the last should be sent up the websocket due to throttling.
         network.update(&mut app, |network, _ctx| {
             for i in 0..5 {
                 network.send_presence_selection_if_changed(Selection::Blocks {
@@ -556,21 +620,44 @@ fn test_selection_updates_throttled_and_duplicates_ignored() {
                 });
             }
         });
+        let first_update = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("First selection update should be sent before the timeout")
+            .expect("Selection update channel should remain open");
+        assert!(is_upstream_message_selection_update(
+            first_update,
+            0,
+            Selection::Blocks {
+                block_ids: vec!["block0".to_string().into()]
+            }
+        ));
 
-        // Only the very first and the last updates should go through, but not any of the intermediate ones.
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
-            "Selection updates should be throttled"
-        );
-
-        // Last sent block ID should be block4, and duplicate selection updates should be ignored.
+        let trailing_update = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Trailing selection update should be sent before the timeout")
+            .expect("Selection update channel should remain open");
+        assert!(is_upstream_message_selection_update(
+            trailing_update,
+            1,
+            Selection::Blocks {
+                block_ids: vec!["block4".to_string().into()]
+            }
+        ));
         network.update(&mut app, |network, _ctx| {
             network.send_presence_selection_if_changed(Selection::Blocks {
                 block_ids: vec!["block4".to_string().into()],
             });
         });
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
+        assert!(
+            ws_proxy_rx
+                .recv()
+                .with_timeout(SELECTION_THROTTLE_PERIOD * 2)
+                .await
+                .is_err(),
             "Duplicate selection updates should be ignored"
         );
 
@@ -578,10 +665,17 @@ fn test_selection_updates_throttled_and_duplicates_ignored() {
         network.update(&mut app, |network, _ctx| {
             network.send_presence_selection_if_changed(Selection::None);
         });
-        assert_eventually!(
-            ws_proxy_rx.len() == 3,
-            "Different selection updates should go through"
-        );
+        let distinct_update = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Distinct selection update should be sent before the timeout")
+            .expect("Selection update channel should remain open");
+        assert!(is_upstream_message_selection_update(
+            distinct_update,
+            2,
+            Selection::None
+        ));
     });
 }
 
@@ -661,6 +755,7 @@ fn test_messages_are_buffered_while_reconnecting() {
             IapManager::new(
                 None,
                 Box::new(|_| futures::FutureExt::boxed(futures::future::ready(None::<String>))),
+                None,
                 ctx,
             )
         });

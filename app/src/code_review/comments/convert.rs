@@ -20,7 +20,11 @@ impl std::fmt::Display for ConversionError {
                 write!(f, "Invalid timestamp: {}", ts)
             }
             ConversionError::InvalidFilePath(path) => {
-                write!(f, "Pending imported review comment targets must use repo-relative paths, invalid path: {}", path.display())
+                write!(
+                    f,
+                    "Pending imported review comment targets must use repo-relative paths, invalid path: {}",
+                    path.display()
+                )
             }
         }
     }
@@ -93,10 +97,10 @@ impl TryFrom<InsertReviewComment> for PendingImportedReviewComment {
             },
         };
 
-        if let Some(file_path) = target.file_path() {
-            if file_path.is_absolute() {
-                return Err(ConversionError::InvalidFilePath(file_path.to_owned()));
-            }
+        if let Some(file_path) = target.file_path()
+            && file_path.is_absolute()
+        {
+            return Err(ConversionError::InvalidFilePath(file_path.to_owned()));
         }
 
         let github_details = ImportedCommentDetails {

@@ -945,6 +945,54 @@ pub fn ls_signature() -> Signature {
     }
 }
 
+/// Models the `rustfmt --print-config <emit> <file>` shape: a single option whose first argument
+/// is a static enum and whose last argument is a path template -- two arguments of different
+/// types. Completing the first value must offer the enum, not the last argument's paths.
+pub fn enum_then_path_option_signature() -> Signature {
+    Signature {
+        name: "rustfmt".to_string(),
+        alias_generator: None,
+        description: Some("testing...".to_string()),
+        priority: Priority::default(),
+        arguments: None,
+        subcommands: None,
+        options: Some(vec![Opt {
+            exact_string: vec!["--print-config".to_string()],
+            description: None,
+            arguments: Some(vec![
+                Argument {
+                    display_name: Some("emit".to_string()),
+                    description: None,
+                    is_variadic: false,
+                    is_command: false,
+                    argument_types: vec![
+                        create_argument_suggestion("default"),
+                        create_argument_suggestion("minimal"),
+                        create_argument_suggestion("current"),
+                    ],
+                    optional: IsArgumentOptional::Required,
+                    skip_generator_validation: false,
+                },
+                Argument {
+                    display_name: Some("file".to_string()),
+                    description: None,
+                    is_variadic: false,
+                    is_command: false,
+                    argument_types: vec![ArgumentType::Template(Template {
+                        type_name: warp_command_signatures::TemplateType::FilesAndFolders,
+                        filter_name: None,
+                    })],
+                    optional: IsArgumentOptional::Required,
+                    skip_generator_validation: false,
+                },
+            ]),
+            required: false,
+            priority: Priority::Default,
+        }]),
+        parser_directives: Default::default(),
+    }
+}
+
 pub fn add_content_signature() -> Signature {
     Signature {
         name: "Add-Content".to_string(),

@@ -138,7 +138,7 @@ impl WorkflowModal {
                         if let GeneratedCommandMetadataError::RateLimited = err {
                             let auth_state = AuthStateProvider::as_ref(ctx).get();
                             let current_user_id = auth_state.user_id().unwrap_or_default();
-                            if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
+                            if let Some(team) = UserWorkspaces::as_ref(ctx).team_for_view(ctx) {
                                 let current_user_email =
                                     auth_state.user_email().unwrap_or_default();
                                 let has_admin_permissions = team.has_admin_permissions(&current_user_email);

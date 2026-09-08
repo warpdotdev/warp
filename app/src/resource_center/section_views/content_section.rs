@@ -6,8 +6,8 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::{
-    SectionAction, SectionView, CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ICON_PADDING,
-    ITEM_PADDING_BOTTOM, SECTION_SPACING,
+    CHEVRON_ICON_SIZE, DESCRIPTION_FONT_SIZE, ICON_PADDING, ITEM_PADDING_BOTTOM, SECTION_SPACING,
+    SectionAction, SectionView,
 };
 use crate::appearance::Appearance;
 use crate::resource_center::{ContentItem, ContentSectionData};

@@ -1,8 +1,9 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
+use warpui_core::Element;
 use warpui_core::elements::{
     Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex,
     Hoverable, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
@@ -10,7 +11,6 @@ use warpui_core::elements::{
 };
 use warpui_core::fonts::{Properties, Weight};
 use warpui_core::platform::Cursor;
-use warpui_core::Element;
 
 use super::agent_slide::AgentSlideAction;
 

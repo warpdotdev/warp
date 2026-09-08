@@ -1,14 +1,14 @@
 use fuzzy_match::FuzzyMatchResult;
 use ordered_float::OrderedFloat;
-use warp_core::ui::theme::Fill;
 use warp_core::ui::Icon;
+use warp_core::ui::theme::Fill;
 use warpui::elements::{ConstrainedBox, Container, Flex, Highlight, ParentElement as _, Text};
 use warpui::fonts::{Properties, Style, Weight};
 use warpui::prelude::CrossAxisAlignment;
 use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, Element, SingletonEntity as _};
 
-use crate::ai::execution_profiles::profiles::ClientProfileId;
+use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::appearance::Appearance;
 use crate::search::{ItemHighlightState, SearchItem};
 use crate::terminal::input::inline_menu::styles as inline_styles;
@@ -19,7 +19,7 @@ const MANAGE_PROFILES_LABEL: &str = "Manage profiles";
 #[derive(Debug, Clone)]
 enum ProfileSearchItemKind {
     Profile {
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
         profile_name: String,
         is_selected: bool,
     },
@@ -35,7 +35,7 @@ pub(super) struct ProfileSearchItem {
 
 impl ProfileSearchItem {
     pub fn new_profile_item(
-        profile_id: ClientProfileId,
+        profile_id: ExecutionProfileId,
         profile_name: String,
         is_selected: bool,
     ) -> Self {
@@ -118,13 +118,13 @@ impl SearchItem for ProfileSearchItem {
             .with_clip(ClipConfig::ellipsis());
 
         // Apply search highlighting to the label.
-        if let Some(match_result) = &self.match_result {
-            if !match_result.matched_indices.is_empty() {
-                label = label.with_single_highlight(
-                    Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
-                    match_result.matched_indices.clone(),
-                );
-            }
+        if let Some(match_result) = &self.match_result
+            && !match_result.matched_indices.is_empty()
+        {
+            label = label.with_single_highlight(
+                Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
+                match_result.matched_indices.clone(),
+            );
         }
 
         let mut row = Flex::row()
@@ -166,10 +166,10 @@ impl SearchItem for ProfileSearchItem {
     }
 
     fn accept_result(&self) -> Self::Action {
-        match self.kind {
-            ProfileSearchItemKind::Profile { profile_id, .. } => {
-                SelectProfileMenuItem::Profile { profile_id }
-            }
+        match &self.kind {
+            ProfileSearchItemKind::Profile { profile_id, .. } => SelectProfileMenuItem::Profile {
+                profile_id: profile_id.clone(),
+            },
             ProfileSearchItemKind::ManageProfiles => SelectProfileMenuItem::ManageProfiles,
         }
     }

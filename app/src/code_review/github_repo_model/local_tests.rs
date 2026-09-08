@@ -20,6 +20,7 @@ fn repository_info() -> RepositoryInfo {
     RepositoryInfo {
         name: "warp".to_string(),
         owner: Some("warpdotdev".to_string()),
+        host: Some("github.com".to_string()),
     }
 }
 

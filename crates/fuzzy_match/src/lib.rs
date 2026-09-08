@@ -52,8 +52,8 @@
 //! - `*` - Matches zero or more characters
 //! - `?` - Matches exactly one character
 
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct FuzzyMatchResult {

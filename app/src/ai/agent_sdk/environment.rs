@@ -2,13 +2,14 @@ use std::collections::HashSet;
 
 use comfy_table::Cell;
 use cynic::QueryBuilder;
+use futures::future;
 use inquire::error::InquireError;
 use inquire::{Confirm, Select};
 use serde::Serialize;
+use warp_cli::GlobalOptions;
 use warp_cli::agent::OutputFormat;
 use warp_cli::environment::{EnvironmentCommand, ImageCommand};
 use warp_cli::scope::ObjectScope;
-use warp_cli::GlobalOptions;
 use warp_graphql::queries::get_oauth_connect_tx_status::OauthConnectTxStatus;
 use warp_graphql::queries::list_warp_dev_images::{
     ListWarpDevImages, ListWarpDevImagesResult, ListWarpDevImagesVariables,
@@ -17,12 +18,13 @@ use warp_graphql::queries::user_repo_auth_status::UserRepoAuthStatusEnum;
 use warpui::r#async::FutureExt;
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
+use crate::CloudObjectTypeAndId;
 use crate::ai::agent_sdk::driver::WARP_DRIVE_SYNC_TIMEOUT;
 use crate::ai::agent_sdk::oauth_flow::poll_oauth_until_terminal;
 use crate::ai::agent_sdk::output::{self, TableFormat};
 use crate::ai::cloud_environments::{
     AmbientAgentEnvironment, BaseImage, CloudAmbientAgentEnvironment,
-    CloudAmbientAgentEnvironmentModel, GithubRepo,
+    CloudAmbientAgentEnvironmentModel, GithubRepo, environment_matches_scope,
 };
 use crate::auth::UserUid;
 use crate::cloud_object::model::generic_string_model::GenericStringObjectId;
@@ -34,7 +36,6 @@ use crate::server::ids::{ClientId, ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::CloudObjectTypeAndId;
 
 const WARP_DEV_ENVIRONMENTS_REPO: &str = "https://github.com/warpdotdev/warp-dev-environments";
 
@@ -63,8 +64,8 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| EnvironmentCommandRunner);
     match command {
-        EnvironmentCommand::List => {
-            runner.update(ctx, |runner, ctx| runner.list(global_options, ctx));
+        EnvironmentCommand::List { scope } => {
+            runner.update(ctx, |runner, ctx| runner.list(global_options, scope, ctx));
             Ok(())
         }
         EnvironmentCommand::Create {
@@ -184,24 +185,42 @@ impl EnvironmentCommandRunner {
         });
     }
 
-    fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
-        let initial_sync = UpdateManager::as_ref(ctx)
-            .initial_load_complete()
-            .with_timeout(WARP_DRIVE_SYNC_TIMEOUT);
+    fn list(
+        &self,
+        global_options: GlobalOptions,
+        scope: ObjectScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
+        let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
 
-        ctx.spawn(initial_sync, move |_, result, ctx| {
-            if result.is_err() {
-                super::report_fatal_error(
-                    anyhow::anyhow!("Timed out waiting for Warp Drive to sync"),
-                    ctx,
-                );
+        ctx.spawn(setup_future, move |_, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
                 return;
             }
+            let team_scope = if scope.is_team() || scope.personal {
+                match super::common::resolve_object_scope(&scope, ctx) {
+                    Ok(team_scope) => Some(team_scope),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
 
             let environments = CloudAmbientAgentEnvironment::get_all(ctx);
 
             let environment_infos: Vec<_> = environments
                 .iter()
+                .filter(|environment| {
+                    team_scope.as_ref().is_none_or(|team_scope| {
+                        environment_matches_scope(environment, team_scope, false)
+                    })
+                })
                 .map(|environment| {
                     let name = environment.model().string_model.name.clone();
                     let description = environment.model().string_model.description.clone();
@@ -301,8 +320,11 @@ impl EnvironmentCommandRunner {
             println!("Description: {desc}");
         }
         match &env.base_image {
-            BaseImage::DockerImage(img) => {
+            Some(BaseImage::DockerImage(img)) => {
                 println!("Docker image: {img}");
+            }
+            None => {
+                println!("Docker image: None");
             }
         }
         if env.github_repos.is_empty() {
@@ -737,7 +759,7 @@ impl EnvironmentCommandRunner {
         );
         let client_id = ClientId::default();
 
-        let owner = match super::common::resolve_owner(scope.team, scope.personal, ctx) {
+        let owner = match super::common::resolve_owner(&scope, ctx) {
             Ok(owner) => owner,
             Err(e) => {
                 super::report_fatal_error(e, ctx);
@@ -755,15 +777,14 @@ impl EnvironmentCommandRunner {
         // for our environment to be assigned a ServerId. Environments are not
         // usable without first being synced.
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Create { .. })
-                    && matches!(result.success_type, OperationSuccessType::Success)
-                    && result.client_id == Some(client_id)
-                {
-                    let server_id = result.server_id.unwrap();
-                    println!("Environment created successfully with ID: {server_id}");
-                    ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
-                }
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Create { .. })
+                && matches!(result.success_type, OperationSuccessType::Success)
+                && result.client_id == Some(client_id)
+            {
+                let server_id = result.server_id.unwrap();
+                println!("Environment created successfully with ID: {server_id}");
+                ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
             }
         });
     }
@@ -952,7 +973,7 @@ impl EnvironmentCommandRunner {
         }
 
         if let Some(new_docker_image) = docker_image {
-            updated_env.base_image = BaseImage::DockerImage(new_docker_image);
+            updated_env.base_image = Some(BaseImage::DockerImage(new_docker_image));
         }
 
         for repo in add_repos {
@@ -987,7 +1008,7 @@ impl EnvironmentCommandRunner {
         }
 
         // Update the environment via UpdateManager
-        let revision = environment.metadata.revision.clone();
+        let revision = environment.metadata.revision;
         UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
             update_manager
                 .update_object::<GenericStringObjectId, CloudAmbientAgentEnvironmentModel>(
@@ -1000,25 +1021,21 @@ impl EnvironmentCommandRunner {
 
         // Subscribe to UpdateManager to wait for the update to complete
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Update)
-                    && result.server_id == Some(server_id)
-                {
-                    match result.success_type {
-                        OperationSuccessType::Success => {
-                            println!("Environment updated successfully!\n");
-                            Self::print_environment_details(&updated_env);
-                            ctx.terminate_app(
-                                warpui::platform::TerminationMode::ForceTerminate,
-                                None,
-                            );
-                        }
-                        _ => {
-                            super::report_fatal_error(
-                                anyhow::anyhow!("Failed to update environment"),
-                                ctx,
-                            );
-                        }
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Update)
+                && result.server_id == Some(server_id)
+            {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        println!("Environment updated successfully!\n");
+                        Self::print_environment_details(&updated_env);
+                        ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+                    }
+                    _ => {
+                        super::report_fatal_error(
+                            anyhow::anyhow!("Failed to update environment"),
+                            ctx,
+                        );
                     }
                 }
             }
@@ -1086,22 +1103,19 @@ impl EnvironmentCommandRunner {
 
         // Listen to the UpdateManager for a completed object deletion
         ctx.subscribe_to_model(&UpdateManager::handle(ctx), move |_, _, event, ctx| {
-            if let UpdateManagerEvent::ObjectOperationComplete { result } = event {
-                if matches!(result.operation, ObjectOperation::Delete { .. }) {
-                    match result.success_type {
-                        OperationSuccessType::Success => {
-                            println!("Environment deleted successfully");
-                            ctx.terminate_app(
-                                warpui::platform::TerminationMode::ForceTerminate,
-                                None,
-                            );
-                        }
-                        _ => {
-                            super::report_fatal_error(
-                                anyhow::anyhow!("Failed to delete environment"),
-                                ctx,
-                            );
-                        }
+            if let UpdateManagerEvent::ObjectOperationComplete { result } = event
+                && matches!(result.operation, ObjectOperation::Delete { .. })
+            {
+                match result.success_type {
+                    OperationSuccessType::Success => {
+                        println!("Environment deleted successfully");
+                        ctx.terminate_app(warpui::platform::TerminationMode::ForceTerminate, None);
+                    }
+                    _ => {
+                        super::report_fatal_error(
+                            anyhow::anyhow!("Failed to delete environment"),
+                            ctx,
+                        );
                     }
                 }
             }
@@ -1121,7 +1135,8 @@ struct EnvironmentInfo {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    base_image: BaseImage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_image: Option<BaseImage>,
     github_repos: Vec<GithubRepo>,
     setup_commands: Vec<String>,
     creator_email: String,
@@ -1161,7 +1176,12 @@ impl TableFormat for EnvironmentInfo {
             Cell::new(&self.id),
             Cell::new(&self.name),
             Cell::new(description_display),
-            Cell::new(self.base_image.to_string()),
+            Cell::new(
+                self.base_image
+                    .as_ref()
+                    .map(|image| image.to_string())
+                    .unwrap_or_default(),
+            ),
             Cell::new(github_repos_display),
             Cell::new(setup_commands_display),
             Cell::new(&self.creator_email),

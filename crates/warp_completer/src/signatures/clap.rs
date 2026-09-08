@@ -54,11 +54,7 @@ fn convert_options(cmd: &ClapCommand) -> Option<Vec<Opt>> {
         .map(convert_arg_to_opt)
         .collect();
 
-    if opts.is_empty() {
-        None
-    } else {
-        Some(opts)
-    }
+    if opts.is_empty() { None } else { Some(opts) }
 }
 
 /// Convert clap subcommands to Signature subcommands by recursively converting each subcommand.

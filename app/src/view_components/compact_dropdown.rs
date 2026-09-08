@@ -125,14 +125,14 @@ impl<A: DropdownItemAction> CompactDropdown<A> {
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center);
 
-        if let Some(MenuItem::Item(fields)) = self.dropdown.as_ref(app).selected_item() {
-            if let Some(icon) = fields.icon() {
-                let icon_color = fields
-                    .override_icon_color()
-                    .unwrap_or_else(|| appearance.theme().active_ui_text_color());
-                button_label
-                    .add_child(self.render_sized_icon(appearance, icon.to_warpui_icon(icon_color)));
-            }
+        if let Some(MenuItem::Item(fields)) = self.dropdown.as_ref(app).selected_item()
+            && let Some(icon) = fields.icon()
+        {
+            let icon_color = fields
+                .override_icon_color()
+                .unwrap_or_else(|| appearance.theme().active_ui_text_color());
+            button_label
+                .add_child(self.render_sized_icon(appearance, icon.to_warpui_icon(icon_color)));
         }
 
         button_label.add_child(self.render_sized_icon(

@@ -2,6 +2,7 @@ use std::path::Path;
 
 #[cfg(feature = "local_fs")]
 use settings::Setting as _;
+use warp_core::features::FeatureFlag;
 
 use super::*;
 
@@ -109,6 +110,56 @@ fn test_resolve_file_target_binary_uses_env_editor() {
         None,
     );
     assert_eq!(target, FileTarget::EnvEditor);
+}
+
+#[test]
+fn test_renders_in_warp_notebook_viewer() {
+    // Markdown always renders in the notebook viewer, independent of the flag.
+    let off = FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    assert!(!renders_in_warp_notebook_viewer(Path::new(
+        "notebook.ipynb"
+    )));
+    assert!(!renders_in_warp_notebook_viewer(Path::new("main.rs")));
+    drop(off);
+
+    // With the flag on, Jupyter notebooks also render in the notebook viewer.
+    let _on = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    assert!(renders_in_warp_notebook_viewer(Path::new("notebook.ipynb")));
+    assert!(renders_in_warp_notebook_viewer(Path::new("README.md")));
+    assert!(!renders_in_warp_notebook_viewer(Path::new("main.rs")));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_jupyter_notebook_flag_on() {
+    let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(true);
+    // Even with prefer_markdown_viewer off and an explicit Warp editor choice,
+    // a Jupyter notebook routes to the notebook viewer (not the JSON editor).
+    let target = resolve_file_target_with_editor_choice(
+        Path::new("analysis.ipynb"),
+        EditorChoice::Warp,
+        false, /* prefer_markdown_viewer */
+        EditorLayout::SplitPane,
+        None,
+    );
+    assert_eq!(target, FileTarget::MarkdownViewer(EditorLayout::SplitPane));
+}
+
+#[test]
+#[cfg(feature = "local_fs")]
+fn test_resolve_file_target_jupyter_notebook_flag_off() {
+    let _flag = FeatureFlag::JupyterNotebookRendering.override_enabled(false);
+    // With the flag off, a Jupyter notebook opens as JSON in the code editor,
+    // exactly as it does today.
+    let target = resolve_file_target_with_editor_choice(
+        Path::new("analysis.ipynb"),
+        EditorChoice::Warp,
+        true, /* prefer_markdown_viewer */
+        EditorLayout::SplitPane,
+        None,
+    );
+    assert_eq!(target, FileTarget::CodeEditor(EditorLayout::SplitPane));
 }
 
 #[test]

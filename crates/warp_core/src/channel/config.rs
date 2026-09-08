@@ -155,4 +155,17 @@ pub struct McpOAuthProviderConfig {
     pub client_id: Cow<'static, str>,
     /// The OAuth client secret registered for this channel.
     pub client_secret: Cow<'static, str>,
+    /// A separately registered native client that permits loopback redirects.
+    /// This must never be inferred from the custom-scheme client.
+    #[serde(default)]
+    pub loopback_client: Option<McpOAuthLoopbackClientConfig>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct McpOAuthLoopbackClientConfig {
+    pub client_id: Cow<'static, str>,
+    /// Native OAuth clients should normally be public, but retain optional
+    /// secret support for providers that require one.
+    #[serde(default)]
+    pub client_secret: Option<Cow<'static, str>>,
 }

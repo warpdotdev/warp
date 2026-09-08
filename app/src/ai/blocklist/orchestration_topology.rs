@@ -5,6 +5,7 @@
 //! orchestration pill bar so other surfaces (e.g. keyboard navigation and
 //! the agent-mode usage footer's credit rollup) can walk and order the same
 //! tree without duplicating the logic.
+use std::collections::HashSet;
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -13,6 +14,113 @@ use crate::ai::blocklist::BlocklistAIHistoryModel;
 pub enum OrchestrationNavigationDirection {
     Previous,
     Next,
+}
+
+/// Semantic role of a participant in an orchestration transcript.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OrchestrationParticipantKind {
+    Orchestrator,
+    Agent { name: String },
+    Unknown,
+}
+
+impl OrchestrationParticipantKind {
+    pub(super) fn display_name(&self) -> &str {
+        match self {
+            Self::Orchestrator => "Orchestrator",
+            Self::Agent { name } => name,
+            Self::Unknown => "Unknown agent",
+        }
+    }
+}
+
+/// Frontend-independent identity for an orchestration participant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedOrchestrationParticipant {
+    pub kind: OrchestrationParticipantKind,
+    pub conversation_id: Option<AIConversationId>,
+}
+
+impl ResolvedOrchestrationParticipant {
+    fn orchestrator(conversation_id: Option<AIConversationId>) -> Self {
+        Self {
+            kind: OrchestrationParticipantKind::Orchestrator,
+            conversation_id,
+        }
+    }
+
+    fn unknown() -> Self {
+        Self {
+            kind: OrchestrationParticipantKind::Unknown,
+            conversation_id: None,
+        }
+    }
+}
+
+/// Returns the agent ID of the conversation that orchestrates `conversation`.
+pub fn orchestrator_agent_id_for_conversation(
+    history: &BlocklistAIHistoryModel,
+    conversation: &AIConversation,
+) -> Option<String> {
+    match history.resolved_parent_conversation_id_for_conversation(conversation) {
+        Some(parent_id) => history
+            .conversation(&parent_id)
+            .and_then(AIConversation::orchestration_agent_id)
+            .or_else(|| conversation.parent_agent_id().map(str::to_owned)),
+        None => conversation
+            .parent_agent_id()
+            .map(str::to_owned)
+            .or_else(|| conversation.orchestration_agent_id()),
+    }
+}
+
+/// Resolves a server-side agent ID to frontend-independent participant data.
+pub fn resolve_orchestration_participant(
+    history: &BlocklistAIHistoryModel,
+    agent_id: &str,
+    orchestrator_agent_id: Option<&str>,
+) -> ResolvedOrchestrationParticipant {
+    let conversation_id = history.conversation_id_for_agent_id(agent_id);
+    if orchestrator_agent_id == Some(agent_id) {
+        return ResolvedOrchestrationParticipant::orchestrator(conversation_id);
+    }
+    let Some(conversation_id) = conversation_id else {
+        return ResolvedOrchestrationParticipant::unknown();
+    };
+    let Some(conversation) = history.conversation(&conversation_id) else {
+        return ResolvedOrchestrationParticipant::unknown();
+    };
+    let name = conversation
+        .agent_name()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Agent")
+        .to_string();
+    ResolvedOrchestrationParticipant {
+        kind: OrchestrationParticipantKind::Agent { name },
+        conversation_id: Some(conversation_id),
+    }
+}
+
+/// Returns the topmost loaded conversation in an orchestration tree.
+///
+/// Conversations without descendants are not orchestration roots. Malformed
+/// parent cycles and missing ancestors fail closed.
+pub fn orchestration_root_conversation_id(
+    history: &BlocklistAIHistoryModel,
+    conversation_id: AIConversationId,
+) -> Option<AIConversationId> {
+    history.conversation(&conversation_id)?;
+    let mut current = conversation_id;
+    let mut visited = HashSet::new();
+    while visited.insert(current) {
+        let conversation = history.conversation(&current)?;
+        let Some(parent) = history.resolved_parent_conversation_id_for_conversation(conversation)
+        else {
+            return (!history.child_conversation_ids_of(&current).is_empty()).then_some(current);
+        };
+        current = parent;
+    }
+    None
 }
 
 const DONE_STATUS_KEY: u8 = 3;
@@ -96,19 +204,51 @@ pub fn has_local_orchestrated_children(
         })
 }
 
+/// One descendant in canonical orchestration pill order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrderedOrchestrationDescendant {
+    pub conversation_id: AIConversationId,
+    pub spawn_index: usize,
+}
+
 /// Returns descendants in the canonical orchestration pill order:
 ///   1) pinned children
 ///   2) unpinned children
 /// each bucket ordered by status priority, then done-recency, then spawn order.
 ///
-/// This is the single ordering source used by both the pill bar and keyboard
-/// navigation. Callers should preserve the returned order rather than sorting
-/// the conversations again.
-pub fn descendant_conversation_ids_in_pill_order(
+/// The pill bar and keyboard navigation share this per-level ordering but
+/// consume it differently: the bar renders one level at a time (the direct
+/// children of its drill-down anchor) while keyboard cycling walks the whole
+/// tree; the bar follows the selection by re-anchoring. Callers should
+/// preserve the returned order rather than sorting the conversations again.
+pub fn descendant_conversations_in_pill_order(
     history: &BlocklistAIHistoryModel,
     parent_id: AIConversationId,
-) -> Vec<AIConversationId> {
-    let mut descendants = descendant_conversation_ids_in_spawn_order(history, parent_id)
+) -> Vec<OrderedOrchestrationDescendant> {
+    conversations_in_pill_order(
+        history,
+        descendant_conversation_ids_in_spawn_order(history, parent_id),
+    )
+}
+
+/// Returns only the DIRECT children of `parent_id` in the same canonical pill
+/// order as [`descendant_conversations_in_pill_order`]. Used by the
+/// drill-down pill bar, which renders one level of the tree at a time.
+pub fn child_conversations_in_pill_order(
+    history: &BlocklistAIHistoryModel,
+    parent_id: AIConversationId,
+) -> Vec<OrderedOrchestrationDescendant> {
+    conversations_in_pill_order(
+        history,
+        history.child_conversation_ids_of(&parent_id).to_vec(),
+    )
+}
+
+fn conversations_in_pill_order(
+    history: &BlocklistAIHistoryModel,
+    conversation_ids: Vec<AIConversationId>,
+) -> Vec<OrderedOrchestrationDescendant> {
+    let mut descendants = conversation_ids
         .into_iter()
         .enumerate()
         .filter_map(|(spawn_index, conversation_id)| {
@@ -138,7 +278,12 @@ pub fn descendant_conversation_ids_in_pill_order(
     );
     descendants
         .into_iter()
-        .map(|(_, _, _, _, conversation_id)| conversation_id)
+        .map(
+            |(_, _, _, spawn_index, conversation_id)| OrderedOrchestrationDescendant {
+                conversation_id,
+                spawn_index,
+            },
+        )
         .collect()
 }
 
@@ -154,16 +299,23 @@ pub fn adjacent_orchestration_child_conversation_id(
     active_conversation_id: AIConversationId,
     direction: OrchestrationNavigationDirection,
 ) -> Option<AIConversationId> {
-    let active_conversation = history.conversation(&active_conversation_id)?;
-    let orchestration_root_id = history
-        .resolved_parent_conversation_id_for_conversation(active_conversation)
+    // Intentional bail when the active conversation isn't loaded; don't
+    // rely on the downstream walk returning None for it.
+    history.conversation(&active_conversation_id)?;
+    // Root the cycle at the top of the tree (not one parent hop) so
+    // navigation covers the whole subtree at any orchestration depth.
+    let orchestration_root_id = orchestration_root_conversation_id(history, active_conversation_id)
         .unwrap_or(active_conversation_id);
-    let descendant_ids = descendant_conversation_ids_in_pill_order(history, orchestration_root_id);
-    if descendant_ids.is_empty() {
+    let descendants = descendant_conversations_in_pill_order(history, orchestration_root_id);
+    if descendants.is_empty() {
         return None;
     }
     let conversation_ids = std::iter::once(orchestration_root_id)
-        .chain(descendant_ids)
+        .chain(
+            descendants
+                .into_iter()
+                .map(|descendant| descendant.conversation_id),
+        )
         .collect::<Vec<_>>();
 
     let active_index = conversation_ids
@@ -212,12 +364,49 @@ pub fn aggregated_orchestrator_status(
     history: &BlocklistAIHistoryModel,
     orchestrator_id: AIConversationId,
 ) -> ConversationStatus {
+    aggregate_loaded_subtree(history, orchestrator_id).1
+}
+
+/// Rolled-up state of a conversation's loaded orchestration subtree: the
+/// number of loaded descendants plus the aggregated status
+/// ([`aggregated_orchestrator_status`] semantics) across the node and those
+/// descendants.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadedSubtreeRollup {
+    pub descendant_count: usize,
+    pub status: ConversationStatus,
+}
+
+/// Returns the rollup for `orchestrator_id`'s subtree in a single walk, or
+/// `None` when no loaded descendant exists. The count deliberately covers
+/// only loaded descendants — the same set the aggregated status inspects —
+/// so a badge never advertises nodes the rollup did not account for (ids
+/// can appear in the parent → children index before their conversations
+/// load).
+pub fn loaded_subtree_rollup(
+    history: &BlocklistAIHistoryModel,
+    orchestrator_id: AIConversationId,
+) -> Option<LoadedSubtreeRollup> {
+    let (descendant_count, status) = aggregate_loaded_subtree(history, orchestrator_id);
+    (descendant_count > 0).then_some(LoadedSubtreeRollup {
+        descendant_count,
+        status,
+    })
+}
+
+/// Single walk over the orchestrator and its loaded descendants, returning
+/// the loaded-descendant count together with the aggregated status.
+fn aggregate_loaded_subtree(
+    history: &BlocklistAIHistoryModel,
+    orchestrator_id: AIConversationId,
+) -> (usize, ConversationStatus) {
     let mut orchestrator_status: Option<ConversationStatus> = None;
     let mut first_blocked: Option<ConversationStatus> = None;
     let mut any_in_progress = false;
     let mut any_waiting = false;
     let mut any_error = false;
     let mut any_cancelled = false;
+    let mut loaded_descendant_count = 0;
 
     for id in std::iter::once(orchestrator_id).chain(descendant_conversation_ids_in_spawn_order(
         history,
@@ -228,6 +417,8 @@ pub fn aggregated_orchestrator_status(
         };
         if id == orchestrator_id {
             orchestrator_status = Some(status.clone());
+        } else {
+            loaded_descendant_count += 1;
         }
         match status {
             // A recovering node counts as still running for aggregation purposes.
@@ -246,36 +437,35 @@ pub fn aggregated_orchestrator_status(
         }
     }
 
-    if any_in_progress {
+    let status = if any_in_progress {
         // Parent's own waiting state outranks descendant in-progress so
         // the pill reflects that THIS conversation is paused.
         if matches!(
             orchestrator_status,
             Some(ConversationStatus::WaitingForEvents)
         ) {
-            return ConversationStatus::WaitingForEvents;
+            ConversationStatus::WaitingForEvents
+        } else {
+            ConversationStatus::InProgress
         }
-        return ConversationStatus::InProgress;
-    }
-    if let Some(blocked) = first_blocked {
-        return blocked;
-    }
-    if any_waiting {
+    } else if let Some(blocked) = first_blocked {
+        blocked
+    } else if any_waiting {
         // Parent's terminal status beats descendant waiting — a
         // finalized run can't resume, so surface the parent's outcome.
         match orchestrator_status {
-            Some(ConversationStatus::Cancelled) => return ConversationStatus::Cancelled,
-            Some(ConversationStatus::Error) => return ConversationStatus::Error,
-            _ => return ConversationStatus::WaitingForEvents,
+            Some(ConversationStatus::Cancelled) => ConversationStatus::Cancelled,
+            Some(ConversationStatus::Error) => ConversationStatus::Error,
+            _ => ConversationStatus::WaitingForEvents,
         }
-    }
-    if any_error {
-        return ConversationStatus::Error;
-    }
-    if any_cancelled {
-        return ConversationStatus::Cancelled;
-    }
-    ConversationStatus::Success
+    } else if any_error {
+        ConversationStatus::Error
+    } else if any_cancelled {
+        ConversationStatus::Cancelled
+    } else {
+        ConversationStatus::Success
+    };
+    (loaded_descendant_count, status)
 }
 
 /// Returns a conversation's direct status, or the aggregated subtree status

@@ -160,6 +160,23 @@ impl AddAssign<i32> for CharOffset {
     }
 }
 
+/// Stores both the char range and the byte range of the same span of text. Some APIs, e.g. the
+/// hover/click APIs, use char ranges, while text-related APIs, e.g. `Regex` and `replace_range`,
+/// use byte ranges.
+#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+pub struct StringRange {
+    pub char_range: Range<usize>,
+    pub byte_range: Range<usize>,
+}
+
+impl StringRange {
+    /// Extends the current range to include the provided range.
+    pub fn extend_range_end(&mut self, other: &StringRange) {
+        self.char_range.end = self.char_range.end.max(other.char_range.end);
+        self.byte_range.end = self.byte_range.end.max(other.byte_range.end);
+    }
+}
+
 /// A utility for counting characters while iterating through a string from left to right.
 ///
 /// # Example

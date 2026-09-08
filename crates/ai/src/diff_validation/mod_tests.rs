@@ -180,13 +180,24 @@ fn test_append_to_end_of_file() {
 
 #[test]
 fn test_totally_unrelated_search() {
-    let input_diffs = vec![SearchAndReplace {
-        search: "4|foo bar baz".to_string(),
-        replace: "hello, world!".to_string(),
-    }];
+    let input_diffs = vec![
+        SearchAndReplace {
+            search: "1|I'd just like to interject".to_string(),
+            replace: "I'd just like to interrupt".to_string(),
+        },
+        SearchAndReplace {
+            search: "4|foo bar baz".to_string(),
+            replace: "hello, world!".to_string(),
+        },
+    ];
     let diff = fuzzy_match_diffs("test.rs", &input_diffs, CONTENT);
-    assert!(deltas(&diff).is_empty());
-    assert!(diff.failures.is_some());
+    assert_eq!(deltas(&diff).len(), 1);
+    let failures = diff.failures.expect("Expected failures to be tracked");
+    assert_eq!(failures.fuzzy_match_failures, 1);
+    assert_eq!(
+        failures.fuzzy_match_failure_details,
+        vec![DiffMatchFailure { block_number: 2 }]
+    );
 }
 
 /// The agent sometimes emits a search whose final line is a prefix of the actual file line.
@@ -411,6 +422,41 @@ fn test_v4a_no_match() {
     assert!(diff.failures.is_some());
     let failures = diff.failures.unwrap();
     assert_eq!(failures.fuzzy_match_failures, 1);
+    assert_eq!(
+        failures.fuzzy_match_failure_details,
+        vec![DiffMatchFailure { block_number: 1 }]
+    );
+}
+
+#[test]
+fn test_v4a_failure_preserves_original_block_ordinal() {
+    let hunks = vec![
+        V4AHunk {
+            change_context: vec![],
+            pre_context: "fn main() {".to_string(),
+            old: "    println!(\"Hello\");".to_string(),
+            new: "    println!(\"Hi\");".to_string(),
+            post_context: "}".to_string(),
+        },
+        V4AHunk {
+            change_context: vec![],
+            pre_context: "fn does_not_exist() {".to_string(),
+            old: "    unrelated_code();".to_string(),
+            new: "    new_code();".to_string(),
+            post_context: "}".to_string(),
+        },
+    ];
+
+    let file_content = "fn main() {\n    println!(\"Hello\");\n}";
+    let diff = fuzzy_match_v4a_diffs("test.rs", &hunks, None, file_content);
+
+    assert_eq!(deltas(&diff).len(), 1);
+    let failures = diff.failures.expect("Expected failures to be tracked");
+    assert_eq!(failures.fuzzy_match_failures, 1);
+    assert_eq!(
+        failures.fuzzy_match_failure_details,
+        vec![DiffMatchFailure { block_number: 2 }]
+    );
 }
 
 #[test]

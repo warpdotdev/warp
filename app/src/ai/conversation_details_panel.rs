@@ -8,17 +8,20 @@ use chrono::{DateTime, Duration, Local};
 use instant::Instant;
 use parking_lot::RwLock;
 use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::vec2f;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
 use warp_core::channel::ChannelState;
 use warp_core::ui::color::coloru_with_opacity;
+use warp_graphql::queries::get_runners::Runner;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::new_scrollable::{NewScrollable, SingleAxisConfig};
 use warpui::elements::{
-    resizable_state_handle, Border, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
-    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, MainAxisAlignment,
-    MainAxisSize, MouseStateHandle, ParentElement, Radius, Resizable, ResizableStateHandle,
-    SelectableArea, SelectionHandle, Shrinkable, Text, Wrap,
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DragBarSide, Empty, Expanded, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, Resizable, ResizableStateHandle, SelectableArea,
+    SelectionHandle, Shrinkable, Stack, Text, Wrap, resizable_state_handle,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -43,20 +46,24 @@ use crate::ai::agent_management::details_action_buttons::{
 };
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, OpenedFrom};
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
-use crate::ai::ambient_agents::{cancel_task_with_toast, AmbientAgentTaskId};
+use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
+use crate::ai::runner_display::{self, RunnerPlatform};
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectLookup as _;
 use crate::notebooks::NotebookId;
+use crate::persistence::model::ChargedUsageTotals;
 use crate::send_telemetry_from_ctx;
 use crate::server::ids::{ServerId, SyncId};
+use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AmbientAgentTask;
-#[cfg(not(target_family = "wasm"))]
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::avatar::{Avatar, AvatarContent};
 use crate::ui_components::blended_colors;
@@ -64,26 +71,27 @@ use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::CustomAction;
 use crate::util::time_format::{format_approx_duration_from_now, human_readable_precise_duration};
+use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::action_button::PrimaryTheme;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::copyable_text_field::{
-    render_copyable_text_field, CopyableTextFieldConfig, COPY_FEEDBACK_DURATION,
+    COPY_FEEDBACK_DURATION, CopyableTextFieldConfig, render_copyable_text_field,
 };
-use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkedConversationDestination, ToastStack, WorkspaceAction};
 use crate::workspaces::user_profiles::{UserProfileWithUID, UserProfiles};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const FIELD_SPACING: f32 = 16.0;
 const HEADER_SPACING: f32 = 12.0;
 const STATUS_ICON_SIZE: f32 = 12.0;
 const HARNESS_CIRCLE_SIZE: f32 = 16.0;
 const HARNESS_ICON_IN_CIRCLE: f32 = 9.0;
+const PLATFORM_ICON_SIZE: f32 = 14.0;
 const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
 const RUN_METADATA_ACCESS_DENIED_TITLE: &str = "Run metadata is not available";
-const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str =
-    "You can view this shared session, but run metadata is only visible to users with access to this run.";
+const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str = "You can view this shared session, but run metadata is only visible to users with access to this run.";
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +117,9 @@ enum PanelMode {
         error_message: Option<String>,
         /// Environment ID.
         environment_id: Option<String>,
+        /// Runner the run named, if any. Absent runs fall back to the
+        /// environment's default runner.
+        runner_id: Option<String>,
         /// Server conversation ID (for copy link).
         conversation_id: Option<String>,
     },
@@ -137,9 +148,11 @@ struct PanelMouseStates {
     copy_fetch_error: MouseStateHandle,
     copy_error: MouseStateHandle,
     copy_setup_commands: MouseStateHandle,
+    copy_initial_query: MouseStateHandle,
     skill_link: MouseStateHandle,
     skill_source_link: MouseStateHandle,
     executor_agent_link: MouseStateHandle,
+    status_chip: MouseStateHandle,
 }
 
 /// Tracks which copy button action was last triggered (for checkmark feedback).
@@ -153,6 +166,7 @@ enum CopyButtonKind {
     FetchError,
     Error,
     SetupCommands,
+    InitialQuery,
 }
 
 /// Information about a principal involved in a conversation.
@@ -230,6 +244,15 @@ pub struct ConversationDetailsData {
     created_at: Option<DateTime<Local>>,
     /// Total credits spent on the conversation/task.
     credits: Option<f32>,
+    /// Total token count used, when the source provides it.
+    total_tokens: Option<u32>,
+    /// Cumulative per-category charged-usage breakdown (input/output/
+    /// cache-read/cache-write cost + token counts), gated by
+    /// `FeatureFlag::PricingTransparency`. `None` when the source doesn't
+    /// yet provide it — e.g. cloud task/REST-backed sources, which don't
+    /// carry the wire protocol's per-category charges (documented gap,
+    /// tracked for the REST vertical).
+    charged_usage: Option<ChargedUsageTotals>,
     /// Total duration of the conversation.
     run_time: Option<Duration>,
     /// Artifacts created during the conversation (plans, PRs, branches).
@@ -336,6 +359,13 @@ impl ConversationDetailsData {
             .map(|m| Harness::from(m.harness))
             .or(Some(Harness::Oz));
 
+        let usage_totals = conversation.usage_totals();
+        let total_tokens: u32 = conversation
+            .token_usage()
+            .iter()
+            .map(|model| model.warp_tokens + model.byok_tokens + model.custom_endpoint_tokens)
+            .sum();
+
         ConversationDetailsData {
             mode: PanelMode::Conversation {
                 directory,
@@ -350,6 +380,8 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: Some(conversation.credits_spent()),
+            total_tokens: (total_tokens > 0).then_some(total_tokens),
+            charged_usage: usage_totals.charged_usage,
             run_time,
             artifacts: conversation.artifacts().to_vec(),
             open_action: None,
@@ -378,6 +410,11 @@ impl ConversationDetailsData {
             .as_ref()
             .and_then(|config| config.environment_id.clone());
 
+        let runner_id = task
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|config| config.runner_id.clone());
+
         let credits = task.credits_used();
 
         let skill_spec = task
@@ -401,6 +438,7 @@ impl ConversationDetailsData {
                 display_status: Some(AgentRunDisplayStatus::from_task(task, app)),
                 error_message,
                 environment_id,
+                runner_id,
                 conversation_id: task.conversation_id().map(str::to_string),
             },
             // Intentionally uses task.title; revisit when product decides
@@ -409,6 +447,11 @@ impl ConversationDetailsData {
             created_at: Some(task.created_at.with_timezone(&Local)),
             artifacts: task.artifacts.clone(),
             credits,
+            // GAP: cloud tasks are sourced from the REST `AmbientAgentTask`,
+            // which doesn't yet carry a per-category charges breakdown
+            // (tracked for the REST vertical).
+            total_tokens: None,
+            charged_usage: None,
             run_time: task.run_time(),
             open_action,
             creator: task
@@ -475,6 +518,9 @@ impl ConversationDetailsData {
                     display_status: Some(entry.display.status.clone()),
                     error_message,
                     environment_id: entry.display.environment_id.clone(),
+                    runner_id: task
+                        .and_then(|task| task.agent_config_snapshot.as_ref())
+                        .and_then(|config| config.runner_id.clone()),
                     conversation_id: entry
                         .identity
                         .server_conversation_token
@@ -486,6 +532,9 @@ impl ConversationDetailsData {
                 executor,
                 created_at,
                 credits,
+                // GAP: see the `from_task` gap note above.
+                total_tokens: None,
+                charged_usage: None,
                 run_time: task.and_then(AmbientAgentTask::run_time),
                 artifacts: entry.display.artifacts.clone(),
                 open_action,
@@ -513,6 +562,11 @@ impl ConversationDetailsData {
             executor: None,
             created_at,
             credits: entry.display.request_usage,
+            // GAP: this branch has no linked `AmbientAgentTask` and the
+            // entry's denormalized total is a bare credits figure with no
+            // token/breakdown counterpart.
+            total_tokens: None,
+            charged_usage: None,
             run_time: None,
             artifacts: entry.display.artifacts.clone(),
             open_action,
@@ -537,6 +591,7 @@ impl ConversationDetailsData {
                 display_status: None,
                 error_message: None,
                 environment_id: None,
+                runner_id: None,
                 conversation_id: None,
             },
             title: "Cloud agent run".to_string(),
@@ -544,6 +599,8 @@ impl ConversationDetailsData {
             executor: None,
             created_at: None,
             credits: None,
+            total_tokens: None,
+            charged_usage: None,
             run_time: None,
             artifacts: vec![],
             open_action: None,
@@ -586,6 +643,11 @@ impl ConversationDetailsData {
             executor: None,
             created_at: Some(created_at),
             credits: credits_used,
+            // GAP: this legacy management-view constructor only accepts a
+            // bare credits total; no token/breakdown source is threaded
+            // through it.
+            total_tokens: None,
+            charged_usage: None,
             run_time: None,
             open_action,
             artifacts,
@@ -617,6 +679,7 @@ pub enum ConversationDetailsPanelAction {
     CopyFetchError,
     CopyError,
     CopySetupCommands(String),
+    CopyInitialQuery,
     Focus,
     CopySelectedText,
     #[cfg(not(target_family = "wasm"))]
@@ -665,6 +728,15 @@ pub struct ConversationDetailsPanel {
     /// Selection state for cmd+C copy.
     selection_handle: SelectionHandle,
     selected_text: Arc<RwLock<Option<String>>>,
+    /// Runner compute by UID. Runners are not synced as cloud objects, so the
+    /// panel fetches them on demand to report the platform a run executes on.
+    runner_platforms: HashMap<String, RunnerPlatform>,
+    runners_loading: bool,
+}
+
+fn trimmed_initial_query(source_prompt: &Option<String>) -> Option<&str> {
+    let trimmed = source_prompt.as_ref()?.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 impl ConversationDetailsPanel {
@@ -698,9 +770,12 @@ impl ConversationDetailsPanel {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
                 })
         });
-        #[cfg(not(target_family = "wasm"))]
         ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if matches!(event, AISettingsChangedEvent::IsAnyAIEnabled { .. }) {
+            if matches!(
+                event,
+                AISettingsChangedEvent::IsAnyAIEnabled { .. }
+                    | AISettingsChangedEvent::UsageDisplayUnit { .. }
+            ) {
                 ctx.notify();
             }
         });
@@ -719,6 +794,8 @@ impl ConversationDetailsPanel {
             copy_feedback_times: HashMap::new(),
             selection_handle: SelectionHandle::default(),
             selected_text: Default::default(),
+            runner_platforms: HashMap::new(),
+            runners_loading: false,
         }
     }
 
@@ -730,7 +807,79 @@ impl ConversationDetailsPanel {
         self.set_artifacts(&data, ctx);
         self.set_action_buttons(&data, ctx);
         self.data = data;
+        self.ensure_runner_platforms(ctx);
         ctx.notify();
+    }
+
+    /// The runner backing this run, by the precedence the server resolves with.
+    fn referenced_runner_uid(&self, app: &AppContext) -> Option<String> {
+        let PanelMode::Task {
+            runner_id,
+            environment_id,
+            ..
+        } = &self.data.mode
+        else {
+            return None;
+        };
+
+        if let Some(runner_id) = runner_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            return Some(runner_id.to_string());
+        }
+
+        Self::environment_model(environment_id.as_deref(), app)?
+            .default_runner_uid
+            .as_deref()
+            .map(str::trim)
+            .filter(|uid| !uid.is_empty())
+            .map(str::to_string)
+    }
+
+    /// Looks up the synced environment for this run.
+    fn environment_model(
+        environment_id: Option<&str>,
+        app: &AppContext,
+    ) -> Option<AmbientAgentEnvironment> {
+        let sync_id = SyncId::ServerId(ServerId::try_from(environment_id?).ok()?);
+        let environment = CloudAmbientAgentEnvironment::get_by_id(&sync_id, app)?;
+        Some(environment.model().string_model.clone())
+    }
+
+    /// Loads the runners needed to name this run's platform. Runs that
+    /// reference no runner need no fetch: their compute is the system default.
+    fn ensure_runner_platforms(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.runners_loading {
+            return;
+        }
+        let Some(runner_uid) = self.referenced_runner_uid(ctx) else {
+            return;
+        };
+        if self.runner_platforms.contains_key(&runner_uid) {
+            return;
+        }
+        self.runners_loading = true;
+        let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
+        ctx.spawn(
+            async move { client.get_runners(None, Some(team_scope)).await },
+            |me, result: anyhow::Result<Vec<Runner>>, ctx| {
+                me.runners_loading = false;
+                match result {
+                    Ok(runners) => {
+                        me.runner_platforms = runner_display::platforms_by_uid(&runners);
+                    }
+                    Err(err) => {
+                        log::warn!("Failed to fetch runners for the run details panel: {err}");
+                    }
+                }
+                ctx.notify();
+            },
+        );
     }
 
     #[cfg(test)]
@@ -1302,9 +1451,15 @@ impl ConversationDetailsPanel {
             .with_height(STATUS_ICON_SIZE)
             .finish();
 
+        // When we have an Oz run URL, the whole chip becomes a clickable
+        // target that opens the run in the Oz web app. In that case the label
+        // is not selectable so a click navigates rather than starting a text
+        // selection.
+        let is_clickable = Self::oz_run_url(&self.data).is_some();
+
         let status_text = Text::new(display_text, appearance.ui_font_family(), ui_font_size)
             .with_color(color)
-            .with_selectable(true)
+            .with_selectable(!is_clickable)
             .finish();
 
         let status_badge = Container::new(
@@ -1319,6 +1474,38 @@ impl ConversationDetailsPanel {
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
         .finish();
 
+        // Make the chip clickable (with a tooltip and pointer cursor) only when
+        // a run view exists to navigate to.
+        let status_element: Box<dyn Element> = if is_clickable {
+            let ui_builder = appearance.ui_builder();
+            Hoverable::new(self.mouse_states.status_chip.clone(), move |state| {
+                let mut stack = Stack::new().with_child(status_badge);
+                if state.is_hovered() {
+                    let tooltip = ui_builder
+                        .tool_tip("View run in Oz web".to_string())
+                        .build()
+                        .finish();
+                    stack.add_positioned_overlay_child(
+                        tooltip,
+                        OffsetPositioning::offset_from_parent(
+                            vec2f(0., -4.),
+                            ParentOffsetBounds::WindowByPosition,
+                            ParentAnchor::TopMiddle,
+                            ChildAnchor::BottomMiddle,
+                        ),
+                    );
+                }
+                stack.finish()
+            })
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);
+            })
+            .finish()
+        } else {
+            status_badge
+        };
+
         Some(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -1327,7 +1514,7 @@ impl ConversationDetailsPanel {
                         .with_margin_bottom(SECTION_HEADER_GAP)
                         .finish(),
                 )
-                .with_child(status_badge)
+                .with_child(status_element)
                 .finish(),
         )
     }
@@ -1456,37 +1643,72 @@ impl ConversationDetailsPanel {
             .with_child(Shrinkable::new(1., oz_link).finish());
 
         // Add GitHub source link if we have enough info to construct it.
-        if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo) {
-            if skill_spec.is_full_path() {
-                let github_url = format!(
-                    "https://github.com/{}/{}/blob/-/{}",
-                    org, repo, skill_spec.skill_identifier
-                );
-                let source_link = appearance
-                    .ui_builder()
-                    .link(
-                        "Open in GitHub".to_string(),
-                        Some(github_url),
-                        None,
-                        self.mouse_states.skill_source_link.clone(),
-                    )
-                    .build()
-                    .finish();
-                row.add_child(separator());
-                row.add_child(Shrinkable::new(1., source_link).finish());
-            }
+        if let (Some(org), Some(repo)) = (&skill_spec.org, &skill_spec.repo)
+            && skill_spec.is_full_path()
+        {
+            let github_url = format!(
+                "https://github.com/{}/{}/blob/-/{}",
+                org, repo, skill_spec.skill_identifier
+            );
+            let source_link = appearance
+                .ui_builder()
+                .link(
+                    "Open in GitHub".to_string(),
+                    Some(github_url),
+                    None,
+                    self.mouse_states.skill_source_link.clone(),
+                )
+                .build()
+                .finish();
+            row.add_child(separator());
+            row.add_child(Shrinkable::new(1., source_link).finish());
         }
 
         Some(row.finish())
     }
 
-    fn render_source_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
-        let source_prompt = self.data.source_prompt.as_ref()?;
-        let trimmed = source_prompt.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        Some(self.render_simple_field("Initial query", trimmed, appearance))
+    fn render_source_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let trimmed = trimmed_initial_query(&self.data.source_prompt)?;
+        let theme = appearance.theme();
+        let ui_font_size = appearance.ui_font_size();
+
+        let label_text = Text::new(
+            "Initial query".to_string(),
+            appearance.ui_font_family(),
+            ui_font_size,
+        )
+        .with_color(blended_colors::text_sub(theme, theme.surface_1()))
+        .finish();
+
+        let value_field = render_copyable_text_field(
+            CopyableTextFieldConfig::new(trimmed)
+                .with_font_size(ui_font_size)
+                .with_text_color(theme.foreground().into())
+                .with_wrap_text(true)
+                .with_icon_size(16.)
+                .with_mouse_state(self.mouse_state_for_copy_button(CopyButtonKind::InitialQuery))
+                .with_last_copied_at(self.copy_feedback_times.get(&CopyButtonKind::InitialQuery)),
+            |ctx| {
+                ctx.dispatch_typed_action(ConversationDetailsPanelAction::CopyInitialQuery);
+            },
+            app,
+        );
+
+        Some(
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(
+                    Container::new(label_text)
+                        .with_margin_bottom(LABEL_VALUE_GAP)
+                        .finish(),
+                )
+                .with_child(value_field)
+                .finish(),
+        )
     }
 
     fn render_artifacts_section(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
@@ -1594,7 +1816,7 @@ impl ConversationDetailsPanel {
         app: &AppContext,
     ) -> Box<dyn Element> {
         let environment_name = &env_model.name;
-        let docker_image = env_model.base_image.to_string();
+        let docker_image = env_model.base_image_display();
 
         let theme = appearance.theme();
         let ui_font_size = appearance.ui_font_size();
@@ -1672,9 +1894,67 @@ impl ConversationDetailsPanel {
             .finish(),
         );
 
+        if let Some(platform_row) = self.render_platform_row(env_model, appearance) {
+            section.add_child(
+                Container::new(platform_row)
+                    .with_margin_bottom(LABEL_VALUE_GAP)
+                    .finish(),
+            );
+        }
+
         Container::new(section.finish())
             .with_margin_bottom(FIELD_SPACING)
             .finish()
+    }
+
+    /// Renders the compute this run executes on, so a run's platform is
+    /// visible without opening the runner it came from.
+    ///
+    /// Absent when a referenced runner cannot be resolved — naming the wrong
+    /// platform would be worse than naming none.
+    fn render_platform_row(
+        &self,
+        env_model: &AmbientAgentEnvironment,
+        appearance: &Appearance,
+    ) -> Option<Box<dyn Element>> {
+        let PanelMode::Task { runner_id, .. } = &self.data.mode else {
+            return None;
+        };
+
+        let platform = runner_display::resolve_run_platform(
+            runner_id.as_deref(),
+            env_model.default_runner_uid.as_deref(),
+            &self.runner_platforms,
+        )?;
+
+        let theme = appearance.theme();
+        let ui_font_size = appearance.ui_font_size();
+
+        let icon = ConstrainedBox::new(platform.icon().to_warpui_icon(theme.foreground()).finish())
+            .with_width(PLATFORM_ICON_SIZE)
+            .with_height(PLATFORM_ICON_SIZE)
+            .finish();
+
+        let label = Text::new(
+            platform.summary(),
+            appearance.ui_font_family(),
+            ui_font_size,
+        )
+        .with_color(theme.foreground().into())
+        .with_selectable(true)
+        .finish();
+
+        Some(
+            Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Container::new(icon).with_margin_right(4.).finish())
+                    .with_child(Shrinkable::new(1., label).finish())
+                    .finish(),
+            )
+            .with_vertical_padding(4.)
+            .finish(),
+        )
     }
 
     // Render a simple field with a button to copy the field's contents.
@@ -1758,6 +2038,7 @@ impl ConversationDetailsPanel {
             CopyButtonKind::FetchError => self.mouse_states.copy_fetch_error.clone(),
             CopyButtonKind::Error => self.mouse_states.copy_error.clone(),
             CopyButtonKind::SetupCommands => self.mouse_states.copy_setup_commands.clone(),
+            CopyButtonKind::InitialQuery => self.mouse_states.copy_initial_query.clone(),
         }
     }
 
@@ -2035,9 +2316,24 @@ impl View for ConversationDetailsPanel {
         }
 
         if let Some(credits) = self.data.credits {
-            let formatted = format!("{credits:.1}");
+            let cost_in_cents = self
+                .data
+                .charged_usage
+                .map(|charged_usage| charged_usage.total_cost_in_cents());
+            let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
+            let formatted = format_usage(
+                credits,
+                self.data.total_tokens,
+                cost_in_cents,
+                usage_display_unit,
+            );
+            let label = usage_label(
+                UsageLabelKind::DetailsPanel,
+                cost_in_cents,
+                usage_display_unit,
+            );
             content.add_child(
-                Container::new(self.render_simple_field("Credits used", &formatted, appearance))
+                Container::new(self.render_simple_field(&label, &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );
@@ -2088,7 +2384,7 @@ impl View for ConversationDetailsPanel {
             }
         }
 
-        if let Some(source_section) = self.render_source_section(appearance) {
+        if let Some(source_section) = self.render_source_section(appearance, app) {
             content.add_child(
                 Container::new(source_section)
                     .with_margin_bottom(FIELD_SPACING)
@@ -2222,7 +2518,7 @@ impl TypedActionView for ConversationDetailsPanel {
                     if let Ok(server_id) = ServerId::try_from(env_id.as_str()) {
                         let sync_id = SyncId::ServerId(server_id);
                         if let Some(env) = CloudAmbientAgentEnvironment::get_by_id(&sync_id, ctx) {
-                            let docker_image = env.model().string_model.base_image.to_string();
+                            let docker_image = env.model().string_model.base_image_display();
                             ctx.clipboard()
                                 .write(ClipboardContent::plain_text(docker_image));
                             self.record_copy(CopyButtonKind::DockerImage, ctx);
@@ -2253,6 +2549,13 @@ impl TypedActionView for ConversationDetailsPanel {
                     ctx.clipboard()
                         .write(ClipboardContent::plain_text(text.clone()));
                     self.record_copy(CopyButtonKind::SetupCommands, ctx);
+                }
+            }
+            ConversationDetailsPanelAction::CopyInitialQuery => {
+                if let Some(trimmed) = trimmed_initial_query(&self.data.source_prompt) {
+                    ctx.clipboard()
+                        .write(ClipboardContent::plain_text(trimmed.to_string()));
+                    self.record_copy(CopyButtonKind::InitialQuery, ctx);
                 }
             }
             ConversationDetailsPanelAction::Focus => {

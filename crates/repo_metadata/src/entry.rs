@@ -3,16 +3,18 @@
 use std::collections::VecDeque;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(feature = "local_fs")]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use futures_lite::StreamExt;
 use ignore::gitignore::Gitignore;
 #[cfg(feature = "local_fs")]
 use notify_debouncer_full::notify::WatchFilter;
 use thiserror::Error;
+use warp_errors::{ErrorExt, register_error, report_error};
 use warp_util::standardized_path::StandardizedPath;
 
+use crate::gitignore_cache;
 use crate::standing_queries::{StandingQueryDefinitions, StandingQueryResults};
 
 /// Maximum file size allowed for treesitter parsing (3MB).
@@ -34,6 +36,14 @@ pub enum BuildTreeError {
     #[error("Maximum directory depth exceeded")]
     MaxDepthExceeded,
 }
+
+impl ErrorExt for BuildTreeError {
+    fn is_actionable(&self) -> bool {
+        false
+    }
+}
+
+register_error!(BuildTreeError);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IgnoredPathStrategy {
@@ -125,10 +135,10 @@ impl Entry {
     /// `budget_exceeded_behavior` controls what happens once the file budget is
     /// exhausted (see [`BudgetExceededBehavior`]).
     #[allow(clippy::too_many_arguments)]
-    pub fn build_tree(
+    pub async fn build_tree(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Gitignore>,
+        gitignores: &mut Vec<Arc<Gitignore>>,
         remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
@@ -150,13 +160,15 @@ impl Entry {
             false,
             None,
         )
+        .await
     }
+
     /// Builds the materialized tree and standing results during the same filesystem traversal.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_tree_with_standing_queries(
+    pub(crate) async fn build_tree_with_standing_queries(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Gitignore>,
+        gitignores: &mut Vec<Arc<Gitignore>>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
         ancestor_is_ignored: bool,
@@ -176,16 +188,17 @@ impl Entry {
             ancestor_is_ignored,
             Some(&mut standing_queries),
         )
+        .await
     }
 
     /// Builds a tree of entries from a given path, eagerly loading any path that
     /// matches one of the supplied force-included paths instead of leaving it
     /// lazy (see [`BuildTreeOptions::force_included_paths`]).
     #[cfg(test)]
-    pub(crate) fn build_tree_with_force_included_paths(
+    pub(crate) async fn build_tree_with_force_included_paths(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Gitignore>,
+        gitignores: &mut Vec<Arc<Gitignore>>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
     ) -> Result<Self, BuildTreeError> {
@@ -198,13 +211,14 @@ impl Entry {
             false,
             None,
         )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn build_tree_with_ignored_ancestor(
+    pub(crate) async fn build_tree_with_ignored_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Gitignore>,
+        gitignores: &mut Vec<Arc<Gitignore>>,
         remaining_file_quota: Option<&mut usize>,
         max_depth: usize,
         current_depth: usize,
@@ -226,13 +240,14 @@ impl Entry {
             ancestor_is_ignored,
             None,
         )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_tree_with_force_included_paths_and_ancestor(
+    async fn build_tree_with_force_included_paths_and_ancestor(
         path: impl Into<PathBuf>,
         files: &mut Vec<FileMetadata>,
-        gitignores: &mut Vec<Gitignore>,
+        gitignores: &mut Vec<Arc<Gitignore>>,
         remaining_file_quota: Option<&mut usize>,
         options: BuildTreeOptions<'_>,
         ancestor_is_ignored: bool,
@@ -319,7 +334,7 @@ impl Entry {
                         continue;
                     }
 
-                    let entries = match std::fs::read_dir(&job.path) {
+                    let entry_paths = match read_dir_entry_paths(&job.path).await {
                         Ok(entries) => entries,
                         Err(e) => {
                             // Preserve existing behavior: failing to read the
@@ -337,12 +352,7 @@ impl Entry {
                     }
 
                     let child_depth = job.depth + 1;
-                    for entry in entries {
-                        let Ok(entry) = entry else {
-                            continue;
-                        };
-                        let entry_path = entry.path();
-
+                    for entry_path in entry_paths {
                         // Do not materialize directory symlinks in the canonical tree. Standing
                         // project-skill queries still follow eligible provider children locally
                         // and retain their lexical paths in the result set.
@@ -457,7 +467,10 @@ impl Entry {
     }
 
     /// Loads an unloaded directory
-    pub fn load(&mut self, gitignores: &mut Vec<Gitignore>) -> Result<(), BuildTreeError> {
+    pub async fn load(
+        &mut self,
+        gitignores: &mut Vec<Arc<Gitignore>>,
+    ) -> Result<(), BuildTreeError> {
         // TODO: Consider a similar `unload` method if we run into performance issues.
         let Self::Directory(directory) = self else {
             return Ok(());
@@ -476,14 +489,15 @@ impl Entry {
             0, /* current_depth */
             &IgnoredPathStrategy::Include,
             ancestor_is_ignored,
-        );
+        )
+        .await;
 
         result.map(|entry| match entry {
             Entry::Directory(entry) => {
                 *directory = entry;
             }
             Entry::File(_) => {
-                log::error!("Called load on a directory but a file entry was returned");
+                report_error!("Called load on a directory but a file entry was returned");
             }
         })
     }
@@ -523,6 +537,17 @@ impl Entry {
     }
 }
 
+async fn read_dir_entry_paths(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut entries = async_fs::read_dir(path).await?;
+    let mut paths = Vec::new();
+    while let Some(entry) = entries.next().await {
+        if let Ok(entry) = entry {
+            paths.push(entry.path());
+        }
+    }
+    Ok(paths)
+}
+
 /// A node in the breadth-first build arena. Directory children are referenced by
 /// arena index so the nested [`Entry`] tree can be assembled bottom-up.
 enum NodeBuilder {
@@ -556,7 +581,7 @@ enum EvaluatedEntry {
 /// omitted; callers decide whether that is fatal (root) or a skip (child).
 fn evaluate_entry(
     curr_path: &Path,
-    gitignores: &mut Vec<Gitignore>,
+    gitignores: &mut Vec<Arc<Gitignore>>,
     options: &BuildTreeOptions<'_>,
     current_depth: usize,
     ancestor_is_ignored: bool,
@@ -570,8 +595,7 @@ fn evaluate_entry(
 
     let gitignore_path = curr_path.join(".gitignore");
     if gitignore_path.exists() {
-        let (gitignore, _) = Gitignore::new(gitignore_path);
-        gitignores.push(gitignore);
+        gitignores.push(gitignore_cache::get_or_parse(&gitignore_path));
     }
 
     let path_is_ignored = ancestor_is_ignored
@@ -593,10 +617,10 @@ fn evaluate_entry(
         match options.ignored_path_strategy {
             IgnoredPathStrategy::Exclude => return Err(BuildTreeError::Ignored),
             IgnoredPathStrategy::IncludeOnly(patterns) => {
-                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str()) {
-                    if !patterns.iter().any(|pattern| file_name == pattern) {
-                        return Err(BuildTreeError::Ignored);
-                    }
+                if let Some(file_name) = curr_path.file_name().and_then(|n| n.to_str())
+                    && !patterns.iter().any(|pattern| file_name == pattern)
+                {
+                    return Err(BuildTreeError::Ignored);
                 }
             }
             IgnoredPathStrategy::IncludeLazy => {
@@ -743,7 +767,7 @@ pub(crate) fn matches_force_included_path(path: &Path, force_included_paths: &[P
 pub fn matches_gitignores(
     path: &Path,
     is_dir: bool,
-    gitignores: &[Gitignore],
+    gitignores: &[Arc<Gitignore>],
     check_ancestors: bool,
 ) -> bool {
     gitignores.iter().any(|gitignore| {
@@ -978,20 +1002,31 @@ fn descend_allowlist_matches(suffix: &[Component<'_>]) -> bool {
 /// a watch on) the directory at `path`.
 ///
 /// Directories inside `.git/` follow the watcher allowlist, force-included
-/// paths are always watched even when gitignored, and any other gitignored
-/// directory is pruned so we don't register watches on `node_modules`, build
-/// output, vendored deps, etc.
+/// paths are always watched even when gitignored, directory symlinks are
+/// pruned to avoid following trees outside the repository, and any other
+/// gitignored directory is pruned so we don't register watches on
+/// `node_modules`, build output, vendored deps, etc.
 pub fn should_watch_repo_directory(
     path: &Path,
-    gitignores: &[Gitignore],
+    repo_root: &Path,
+    gitignores: &[Arc<Gitignore>],
     force_included_paths: &[PathBuf],
 ) -> bool {
-    if is_git_internal_path(path) {
-        return should_watch_directory_in_git_path(path);
-    }
-
+    // Do not follow directory symlinks while recursively registering watches.
+    // A repository symlink such as `result -> /nix/store/...` can otherwise
+    // make the watcher traverse a large tree outside the repository. Keep
+    // explicitly force-included paths working for project-skill providers,
+    // which intentionally support symlinked skill directories.
     if matches_force_included_path(path, force_included_paths) {
         return true;
+    }
+
+    if is_within_symlink(path, repo_root) {
+        return false;
+    }
+
+    if is_git_internal_path(path) {
+        return should_watch_directory_in_git_path(path);
     }
 
     !matches_gitignores(
@@ -1000,6 +1035,25 @@ pub fn should_watch_repo_directory(
         gitignores,
         /* check_ancestors */ true,
     )
+}
+
+/// Returns whether `path` is a symlink or is below one.
+///
+/// The recursive watcher requires this check to be monotonic: if a symlinked
+/// directory is rejected, its descendants must be rejected as well even
+/// though their individual paths are not themselves symlinks.
+fn is_within_symlink(path: &Path, repo_root: &Path) -> bool {
+    // A valid path beneath a symlink can only be reached through a directory
+    // symlink, so avoid a second `metadata` syscall to resolve its target.
+    path.ancestors()
+        // The watched root itself may be a symlink (for example, a workspace
+        // opened through a user-created alias). It is the boundary of this
+        // check, not a symlinked directory to prune.
+        .take_while(|ancestor| *ancestor != repo_root && ancestor.starts_with(repo_root))
+        .any(|ancestor| {
+            std::fs::symlink_metadata(ancestor)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        })
 }
 
 /// Returns the [`WatchFilter`] used by repository file watchers.
@@ -1024,11 +1078,13 @@ pub fn should_watch_repo_directory(
 /// over-watch, never to miss events.
 #[cfg(feature = "local_fs")]
 pub fn repo_watch_filter(
-    gitignores: Vec<Gitignore>,
+    repo_root: PathBuf,
+    gitignores: Vec<Arc<Gitignore>>,
     force_included_paths: Vec<PathBuf>,
 ) -> WatchFilter {
-    let should_watch =
-        move |path: &Path| should_watch_repo_directory(path, &gitignores, &force_included_paths);
+    let should_watch = move |path: &Path| {
+        should_watch_repo_directory(path, &repo_root, &gitignores, &force_included_paths)
+    };
     WatchFilter::with_filter(
         Arc::new(should_watch),
         Arc::new(|path: &Path| !should_ignore_git_path(path)),
@@ -1041,16 +1097,15 @@ pub fn is_file_parsable(path: &Path) -> Result<bool, io::Error> {
     std::fs::metadata(path).map(|metadata| (metadata.len() as usize) < MAX_FILE_SIZE)
 }
 
-pub fn gitignores_for_directory(directory_path: &Path) -> Vec<Gitignore> {
+pub fn gitignores_for_directory(directory_path: &Path) -> Vec<Arc<Gitignore>> {
     let mut gitignores = Vec::new();
     let gitignore_path = directory_path.join(".gitignore");
     if gitignore_path.exists() {
-        let (gitignore, _) = Gitignore::new(&gitignore_path);
-        gitignores.push(gitignore);
+        gitignores.push(gitignore_cache::get_or_parse(&gitignore_path));
     }
     let (global_gitignore, _) = Gitignore::global();
     if !global_gitignore.is_empty() {
-        gitignores.push(global_gitignore);
+        gitignores.push(Arc::new(global_gitignore));
     }
     gitignores
 }

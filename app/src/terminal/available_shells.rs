@@ -12,9 +12,9 @@ use settings::Setting as _;
 use warpui::{AppContext, ModelContext};
 use warpui::{Entity, SingletonEntity};
 
+use super::ShellLaunchData;
 use super::session_settings::{NewSessionShell, StartupShell};
 use super::shell::ShellType;
-use super::ShellLaunchData;
 #[cfg(feature = "local_tty")]
 use crate::util::path::file_exists_and_is_executable;
 
@@ -23,6 +23,13 @@ struct LocalConfig {
     command: String,
     executable_path: PathBuf,
     shell_type: ShellType,
+}
+
+#[cfg(feature = "local_tty")]
+impl crate::terminal::local_tty::shell::AvailableShell for AvailableShell {
+    fn get_valid_shell_path_and_type(&self) -> Option<ShellLaunchData> {
+        AvailableShell::get_valid_shell_path_and_type(self)
+    }
 }
 
 impl TryFrom<StartupShell> for LocalConfig {
@@ -464,7 +471,7 @@ impl AvailableShells {
         // to search.
         #[cfg(windows)]
         {
-            use crate::util::windows;
+            use warp_util::path::windows;
 
             paths_to_search.extend(windows::powershell_7_install_paths());
             paths_to_search.push(windows::powershell_5_install_path());
@@ -848,10 +855,10 @@ impl AvailableShells {
                 let Ok(path) = dunce::canonicalize(line) else {
                     continue;
                 };
-                if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
-                    if let Some(set) = shells.get_mut(file_name) {
-                        set.insert(path);
-                    }
+                if let Some(file_name) = path.file_name().and_then(|name| name.to_str())
+                    && let Some(set) = shells.get_mut(file_name)
+                {
+                    set.insert(path);
                 }
             }
         }
@@ -893,12 +900,11 @@ impl AvailableShells {
                             executable_path,
                             ..
                         }) = shell.state.as_ref()
+                            && shell_command == command
                         {
-                            if shell_command == command {
-                                return Some(NewSessionShell::Executable(
-                                    executable_path.display().to_string(),
-                                ));
-                            }
+                            return Some(NewSessionShell::Executable(
+                                executable_path.display().to_string(),
+                            ));
                         }
                     }
                     None

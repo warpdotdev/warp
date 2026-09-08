@@ -1,4 +1,5 @@
 use rquickjs::{Ctx, Function, Object};
+use warp_errors::report_error;
 
 use super::plugin::PluginHandle;
 
@@ -37,7 +38,7 @@ pub fn console(ctx: Ctx<'_>) -> rquickjs::Result<Object<'_>> {
     console.set(
         "err",
         Function::new(ctx, |message: String| {
-            log::error!("{message}");
+            report_error!("Plugin JS console error", extra: { "message" => %message });
         }),
     )?;
     Ok(console)

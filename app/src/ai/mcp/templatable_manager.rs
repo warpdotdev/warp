@@ -10,13 +10,15 @@ use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use diesel::SqliteConnection;
 use futures_util::stream::AbortHandle;
+use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 use mcp::oauth;
-use mcp::TemplatableMCPServerInfo;
 #[cfg(not(target_family = "wasm"))]
 pub use native::McpIntegration;
 #[cfg(not(target_family = "wasm"))]
 use parking_lot::Mutex;
+#[cfg(not(target_family = "wasm"))]
+use simple_logger::SimpleLogger;
 use uuid::Uuid;
 #[cfg(not(target_family = "wasm"))]
 use warpui::ModelSpawner;
@@ -49,6 +51,8 @@ pub struct TemplatableMCPServerManager {
 
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     spawned_servers: HashMap<Uuid, SpawnedServerInfo>,
+    #[cfg(not(target_family = "wasm"))]
+    reconnectable_ephemeral_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     /// Cached credentials for each server.
     ///
     /// We persist these to secure storage, and if they are present when the server is started,
@@ -81,9 +85,33 @@ pub struct TemplatableMCPServerManager {
     /// is received or the spawn task terminates.
     #[cfg(not(target_family = "wasm"))]
     pending_oauth_csrf: HashMap<String, Uuid>,
+    /// Short-lived authorization URLs for interactive OAuth flows.
+    #[cfg(not(target_family = "wasm"))]
+    authorization_urls: HashMap<Uuid, String>,
     /// UUIDs of MCP servers started via the Oz CLI. We track these so they can be distinguished from
     /// file-based ephemeral MCP servers, which are directory-scoped.
     cli_spawned_server_uuids: HashSet<Uuid>,
+    /// UUIDs of built-in Warp-hosted servers (e.g. the Factory MCP), which are
+    /// spawned automatically from in-code definitions and authenticated with
+    /// the logged-in user's session credentials.
+    builtin_server_uuids: HashSet<Uuid>,
+    /// The bearer credential the current built-in server spawn was created
+    /// with. Compared on credential-rotation events so back-to-back auth
+    /// events with the same token (common at startup) don't respawn the
+    /// server and open redundant server-side MCP sessions. Native-only like
+    /// the spawn path that reads it; on wasm the built-in server is never
+    /// spawned, so the field would be dead code there.
+    #[cfg(not(target_family = "wasm"))]
+    builtin_server_token: Option<String>,
+    /// Log-file handles for spawned server instances, keyed by installation
+    /// UUID. `LogManager` reserves one log path per template UUID and rejects
+    /// re-registration while an unclosed logger holds it, so shutdown paths
+    /// close the outgoing instance's logger eagerly instead of waiting for
+    /// async teardown to drop the remaining clones. Without this, an
+    /// immediate respawn (e.g. the built-in Factory MCP picking up a rotated
+    /// token) loses the race and fails to spawn.
+    #[cfg(not(target_family = "wasm"))]
+    server_loggers: HashMap<Uuid, SimpleLogger>,
 }
 
 /// Information about a spawned server task.
@@ -163,6 +191,47 @@ impl TemplatableMCPServerManager {
         self.is_server_active(uuid) || self.spawned_servers.contains_key(&uuid)
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn reconnectable_installation(
+        &self,
+        installation_uuid: Uuid,
+    ) -> Option<&TemplatableMCPServerInstallation> {
+        self.locally_installed_servers
+            .get(&installation_uuid)
+            .or_else(|| {
+                self.reconnectable_ephemeral_installations
+                    .get(&installation_uuid)
+            })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn register_reconnect_waiter(
+        &mut self,
+        installation_uuid: Uuid,
+        result_tx: ReconnectResultSender,
+    ) -> bool {
+        let should_start_reconnect = !self.pending_reconnections.contains_key(&installation_uuid)
+            && !self.spawned_servers.contains_key(&installation_uuid);
+        self.pending_reconnections
+            .entry(installation_uuid)
+            .or_default()
+            .push(result_tx);
+        should_start_reconnect
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn notify_reconnect_waiters(
+        &mut self,
+        installation_uuid: Uuid,
+        result: Result<rmcp::Peer<rmcp::RoleClient>, String>,
+    ) {
+        if let Some(waiters) = self.pending_reconnections.remove(&installation_uuid) {
+            for tx in waiters {
+                let _ = tx.send(result.clone());
+            }
+        }
+    }
+
     pub fn get_server_state(&self, installation_uuid: Uuid) -> Option<MCPServerState> {
         self.server_states.get(&installation_uuid).copied()
     }
@@ -207,6 +276,34 @@ impl TemplatableMCPServerManager {
             .get(&uuid)
             .map(|server| server.tools().clone())
             .unwrap_or_default()
+    }
+
+    #[cfg(feature = "tui")]
+    pub fn resources_for_server(&self, uuid: Uuid) -> Vec<rmcp::model::Resource> {
+        self.active_servers
+            .get(&uuid)
+            .map(|server| server.resources().clone())
+            .unwrap_or_default()
+    }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn authorization_url(&self, uuid: Uuid) -> Option<&str> {
+        self.authorization_urls.get(&uuid).map(String::as_str)
+    }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn has_credentials(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
+        if let Some(hash) = FileBasedMCPManager::as_ref(app).get_hash_by_uuid(installation_uuid) {
+            return self.file_based_server_credentials.contains_key(&hash);
+        }
+        self.get_template_uuid(installation_uuid)
+            .is_some_and(|uuid| self.server_credentials.contains_key(&uuid))
+    }
+    #[cfg(all(not(target_family = "wasm"), feature = "tui"))]
+    pub fn can_log_out(&self, installation_uuid: Uuid, app: &warpui::AppContext) -> bool {
+        self.has_credentials(installation_uuid, app)
+            || self
+                .active_servers
+                .get(&installation_uuid)
+                .is_some_and(TemplatableMCPServerInfo::is_authenticated_transport)
     }
 
     /// Returns the JSON Schema `input_schema` for a named tool across active MCP servers.
@@ -282,6 +379,15 @@ impl TemplatableMCPServerManager {
             .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
             .collect()
     }
+
+    /// Returns built-in Warp-hosted servers (e.g. the Factory MCP) that are
+    /// currently active.
+    pub fn get_active_builtin_servers(&self) -> HashMap<Uuid, &TemplatableMCPServerInfo> {
+        self.builtin_server_uuids
+            .iter()
+            .filter_map(|uuid| self.active_servers.get(uuid).map(|info| (*uuid, info)))
+            .collect()
+    }
 }
 
 #[derive(Debug)]
@@ -290,6 +396,18 @@ pub enum TemplatableMCPServerManagerEvent {
     StateChanged {
         uuid: Uuid,
         state: MCPServerState,
+    },
+    /// A server managed by this shared runtime needs interactive OAuth.
+    /// Frontends choose how to present and receive the authorization flow.
+    AuthenticationRequired {
+        #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+        uuid: Uuid,
+    },
+    /// The shared secure credential cache changed for an installation.
+    /// Frontends can refresh any authentication controls or status they expose.
+    CredentialsChanged {
+        #[cfg_attr(not(feature = "tui"), allow(dead_code))]
+        uuid: Uuid,
     },
     // TODO(aeybel) Right now most of the app doesn't use these events to communicate
     // We should change them so this manager is source of truth and all communication goes through here
@@ -306,3 +424,7 @@ impl Entity for TemplatableMCPServerManager {
 }
 
 impl SingletonEntity for TemplatableMCPServerManager {}
+
+#[cfg(test)]
+#[path = "templatable_manager_tests.rs"]
+mod tests;

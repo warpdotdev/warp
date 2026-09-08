@@ -7,10 +7,10 @@ use async_trait::async_trait;
 #[cfg(feature = "local_fs")]
 use command::r#async::Command;
 
+use crate::CommandBuilder;
 use crate::language_server_candidate::{LanguageServerCandidate, LanguageServerMetadata};
 #[cfg(feature = "local_fs")]
 use crate::supported_servers::CustomBinaryConfig;
-use crate::CommandBuilder;
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 pub struct TypeScriptLanguageServerCandidate {

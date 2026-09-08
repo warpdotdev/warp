@@ -1,10 +1,10 @@
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use super::workflow::Workflow;
 use super::CloudWorkflowModel;
+use super::workflow::Workflow;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{GenericCloudObject, Owner};
 use crate::drive::OpenWarpDriveObjectSettings;
@@ -13,9 +13,9 @@ use crate::server::cloud_objects::update_manager::{
     ObjectOperation, OperationSuccessType, UpdateManager, UpdateManagerEvent,
 };
 use crate::server::ids::{ClientId, SyncId};
-use crate::workflows::workflow_view::WorkflowView;
 use crate::workflows::WorkflowViewMode;
-use crate::{safe_warn, PaneViewLocator, WindowId};
+use crate::workflows::workflow_view::WorkflowView;
+use crate::{PaneViewLocator, WindowId, safe_warn};
 
 pub struct WorkflowManager {
     panes_by_hashed_id: HashMap<String, WorkflowPaneData>,

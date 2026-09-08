@@ -193,7 +193,7 @@ async fn download_remote_server_tarball_to_cache(
     // cache hit is good enough for this install, so discard our temp file.
     match async_fs::rename(&temp_path, cache_path).await {
         Ok(()) => Ok(()),
-        Err(e) if is_valid_cached_tarball(cache_path).await => {
+        Err(_e) if is_valid_cached_tarball(cache_path).await => {
             let _ = async_fs::remove_file(&temp_path).await;
             Ok(())
         }

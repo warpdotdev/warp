@@ -379,4 +379,63 @@ impl CodeReviewView {
         let line_index = line_number.checked_sub(1)?;
         text.lines().nth(line_index).map(ToOwned::to_owned)
     }
+
+    /// The number of collapsed hidden sections in the given file's diff editor.
+    pub fn hidden_section_count_for_test(&self, path: &str, ctx: &AppContext) -> Option<usize> {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return None;
+        };
+        let editor_index = state
+            .file_states
+            .iter()
+            .position(|(_, file_state)| file_state.file_diff.file_path == path)?;
+        let editor_state = state
+            .file_states
+            .get_index(editor_index)
+            .and_then(|(_, file_state)| file_state.editor_state.as_ref())?;
+        let editor = editor_state.editor().clone();
+        Some(
+            editor
+                .as_ref(ctx)
+                .editor()
+                .read(ctx, |code_editor_view, ctx| {
+                    code_editor_view.hidden_section_count_for_test(ctx)
+                }),
+        )
+    }
+
+    /// Fully expand the first hidden section of the given file's diff editor,
+    /// mirroring what a bar double-click does. Returns whether a section was
+    /// expanded.
+    pub fn fully_expand_first_hidden_section_for_test(
+        &mut self,
+        path: &str,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return false;
+        };
+        let Some(editor_index) = state
+            .file_states
+            .iter()
+            .position(|(_, file_state)| file_state.file_diff.file_path == path)
+        else {
+            return false;
+        };
+        let Some(editor_state) = state
+            .file_states
+            .get_index(editor_index)
+            .and_then(|(_, file_state)| file_state.editor_state.as_ref())
+        else {
+            return false;
+        };
+        let editor = editor_state.editor().clone();
+        editor
+            .as_ref(ctx)
+            .editor()
+            .clone()
+            .update(ctx, |code_editor_view, ctx| {
+                code_editor_view.fully_expand_first_hidden_section_for_test(ctx)
+            })
+    }
 }

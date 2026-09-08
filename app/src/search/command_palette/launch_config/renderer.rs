@@ -1,3 +1,4 @@
+use warpui::Element;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, Flex, Highlight, ParentElement, Radius,
     Shrinkable, Text,
@@ -5,7 +6,6 @@ use warpui::elements::{
 use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::ui_components::text::Span;
-use warpui::Element;
 
 use crate::appearance::Appearance;
 use crate::launch_configs::launch_config::LaunchConfig;

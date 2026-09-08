@@ -18,6 +18,7 @@ impl From<&proto::RepositoryInfo> for RepositoryInfo {
         RepositoryInfo {
             name: info.name.clone(),
             owner: info.owner.clone(),
+            host: info.host.clone(),
         }
     }
 }
@@ -27,6 +28,7 @@ impl From<&RepositoryInfo> for proto::RepositoryInfo {
         proto::RepositoryInfo {
             name: info.name.clone(),
             owner: info.owner.clone(),
+            host: info.host.clone(),
         }
     }
 }

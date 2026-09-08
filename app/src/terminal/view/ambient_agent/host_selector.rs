@@ -4,13 +4,15 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
+use warp_core::ui::theme::color::internal_colors;
+use warp_errors::report_if_error;
 use warpui::elements::{
     Border, ChildAnchor, ChildView, OffsetPositioning, ParentAnchor, ParentElement as _,
     ParentOffsetBounds, Stack,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -18,12 +20,14 @@ use warpui::{
 use crate::ai::blocklist::inline_action::orchestration_controls::ORCHESTRATION_WARP_WORKER_HOST;
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
+use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::report_if_error;
+use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::view_components::action_button::{
     ActionButton, ActionButtonTheme, ButtonSize, TooltipAlignment,
 };
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const HEADER_FONT_SIZE: f32 = 12.;
 
@@ -137,6 +141,21 @@ impl HostSelector {
                 me.refresh_menu(ctx);
             },
         );
+        ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                NetworkStatusEvent::NetworkStatusChanged {
+                    new_status: NetworkStatusKind::Online,
+                }
+            ) {
+                me.refresh_connected_hosts(ctx);
+            }
+        });
+        ctx.subscribe_to_model(&AuthManager::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AuthManagerEvent::AuthComplete) {
+                me.refresh_connected_hosts(ctx);
+            }
+        });
 
         let mut me = Self {
             button,
@@ -165,6 +184,7 @@ impl HostSelector {
                 button.set_label(label, ctx);
             });
         }
+        me.refresh_connected_hosts(ctx);
         me.refresh_menu(ctx);
         me
     }
@@ -207,6 +227,33 @@ impl HostSelector {
         self.refresh_menu(ctx);
     }
 
+    /// Drops the configured default host, e.g. because the window moved to a team that
+    /// configures none. The inverse of [`Self::set_default_host`], deferring to a saved
+    /// selection the same way: without it, a selection chosen only because of the previous
+    /// team's default would survive the move and keep pointing at that team's worker.
+    pub fn clear_default_host(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.default_host.is_none() {
+            return;
+        }
+        self.default_host = None;
+
+        if CloudAgentSettings::as_ref(ctx)
+            .last_selected_host
+            .value()
+            .is_some()
+        {
+            self.refresh_menu(ctx);
+            return;
+        }
+
+        self.selected = Host::Warp;
+        let label = self.selected.display_name().to_string();
+        self.button.update(ctx, |button, ctx| {
+            button.set_label(label, ctx);
+        });
+        self.refresh_menu(ctx);
+    }
+
     /// Programmatically opens the host selector popover. No-op if already open.
     pub fn open_menu(&mut self, ctx: &mut ViewContext<Self>) {
         self.set_menu_visibility(true, ctx);
@@ -222,15 +269,20 @@ impl HostSelector {
         });
     }
 
+    fn refresh_connected_hosts(&mut self, ctx: &mut ViewContext<Self>) {
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+            model.refresh(&scope, ctx);
+        });
+    }
+
     fn set_menu_visibility(&mut self, is_open: bool, ctx: &mut ViewContext<Self>) {
         if self.is_menu_open == is_open {
             return;
         }
         self.is_menu_open = is_open;
         if is_open {
-            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
-                model.refresh(ctx);
-            });
+            self.refresh_connected_hosts(ctx);
             ctx.focus(&self.menu);
             self.highlight_selected_host(ctx);
         }
@@ -291,6 +343,7 @@ fn build_menu_items(
         clickable: false,
         right_side_fields: None,
     };
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
 
     let item_for = |host: Host, badge: Option<&str>| {
         let label = host.display_name().to_string();
@@ -298,6 +351,8 @@ fn build_menu_items(
             .with_font_size_override(ITEM_FONT_SIZE)
             .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
             .with_override_hover_background_color(hover_background)
+            // Ellipsize long worker names so they don't overflow into the right-side badge.
+            .with_clip_config(ClipConfig::ellipsis())
             .with_on_select_action(HostSelectorAction::SelectHost(host));
         if let Some(badge) = badge {
             fields = fields.with_right_side_label(
@@ -321,7 +376,7 @@ fn build_menu_items(
         Some(Host::Warp) | None => None,
     };
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
-        .worker_hosts_excluding(default_slug)
+        .worker_hosts_excluding(&scope, default_slug)
         .into_iter()
         .collect::<Vec<_>>();
     connected_hosts.sort();

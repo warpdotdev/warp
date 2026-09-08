@@ -41,14 +41,14 @@ impl Input {
 
         let mut column = Flex::column();
 
-        if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall) {
-            if let Some(banner) = self.render_input_banner(appearance, app, input_mode, false) {
-                column.add_child(
-                    Container::new(banner)
-                        .with_margin_top(spacing::UDI_CHIP_MARGIN)
-                        .finish(),
-                );
-            }
+        if matches!(input_mode, InputMode::PinnedToBottom | InputMode::Waterfall)
+            && let Some(banner) = self.render_input_banner(appearance, app, input_mode, false)
+        {
+            column.add_child(
+                Container::new(banner)
+                    .with_margin_top(spacing::UDI_CHIP_MARGIN)
+                    .finish(),
+            );
         }
 
         let prompt_elements = self
@@ -85,14 +85,14 @@ impl Input {
             );
         }
 
-        if matches!(input_mode, InputMode::PinnedToTop) {
-            if let Some(banner) = self.render_input_banner(appearance, app, input_mode, false) {
-                column.add_child(
-                    Container::new(banner)
-                        .with_margin_bottom(spacing::UDI_CHIP_MARGIN)
-                        .finish(),
-                );
-            }
+        if matches!(input_mode, InputMode::PinnedToTop)
+            && let Some(banner) = self.render_input_banner(appearance, app, input_mode, false)
+        {
+            column.add_child(
+                Container::new(banner)
+                    .with_margin_bottom(spacing::UDI_CHIP_MARGIN)
+                    .finish(),
+            );
         }
 
         stack.add_child(wrap_input_with_terminal_padding_and_focus_handler(
@@ -104,15 +104,14 @@ impl Input {
         ));
 
         if let Some(selected_workflow_state) = self.workflows_state.selected_workflow_state.as_ref()
+            && selected_workflow_state.should_show_more_info_view
         {
-            if selected_workflow_state.should_show_more_info_view {
-                add_workflow_info_overlay(
-                    &mut stack,
-                    selected_workflow_state,
-                    self.size_info(app).pane_height_px().as_f32(),
-                    menu_positioning,
-                );
-            }
+            add_workflow_info_overlay(
+                &mut stack,
+                selected_workflow_state,
+                self.size_info(app).pane_height_px().as_f32(),
+                menu_positioning,
+            );
         }
 
         let is_focused = self.focus_handle.as_ref().is_none_or(|h| h.is_focused(app));

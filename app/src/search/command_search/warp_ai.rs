@@ -12,7 +12,7 @@ use warpui::{AppContext, Element, SingletonEntity};
 use super::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::ai::AIRequestUsageModel;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
-use crate::ai_assistant::{GenerateCommandsFromNaturalLanguageError, AI_ASSISTANT_LOGO_COLOR};
+use crate::ai_assistant::{AI_ASSISTANT_LOGO_COLOR, GenerateCommandsFromNaturalLanguageError};
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
 use crate::search::command_search::searcher::CommandSearchItemAction;
@@ -67,7 +67,7 @@ impl SearchItem for WarpAISearchItem {
         };
 
         let icon = if FeatureFlag::AgentMode.is_enabled() {
-            UIIcon::Oz
+            UIIcon::Agent
                 .to_warpui_icon(
                     appearance
                         .theme()

@@ -8,9 +8,9 @@ use super::{
 };
 use crate::app_state::{EnvVarCollectionPaneSnapshot, LeafContents};
 use crate::drive::items::WarpDriveItemId;
+use crate::env_vars::EnvVarCollectionType;
 use crate::env_vars::manager::{EnvVarCollectionManager, EnvVarCollectionSource};
 use crate::env_vars::view::env_var_collection::{EnvVarCollectionEvent, EnvVarCollectionView};
-use crate::env_vars::EnvVarCollectionType;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::server::ids::SyncId;
 use crate::workspaces::user_workspaces::UserWorkspaces;

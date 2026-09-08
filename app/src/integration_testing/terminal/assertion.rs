@@ -5,14 +5,14 @@ use warp_util::path::user_friendly_path;
 use warpui::integration::{AssertionCallback, AssertionOutcome};
 use warpui::units::Lines;
 use warpui::windowing::WindowManager;
-use warpui::{async_assert, async_assert_eq, App, SingletonEntity, ViewHandle, WindowId};
+use warpui::{App, SingletonEntity, ViewHandle, WindowId, async_assert, async_assert_eq};
 
 use super::util::ExpectedOutput;
-use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::integration_testing::view_getters::{
     single_input_view_for_tab, single_terminal_view, single_terminal_view_for_tab, terminal_view,
 };
 use crate::settings::InputModeSettings;
+use crate::terminal::History;
 use crate::terminal::block_list_viewport::{InputMode, ScrollPosition};
 use crate::terminal::model::block::BlockState;
 use crate::terminal::model::blocks::BlockFilter;
@@ -20,7 +20,6 @@ use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::grid_handler::TermMode;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::view::TerminalViewState;
-use crate::terminal::History;
 use crate::workspace::{ActiveSession, Workspace};
 
 lazy_static::lazy_static! {
@@ -129,12 +128,13 @@ pub fn assert_input_mode(expected_input_mode: InputMode) -> AssertionCallback {
 pub fn assert_gap_exists(gap_exists: bool) -> AssertionCallback {
     Box::new(move |app, window_id| {
         app.update(|ctx| {
-            assert!(ctx
-                .presenter(window_id)
-                .expect("should exist")
-                .borrow()
-                .scene()
-                .is_some());
+            assert!(
+                ctx.presenter(window_id)
+                    .expect("should exist")
+                    .borrow()
+                    .scene()
+                    .is_some()
+            );
         });
         let terminal_view = single_terminal_view(app, window_id);
         terminal_view.read(app, |view, _ctx| {
@@ -406,7 +406,8 @@ pub fn assert_selected_block_index_is_first_renderable() -> AssertionCallback {
                 .block_at(selected_block_index)
                 .expect("Block should exist");
             assert!(
-                block.height(&AgentViewState::Inactive) != Lines::zero(),
+                block.height(&crate::terminal::model::block::TranscriptScope::Terminal)
+                    != Lines::zero(),
                 "The selected block should be rendered"
             );
             // Previous index either doesn't exist or isn't renderable
@@ -414,7 +415,8 @@ pub fn assert_selected_block_index_is_first_renderable() -> AssertionCallback {
                 let prev_block = model.block_list().block_at(selected_block_index - 1.into());
                 if let Some(prev_block) = prev_block {
                     assert!(
-                        prev_block.is_empty(&AgentViewState::Inactive),
+                        prev_block
+                            .is_empty(&crate::terminal::model::block::TranscriptScope::Terminal),
                         "Prev index should be hidden"
                     );
                 }
@@ -437,7 +439,8 @@ pub fn assert_selected_block_index_is_last_renderable() -> AssertionCallback {
                 .block_at(selected_block_index)
                 .expect("Block should exist");
             assert!(
-                block.height(&AgentViewState::Inactive) != Lines::zero(),
+                block.height(&crate::terminal::model::block::TranscriptScope::Terminal)
+                    != Lines::zero(),
                 "The selected block should be rendered"
             );
 
@@ -645,7 +648,9 @@ pub fn assert_no_visible_background_blocks(
                 .blocks()
                 .iter()
                 .filter(|block| {
-                    block.is_background() && block.is_visible(&AgentViewState::Inactive)
+                    block.is_background()
+                        && block
+                            .is_visible(&crate::terminal::model::block::TranscriptScope::Terminal)
                 })
                 .count();
             async_assert_eq!(

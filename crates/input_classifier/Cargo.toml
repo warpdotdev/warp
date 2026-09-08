@@ -33,6 +33,7 @@ nld_heuristic_v1 = []
 nld_heuristic_v2 = []
 
 [dependencies]
+warp_errors.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true

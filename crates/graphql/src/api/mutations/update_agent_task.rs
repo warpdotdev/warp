@@ -24,6 +24,15 @@ pub struct UpdateAgentTaskInput {
     pub conversation_id: Option<cynic::Id>,
     #[cynic(skip_serializing_if = "Option::is_none")]
     pub status_message: Option<AgentTaskStatusMessageInput>,
+    /// Deadline of an open post-failure debug window. Sent on its own during a refresh, so it
+    /// must never be paired with a `status_message` that would overwrite the failure text.
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub session_debug_until: Option<crate::scalars::Time>,
+    /// Whether a REMOTE-2661 debug turn is actively pinning the post-failure debug window. Like
+    /// `session_debug_until`, sent on its own so a pin/unpin update never overwrites the failure
+    /// text in `status_message`.
+    #[cynic(skip_serializing_if = "Option::is_none")]
+    pub debug_agent_active: Option<bool>,
 }
 
 #[derive(cynic::InputObject, Debug)]

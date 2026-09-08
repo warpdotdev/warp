@@ -15,12 +15,12 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::green_check_icon;
 use crate::ai::blocklist::inline_action::requested_command::VIEWING_COMMAND_DETAIL_MESSAGE;
+use crate::terminal::TerminalModel;
 use crate::terminal::event::BlockCompletedEvent;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::view::ambient_agent::{
     AmbientAgentViewModel, AmbientAgentViewModelEvent, SetupCommandGroupId,
 };
-use crate::terminal::TerminalModel;
 
 enum Status {
     Running,
@@ -69,22 +69,22 @@ impl CloudModeSetupCommandBlock {
         });
 
         ctx.subscribe_to_model(model_events, |me, model_events, event, ctx| {
-            if let ModelEvent::BlockCompleted(BlockCompletedEvent { block_id, .. }) = event {
-                if *block_id == me.block_id {
-                    if me
-                        .terminal_model
-                        .lock()
-                        .block_list()
-                        .block_with_id(block_id)
-                        .is_some_and(|block| block.exit_code().was_successful())
-                    {
-                        me.status = Status::Completed { is_success: true };
-                    } else {
-                        me.status = Status::Completed { is_success: false };
-                    }
-                    ctx.unsubscribe_to_model(&model_events);
-                    ctx.notify();
+            if let ModelEvent::BlockCompleted(BlockCompletedEvent { block_id, .. }) = event
+                && *block_id == me.block_id
+            {
+                if me
+                    .terminal_model
+                    .lock()
+                    .block_list()
+                    .block_with_id(block_id)
+                    .is_some_and(|block| block.exit_code().was_successful())
+                {
+                    me.status = Status::Completed { is_success: true };
+                } else {
+                    me.status = Status::Completed { is_success: false };
                 }
+                ctx.unsubscribe_to_model(&model_events);
+                ctx.notify();
             }
         });
 

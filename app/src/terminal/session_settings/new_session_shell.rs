@@ -48,10 +48,9 @@ impl NewSessionShell {
         if let Some(file_stem) = path
             .file_stem()
             .and_then(|s| s.to_str().map(|s| s.to_lowercase()))
+            && (file_stem.contains("powershell") || file_stem.contains("pwsh"))
         {
-            if file_stem.contains("powershell") || file_stem.contains("pwsh") {
-                return ShellFamily::PowerShell;
-            }
+            return ShellFamily::PowerShell;
         }
         ShellFamily::Posix
     }

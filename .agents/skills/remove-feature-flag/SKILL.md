@@ -79,9 +79,9 @@ if FeatureFlag::YourFeatureName.is_enabled() {
 // new behavior (unconditionally enabled)
 ```
 
-Use ripgrep to find all occurrences:
+Use ripgrep to find all occurrences. The shared `FeatureFlag` may be used from the headless TUI, so search `crates/warp_tui/` (and other non-`app/` crates), not just `app/` and `warp_core/`:
 ```bash
-rg "YourFeatureName" app/ warp_core/
+rg "YourFeatureName" app/ warp_core/ crates/warp_tui/
 ```
 
 ### 6. Remove keybinding predicates
@@ -122,8 +122,11 @@ cargo clippy --workspace --all-targets --all-features --tests -- -D warnings
 # Run tests
 cargo nextest run --no-fail-fast --workspace --exclude command-signatures-v2
 
-# Build the app
+# Build the GUI app
 cargo run
+
+# Also validate the headless TUI if the flag was used there
+./script/run-tui
 ```
 
 ## Best Practices
@@ -137,11 +140,11 @@ cargo run
 ## Example Search Commands
 
 ```bash
-# Find all occurrences of the flag name
-rg "YourFeatureName" app/ warp_core/
+# Find all occurrences of the flag name (include the TUI and other non-app crates)
+rg "YourFeatureName" app/ warp_core/ crates/warp_tui/
 
 # Find feature flag checks
-rg "FeatureFlag::YourFeatureName" app/
+rg "FeatureFlag::YourFeatureName" app/ crates/warp_tui/
 
 # Find cfg attributes
 rg 'cfg\(feature = "your_feature_name"\)' app/

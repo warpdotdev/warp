@@ -14,8 +14,8 @@ use warpui::text_layout::ClipConfig;
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{
-    id, AppContext, Entity, FocusContext, SingletonEntity as _, TypedActionView, View, ViewContext,
-    ViewHandle,
+    AppContext, Entity, FocusContext, SingletonEntity as _, TypedActionView, View, ViewContext,
+    ViewHandle, id,
 };
 
 use crate::appearance::Appearance;

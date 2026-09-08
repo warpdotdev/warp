@@ -1,7 +1,7 @@
 use pathfinder_color::ColorU;
 use warp_core::ui::appearance::Appearance;
-use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::color::ContrastingColor;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
 use warp_core::ui::theme::Fill;
 
 use super::DriveObjectType;

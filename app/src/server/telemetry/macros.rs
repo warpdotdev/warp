@@ -3,7 +3,7 @@
 /// is immediately sent to Rudderstack even if the user quits before the queue is flushed.
 #[macro_export]
 macro_rules! send_telemetry_sync_from_ctx {
-    ($event:expr, $ctx:expr) => {
+    ($event:expr_2021, $ctx:expr_2021) => {
         #[allow(unused_imports)]
         use warp_core::telemetry::TelemetryEvent as _;
         let event = $event;
@@ -38,7 +38,7 @@ macro_rules! send_telemetry_sync_from_ctx {
 /// `ViewContext`.
 #[macro_export]
 macro_rules! send_telemetry_sync_from_app_ctx {
-    ($event:expr, $app_ctx:expr) => {
+    ($event:expr_2021, $app_ctx:expr_2021) => {
         #[allow(unused_imports)]
         use warp_core::telemetry::TelemetryEvent as _;
         if $event.enablement_state().is_enabled() {
@@ -73,7 +73,7 @@ macro_rules! send_telemetry_sync_from_app_ctx {
 /// when you are already on a background thread and thus can't access any app context.
 #[macro_export]
 macro_rules! send_telemetry_on_executor {
-    ($auth_state: expr, $event:expr, $executor:expr) => {
+    ($auth_state: expr_2021, $event:expr_2021, $executor:expr_2021) => {
         #[allow(unused_imports)]
         use warp_core::telemetry::TelemetryEvent as _;
         let event = $event;

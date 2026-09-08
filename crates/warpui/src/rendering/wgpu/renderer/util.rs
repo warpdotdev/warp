@@ -1,8 +1,8 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wgpu::util::BufferInitDescriptor;
-use wgpu::{Buffer, BufferAddress, BufferDescriptor, Device, COPY_BUFFER_ALIGNMENT};
+use wgpu::{Buffer, BufferAddress, BufferDescriptor, COPY_BUFFER_ALIGNMENT, Device};
 
 use super::Error;
 
@@ -73,11 +73,19 @@ pub fn create_buffer_init(
             return Err(super::Error::DeviceLost);
         }
 
-        buffer
-            .slice(..)
-            .get_mapped_range_mut()
+        let buffer_slice = buffer.slice(..);
+        let mut mapping = match buffer_slice.get_mapped_range_mut() {
+            Ok(mapping) => mapping,
+            Err(err) => {
+                log::warn!("Failed to map wgpu buffer range: {err:#}");
+                buffer.unmap();
+                return Err(err.into());
+            }
+        };
+        mapping
             .slice(..unpadded_size as usize)
             .copy_from_slice(descriptor.contents);
+        drop(mapping);
         buffer.unmap();
 
         Ok(buffer)

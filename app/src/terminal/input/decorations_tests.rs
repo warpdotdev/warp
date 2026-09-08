@@ -1,6 +1,6 @@
 use warp_completer::completer::SuggestionTypeName;
-use warpui::text_layout::TextStyle;
 use warpui::App;
+use warpui::text_layout::TextStyle;
 
 use crate::appearance::Appearance;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;

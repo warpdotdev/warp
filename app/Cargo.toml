@@ -2,7 +2,7 @@
 authors = ["Warp Team <dev@warp.dev>"]
 default-run = "warp-oss"
 description = "The cloud-backed terminal for individuals and teams"
-edition = "2021"
+edition = "2024"
 autobins = false
 name = "warp"
 version = "0.1.0"
@@ -48,14 +48,10 @@ path = "src/bin/preview.rs"
 required-features = ["preview_channel"]
 test = false
 
-[[bin]]
-name = "generate_settings_schema"
-path = "src/bin/generate_settings_schema.rs"
-test = false
-
 [dependencies]
 addr = "0.15.6"
 ai.workspace = true
+ai_types.workspace = true
 alphanumeric-sort = "1.5.7"
 anyhow.workspace = true
 arrayvec.workspace = true
@@ -109,7 +105,6 @@ enclose = "1.1.8"
 enum-iterator.workspace = true
 event-listener.workspace = true
 field_mask.workspace = true
-flate2 = "1.0.17"
 float-cmp.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
@@ -174,13 +169,14 @@ qrcode.workspace = true
 rand.workspace = true
 rangemap.workspace = true
 rayon.workspace = true
-regex-automata = "0.4.6"
+regex-automata.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true
 sentry-log = { workspace = true, optional = true }
 inventory = "0.3"
 schemars = "1"
+secret_redaction.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde-bytes-repr.workspace = true
@@ -235,6 +231,7 @@ warp_assets.workspace = true
 warp_channel_config.workspace = true
 warp_completer.workspace = true
 warp_core.workspace = true
+warp_errors = { workspace = true, features = ["reqwest-errors"] }
 warp_editor.workspace = true
 warp_graphql.workspace = true
 warp_js = { workspace = true, optional = true }
@@ -272,6 +269,8 @@ warp_ripgrep.workspace = true
 warp_managed_secrets.workspace = true
 warp_multi_agent_client.workspace = true
 local_control.workspace = true
+hashbrown.workspace = true
+rustc-hash.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block.workspace = true
@@ -307,6 +306,7 @@ wgpu.workspace = true
 app-installation-detection.workspace = true
 async-io.workspace = true
 axum.workspace = true
+build_cache.workspace = true
 cloud_object_persistence.workspace = true
 comfy-table = "7.1.4"
 inquire = "0.9.1"
@@ -328,6 +328,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
+warp_errors = { workspace = true, features = ["tokio-errors", "websocket-errors"] }
 
 # AWS SDK (loading credentials for BYO LLM)
 aws-config = { version = "1.8.16", features = ["credentials-login"] }
@@ -342,7 +343,6 @@ syntect = "5.0"
 sysinfo.workspace = true
 warp-command-signatures = { workspace = true, features = ["embed-signatures"] }
 is_executable = "1.0.1"
-gethostname = "1.1.0"
 watcher.workspace = true
 warp_files.workspace = true
 
@@ -371,12 +371,11 @@ web-sys.workspace = true
 warp_web_event_bus.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-cvt = "0.1.1"
 signal-hook = "0.3.17"
-signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
 nix = { workspace = true, features = [
     "fs",
     "hostname",
+    "process",
     "resource",
     "signal",
     "socket",
@@ -421,6 +420,7 @@ winreg.workspace = true
 [dev-dependencies]
 ai = { workspace = true, features = ["test-util"] }
 async-process.workspace = true
+computer_use = { workspace = true, features = ["test-util"] }
 firebase.workspace = true
 jsonschema = { workspace = true, default-features = false }
 async-executor = "1.5.1"
@@ -463,7 +463,7 @@ embed-resource = "3.0"
 
 # Note that we support channel-specific enables for these features
 [features]
-tui = ["warpui_core/tui"]
+tui = ["warp_terminal/tui", "warpui_core/tui"]
 ai_resume_button = []
 autoupdate = []
 figma_detection = []
@@ -477,15 +477,14 @@ agent_mode_debug = []
 agent_mode_primary_xml = []
 agent_mode_pre_plan_xml = []
 agent_onboarding = []
+account_first_onboarding = []
 agent_shared_sessions = []
 ask_user_question = []
 async_find = []
 changelog = []
 clear_autosuggestion_on_escape = []
-cloud_object_initial_load = ["enforce_revisions_to_cloud_objects"]
 codebase_index_speedbump = []
 cocoa_sentry = ["crash_reporting"]
-command_predictor = []
 context_line_review_comments = []
 completions_v2 = [
     "plugin_host",
@@ -498,13 +497,18 @@ crash_reporting = [
     "dep:minidumper",
     "dep:crash-handler",
     "warp_logging/crash_reporting",
+    "warp_errors/crash_reporting",
+    "warp_terminal/crash_reporting",
     "ai/crash_reporting",
 ]
 creating_shared_sessions = []
 cross_repo_context = []
 codebase_index_persistence = ["full_source_code_embedding"]
+well_known_mcp_ids = []
+factory_mcp = []
 default = [
     "agent_mode",
+    "osc_hyperlinks",
     "viewing_shared_sessions",
     "render_continuous_block_selections_with_single_border",
     "shared_with_me",
@@ -573,7 +577,6 @@ default = [
     "mcp_oauth",
     "expand_edit_to_pane",
     "fallback_model_load_output_messaging",
-    "api_key_authentication",
     "api_key_management",
     "summarization_cancellation_confirmation",
     "ui_zoom",
@@ -590,10 +593,12 @@ default = [
     "cloud_environments",
     "create_environment_slash_command",
     "code_review_find",
+    "async_find",
     "shared_session_long_running_commands",
     "mcp_grouped_server_context",
     "fork_from_command",
     "context_window_usage_v2",
+    "context_window_usage_breakdown",
     "ambient_agents_command_line",
     "ambient_agents_image_upload",
     "scheduled_ambient_agents",
@@ -606,6 +611,7 @@ default = [
     "agent_tips",
     "pluggable_notifications",
     "agent_onboarding",
+    "account_first_onboarding",
     "global_search",
     "cloud_conversations",
     "list_skills",
@@ -616,6 +622,7 @@ default = [
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
     "agent_mode_computer_use",
+    "background_computer_use",
     "oz_platform_skills",
     "oz_identity_federation",
     "sync_ambient_plans",
@@ -626,9 +633,11 @@ default = [
     "inline_slash_commands",
     "inline_history_menu",
     "inline_model_selector",
+    "restore_prompt_on_inline_model_selector_search",
     "oz_launch_modal",
     "open_warp_launch_modal",
     "orchestration_launch_modal",
+    "agent_cli_launch_modal",
     "new_tab_styling",
     "richtext_multiselect",
     "inline_profile_selector",
@@ -648,7 +657,6 @@ default = [
     "blocklist_markdown_table_rendering",
     "markdown_mermaid",
     "blocklist_markdown_images",
-    "pr_comments_slash_command",
     "pr_comments_v2",
     "pr_comments_skill",
     "revert_to_checkpoints",
@@ -665,22 +673,19 @@ default = [
     "vertical_tabs_summary_mode",
     "tab_configs",
     "grouped_tabs",
+    "pinned_tabs",
     "agent_harness",
     "hoa_onboarding_flow",
     "hoa_remote_control",
     "codex_notifications",
     "codex_plugin",
     "trim_trailing_blank_lines",
-    "open_warp_new_settings_modes",
     "skip_firebase_anonymous_user",
     "settings_file",
     "directory_tab_colors",
     "git_credential_refresh",
     "oz_handoff",
     "handoff_local_cloud",
-    "run_agents_tool",
-    "orchestration_viewer_streamer",
-    "owner_orchestration_ancestor_streamer",
     "pending_user_query_indicator",
     "queue_slash_command",
     "queued_prompts_v2",
@@ -691,9 +696,20 @@ default = [
     "solo_user_byok",
     "custom_model_routers",
     "supergrok",
+    "gemini_enterprise",
     "billing_and_usage_page_v2",
     "remote_code_review",
     "git_operations_in_code_review",
+    "terminal_lifecycle_recovery",
+    "cloud_runners",
+    "cloud_agent_runners",
+    "file_backed_execution_profiles",
+    "well_known_mcp_ids",
+    "factory_mcp",
+    "wait_for_events_parent_registration",
+    "orchestration_unified_stack",
+    "ime_marked_text",
+    "ctrl_c_cancels_third_party_harness",
 ]
 # Enable this feature to automatically perform heap profiling.  NOTE: This will
 # substantially slow down program execution.
@@ -707,15 +723,12 @@ agent_management_view = []
 agent_management_details_view = []
 interactive_conversation_management_view = []
 default_waterfall_mode = []
-enforce_revisions_to_cloud_objects = []
 suggested_agent_mode_workflows = []
-ssh_enable_host_denylist_in_settings = []
 extern_plist = []
 fast_dev = ["skip_login"]
 full_screen_zen_mode = []
 global_ai_analytics_banner = []
 global_ai_analytics_collection = []
-grab_the_baton_editing = []
 grep_tool = []
 # This feature is enabled in graphical builds of Warp, and groups together other features
 # that are not needed in headless builds. Because Cargo features are additive, the default
@@ -728,7 +741,9 @@ nld_classifier_v2 = ["input_classifier/nld_classifier_v2"]
 nld_classifier_v3 = ["input_classifier/nld_classifier_v3"]
 nld_heuristic_v1 = ["input_classifier/nld_heuristic_v1"]
 nld_heuristic_v2 = ["input_classifier/nld_heuristic_v2"]
+nld_prompt_history_match = []
 msys2_shells = []
+file_backed_execution_profiles = []
 file_retrieval_tools = []
 get_started_tab = []
 code_mode_chip = []
@@ -764,7 +779,6 @@ jemalloc_with_profiling = ["jemalloc", "tikv-jemallocator/profiling"]
 jemalloc_auto_heap_profiling = ["jemalloc_with_profiling"]
 jemalloc_pprof = ["jemalloc_with_profiling", "dep:jemalloc_pprof"]
 run_generators_with_cmd_exe = []
-inline_ssh_banner = []
 kitty_images = []
 kitty_keyboard_protocol = []
 ligatures = []
@@ -774,7 +788,7 @@ list_skills = []
 # This feature is enabled in build.rs when compiling for platforms which
 # support having a local tty/shell session.  It can be used to conditionally
 # include dependencies that should only exist in such environments.
-local_tty = []
+local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
 local_claude_codex_child_harnesses = []
 # This feature is enabled in build.rs when compiling for platforms which
@@ -787,18 +801,18 @@ local_fs = [
     "persistence/local_fs",
     "repo_metadata/local_fs",
     "warp_core/local_fs",
+    "warp_terminal/local_fs",
 ]
 log_expensive_frames_in_sentry = []
+jupyter_notebook_rendering = []
 markdown_tables = []
 markdown_mermaid = []
 mcp_server = []
 mcp_oauth = []
 mcp_debugging_ids = []
-notebook_parameter = []
 oz_changelog_updates = []
-personal_cloud_objects = []
 # Remote-backed tty that connects to a PTY-like interface via a server.
-remote_tty = []
+remote_tty = ["warp_terminal/remote_tty"]
 # Fix for cursor reflow bug during window resize, from Alacritty resizing logic.
 resize_fix = []
 pluggable_notifications = []
@@ -813,7 +827,6 @@ plugin_host = ["dep:rquickjs", "dep:warp_js", "warp_cli/plugin_host"]
 # NOTE: This may slow down program execution.
 pprof_cpu_profiling = ["dep:pprof"]
 predict_am_queries = []
-quake_mode = []
 record_app_active_events = []
 recording_mode = []
 remote_codebase_indexing = ["full_source_code_embedding"]
@@ -824,31 +837,35 @@ remote_codebase_indexing = ["full_source_code_embedding"]
 release_bundle = ["rust-embed/debug-embed", "warp_core/release_bundle"]
 render_agent_mode_output_markdown = []
 render_continuous_block_selections_with_single_border = []
-rich_history = []
 richtext_multiselect = []
 runtime_feature_flags = []
 selectable_prompt = []
 settings_file = []
 sequential_storage = []
-session_sharing = []
 session_sharing_acls = []
 skip_login = ["warp_server_client/skip_login"]
 # This feature should only be enabled when building a self-contained binary with the bundle script.
 standalone = ["warp_assets/standalone", "warp_core/standalone"]
 prompt_suggestions_via_maa = []
 voice_input = ["dep:voice_input"]
-system_theme = []
 tab_close_button_on_left = []
-team_features_override = []
-test-util = ["cloud_object_client/test-util", "warp_server_auth/test-util"]
-team_workflows = ["team_features_override"]
-toggle_bootstrap_block = []
+test-util = [
+    "cloud_object_client/test-util",
+    "warp_server_auth/test-util",
+    "http_client/test-util",
+    "warp_core/test-util",
+    "warp_terminal/test-util",
+    "ai/test-util",
+    "warp_server_client/test-util",
+]
+terminal_lifecycle_recovery = []
 # Feature enabled only when app is compiled for integration tests.
 integration_tests = [
     "warp_cli/integration_tests",
     "warpui/integration_tests",
     "warpui/test-util",
     "warp_core/integration_tests",
+    "warp_terminal/integration_tests",
     "warp_server_client/integration_tests",
 ]
 traces = []
@@ -868,7 +885,6 @@ loginless_conversion = []
 external_agent_mode_context = []
 avatar_in_tab_bar = []
 ssh_drag_and_drop = []
-permanent_autosuggestion_hint = []
 cycle_next_command_suggestion = []
 multi_workspace = []
 ime_marked_text = []
@@ -882,7 +898,6 @@ suggested_rules = []
 command_correction_key = []
 full_source_code_embedding = []
 use_tantivy_search = []
-agent_management_popup = []
 simulate_github_unauthed = []
 reload_stale_conversation_files = []
 shared_block_title_generation = []
@@ -894,12 +909,12 @@ agent_decides_command_execution = []
 fast_forward_autoexecute_button = []
 code_find_replace = []
 command_palette_file_search = []
-conversation_filter = []
 ai_context_menu_commands = []
 preview_channel = []
 ai_context_menu_code = []
 expand_edit_to_pane = []
 fallback_model_load_output_messaging = []
+warping_model_name = []
 profiles_design_revamp = []
 search_codebase_ui = []
 linked_code_blocks = []
@@ -907,7 +922,6 @@ tabbed_editor_view = []
 selection_as_context = []
 send_telemetry_to_file = []
 multi_profile = []
-pr_comments_slash_command = []
 pr_comments_v2 = []
 pr_comments_skill = []
 conversation_artifacts = []
@@ -923,7 +937,6 @@ code_review_save_changes = []
 remote_code_review = []
 file_tree = []
 code_launch_modal = []
-api_key_authentication = []
 api_key_management = []
 diff_set_as_context = []
 discard_per_file_and_all_changes = []
@@ -936,6 +949,7 @@ integration_command = []
 artifact_command = []
 cloud_environments = []
 cloud_runners = []
+cloud_agent_runners = []
 create_environment_slash_command = []
 summarize_conversation_command = []
 mcp_grouped_server_context = []
@@ -960,6 +974,7 @@ ambient_agents_rtc = []
 team_api_keys = []
 named_agents = []
 classic_completions = []
+native_shell_completions = []
 cloud_mode = []
 cloud_mode_from_local_session = []
 cloud_mode_image_context = []
@@ -977,21 +992,19 @@ oz_identity_federation = []
 oz_launch_modal = []
 open_warp_launch_modal = []
 orchestration_launch_modal = []
+agent_cli_launch_modal = []
 new_tab_styling = []
 file_based_mcp = []
 skill_arguments = []
 active_conversation_requires_interaction = []
 incremental_auto_reload = []
-run_agents_tool = []
-orchestration_viewer_streamer = []
-owner_orchestration_ancestor_streamer = []
 wait_for_events_parent_registration = []
+orchestration_unified_stack = []
 pending_user_query_indicator = []
 queue_slash_command = []
 queued_prompts_v2 = ["queue_slash_command"]
 inline_menu_headers = []
 directory_tab_colors = []
-open_warp_new_settings_modes = []
 hoa_code_review = []
 vertical_tabs = []
 vertical_tabs_summary_mode = []
@@ -1022,6 +1035,11 @@ cloud_mode_input_v2 = ["cloud_mode"]
 handoff_cloud_cloud = ["cloud_mode_setup_v2"]
 git_credential_refresh = []
 prompt_cache_expiry_warning = []
+osc_hyperlinks = []
+ctrl_c_cancels_third_party_harness = []
+shell_widget_handoff = []
+history_search_ranking_v2 = []
+stored_screenshots = []
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

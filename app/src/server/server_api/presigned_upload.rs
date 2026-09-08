@@ -2,11 +2,11 @@ use std::future::Future;
 #[cfg(feature = "local_fs")]
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 #[cfg(not(target_family = "wasm"))]
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 #[cfg(not(target_family = "wasm"))]
-use crc::{Crc, CRC_32_ISCSI};
+use crc::{CRC_32_ISCSI, Crc};
 pub use warp_server_client::HttpStatusError;
 
 #[cfg(feature = "local_fs")]

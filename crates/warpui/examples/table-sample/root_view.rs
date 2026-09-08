@@ -930,9 +930,11 @@ impl TableSampleView {
 
         let single_column = Table::new(
             TableStateHandle::new(3, move |row_idx, _| {
-                vec![Text::new(format!("Row {}", row_idx + 1), font_family, 14.0)
-                    .with_color(ColorU::new(50, 50, 50, 255))
-                    .finish()]
+                vec![
+                    Text::new(format!("Row {}", row_idx + 1), font_family, 14.0)
+                        .with_color(ColorU::new(50, 50, 50, 255))
+                        .finish(),
+                ]
             }),
             800.0,
             500.0,

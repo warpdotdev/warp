@@ -14,15 +14,15 @@ use crate::ai::blocklist::{InputConfig, SerializedBlockListItem};
 use crate::code::editor_management::CodeSource;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::root_view::quake_mode_window_id;
-use crate::server::ids::SyncId;
-use crate::settings_view::environments_page::EnvironmentsPage;
+use crate::server::ids::{ServerId, SyncId};
 use crate::settings_view::SettingsSection;
+use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
 use crate::themes::theme::AnsiColorIdentifier;
+use crate::workspace::WorkspaceRegistry;
 use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::view::left_panel::ToolPanelView;
-use crate::workspace::WorkspaceRegistry;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppState {
@@ -45,6 +45,7 @@ pub struct PersistedAgentManagementFilters {
 pub struct WindowSnapshot {
     pub tabs: Vec<TabSnapshot>,
     pub active_tab_index: usize,
+    pub team_uid: Option<ServerId>,
     pub bounds: Option<RectF>,
     pub fullscreen_state: FullscreenState,
     pub quake_mode: bool,
@@ -360,10 +361,10 @@ pub fn get_app_state(app: &AppContext) -> AppState {
 
     for (index, window_id) in app.window_ids().enumerate() {
         // Determine index of active window
-        if let Some(active_window_id) = active_window_id {
-            if active_window_id == window_id {
-                active_window_index = Some(index);
-            }
+        if let Some(active_window_id) = active_window_id
+            && active_window_id == window_id
+        {
+            active_window_index = Some(index);
         }
 
         if let Some(workspace) = WorkspaceRegistry::as_ref(app).get(window_id, app) {

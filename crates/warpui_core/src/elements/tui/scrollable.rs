@@ -9,8 +9,9 @@
 //! [`TuiScrollableElement`] without changing this wrapper.
 
 use super::{
-    TuiBuffer, TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext,
-    TuiPresentationContext, TuiRect, TuiRectExt, TuiSize,
+    TuiConstraint, TuiElement, TuiEvent, TuiEventContext, TuiLayoutContext, TuiPaintContext,
+    TuiPaintSurface, TuiPoint, TuiPresentationContext, TuiScreenPoint, TuiScreenPosition, TuiSize,
+    TuiZIndex,
 };
 use crate::AppContext;
 
@@ -47,6 +48,7 @@ pub trait TuiScrollableElement: TuiElement {
 pub struct TuiScrollable {
     child: Box<dyn TuiScrollableElement>,
     propagate_mousewheel_if_not_handled: bool,
+    child_max_z_index: Option<TuiZIndex>,
 }
 
 impl TuiScrollable {
@@ -55,6 +57,7 @@ impl TuiScrollable {
         Self {
             child,
             propagate_mousewheel_if_not_handled: false,
+            child_max_z_index: None,
         }
     }
 
@@ -62,6 +65,20 @@ impl TuiScrollable {
     pub fn with_propagate_mousewheel_if_not_handled(mut self, propagate: bool) -> Self {
         self.propagate_mousewheel_if_not_handled = propagate;
         self
+    }
+
+    /// Returns whether `position` is inside the visible child bounds without
+    /// being covered by a layer painted above the child's own descendants.
+    fn is_mouse_over_child(&self, position: TuiPoint, event_ctx: &TuiEventContext<'_>) -> bool {
+        let Some((origin, size, z_index)) = self
+            .origin()
+            .zip(self.size())
+            .zip(self.child_max_z_index)
+            .map(|((origin, size), z_index)| (origin, size, z_index))
+        else {
+            return false;
+        };
+        event_ctx.hit_test_with_z_index(origin, size, z_index, position)
     }
 }
 
@@ -75,12 +92,26 @@ impl TuiElement for TuiScrollable {
         self.child.layout(constraint, ctx, app)
     }
 
-    fn render(&self, area: TuiRect, buffer: &mut TuiBuffer, ctx: &mut TuiLayoutContext) {
-        self.child.render(area, buffer, ctx);
+    fn after_layout(&mut self, ctx: &mut TuiLayoutContext, app: &AppContext) {
+        self.child.after_layout(ctx, app);
     }
 
-    fn cursor_position(&self, area: TuiRect, ctx: &mut TuiLayoutContext) -> Option<(u16, u16)> {
-        self.child.cursor_position(area, ctx)
+    fn render(
+        &mut self,
+        origin: TuiScreenPosition,
+        surface: &mut TuiPaintSurface<'_>,
+        ctx: &mut TuiPaintContext,
+    ) {
+        self.child.render(origin, surface, ctx);
+        self.child_max_z_index = Some(ctx.scene.max_active_z_index());
+    }
+
+    fn size(&self) -> Option<TuiSize> {
+        self.child.size()
+    }
+
+    fn origin(&self) -> Option<TuiScreenPoint> {
+        self.child.origin()
     }
 
     fn present(&mut self, ctx: &mut TuiPresentationContext<'_>) {
@@ -90,21 +121,22 @@ impl TuiElement for TuiScrollable {
     fn dispatch_event(
         &mut self,
         event: &TuiEvent,
-        area: TuiRect,
-        event_ctx: &mut TuiEventContext,
-        ctx: &mut TuiLayoutContext,
+        event_ctx: &mut TuiEventContext<'_>,
         app: &AppContext,
     ) -> bool {
-        if self.child.dispatch_event(event, area, event_ctx, ctx, app) {
+        if self.child.dispatch_event(event, event_ctx, app) {
             return true;
         }
+        let Some(size) = self.size() else {
+            return false;
+        };
         match event {
             TuiEvent::ScrollWheel {
                 position, delta, ..
-            } if area.contains_point(*position) => {
+            } if self.is_mouse_over_child(*position, event_ctx) => {
                 let scrolled = self
                     .child
-                    .scroll_by_rows(-(delta.1 * WHEEL_STEP), usize::from(area.height));
+                    .scroll_by_rows(-(delta.1 * WHEEL_STEP), usize::from(size.height));
                 if scrolled {
                     event_ctx.notify();
                 }

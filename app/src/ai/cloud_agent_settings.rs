@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use settings::macros::define_settings_group;
 use settings::{Setting as _, SupportedPlatforms, SyncToCloud};
 use warp_cli::agent::Harness;
-use warp_core::report_if_error;
+use warp_errors::report_if_error;
 
 use crate::server::ids::SyncId;
 

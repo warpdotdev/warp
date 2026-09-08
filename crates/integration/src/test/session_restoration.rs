@@ -20,9 +20,9 @@ use warp::terminal::shell::ShellType;
 use warp::terminal::{History, ShellHost, TerminalView};
 use warp::workspace::Workspace;
 use warpui_core::integration::{AssertionOutcome, TestStep};
-use warpui_core::{async_assert_eq, SingletonEntity, ViewHandle};
+use warpui_core::{SingletonEntity, ViewHandle, async_assert_eq};
 
-use super::{new_builder, Builder, TEST_ONLY_ASSETS};
+use super::{Builder, TEST_ONLY_ASSETS, new_builder};
 use crate::util::{get_local_user, tab_title_in_home_dir};
 
 pub fn test_session_restoration() -> Builder {

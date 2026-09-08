@@ -5,11 +5,11 @@ use warpui_core::r#async::executor;
 
 use super::*;
 use crate::proto::{
-    client_message, host_scoped_request, notification, run_command_response, server_message,
-    session_scoped_request, ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState,
-    CodebaseIndexStatusUpdated, CodebaseIndexStatusesSnapshot, ErrorCode, GetDiffStateResponse,
-    InitializeResponse, OpenBufferResponse, RemoteAgentContextSnapshot, RemoteContextFileProto,
-    RunCommandResponse, RunCommandSuccess, ServerMessage, WriteFile,
+    ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
+    CodebaseIndexStatusesSnapshot, ErrorCode, GetDiffStateResponse, InitializeResponse,
+    OpenBufferResponse, RemoteAgentContextSnapshot, RemoteContextFileProto, RunCommandResponse,
+    RunCommandSuccess, ServerMessage, WriteFile, client_message, host_scoped_request, notification,
+    run_command_response, server_message, session_scoped_request,
 };
 use crate::protocol;
 

@@ -5,11 +5,11 @@ use std::path::PathBuf;
 use warpui::{AppContext, SingletonEntity, ViewContext, WindowId};
 
 use super::Workspace;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::available_shells::AvailableShell;
 #[cfg(feature = "local_tty")]
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::session_settings::{NewSessionSource, SessionSettings};
-use crate::terminal::ShellLaunchData;
 
 impl Workspace {
     /// Helper function to compute the initial directory for a new session

@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use super::{CompleterOptions, CompletionContext, MatchedSuggestion, SuggestionTypeName};
-use crate::completer::engine::{self, CompletionLocation};
 use crate::completer::LocationType;
+use crate::completer::engine::{self, CompletionLocation};
 use crate::parsers::ClassifiedCommand;
 use crate::signatures::Command;
 

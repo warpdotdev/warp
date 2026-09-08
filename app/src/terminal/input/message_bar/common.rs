@@ -1,18 +1,17 @@
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_color::ColorU;
+use warp_core::ui::Icon;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::Icon;
 use warpui::elements::{
-    Border, CacheOption, Clipped, Container, CornerRadius, Element, FormattedTextElement,
-    Hoverable, Image, ParentElement, Radius, Wrap, WrapFill, DEFAULT_UI_LINE_HEIGHT_RATIO,
+    Border, CacheOption, Clipped, Container, CornerRadius, DEFAULT_UI_LINE_HEIGHT_RATIO, Element,
+    FormattedTextElement, Hoverable, Image, ParentElement, Radius, Wrap, WrapFill,
 };
 use warpui::platform::Cursor;
 use warpui::prelude::{Align, ConstrainedBox, CrossAxisAlignment, Flex, MainAxisSize, Text};
 use warpui::ui_components::keyboard_shortcut::keystroke_to_keys;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::ai::blocklist::agent_view::agent_view_bg_color;
 use crate::ai::blocklist::agent_view::shortcuts::render_keystroke_with_color_overrides;
 use crate::terminal;
 use crate::terminal::input::message_bar::{ChipHorizontalAlignment, Message, MessageItem};
@@ -508,7 +507,7 @@ pub fn disableable_message_item_color_overrides(
         Some(
             appearance
                 .theme()
-                .disabled_text_color(agent_view_bg_color(app).into())
+                .disabled_text_color(appearance.theme().background())
                 .into_solid(),
         ),
         Some(blended_colors::neutral_2(appearance.theme())),

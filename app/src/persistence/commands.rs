@@ -1,8 +1,9 @@
 use anyhow::Result;
 use diesel::sqlite::SqliteConnection;
 use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
+use warp_core::command::ExitCode;
 
-use crate::terminal::event::UserBlockCompleted;
+use crate::terminal::ShellHost;
 
 /// Returns the command that was run right after `command`
 /// in the same session, if any.
@@ -43,17 +44,16 @@ pub fn get_previous_commands(
 /// (same pwd, exit code, shell, hostname), from newest to oldest.
 pub fn get_same_commands_from_history(
     conn: &mut SqliteConnection,
-    completed_block: &UserBlockCompleted,
+    command: &str,
+    pwd: &Option<String>,
+    exit_code: ExitCode,
+    shell_host: Option<&ShellHost>,
     num_commands: usize,
 ) -> Result<Vec<super::model::Command>> {
-    let shell_host = completed_block.serialized_block.shell_host.as_ref();
     let commands = super::schema::commands::dsl::commands
-        .filter(super::schema::commands::columns::command.eq(&completed_block.command))
-        .filter(super::schema::commands::columns::pwd.eq(&completed_block.serialized_block.pwd))
-        .filter(
-            super::schema::commands::columns::exit_code
-                .eq(completed_block.serialized_block.exit_code.value()),
-        )
+        .filter(super::schema::commands::columns::command.eq(command))
+        .filter(super::schema::commands::columns::pwd.eq(pwd))
+        .filter(super::schema::commands::columns::exit_code.eq(exit_code.value()))
         .filter(
             super::schema::commands::columns::shell
                 .eq(shell_host.map(|host| host.shell_type.name())),

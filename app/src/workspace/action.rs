@@ -9,6 +9,7 @@ use warpui::accessibility::AccessibilityVerbosity;
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::Vector2F;
 use warpui::platform::Cursor;
+use warpui::platform::keyboard::KeyCode;
 use warpui::{EntityId, WeakViewHandle, WindowId};
 
 use super::global_actions::{ForkFromExchange, ForkedConversationDestination};
@@ -17,22 +18,22 @@ use super::tab_settings::{
     VerticalTabsTabItemMode, VerticalTabsViewMode,
 };
 use super::view::{OnboardingTutorial, WorkspaceBanner};
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::agent::api::ServerConversationToken;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::PendingAttachment;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::auth::auth_manager::LoginGatedFeature;
-use crate::drive::items::WarpDriveItemId;
 use crate::drive::CloudObjectTypeAndId;
+use crate::drive::items::WarpDriveItemId;
 use crate::palette::PaletteMode;
 use crate::pane_group::PaneGroup;
 use crate::prompt::editor_modal::OpenSource as PromptEditorOpenSource;
 use crate::search;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::telemetry::{
     AddTabWithShellSource, AgentModeEntrypoint, PaletteSource, SharingDialogSource,
 };
@@ -44,8 +45,8 @@ use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::themes::theme_chooser::ThemeChooserMode;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
-use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::PaneViewLocator;
+use crate::workspace::tab_group::TabGroupId;
 
 /// This enum determines how the search query is initialized when opening command search.
 #[derive(Clone, Default, Debug)]
@@ -141,24 +142,14 @@ pub enum WorkspaceAction {
     RenamePane(PaneViewLocator),
     ResetPaneName(PaneViewLocator),
     RenameActiveTab,
-    /// Renames the focused pane in the active tab. Mirrors `RenameActiveTab`
-    /// so the action is reachable from the binding registry / Command Palette
-    /// (see #9351). The context-menu path keeps using `RenamePane(locator)`.
     RenameActivePane,
     SetActiveTabName(String),
-    /// Sets the manual color override for the active tab.
-    ///
-    /// - `Color(_)` — apply that color.
-    /// - `Cleared` — explicitly clear (suppresses any directory default).
-    /// - `Unset` — remove the manual override (lets the directory default apply, if any).
+    CycleActiveTabColor,
     SetActiveTabColor(SelectedTabColor),
     ToggleTabRightClickMenu {
         tab_index: usize,
         anchor: TabContextMenuAnchor,
     },
-    /// Toggles the multi-tab selection right-click menu.
-    /// Dispatched by the UI when the right-clicked tab is part of a multi-tab
-    /// selection (cmd-click or shift-click).
     ToggleTabSelectionRightClickMenu {
         tab_index: usize,
         anchor: TabContextMenuAnchor,
@@ -186,9 +177,6 @@ pub enum WorkspaceAction {
     ToggleTabGroupCollapsed(TabGroupId),
     /// Opens an inline editor over the given group's header for renaming.
     RenameTabGroup(TabGroupId),
-    /// Cancels any active rename (tab, pane, or group) without committing the
-    /// new name. Dispatched when clicking on the vtab panel background while a
-    /// rename editor is open.
     CancelActiveRename,
     /// Creates a new tab group containing the tab at the given index.
     NewTabGroupFromTab(usize),
@@ -209,8 +197,7 @@ pub enum WorkspaceAction {
     ToggleTabMultiSelection {
         locator: PaneViewLocator,
     },
-    /// Clears the tab multi-selection. Dispatched from the UI when the user takes
-    /// an action that should cancel any active selections.
+    /// Clears the tab multi-selection.
     ClearTabMultiSelection,
     /// Creates a new tab group from the current tab multi-selection.
     NewTabGroupFromSelectedTabs,
@@ -303,6 +290,10 @@ pub enum WorkspaceAction {
     DecreaseZoom,
     ResetZoom,
     ActivateTabByNumber(usize),
+    SetTabShortcutModifierKey {
+        key_code: KeyCode,
+        pressed: bool,
+    },
     OpenPalette {
         mode: PaletteMode,
         source: PaletteSource,
@@ -334,8 +325,6 @@ pub enum WorkspaceAction {
         color: AnsiColorIdentifier,
         tab_index: usize,
     },
-    /// Toggles the color for a tab group. Clears the color if it was already
-    /// set to `color`; otherwise applies `color` as the uniform group color.
     ToggleTabGroupColor {
         color: AnsiColorIdentifier,
         group_id: TabGroupId,
@@ -349,6 +338,7 @@ pub enum WorkspaceAction {
     ClickedAIAssistantIcon,
     ToggleKeybindingsPage,
     ShowCommandSearch(CommandSearchOptions),
+    TriggerExternalCtrlTFileSearch,
     CreatePersonalNotebook,
     ImportToPersonalDrive,
     ImportToTeamDrive,
@@ -385,8 +375,7 @@ pub enum WorkspaceAction {
     ToggleLeftPanel,
     /// Toggles directly to the Warp Drive tab of the left panel in Code Mode V2
     ToggleWarpDrive,
-    /// Unconditionally opens Warp Drive. This is used in the case of user lifecycle
-    /// events like new user onboarding or when the user joins a team.
+    /// Unconditionally opens Warp Drive.
     OpenWarpDrive,
     /// Toggles the right panel. This happens as an explicit action from the user.
     ToggleRightPanel,
@@ -408,6 +397,10 @@ pub enum WorkspaceAction {
     /// Closes the focused panel. This happens as an explicit action from the user.
     ClosePanel,
     CopyTextToClipboard(String),
+    /// Copies a path to the clipboard based on the focused pane: the open file's display path
+    /// if the focused pane is the rendered file viewer (`FilePane`), otherwise the focused
+    /// terminal session's working directory. No-op if neither yields a path.
+    CopyCurrentPath,
     /// An action only registered in dev and local builds, which writes the user's current access
     /// token to the system clipboard to aid debugging and development.
     CopyAccessTokenToClipboard,
@@ -740,6 +733,18 @@ pub enum WorkspaceAction {
     /// Reset the orchestration launch modal dismissed state (for debugging)
     #[cfg(debug_assertions)]
     ResetOrchestrationLaunchModalState,
+    /// Open the Warp Agent CLI Launch Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenAgentCliLaunchModal,
+    /// Reset the Warp Agent CLI launch modal dismissed state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetAgentCliLaunchModalState,
+    /// Open the Feature Intro Modal (for debugging)
+    #[cfg(debug_assertions)]
+    OpenFeatureIntroModal,
+    /// Reset the feature intro seen state (for debugging)
+    #[cfg(debug_assertions)]
+    ResetFeatureIntroModalState,
     /// Open the auto-handoff sleep modal (for debugging)
     #[cfg(debug_assertions)]
     OpenAutoHandoffSleepModal,
@@ -817,6 +822,8 @@ pub enum WorkspaceAction {
     StartAgentOnboardingTutorial(OnboardingTutorial),
     ShowSessionConfigModal,
     DismissSessionConfigTabConfigChip,
+    /// Dismiss the non-blocking feature-intro popover without requiring it to hold focus.
+    DismissFeatureIntroModal,
     /// Start the HOA onboarding flow (for debugging)
     #[cfg(debug_assertions)]
     ShowHoaOnboardingFlow,
@@ -863,6 +870,12 @@ pub enum WorkspaceAction {
     /// Opens (or focuses) the in-app network log pane as a right-split of the
     /// active pane group. Gated on `ContextFlag::NetworkLogConsole`.
     OpenNetworkLogPane,
+    /// Opens or focuses a window scoped to the specified team.
+    OpenNewWindowForTeam {
+        team_uid: ServerId,
+    },
+    /// Shows (toggles) the team-switcher dropdown menu in the title bar.
+    ShowTeamSwitcherMenu,
 }
 
 impl From<&WorkspaceAction> for LoginGatedFeature {
@@ -908,6 +921,7 @@ impl WorkspaceAction {
             ContinueThirdPartyConversationLocally { .. } => true,
             ActivateTab(_)
             | ActivateTabByNumber(_)
+            | SetTabShortcutModifierKey { .. }
             | ActivatePrevTab
             | ActivateNextTab
             | ActivateLastTab
@@ -926,6 +940,7 @@ impl WorkspaceAction {
             | RenameActiveTab
             | RenameActivePane
             | SetActiveTabName(_)
+            | CycleActiveTabColor
             | SetActiveTabColor(_)
             | CloseTab(_)
             | CloseActiveTab
@@ -1040,6 +1055,7 @@ impl WorkspaceAction {
             | OpenPromptSuggestionsUnavailableModal
             | ToggleKeybindingsPage
             | ShowCommandSearch(_)
+            | TriggerExternalCtrlTFileSearch
             | ToggleMouseReporting
             | ToggleScrollReporting
             | ToggleFocusReporting
@@ -1077,6 +1093,7 @@ impl WorkspaceAction {
             | ToggleVerticalTabsShowDetailsOnHover
             | ToggleWelcomeTips
             | CopyTextToClipboard(_)
+            | CopyCurrentPath
             | CopyAccessTokenToClipboard
             | OpenTabConfigRepoPicker { .. }
             | OpenNewWorktreeModal
@@ -1169,6 +1186,7 @@ impl WorkspaceAction {
             | StartAgentOnboardingTutorial(_)
             | ShowSessionConfigModal
             | DismissSessionConfigTabConfigChip
+            | DismissFeatureIntroModal
             | SaveCurrentTabAsNewConfig(_)
             | SyncTrafficLights
             | OpenTabConfigErrorFile { .. }
@@ -1182,7 +1200,9 @@ impl WorkspaceAction {
             | ShowHandoffEnvironmentCreationModal
             | ShowCloudModeV2EnvironmentCreationModal
             | OpenCreateAuthSecretModal { .. }
-            | OpenNetworkLogPane => false,
+            | OpenNetworkLogPane
+            | OpenNewWindowForTeam { .. }
+            | ShowTeamSwitcherMenu => false,
             #[cfg(debug_assertions)]
             ShowHoaOnboardingFlow => false,
             #[cfg(target_family = "wasm")]
@@ -1197,6 +1217,10 @@ impl WorkspaceAction {
             | ResetOpenWarpLaunchModalState
             | OpenOrchestrationLaunchModal
             | ResetOrchestrationLaunchModalState
+            | OpenAgentCliLaunchModal
+            | ResetAgentCliLaunchModalState
+            | OpenFeatureIntroModal
+            | ResetFeatureIntroModalState
             | OpenAutoHandoffSleepModal
             | ResetAutoHandoffSleepModalState
             | TriggerAutoHandoffToCloud

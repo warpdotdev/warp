@@ -5,22 +5,23 @@ use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use warp_core::ui::appearance::Appearance;
+use warpui::Element;
 use warpui::elements::{
     Align, Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Empty,
     Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Shrinkable,
     Text,
 };
 use warpui::fonts::{Properties, Weight};
-use warpui::Element;
 
 use crate::settings_view::billing_and_usage_page_v2::{
     AGGREGATE_CREDITS_DOT_COLOR, AMBIENT_CREDITS_DOT_COLOR, BASE_CREDITS_DOT_COLOR,
     BONUS_CREDITS_DOT_COLOR, PAYG_CREDITS_DOT_COLOR,
 };
 use crate::ui_components::blended_colors;
+use crate::workspaces::team::Team;
 use crate::workspaces::workspace::{
     AiCreditsUsageAndCostSubjectType, AiCreditsUsageAndCostType, AiCreditsUsageBucket,
-    BillingCycleUsageEntry,
+    BillingCycleUsageEntry, WorkspaceMember,
 };
 
 // for a bunch of this (min fill ratio, cost type order, ... )
@@ -193,6 +194,30 @@ pub fn filter_legacy_buckets(entries: &[BillingCycleUsageEntry]) -> Vec<BillingC
             e.usage_bucket != AiCreditsUsageBucket::Voice
                 && e.usage_bucket != AiCreditsUsageBucket::SuggestedCodeDiffs
         })
+        .cloned()
+        .collect()
+}
+
+pub fn filter_entries_by_attributed_team(
+    entries: &[BillingCycleUsageEntry],
+    team_uid: &str,
+) -> Vec<BillingCycleUsageEntry> {
+    entries
+        .iter()
+        .filter(|e| e.attributed_team_uid.as_deref() == Some(team_uid))
+        .cloned()
+        .collect()
+}
+
+pub fn members_for_team(members: &[WorkspaceMember], team: Option<&Team>) -> Vec<WorkspaceMember> {
+    let Some(team) = team else {
+        return members.to_vec();
+    };
+    let team_member_uids: std::collections::HashSet<_> =
+        team.members.iter().map(|member| &member.uid).collect();
+    members
+        .iter()
+        .filter(|member| team_member_uids.contains(&member.uid))
         .cloned()
         .collect()
 }

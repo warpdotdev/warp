@@ -9,6 +9,7 @@ use warpui::{Element, Entity, ModelHandle, SingletonEntity, View, ViewContext, V
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent_conversations_model::AgentConversationEntryId;
 use crate::ai::blocklist::agent_view::AgentViewController;
+use crate::ai::blocklist::conversation_selection::ConversationSelectionHandle;
 use crate::features::FeatureFlag;
 use crate::search::data_source::{Query, QueryFilter};
 use crate::search::mixer::SearchMixer;
@@ -22,6 +23,7 @@ use crate::terminal::input::suggestions_mode_model::{
     InputSuggestionsModeEvent, InputSuggestionsModeModel,
 };
 use crate::terminal::model::session::active_session::ActiveSession;
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 /// Events emitted by InlineConversationMenuView.
 #[derive(Debug, Clone)]
@@ -60,13 +62,30 @@ impl InlineConversationMenuView {
     pub fn new(
         input_suggestions_model: ModelHandle<InputSuggestionsModeModel>,
         agent_view_controller: ModelHandle<AgentViewController>,
+        conversation_selection: ConversationSelectionHandle,
         input_buffer_model: &ModelHandle<InputBufferModel>,
         positioner: &ModelHandle<InlineMenuPositioner>,
         active_session: ModelHandle<ActiveSession>,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
-        let data_source = ctx.add_model(|_| {
-            ConversationMenuDataSource::new(agent_view_controller.clone(), active_session)
+        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
+        let data_source = ctx.add_model(move |_| {
+            ConversationMenuDataSource::new(
+                conversation_selection,
+                active_session,
+                team_context_resolver,
+            )
+        });
+        let window_id = ctx.window_id();
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |me, _, event, ctx| {
+            if matches!(
+                event,
+                UserWorkspacesEvent::WindowTeamChanged {
+                    window_id: changed_window_id
+                } if *changed_window_id == window_id
+            ) {
+                me.rerun_query(ctx);
+            }
         });
 
         let tab_configs = TAB_CONFIGS.clone();

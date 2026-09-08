@@ -16,7 +16,7 @@ use crate::search::command_search::searcher::CommandSearchItemAction;
 use crate::search::item::SearchItem;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::terminal::rich_history::{
-    render_row_with_icon_and_paragraph, DETAILS_PARAGRAPH_SPACING,
+    DETAILS_PARAGRAPH_SPACING, render_row_with_icon_and_paragraph,
 };
 use crate::ui_components::icons::Icon as UiIcon;
 use crate::util::time_format::format_approx_duration_from_now;
