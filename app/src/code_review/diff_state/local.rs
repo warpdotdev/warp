@@ -1862,7 +1862,7 @@ impl LocalDiffStateModel {
             total_additions += file_diff.additions();
             total_deletions += file_diff.deletions();
 
-            if is_binary {
+            if file_diff.is_binary {
                 files.push(FileDiffAndContent {
                     file_diff,
                     content_at_head: None,
