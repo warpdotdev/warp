@@ -17,10 +17,11 @@ pub use config_state::{AuthSecretSelection, OrchestrationConfigState};
 pub use edit_state::OrchestrationEditState;
 #[cfg_attr(not(feature = "tui"), allow(unused_imports))]
 pub use providers::ORCHESTRATION_ENV_NONE_LABEL;
+#[cfg_attr(not(feature = "tui"), allow(unused_imports))]
+pub use providers::resolve_default_environment_id;
 pub use providers::{
     ORCHESTRATION_WARP_WORKER_HOST, persist_environment_selection, persist_host_selection,
-    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug,
+    resolve_auth_secret_selection_for_harness, resolve_default_host_slug,
 };
 pub(crate) use providers::{
     can_execute_with_auth_secret, persist_auth_secret_selection,

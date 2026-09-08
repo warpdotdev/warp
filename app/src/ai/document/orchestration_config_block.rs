@@ -49,7 +49,7 @@ use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextResolver, UserWorkspaces};
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
@@ -162,6 +162,7 @@ pub struct OrchestrationConfigBlockView {
     runners: Vec<(String, String)>,
     /// True while the `getRunners` fetch is in flight.
     runners_loading: bool,
+    team_context_resolver: TeamContextResolver,
 }
 
 impl OrchestrationConfigBlockView {
@@ -335,6 +336,7 @@ impl OrchestrationConfigBlockView {
             user_has_interacted: false,
             runners: Vec::new(),
             runners_loading: false,
+            team_context_resolver: UserWorkspaces::team_context_resolver(ctx.handle()),
         };
         if view.is_approved {
             view.ensure_pickers(ctx);
@@ -928,7 +930,14 @@ impl View for OrchestrationConfigBlockView {
                         .orchestration_edit_state
                         .orchestration_config_state
                         .execution_mode,
-                    app,
+                    oc::environment_snapshot(
+                        &self.orchestration_edit_state.orchestration_config_state,
+                        &(self.team_context_resolver)(app),
+                        app,
+                    )
+                    .rows
+                    .iter()
+                    .any(|row| !row.id.is_empty()),
                 ) {
                     column.add_child(oc::render_validation_error(
                         message,

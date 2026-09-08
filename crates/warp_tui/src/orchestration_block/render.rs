@@ -92,6 +92,7 @@ impl TuiOrchestrationBlock {
         app: &AppContext,
         builder: &TuiUiBuilder,
     ) -> Box<dyn TuiElement> {
+        let team_context = (self.team_context_resolver)(app);
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let is_remote = state.execution_mode.is_remote();
         let mut entries: Vec<(&str, String)> = vec![(
@@ -128,7 +129,7 @@ impl TuiOrchestrationBlock {
             entries.push((
                 "Environment",
                 Self::label_for_id(
-                    &environment_snapshot(state, app),
+                    &environment_snapshot(state, &team_context, app),
                     &environment_id,
                     "Empty environment",
                 ),
@@ -156,6 +157,7 @@ impl TuiOrchestrationBlock {
 
     /// Renders the acceptance card body.
     fn render_acceptance(&self, app: &AppContext, builder: &TuiUiBuilder) -> Box<dyn TuiElement> {
+        let team_context = (self.team_context_resolver)(app);
         let state = &self.orchestration_edit_state.orchestration_config_state;
         let mut column = TuiFlex::column();
 
@@ -189,7 +191,13 @@ impl TuiOrchestrationBlock {
                     .with_style(builder.error_text_style())
                     .finish(),
             );
-        } else if let Some(message) = empty_env_recommendation_message(&state.execution_mode, app) {
+        } else if let Some(message) = empty_env_recommendation_message(
+            &state.execution_mode,
+            environment_snapshot(state, &team_context, app)
+                .rows
+                .iter()
+                .any(|row| !row.id.is_empty()),
+        ) {
             column.add_child(
                 TuiText::new(message)
                     .with_style(builder.attention_glyph_style())

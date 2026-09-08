@@ -16,7 +16,7 @@ use super::providers::{
 };
 use crate::LLMPreferences;
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, environment_matches_scope};
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::harness_display;
@@ -561,12 +561,17 @@ fn build_host_snapshot(
 
 // ── Environment ─────────────────────────────────────────────────────
 
-/// Builds the environment options: "Empty environment" plus existing
-/// environments sorted by name, mirroring the GUI environment picker.
-pub fn environment_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> OptionSnapshot {
+/// Builds the environment options: "Empty environment" plus personal and
+/// current-team environments sorted by name.
+pub fn environment_snapshot<S: TeamScope + ?Sized>(
+    state: &OrchestrationConfigState,
+    scope: &S,
+    ctx: &AppContext,
+) -> OptionSnapshot {
     let all_envs = CloudAmbientAgentEnvironment::get_all(ctx);
     let mut sorted_envs: Vec<(String, String)> = all_envs
         .iter()
+        .filter(|environment| environment_matches_scope(environment, scope, true))
         .map(|env| (env.id.uid(), env.model().string_model.name.clone()))
         .collect();
     sorted_envs.sort_by(|a, b| a.1.cmp(&b.1));
