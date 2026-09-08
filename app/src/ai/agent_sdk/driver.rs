@@ -226,15 +226,18 @@ const TASK_STATUS_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const MANAGED_MCP_RESOLVE_MAX_ATTEMPTS: usize = 6;
 /// Timeout for individual harness auth preflight commands.
 const PREFLIGHT_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
-/// Bounded fallback for draining `PendingCliHarnessPromptQueue`: some CLI-harness sessions
-/// (e.g. Codex using only its OSC 9 notification fallback, when the platform plugin is
-/// unavailable or disabled) never emit a genuine `CLIAgentSessionsModelEvent::StatusChanged`
-/// with `CLIAgentSessionStatus::InProgress` — Codex's OSC 9 path only ever produces opaque
-/// `Stop` notifications, which map to `Success`, not `InProgress`. Once this window elapses
-/// after harness setup, drain and deliver any still-queued prompts anyway rather than losing
-/// them forever; draining is idempotent, so this is a no-op when the normal `InProgress`-driven
-/// drain already ran.
-const PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+/// Last-resort bound for draining `PendingCliHarnessPromptQueue` when the CLI-harness plugin
+/// never reports `CLIAgentSessionsModelEvent::StatusChanged` with `CLIAgentSessionStatus::InProgress`
+/// — the normal drain signal. Finding anything still queued once this window elapses is not a
+/// routine race: a healthy plugin reports `InProgress` almost immediately after the harness
+/// starts processing its turn, so hitting this fallback indicates a broken or missing plugin
+/// integration (e.g. a Codex session on the OSC 9 fallback, whose notifications only ever map
+/// to `Success`, never `InProgress`). Draining is idempotent, so this is a silent no-op in the
+/// healthy case where the normal drain already ran. Set below the ~10 minutes the server allows
+/// before it expects the agent to have started working after a run is claimed, so this fallback
+/// still has a chance to recover queued prompts before the server considers the run stalled.
+const PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT: Duration =
+    Duration::from_secs(8 * 60);
 pub(crate) const WARP_DRIVE_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 /// Maximum time to wait for an automatic error resume before propagating the error.
 /// If no follow-up status arrives within this window, the driver terminates with the
@@ -5025,11 +5028,20 @@ impl AgentDriver {
                     Timer::after(PENDING_CLI_HARNESS_PROMPT_QUEUE_FALLBACK_DRAIN_TIMEOUT).await;
                 },
                 move |me, _, ctx| {
-                    me.drain_and_deliver_pending_cli_harness_prompts(
+                    let delivered_count = me.drain_and_deliver_pending_cli_harness_prompts(
                         task_id,
                         terminal_view_id,
                         ctx,
                     );
+                    if delivered_count > 0 {
+                        log::warn!(
+                            "Ambient agent CLI lifecycle: unexpectedly had to fall back to a \
+                             bounded timeout to drain {delivered_count} queued shared-session \
+                             prompt(s) for task {task_id} — the CLI-harness plugin never reported \
+                             InProgress; this likely indicates a broken or missing plugin \
+                             integration. terminal_view_id={terminal_view_id:?}"
+                        );
+                    }
                 },
             );
         }
@@ -5140,6 +5152,8 @@ impl AgentDriver {
     /// Drains and delivers, as genuine PTY follow-ups via `TerminalDriver::send_text_to_cli`,
     /// any shared-session prompts queued (see `accept_agent_prompt` in
     /// `terminal_view_adaptor.rs`) while `task_id`'s CLI-harness session had no live PTY yet.
+    /// Returns how many prompts were delivered, so callers (e.g. the bounded fallback timeout)
+    /// can tell an empty, already-drained queue apart from one that genuinely had work pending.
     /// Safe to call from multiple triggers (the normal `StatusChanged{InProgress}` signal and
     /// the bounded fallback timeout) since draining is idempotent: nothing happens once the
     /// queue for this task is already empty.
@@ -5148,9 +5162,10 @@ impl AgentDriver {
         task_id: AmbientAgentTaskId,
         terminal_view_id: EntityId,
         ctx: &mut ModelContext<Self>,
-    ) {
+    ) -> usize {
         let queued = PendingCliHarnessPromptQueue::handle(ctx)
             .update(ctx, |queue, _ctx| queue.drain(task_id));
+        let delivered_count = queued.len();
         for prompt in queued {
             log::info!(
                 "Delivering a shared-session prompt that had been queued while waiting for \
@@ -5163,6 +5178,7 @@ impl AgentDriver {
                 terminal_driver.send_text_to_cli(prompt.prompt, ctx);
             });
         }
+        delivered_count
     }
 
     /// Removes the task mapping registered for CLI agent session status updates, and drops any
