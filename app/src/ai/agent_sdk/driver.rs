@@ -165,6 +165,60 @@ where
     }
 }
 
+fn terminal_error_category(
+    state: AgentTaskState,
+    error_code: Option<PlatformErrorCode>,
+) -> Option<&'static str> {
+    if !matches!(state, AgentTaskState::Failed | AgentTaskState::Error) {
+        return None;
+    }
+    Some(match error_code {
+        Some(PlatformErrorCode::AuthenticationRequired) => "authentication_required",
+        Some(PlatformErrorCode::BudgetExceeded) => "budget_exceeded",
+        Some(PlatformErrorCode::ContentPolicyViolation) => "content_policy_violation",
+        Some(PlatformErrorCode::EnvironmentSetupFailed) => "environment_setup_failed",
+        Some(PlatformErrorCode::ExternalAuthenticationRequired) => {
+            "external_authentication_required"
+        }
+        Some(PlatformErrorCode::FeatureNotAvailable) => "feature_not_available",
+        Some(PlatformErrorCode::InsufficientCredits) => "insufficient_credits",
+        Some(PlatformErrorCode::IntegrationDisabled) => "integration_disabled",
+        Some(PlatformErrorCode::IntegrationNotConfigured) => "integration_not_configured",
+        Some(PlatformErrorCode::InternalError) => "internal_error",
+        Some(PlatformErrorCode::InvalidRequest) => "invalid_request",
+        Some(PlatformErrorCode::NotAuthorized) => "not_authorized",
+        Some(PlatformErrorCode::ResourceUnavailable) => "resource_unavailable",
+        Some(PlatformErrorCode::ResourceNotFound) => "resource_not_found",
+        None if state == AgentTaskState::Failed => "environment_setup_failed",
+        None => "agent_process_failed",
+    })
+}
+
+async fn report_terminal_error_fallback(
+    task_id: AmbientAgentTaskId,
+    category: &str,
+    message: String,
+    terminal_reporter: &Arc<dyn HarnessSupportClient>,
+) {
+    match terminal_reporter
+        .report_terminal_error(category.to_string(), message)
+        .with_timeout(super::TERMINAL_ERROR_REPORT_TIMEOUT)
+        .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            log::warn!(
+                "Failed to report workload-authenticated terminal error for task {task_id}: {error:#}"
+            );
+        }
+        Err(_) => {
+            log::warn!(
+                "Timed out reporting workload-authenticated terminal error for task {task_id}"
+            );
+        }
+    }
+}
+
 const HARNESS_SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Delay after the initial exit request before retrying with the harness's
 /// follow-up input (e.g. Claude's confirmation-dialog dismissal). Sent
@@ -1310,6 +1364,7 @@ impl AgentDriver {
         let foreground = ctx.spawner();
         let foreground_for_error = foreground.clone();
         let server_api = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let terminal_reporter = ServerApiProvider::as_ref(ctx).get_harness_support_client();
         let task_id = self.task_id;
 
         ctx.spawn(
@@ -1491,6 +1546,7 @@ impl AgentDriver {
                             task_id,
                             &AgentDriverError::TerminatedBySignal,
                             &server_api,
+                            &terminal_reporter,
                         )
                         .await;
                     }
@@ -1563,6 +1619,8 @@ impl AgentDriver {
         );
 
         let server_api_for_error = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let terminal_reporter_for_error =
+            ServerApiProvider::as_ref(ctx).get_harness_support_client();
 
         async move {
             if let Some(ref task_id) = task_id {
@@ -1589,7 +1647,13 @@ impl AgentDriver {
             // teardown, since SIGKILL follows shortly after SIGTERM.
             if let (Some(task_id), Err(err)) = (task_id, &result) {
                 if !matches!(err, AgentDriverError::TerminatedBySignal) {
-                    report_driver_error(task_id, err, &server_api_for_error).await;
+                    report_driver_error(
+                        task_id,
+                        err,
+                        &server_api_for_error,
+                        &terminal_reporter_for_error,
+                    )
+                    .await;
                 }
                 if matches!(
                     err,
@@ -2711,15 +2775,23 @@ impl AgentDriver {
         let message = error.to_string();
         let resolved = foreground
             .spawn(|me, ctx| {
-                me.task_id
-                    .map(|task_id| (task_id, ServerApiProvider::as_ref(ctx).get_ai_client()))
+                me.task_id.map(|task_id| {
+                    (
+                        task_id,
+                        ServerApiProvider::as_ref(ctx).get_ai_client(),
+                        ServerApiProvider::as_ref(ctx).get_harness_support_client(),
+                    )
+                })
             })
             .await;
-        let Ok(Some((task_id, ai_client))) = resolved else {
+        let Ok(Some((task_id, ai_client, terminal_reporter))) = resolved else {
             return;
         };
 
         let status = setup_failure_status_update(message);
+        let terminal_category = terminal_error_category(AgentTaskState::Failed, status.error_code)
+            .expect("failed setup status must have a terminal error category");
+        let terminal_message = status.message.clone();
         let deadline = debug_window_deadline(window);
         if let Err(error) = ai_client
             .update_agent_task(
@@ -2736,6 +2808,13 @@ impl AgentDriver {
             log::warn!(
                 "Failed to report {stage} failure for run {task_id} before lingering: {error:#}"
             );
+            report_terminal_error_fallback(
+                task_id,
+                terminal_category,
+                terminal_message,
+                &terminal_reporter,
+            )
+            .await;
         }
     }
 
@@ -4459,8 +4538,11 @@ pub(super) async fn report_driver_error(
     task_id: AmbientAgentTaskId,
     err: &AgentDriverError,
     server_api: &Arc<dyn AIClient>,
+    terminal_reporter: &Arc<dyn HarnessSupportClient>,
 ) {
     let (state, status_update) = error_classification::classify_driver_error(err);
+    let terminal_category = terminal_error_category(state, status_update.error_code);
+    let terminal_message = status_update.message.clone();
     if let Err(e) = server_api
         .update_agent_task(
             task_id,
@@ -4476,6 +4558,15 @@ pub(super) async fn report_driver_error(
         report_error!(
             anyhow!(e).context(format!("Failed to report driver error for task {task_id}"))
         );
+        if let Some(terminal_category) = terminal_category {
+            report_terminal_error_fallback(
+                task_id,
+                terminal_category,
+                terminal_message,
+                terminal_reporter,
+            )
+            .await;
+        }
     }
 }
 

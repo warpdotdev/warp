@@ -14,6 +14,7 @@ use warpui::{App, SingletonEntity, WindowId};
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
     command_to_telemetry_event, reconcile_task_harness, resolve_local_run_team_scope,
+    task_id_before_auth,
 };
 use crate::ai::agent_sdk::driver::AgentDriverOptions;
 use crate::root_view::NewWorkspaceSource;
@@ -235,6 +236,22 @@ fn persisted_auth_is_refreshed_without_pending_api_key() {
 #[test]
 fn logged_out_command_has_no_authentication_source() {
     assert_eq!(command_authentication(None, false), None);
+}
+
+#[test]
+fn task_scoped_run_exposes_task_id_before_authentication() {
+    let task_scoped = CliCommand::Agent(AgentCommand::Run(parse_run_agent_args(&[
+        "agent",
+        "run",
+        "--task-id",
+        TASK_ID,
+    ])));
+    assert_eq!(task_id_before_auth(&task_scoped), Some(TASK_ID));
+
+    let local = CliCommand::Agent(AgentCommand::Run(parse_run_agent_args(&[
+        "agent", "run", "--prompt", "hello",
+    ])));
+    assert_eq!(task_id_before_auth(&local), None);
 }
 
 #[test]
