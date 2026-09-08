@@ -1,3 +1,4 @@
+use instant::Instant;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{Vector2F, vec2f};
 
@@ -5,7 +6,7 @@ use crate::elements::{
     Axis, ClippedScrollStateHandle, RectFExt as _, ScrollToPositionMode,
     project_scroll_delta_by_sensitivity,
 };
-use crate::units::Pixels;
+use crate::units::{IntoPixels, Pixels};
 use crate::{EventContext, SizeConstraint};
 
 /// Calculate the child size constraint for a given axis.
@@ -39,7 +40,9 @@ pub(super) fn child_constraint_for_axis(
     }
 }
 
-/// Update the ClippedScrollStateHandle to match scrolling with the given delta.
+/// Update the ClippedScrollStateHandle to match scrolling with the given delta. This jumps
+/// directly to the new position, cancelling any in-flight smooth-scroll animation. Used for
+/// precise/trackpad wheel input and whenever smooth scrolling is disabled.
 pub(super) fn scroll_clipped_scrollable_handle_with_delta(
     handle: &ClippedScrollStateHandle,
     child_size: Pixels,
@@ -69,6 +72,35 @@ pub(super) fn scroll_clipped_scrollable_handle_with_delta(
             handle.scroll_to(new_scroll_start);
             ctx.notify();
         }
+    }
+}
+
+/// Adds an eligible discrete (non-precise) wheel `delta` to the `ClippedScrollStateHandle`'s
+/// smooth-scroll animation, composing with or reversing any contribution already in flight.
+///
+/// Unlike [`scroll_clipped_scrollable_handle_with_delta`], the clamp here is computed against
+/// the controller's target rather than its currently displayed position, so the animation never
+/// overshoots the scrollable bounds even while it's still catching up to an earlier notch.
+pub(super) fn animate_clipped_scrollable_handle_with_delta(
+    handle: &ClippedScrollStateHandle,
+    child_size: Pixels,
+    viewport_size: Pixels,
+    delta: Pixels,
+    ctx: &mut EventContext,
+) {
+    if child_size <= viewport_size {
+        return;
+    }
+
+    let target = handle.scroll_target();
+    let new_target = (target - delta)
+        .max(Pixels::zero())
+        .min(child_size - viewport_size);
+    let contribution = (new_target - target).as_f32();
+
+    if contribution.abs() > f32::EPSILON {
+        handle.animate_scroll_by(contribution.into_pixels(), Instant::now());
+        ctx.notify();
     }
 }
 

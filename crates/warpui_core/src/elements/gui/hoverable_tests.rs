@@ -33,6 +33,26 @@ fn mouse_moved_event(position: Vector2F) -> Event {
     }
 }
 
+/// Polls `condition` via short real sleeps until it returns `true`, panicking with `message` if
+/// `timeout` elapses first. Used in place of a fixed-delay wait so a test advances as soon as
+/// the awaited state actually changes.
+async fn poll_until(mut condition: impl FnMut() -> bool, timeout: Duration, message: &str) {
+    let start = Instant::now();
+    while !condition() {
+        assert!(start.elapsed() < timeout, "{message}");
+        Timer::after(Duration::from_millis(2)).await;
+    }
+}
+
+/// Polls in small increments until at least `min_elapsed` real time has passed since
+/// `reference`. Used to synthesize a real gap between dispatches for a timing guard under test
+/// (`BACK_TO_BACK_SYNTHETIC_WINDOW`) without a single blind sleep.
+async fn wait_until_elapsed(reference: Instant, min_elapsed: Duration) {
+    while reference.elapsed() < min_elapsed {
+        Timer::after(Duration::from_millis(1)).await;
+    }
+}
+
 #[derive(Default)]
 struct View {
     // Maps identifier to number of mouse down events
@@ -457,9 +477,18 @@ fn test_hoverable_element_hover_handling_with_hover_in_delay() {
             );
         });
 
-        // Wait 1s for the delay to complete, then verify that we got a hover event from the
-        // top-right Hoverable
-        Timer::after(Duration::from_secs(1)).await;
+        // Wait for the delay to complete, then verify that we got a hover event from the
+        // top-right Hoverable.
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight) > 0
+                })
+            },
+            Duration::from_secs(2),
+            "the hover-in delay should have fired within 2s",
+        )
+        .await;
         view.read(app, |view, _| {
             assert_eq!(
                 1,
@@ -563,7 +592,16 @@ fn test_hoverable_element_hover_handling_with_hover_out_delay() {
             );
         });
 
-        Timer::after(Duration::from_millis(1000)).await;
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    view.num_hover_out_events(&ElementIdentifier::HoverableElementTopRight) > 0
+                })
+            },
+            Duration::from_secs(2),
+            "the hover-out delay should have fired within 2s",
+        )
+        .await;
         view.read(app, |view, _| {
             assert_eq!(
                 1,
@@ -650,7 +688,16 @@ fn test_hoverable_element_hover_handling_with_hover_in_out_delay() {
         // The other hover-in and hover-out events should have been dropped
         // due to the mouse moving in and out of the hoverable during the
         // delay period.
-        Timer::after(Duration::from_millis(1000)).await;
+        poll_until(
+            || {
+                view.read(app, |view, _| {
+                    view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight) > 0
+                })
+            },
+            Duration::from_secs(2),
+            "the hover-in delay should have fired within 2s",
+        )
+        .await;
         view.read(app, |view, _| {
             assert_eq!(
                 1,
@@ -662,6 +709,196 @@ fn test_hoverable_element_hover_handling_with_hover_in_out_delay() {
             );
         });
     });
+}
+
+/// Regression test for a hover highlight detaching during a continuous content animation (e.g.
+/// smooth scrolling): a burst of *synthetic* MouseMoved events spaced apart like separate
+/// repaint frames (not truly back-to-back) must each be allowed to update hover state, while
+/// synthetic events that really are back-to-back (the relayout-cascade case the guard exists
+/// for) must still be suppressed.
+#[test]
+fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_suppressed() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(|ctx| {
+            presenter.borrow_mut().invalidate(invalidation, ctx);
+            presenter
+                .borrow_mut()
+                .build_scene(vec2f(100., 100.), 1., None, ctx);
+        });
+
+        let synthetic_move_at = |position: Vector2F| Event::MouseMoved {
+            position,
+            cmd: false,
+            shift: false,
+            is_synthetic: true,
+        };
+
+        // Simulate four repaint frames of a scroll animation: the physical mouse never moves,
+        // but content underneath it does, so each frame's synthetic MouseMoved hit-tests
+        // against a different position relative to the (stationary) hoverables -- exactly as if
+        // the hoverables themselves shifted underneath a fixed cursor. A real gap separates each
+        // frame (the shortest is bounded below by `SMOOTH_SCROLL_FRAME_INTERVAL`), comfortably
+        // longer than the guard's window.
+
+        // Frame 1: enters the bottom-left hoverable.
+        let frame_1_at = Instant::now();
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(10., 90.)),
+                window_id,
+                presenter.clone(),
+            );
+        });
+
+        // Frame 2: leaves the bottom-left hoverable (still a synthetic move, still no real mouse
+        // movement).
+        wait_until_elapsed(frame_1_at, Duration::from_millis(10)).await;
+        let frame_2_at = Instant::now();
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(100., 100.)),
+                window_id,
+                presenter.clone(),
+            );
+        });
+
+        // Frame 3: enters the top-right hoverable.
+        wait_until_elapsed(frame_2_at, Duration::from_millis(10)).await;
+        let frame_3_at = Instant::now();
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(90., 10.)),
+                window_id,
+                presenter.clone(),
+            );
+        });
+
+        // Frame 4: leaves the top-right hoverable.
+        wait_until_elapsed(frame_3_at, Duration::from_millis(10)).await;
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(100., 100.)),
+                window_id,
+                presenter.clone(),
+            );
+        });
+
+        // Every transition above should have been handled -- none of them were truly
+        // back-to-back, so the guard must not have suppressed any of them.
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+            assert_eq!(
+                1,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementTopRight)
+            );
+        });
+    });
+}
+
+/// The guard must still suppress a genuinely back-to-back synthetic cascade -- the case it was
+/// introduced for, where handling one synthetic hover change triggers a relayout that replays
+/// another synthetic MouseMoved within essentially the same instant.
+#[test]
+fn truly_back_to_back_synthetic_hover_changes_are_still_suppressed() {
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        app.update(init);
+        let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
+
+        let mut presenter = Presenter::new(window_id);
+
+        let mut updated = EntityIdSet::default();
+        updated.insert(app.root_view_id(window_id).unwrap());
+        let invalidation = WindowInvalidation {
+            updated,
+            ..Default::default()
+        };
+
+        app.update(move |ctx| {
+            presenter.invalidate(invalidation, ctx);
+            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
+            let presenter = Rc::new(RefCell::new(presenter));
+
+            let synthetic_move_at = |position: Vector2F| Event::MouseMoved {
+                position,
+                cmd: false,
+                shift: false,
+                is_synthetic: true,
+            };
+
+            // Two synthetic moves dispatched with no delay in between -- indistinguishable from
+            // the same-instant relayout cascade the guard exists to break.
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(10., 90.)),
+                window_id,
+                presenter.clone(),
+            );
+            ctx.simulate_window_event(synthetic_move_at(vec2f(100., 100.)), window_id, presenter);
+        });
+
+        // The hover-in from the first synthetic move is handled (there was nothing before it to
+        // collide with), but the immediately-following hover-out is suppressed.
+        view.read(app, |view, _| {
+            assert_eq!(
+                1,
+                view.num_hover_in_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+            assert_eq!(
+                0,
+                view.num_hover_out_events(&ElementIdentifier::HoverableElementBottomLeft)
+            );
+        });
+    });
+}
+
+/// Unit-level coverage for the suppression predicate itself, deterministic via injected
+/// `Instant`s rather than real sleeps: two synthetic changes spaced further apart than
+/// [`BACK_TO_BACK_SYNTHETIC_WINDOW`] are not suppressed, but two within it are, and a real
+/// (non-synthetic) change in between resets the guard.
+#[test]
+fn should_suppress_synthetic_hover_change_only_within_the_back_to_back_window() {
+    let mut state = MouseState::default();
+    let start = Instant::now();
+
+    // The first synthetic change has nothing before it to collide with.
+    assert!(!state.should_suppress_synthetic_hover_change(true, start));
+
+    // A second synthetic change comfortably outside the window is not suppressed.
+    let second_at = start + BACK_TO_BACK_SYNTHETIC_WINDOW + Duration::from_millis(1);
+    assert!(!state.should_suppress_synthetic_hover_change(true, second_at));
+
+    // A third synthetic change immediately after that one, within the window, is suppressed.
+    let third_at = second_at + Duration::from_millis(1);
+    assert!(state.should_suppress_synthetic_hover_change(true, third_at));
+
+    // A real (non-synthetic) change resets the guard, so the next synthetic change -- even
+    // immediately after -- is not suppressed.
+    assert!(!state.should_suppress_synthetic_hover_change(false, third_at));
+    assert!(!state.should_suppress_synthetic_hover_change(true, third_at));
 }
 
 // Why would Elements that haven't been painted need to receive any mouse events?
