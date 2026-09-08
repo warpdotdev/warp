@@ -154,12 +154,11 @@ impl AxisConfiguration {
                 let Some(scroll_data) = child.scroll_data(axis, app) else {
                     return;
                 };
-                let added = handle.lock().unwrap().animate_scroll_by_clamped(
+                if handle.lock().unwrap().animate_scroll_by_clamped(
                     delta,
                     &scroll_data,
                     Instant::now(),
-                );
-                if added {
+                ) {
                     ctx.notify();
                 }
             }

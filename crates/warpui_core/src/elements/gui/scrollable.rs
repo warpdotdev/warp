@@ -397,12 +397,11 @@ impl Scrollable {
                 let full_delta = delta_along_axis * NUM_PIXELS_PER_LINE;
                 if should_animate_scroll(precise) {
                     let scroll_data = self.scroll_data(app);
-                    let added = self.state().animate_scroll_by_clamped(
+                    if self.state().animate_scroll_by_clamped(
                         full_delta.into_pixels(),
                         &scroll_data,
                         Instant::now(),
-                    );
-                    if added {
+                    ) {
                         ctx.notify();
                     }
                 } else {
