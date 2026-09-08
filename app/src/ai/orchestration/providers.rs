@@ -281,9 +281,9 @@ fn requires_default_auth_secret_for_execution(request: &RunAgentsRequest) -> boo
 /// Whether the request can execute as-is: either it doesn't need a
 /// managed auth secret, already carries one, or a persisted default
 /// exists for the harness.
-pub(crate) fn can_execute_with_auth_secret(
+pub(crate) fn can_execute_with_auth_secret<S: TeamScope + ?Sized>(
     request: &RunAgentsRequest,
-    team_scope: RequestTeamScope,
+    team_scope: &S,
     ctx: &AppContext,
 ) -> bool {
     if !requires_default_auth_secret_for_execution(request) {
@@ -300,8 +300,8 @@ pub(crate) fn can_execute_with_auth_secret(
 }
 
 /// Returns the persisted default managed-secret name for a harness, if any.
-pub(crate) fn default_auth_secret_name_for_harness(
-    team_scope: RequestTeamScope,
+pub(crate) fn default_auth_secret_name_for_harness<S: TeamScope + ?Sized>(
+    team_scope: &S,
     harness_type: &str,
     ctx: &AppContext,
 ) -> Option<String> {
@@ -317,9 +317,9 @@ pub(crate) fn default_auth_secret_name_for_harness(
 
 /// Fills `harness_auth_secret_name` from the persisted scoped harness default
 /// when the request needs one and doesn't already carry a name.
-pub(crate) fn populate_default_auth_secret_for_execution(
+pub(crate) fn populate_default_auth_secret_for_execution<S: TeamScope + ?Sized>(
     request: &mut RunAgentsRequest,
-    team_scope: RequestTeamScope,
+    team_scope: &S,
     ctx: &AppContext,
 ) {
     if !requires_default_auth_secret_for_execution(request)

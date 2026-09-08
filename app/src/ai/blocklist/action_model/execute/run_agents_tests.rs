@@ -35,7 +35,7 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::user_workspaces::{
-    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces,
+    TeamContextForOperation, TeamScope, TeamlessScopeForTest, UserWorkspaces,
 };
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
@@ -98,14 +98,16 @@ fn persist_plan_config_with_harness(
 }
 
 fn request_scope_for_team(team_uid: i64) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(ServerId::from(
-        team_uid,
-    )))
+    RequestTeamScope::from_scope(&team_scope_for_team(team_uid))
 }
 
-fn persist_scoped_default_auth_secret(
+fn team_scope_for_team(team_uid: i64) -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(team_uid))
+}
+
+fn persist_scoped_default_auth_secret<S: TeamScope + ?Sized>(
     app: &mut App,
-    team_scope: RequestTeamScope,
+    team_scope: &S,
     harness: Harness,
     secret_name: &str,
 ) {
@@ -120,15 +122,15 @@ fn persist_scoped_default_auth_secret(
 }
 
 #[test]
-fn scoped_auth_secret_defaults_do_not_cross_team_scope() {
+fn scoped_auth_secret_default_overrides_legacy_fallback_for_its_team() {
     App::test((), |mut app| async move {
         let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
-        let team_a_scope = request_scope_for_team(7);
-        let team_b_scope = request_scope_for_team(8);
+        let team_a_scope = team_scope_for_team(7);
+        let team_b_scope = team_scope_for_team(8);
         persist_default_auth_secret(&mut app, "claude", "legacy-personal-key");
         persist_scoped_default_auth_secret(
             &mut app,
-            team_a_scope,
+            &team_a_scope,
             Harness::Claude,
             "team-a-anthropic-key",
         );
@@ -141,16 +143,19 @@ fn scoped_auth_secret_defaults_do_not_cross_team_scope() {
         let mut personal_request = team_b_request.clone();
 
         state.executor.update(&mut app, |_, ctx| {
-            populate_default_auth_secret_for_execution(&mut team_b_request, team_b_scope, ctx);
-            populate_default_auth_secret_for_execution(&mut team_a_request, team_a_scope, ctx);
+            populate_default_auth_secret_for_execution(&mut team_b_request, &team_b_scope, ctx);
+            populate_default_auth_secret_for_execution(&mut team_a_request, &team_a_scope, ctx);
             populate_default_auth_secret_for_execution(
                 &mut personal_request,
-                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                &TeamlessScopeForTest,
                 ctx,
             );
         });
 
-        assert_eq!(team_b_request.harness_auth_secret_name, None);
+        assert_eq!(
+            team_b_request.harness_auth_secret_name.as_deref(),
+            Some("legacy-personal-key")
+        );
         assert_eq!(
             team_a_request.harness_auth_secret_name.as_deref(),
             Some("team-a-anthropic-key")
@@ -1066,11 +1071,7 @@ fn populate_default_auth_secret_for_autoexecute_uses_persisted_secret() {
         };
 
         state.executor.update(&mut app, |_, ctx| {
-            populate_default_auth_secret_for_execution(
-                &mut request,
-                RequestTeamScope::from_scope(&TeamlessScopeForTest),
-                ctx,
-            );
+            populate_default_auth_secret_for_execution(&mut request, &TeamlessScopeForTest, ctx);
         });
 
         assert_eq!(

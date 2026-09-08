@@ -41,7 +41,7 @@ use crate::ai::orchestration::{
 };
 use crate::features::FeatureFlag;
 use crate::server::team_scope::RequestTeamScope;
-use crate::workspaces::user_workspaces::TeamContextResolver;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, TeamContextResolver, TeamScope};
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
 /// this window (e.g. binary not found, server error), the slot is failed
@@ -105,8 +105,8 @@ impl RunAgentsExecutor {
         }
     }
 
-    fn request_team_scope(&self, ctx: &ModelContext<Self>) -> RequestTeamScope {
-        RequestTeamScope::from_scope(&(self.team_context_resolver)(ctx))
+    fn team_scope(&self, ctx: &ModelContext<Self>) -> ResolvedTeamScope {
+        ResolvedTeamScope::from_scope(&(self.team_context_resolver)(ctx))
     }
 
     pub fn is_pending(&self, action_id: &AIAgentActionId) -> bool {
@@ -402,13 +402,13 @@ impl RunAgentsExecutor {
         let mut request = request.clone();
         let action_id = id.clone();
         let parent_conversation_id = input.conversation_id;
-        let team_scope = self.request_team_scope(ctx);
+        let team_scope = self.team_scope(ctx);
         if let Some(reason) = prepare_request_for_execution(
             &mut request,
             parent_conversation_id,
             self.terminal_view_id,
             &self.launched_agents,
-            team_scope,
+            &team_scope,
             ctx,
         ) {
             let result = RunAgentsResult::Denied { reason };
@@ -422,11 +422,12 @@ impl RunAgentsExecutor {
         }
         let telemetry_request = request.clone();
 
+        let request_team_scope = RequestTeamScope::from_scope(&team_scope);
         let receiver = self.dispatch_prepared_run_agents(
             action_id,
             request,
             parent_conversation_id,
-            team_scope,
+            request_team_scope,
             ctx,
         );
 
@@ -470,9 +471,9 @@ impl RunAgentsExecutor {
             return true;
         }
         let mut resolved_request = request.clone();
-        let team_scope = self.request_team_scope(ctx);
+        let team_scope = self.team_scope(ctx);
         resolve_request_from_approved_config(&mut resolved_request, input.conversation_id, ctx);
-        populate_default_auth_secret_for_execution(&mut resolved_request, team_scope, ctx);
+        populate_default_auth_secret_for_execution(&mut resolved_request, &team_scope, ctx);
         if self
             .duplicate_launched_agents_reason(&resolved_request, input.conversation_id, ctx)
             .is_some()
@@ -482,7 +483,7 @@ impl RunAgentsExecutor {
         approved_orchestration_config_can_autoexecute(
             request,
             input.conversation_id,
-            team_scope,
+            &team_scope,
             ctx,
         ) || BlocklistAIPermissions::as_ref(ctx)
             .get_run_agents_setting(ctx, Some(self.terminal_view_id))
@@ -510,7 +511,7 @@ enum ChildSlot {
 fn approved_orchestration_config_can_autoexecute(
     request: &RunAgentsRequest,
     parent_conversation_id: AIConversationId,
-    team_scope: RequestTeamScope,
+    team_scope: &(impl TeamScope + ?Sized),
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> bool {
     let mut resolved_request = request.clone();
@@ -543,7 +544,7 @@ fn prepare_request_for_execution(
     parent_conversation_id: AIConversationId,
     terminal_view_id: EntityId,
     launched_agents: &HashMap<AIConversationId, HashMap<String, ExistingLaunchedAgent>>,
-    team_scope: RequestTeamScope,
+    team_scope: &(impl TeamScope + ?Sized),
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> Option<String> {
     let status = resolve_request_from_approved_config(request, parent_conversation_id, ctx);
