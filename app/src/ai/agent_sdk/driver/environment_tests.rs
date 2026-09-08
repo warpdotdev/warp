@@ -11,8 +11,8 @@ use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
     checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, repos_span_multiple_hosts,
-    repository_clone_requests, single_repo_name, validate_repository_head_overrides,
+    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
+    validate_repository_head_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -270,45 +270,6 @@ fn merge_repos_supports_additional_only_and_empty_inputs() {
             .unwrap()
             .is_empty()
     );
-}
-
-#[test]
-fn repos_span_multiple_hosts_is_false_for_single_forge_environments() {
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
-    ];
-    assert!(!repos_span_multiple_hosts(&repos));
-}
-
-#[test]
-fn repos_span_multiple_hosts_is_false_for_zero_or_one_repos() {
-    assert!(!repos_span_multiple_hosts(&[]));
-    assert!(!repos_span_multiple_hosts(&[repo(
-        CodeForge::GitHub,
-        "warpdotdev",
-        "warp"
-    )]));
-}
-
-#[test]
-fn repos_span_multiple_hosts_is_true_for_mixed_forge_environments() {
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp"),
-        repo(CodeForge::GitLab, "platform/backend", "api"),
-    ];
-    assert!(repos_span_multiple_hosts(&repos));
-}
-
-#[test]
-fn repos_span_multiple_hosts_ignores_repos_with_no_resolvable_host() {
-    let mut unhosted = repo(CodeForge::GitHub, "warpdotdev", "warp");
-    unhosted.code_forge = Some(CodeForge::None);
-    let repos = vec![
-        repo(CodeForge::GitHub, "warpdotdev", "warp-server"),
-        unhosted,
-    ];
-    assert!(!repos_span_multiple_hosts(&repos));
 }
 
 #[test]

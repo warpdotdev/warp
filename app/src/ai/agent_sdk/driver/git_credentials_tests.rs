@@ -322,6 +322,80 @@ fn repository_identity_falls_back_to_the_primary_forge() {
     assert!(select_host_identity(&[], "github.com").is_none());
 }
 
+fn init_repo(dir: &std::path::Path) {
+    BlockingCommand::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(dir)
+        .output()
+        .expect("git init should succeed");
+}
+
+#[test]
+fn repository_identity_is_unchanged_when_it_matches_the_baseline() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Warp");
+    run_repository_git_config(temp_dir.path(), "user.email", "agent@warp.dev");
+
+    let baseline = Some(("Warp".to_string(), "agent@warp.dev".to_string()));
+    assert!(!repository_identity_changed_since(
+        temp_dir.path(),
+        baseline
+    ));
+    Ok(())
+}
+
+#[test]
+fn repository_identity_is_changed_when_a_setup_command_overrides_it() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    let baseline = Some(("Warp".to_string(), "agent@warp.dev".to_string()));
+    assert!(repository_identity_changed_since(temp_dir.path(), baseline));
+    Ok(())
+}
+
+#[test]
+fn repository_identity_is_changed_when_baseline_is_none_but_the_repo_has_one() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    assert!(repository_identity_changed_since(temp_dir.path(), None));
+    Ok(())
+}
+
+#[test]
+fn configure_repository_git_identity_if_unset_skips_a_repo_the_customer_already_configured()
+-> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    init_repo(temp_dir.path());
+    run_repository_git_config(temp_dir.path(), "user.name", "Vercel Bot");
+    run_repository_git_config(temp_dir.path(), "user.email", "vercel-bot@example.com");
+
+    // The repo's identity already differs from `baseline`, so this must return
+    // before ever consulting HOST_IDENTITIES (via recorded_identity_for_host) —
+    // exercised here with a host that has no recorded identity, to make sure a
+    // changed repo is left alone rather than falling through to some default.
+    configure_repository_git_identity_if_unset(
+        temp_dir.path(),
+        "github.com",
+        Some(("Warp".to_string(), "agent@warp.dev".to_string())),
+    );
+
+    assert_eq!(
+        repository_git_identity(temp_dir.path()),
+        Some((
+            "Vercel Bot".to_string(),
+            "vercel-bot@example.com".to_string()
+        ))
+    );
+    Ok(())
+}
+
 #[test]
 fn unique_credentials_drop_identical_duplicate_hosts() {
     let unique = unique_credentials_by_host(&[github_credential(), github_credential()]).unwrap();

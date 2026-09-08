@@ -654,18 +654,89 @@ fn recorded_identity_for_host(host: &str) -> Option<(String, String)> {
 /// Write `user.name`/`user.email` into one repository's LOCAL git config,
 /// selecting the identity of the forge that hosts it.
 ///
-/// Repo-local config always wins over `--global` config, so callers should
-/// only reach for this when a sandbox genuinely spans more than one forge and
-/// therefore can't rely on a single process-wide `--global` identity (set by
-/// [`configure_git_identity`]) to represent every repo correctly. Calling this
-/// unconditionally on a single-forge sandbox would permanently defeat a later
-/// `--global` override, such as a customer's own setup command.
-pub(crate) fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &str) {
+/// Repo-local config always wins over `--global` config, so most callers want
+/// [`configure_repository_git_identity_if_unset`] instead, which only applies
+/// this when nothing has already claimed the repo's identity. Calling this
+/// unconditionally would permanently defeat a later `--global` override, such
+/// as a customer's own setup command.
+fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &str) {
     let Some((name, email)) = recorded_identity_for_host(host) else {
         return;
     };
     run_repository_git_config(repository_dir, "user.name", &name);
     run_repository_git_config(repository_dir, "user.email", &email);
+}
+
+/// Reads a single git config key with `--get`, honoring git's own resolution
+/// order for `location` (e.g. `["--global"]` reads the process-wide value;
+/// `["-C", dir]` reads a repository's effective value, local over global over
+/// system). Returns `None` if the key is unset or the invocation fails.
+fn read_git_config(location: &[&str], key: &str) -> Option<String> {
+    let mut args = location.to_vec();
+    args.extend(["config", "--get", key]);
+    let output = BlockingCommand::new("git").args(&args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+/// The `user.name`/`user.email` pair currently in effect at `location` (see
+/// [`read_git_config`]). `None` unless both are set.
+fn read_git_identity(location: &[&str]) -> Option<(String, String)> {
+    let name = read_git_config(location, "user.name")?;
+    let email = read_git_config(location, "user.email")?;
+    Some((name, email))
+}
+
+/// The process-wide git identity right now. Intended to be snapshotted once,
+/// right after bootstrap (before any repo is cloned or any setup command
+/// runs), as the `baseline` for [`configure_repository_git_identity_if_unset`].
+pub(crate) fn global_git_identity() -> Option<(String, String)> {
+    read_git_identity(&["--global"])
+}
+
+/// The git identity currently in effect for `repository_dir` (local over
+/// global over system, exactly as git itself resolves it for a commit there).
+fn repository_git_identity(repository_dir: &std::path::Path) -> Option<(String, String)> {
+    read_git_identity(&["-C", &repository_dir.to_string_lossy()])
+}
+
+/// Reports whether `repository_dir`'s effective identity differs from
+/// `baseline`, meaning something — a customer's setup command, a repo-local
+/// config the agent ran itself, etc. — has already claimed an identity for
+/// this repo since `baseline` was captured.
+fn repository_identity_changed_since(
+    repository_dir: &std::path::Path,
+    baseline: Option<(String, String)>,
+) -> bool {
+    repository_git_identity(repository_dir) != baseline
+}
+
+/// Write `user.name`/`user.email` into one repository's LOCAL git config from
+/// the recorded identity for `host` — but only if nothing has changed the
+/// repo's effective identity away from `baseline` since it was captured.
+///
+/// This is how a forge-specific identity reaches a repo in a mixed-forge
+/// sandbox without permanently overriding a customer's own git identity:
+/// repo-local config always wins over `--global` config regardless of write
+/// order, so this can only safely run *after* setup commands (or anything
+/// else that might configure git identity) have had their chance, comparing
+/// against a `baseline` captured before any of that ran (see
+/// [`global_git_identity`]). A repo the customer's setup command already gave
+/// its own identity — globally, or locally for just that repo — is left
+/// alone; every other repo falls back to the forge-appropriate identity Warp
+/// resolved at bootstrap.
+pub(crate) fn configure_repository_git_identity_if_unset(
+    repository_dir: &std::path::Path,
+    host: &str,
+    baseline: Option<(String, String)>,
+) {
+    if repository_identity_changed_since(repository_dir, baseline) {
+        return;
+    }
+    configure_repository_git_identity(repository_dir, host);
 }
 
 fn run_repository_git_config(repository_dir: &std::path::Path, key: &str, value: &str) {
