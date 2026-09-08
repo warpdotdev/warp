@@ -10,9 +10,8 @@ use super::{
 };
 use crate::ai::agent::UserQueryMode;
 use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::server::ids::ServerId;
 use crate::server::server_api::ai::{MockAIClient, SpawnAgentResponse, TaskStatusMessage};
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::terminal::shared_session;
 use crate::workspaces::user_workspaces::TeamContextForOperation;
 
@@ -693,20 +692,20 @@ async fn followup_bounded_skip_for_server_stall() {
 fn run_id() -> crate::ai::ambient_agents::AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
-fn request_team_scope() -> RequestTeamScope {
-    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
+fn test_scope() -> RequestTeamScope {
+    request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
 #[tokio::test]
 async fn spawn_uses_resolved_team_scope() {
     use futures::StreamExt;
-    let team_uid = ServerId::from(7);
-    let expected_team_uid = team_uid.uid();
+
+    let team_uid = 7.into();
     let mut mock = MockAIClient::new();
     mock.expect_spawn_agent()
         .times(1)
         .withf(move |request, team_scope| {
-            request.team == Some(true) && team_scope.team_uid() == Some(expected_team_uid.as_str())
+            request.team == Some(true) && team_scope.team_uid() == Some(team_uid)
         })
         .returning(|_, _| {
             Ok(SpawnAgentResponse {
@@ -737,9 +736,7 @@ async fn spawn_uses_resolved_team_scope() {
         snapshot_disabled: None,
         orchestration_handoff: None,
     };
-    let team_scope = crate::server::team_scope::request_team_scope(
-        &TeamContextForOperation::new_for_test(team_uid),
-    );
+    let team_scope = request_team_scope(&TeamContextForOperation::new_for_test(team_uid));
     let mut stream = Box::pin(spawn_task(request, team_scope, Arc::new(mock), None));
 
     assert!(matches!(
@@ -824,7 +821,7 @@ async fn poll_retries_transient_429_errors() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, test_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -893,7 +890,7 @@ async fn poll_fails_on_permanent_http_error() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, test_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -963,7 +960,7 @@ async fn poll_gives_up_after_max_transient_retries() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, test_scope(), ai_client, None));
 
     // First event: TaskSpawned
     let event = stream
@@ -1027,7 +1024,7 @@ async fn poll_stops_on_terminal_failure_like_state() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, test_scope(), ai_client, None));
 
     let event = stream
         .next()
@@ -1174,7 +1171,7 @@ async fn poll_for_session_join_info_waits_until_link_is_available() {
         orchestration_handoff: None,
     };
 
-    let mut stream = Box::pin(spawn_task(request, request_team_scope(), ai_client, None));
+    let mut stream = Box::pin(spawn_task(request, test_scope(), ai_client, None));
 
     // First event should be TaskSpawned
     let event = stream

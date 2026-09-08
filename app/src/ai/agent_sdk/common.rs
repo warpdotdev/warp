@@ -25,7 +25,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
@@ -162,7 +162,7 @@ pub(super) fn request_team_scope_for_cli(
     ctx: &AppContext,
 ) -> anyhow::Result<RequestTeamScope> {
     let team_scope = resolve_team_scope(team_selection, ctx)?;
-    Ok(crate::server::team_scope::request_team_scope(&team_scope))
+    Ok(request_team_scope(&team_scope))
 }
 
 pub(super) fn resolve_object_scope(

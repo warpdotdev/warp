@@ -26,7 +26,7 @@ use super::output::{self, TableFormat};
 use crate::ai::runner_display::{arch_display, macos_version_display, os_display};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::factory::FactoryClient;
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 /// Handle runner-related CLI commands.
@@ -87,7 +87,7 @@ impl RunnerCommandRunner {
                 return;
             }
             let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => Some(crate::server::team_scope::request_team_scope(&team_scope)),
+                Ok(team_scope) => Some(request_team_scope(&team_scope)),
                 Err(error) => {
                     super::report_fatal_error(error, ctx);
                     return;
@@ -180,7 +180,7 @@ impl RunnerCommandRunner {
                 return;
             }
             let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx) {
-                Ok(team_scope) => Some(crate::server::team_scope::request_team_scope(&team_scope)),
+                Ok(team_scope) => Some(request_team_scope(&team_scope)),
                 Err(error) => {
                     super::report_fatal_error(error, ctx);
                     return;
@@ -240,9 +240,7 @@ fn resolve_create_request_scope(
         return Ok(None);
     }
     let team_scope = super::common::resolve_object_scope(scope, ctx)?;
-    Ok(Some(crate::server::team_scope::request_team_scope(
-        &team_scope,
-    )))
+    Ok(Some(request_team_scope(&team_scope)))
 }
 
 async fn execute_list(

@@ -57,7 +57,7 @@ use crate::server::retry_strategies::{
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
 use crate::server::server_api::presigned_upload::HttpStatusError;
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
@@ -1229,12 +1229,11 @@ impl AgentConversationsModel {
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let scope = team_context_resolver(ctx);
-        let request_team_scope = crate::server::team_scope::request_team_scope(&scope);
+        let request_team_scope = request_team_scope(&scope);
 
         let future = ctx.spawn_with_retry_on_error(
             move || {
                 let ai_client = ai_client.clone();
-                let request_team_scope = request_team_scope.clone();
                 async move {
                     ai_client
                         .list_ambient_agent_tasks(
@@ -2088,7 +2087,6 @@ impl AgentConversationsModel {
             move || {
                 let ai_client = ai_client.clone();
                 let task_filter = task_filter.clone();
-                let request_team_scope = request_team_scope.clone();
                 async move {
                     ai_client
                         .list_ambient_agent_tasks(

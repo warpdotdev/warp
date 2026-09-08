@@ -477,7 +477,7 @@ impl TuiSessions {
                         child,
                         (**request).clone(),
                         (**prepared).clone(),
-                        team_scope.clone(),
+                        *team_scope,
                         ctx,
                     );
                 });

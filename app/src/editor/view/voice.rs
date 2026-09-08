@@ -19,6 +19,7 @@ use crate::ai::blocklist::InputType;
 use crate::appearance::Appearance;
 use crate::editor::EditorElement;
 use crate::server::server_api::TranscribeError;
+use crate::server::team_scope::request_team_scope;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::{AISettings, VoiceInputToggleKey};
 use crate::themes::theme::Fill;
@@ -459,9 +460,8 @@ impl EditorView {
                     let language = AISettings::as_ref(ctx)
                         .voice_input_language_code()
                         .map(str::to_owned);
-                    let team_scope = crate::server::team_scope::request_team_scope(
-                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                    );
+                    let team_scope =
+                        request_team_scope(&UserWorkspaces::as_ref(ctx).team_context_for_view(ctx));
                     if !state.lifecycle.begin_transcribing() {
                         return;
                     }

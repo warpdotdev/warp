@@ -24,6 +24,7 @@ use crate::ai::blocklist::{
 use crate::ai::paths::host_native_absolute_path;
 use crate::auth::auth_state::AuthStateProvider;
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::request_team_scope;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -198,9 +199,7 @@ impl PassiveSuggestionsModel {
         let (cancellation_tx, cancellation_rx) = futures::channel::oneshot::channel();
 
         // Resolved before spawning, so a mid-flight team switch cannot re-attribute the request.
-        let team_scope = crate::server::team_scope::request_team_scope(
-            &self.ai_controller.as_ref(ctx).team_context(ctx),
-        );
+        let team_scope = request_team_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
 
         let stream_handle = ctx.spawn(
             async move {

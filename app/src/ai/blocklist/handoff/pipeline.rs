@@ -57,7 +57,7 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::settings::AISettings;
 
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
@@ -544,7 +544,7 @@ pub fn prepare_handoff(
         .map(|environment| environment.id)
         .collect();
     let scope = controller.as_ref(ctx).team_context(ctx);
-    let team_scope = crate::server::team_scope::request_team_scope(&scope);
+    let team_scope = request_team_scope(&scope);
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
         .get_active_base_model(&scope, ctx, Some(terminal_surface_id))
@@ -758,9 +758,9 @@ async fn execute_validated_handoff(
                 },
                 forked.forked_conversation_id.clone(),
                 None,
-                forked.pending.team_scope.clone(),
+                forked.pending.team_scope,
             ),
-            team_scope: forked.pending.team_scope.clone(),
+            team_scope: forked.pending.team_scope,
             cancel,
         };
         if let Err(error) = materialize_handoff_target(materialization)
@@ -804,7 +804,7 @@ async fn execute_validated_handoff(
         settled.spawn_ready,
         settled.forked_conversation_id,
         settled.initial_snapshot_token,
-        settled.team_scope.clone(),
+        settled.team_scope,
     );
     let response = ai_client
         .spawn_agent(request.clone(), settled.team_scope)

@@ -3,6 +3,7 @@ use mockito::Server;
 
 use super::*;
 use crate::server::retry_strategies::is_transient_http_error;
+use crate::server::team_scope::request_team_scope;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 /// Sends a GET request to a mock endpoint returning `status`/`headers`/`body`, then feeds the
@@ -113,18 +114,14 @@ fn out_of_credits_429_wraps_quota_limit_and_stays_transient() {
 #[test]
 fn team_uid_header_value_includes_only_resolved_team_scope() {
     let team_uid = 7.into();
-    let team_scope = crate::server::team_scope::request_team_scope(
-        &TeamContextForOperation::new_for_test(team_uid),
-    );
+    let team_scope = request_team_scope(&TeamContextForOperation::new_for_test(team_uid));
 
     assert_eq!(
         ServerApi::team_uid_header_value(team_scope),
         Some(team_uid.uid().to_string())
     );
     assert_eq!(
-        ServerApi::team_uid_header_value(crate::server::team_scope::request_team_scope(
-            &TeamlessScopeForTest
-        )),
+        ServerApi::team_uid_header_value(request_team_scope(&TeamlessScopeForTest)),
         None
     );
 }

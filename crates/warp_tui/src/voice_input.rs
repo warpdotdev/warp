@@ -5,9 +5,9 @@ use std::time::Duration;
 use warp::settings::{AISettings, TuiVoiceSettings};
 pub(crate) use warp::tui_export::VoiceInputLifecycleState as TuiVoiceInputState;
 use warp::tui_export::{
-    AIRequestUsageModel, BlocklistAIInputModel, RequestTeamScope, StartListeningError,
-    TeamContextResolver, TelemetryEvent, TranscribeError, UserWorkspaces, VoiceInput,
-    VoiceInputToggledFrom, VoiceSessionResult, VoiceTranscriber,
+    AIRequestUsageModel, BlocklistAIInputModel, StartListeningError, TeamContextResolver,
+    TelemetryEvent, TranscribeError, UserWorkspaces, VoiceInput, VoiceInputToggledFrom,
+    VoiceSessionResult, VoiceTranscriber, request_team_scope,
 };
 use warp_core::settings::Setting as _;
 use warp_errors::report_error;
@@ -322,7 +322,7 @@ impl TuiVoiceInputModel {
         let language = AISettings::as_ref(ctx)
             .voice_input_language_code()
             .map(str::to_owned);
-        let team_scope = warp::tui_export::request_team_scope(&(self.team_context_resolver)(ctx));
+        let team_scope = request_team_scope(&(self.team_context_resolver)(ctx));
         VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
             voice_input.set_transcribing_active(true);
         });

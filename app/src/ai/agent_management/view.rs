@@ -70,6 +70,7 @@ use crate::editor::{
 };
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::notebooks::NotebookId;
+use crate::server::team_scope::request_team_scope;
 use crate::settings::ai::AISettings;
 use crate::ui_components::agent_icon::agent_conversation_entry_icon_variant;
 use crate::ui_components::avatar::{Avatar, AvatarContent};
@@ -896,7 +897,7 @@ impl AgentManagementView {
         if let Some(uid) = current_user_uid {
             let filters = self.filters.clone();
             let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-            let request_team_scope = crate::server::team_scope::request_team_scope(&scope);
+            let request_team_scope = request_team_scope(&scope);
             AgentConversationsModel::handle(ctx).update(ctx, |model, ctx| {
                 model.fetch_tasks_for_filters(&filters, &uid, request_team_scope, ctx);
             });

@@ -15434,7 +15434,6 @@ dependencies = [
  "warp_managed_secrets",
  "warp_multi_agent_api",
  "warp_multi_agent_client",
- "warp_request_context",
  "warp_ripgrep",
  "warp_search_core",
  "warp_server_auth",
@@ -15887,16 +15886,6 @@ dependencies = [
  "warp_core",
  "warp_multi_agent_api",
  "warp_server_client",
-]
-
-[[package]]
-name = "warp_request_context"
-version = "0.1.0"
-dependencies = [
- "schemars 1.0.4",
- "serde",
- "serde_json",
- "settings_value",
 ]
 
 [[package]]

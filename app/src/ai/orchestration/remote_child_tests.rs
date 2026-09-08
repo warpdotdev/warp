@@ -14,11 +14,11 @@ use crate::ai::agent::{StartAgentExecutionMode, UserQueryMode};
 use crate::ai::blocklist::StartAgentRequest;
 use crate::ai::skills::{BundledSkillActivation, SkillManager, SkillReference};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::workspaces::user_workspaces::TeamContextForOperation;
 
-fn request_team_scope() -> RequestTeamScope {
-    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
+fn test_scope() -> RequestTeamScope {
+    request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
 fn config(harness_type: &str) -> RemoteChildLaunchConfig {
@@ -89,7 +89,7 @@ fn prepared_remote_request_matches_gui_wire_semantics() {
                     runner_id: "runner-1".to_string(),
                     agent_identity_uid: Some("researcher-agent".to_string()),
                 },
-                request_team_scope(),
+                test_scope(),
                 ctx,
             )
             .unwrap();
@@ -193,7 +193,7 @@ fn repo_qualified_skill_spec_resolves_into_runtime_skills() {
                     runner_id: String::new(),
                     agent_identity_uid: None,
                 },
-                request_team_scope(),
+                test_scope(),
                 ctx,
             )
             .unwrap();
@@ -240,7 +240,7 @@ fn missing_repo_qualified_skill_reports_repository_and_reason() {
                     working_dir: temp.path().to_path_buf(),
                     ..config("")
                 },
-                request_team_scope(),
+                test_scope(),
                 ctx,
             )
             .unwrap_err()

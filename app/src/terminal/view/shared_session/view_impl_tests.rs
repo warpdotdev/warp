@@ -34,6 +34,8 @@ use crate::pane_group::{BackingView, PaneConfigurationEvent};
 use crate::server::ids::ServerId;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::server::server_api::ai::SpawnAgentRequest;
+#[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
+use crate::server::team_scope::request_team_scope;
 use crate::terminal::TerminalView;
 use crate::terminal::model::blocks::{INLINE_BANNER_HEIGHT, ToTotalIndex as _};
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
@@ -1009,7 +1011,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                 let (cancel, _) = oneshot::channel();
                 model.begin_local_to_cloud_handoff(
                     handoff_request_for_test(),
-                    crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
+                    request_team_scope(&TeamlessScopeForTest),
                     cancel,
                     ctx,
                 );

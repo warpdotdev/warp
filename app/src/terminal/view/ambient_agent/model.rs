@@ -45,7 +45,7 @@ use crate::server::server_api::ai::{
     AgentConfigSnapshot, AmbientAgentTaskState, AttachmentInput, RunFollowupRequest,
     SpawnAgentRequest,
 };
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::terminal::view::ambient_agent::{SetupCommandGroupId, SetupCommandState};
 use crate::terminal::{CLIAgent, TerminalView};
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
@@ -528,7 +528,7 @@ impl AmbientAgentViewModel {
         let previous_harness = self.selected_harness();
         self.local_to_cloud_handoff_state = Some(LocalToCloudHandoffState::Preparing { cancel });
         self.request = Some(request);
-        self.request_team_scope = Some(team_scope.clone());
+        self.request_team_scope = Some(team_scope);
         self.source = None;
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),
@@ -1155,11 +1155,7 @@ impl AmbientAgentViewModel {
             orchestration_handoff: None,
         };
 
-        self.spawn_internal(
-            request,
-            crate::server::team_scope::request_team_scope(scope),
-            ctx,
-        );
+        self.spawn_internal(request, request_team_scope(scope), ctx);
     }
 
     /// Spawn an ambient agent with a fully-constructed request.
@@ -1208,7 +1204,7 @@ impl AmbientAgentViewModel {
     ) {
         request.interactive = Some(true);
         self.request = Some(request.clone());
-        self.request_team_scope = Some(team_scope.clone());
+        self.request_team_scope = Some(team_scope);
         self.source = None;
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let stream = spawn_task(request, team_scope, ai_client, None);
@@ -1531,8 +1527,7 @@ impl AmbientAgentViewModel {
         if !matches!(self.status, Status::NeedsGithubAuth { .. }) {
             return;
         }
-        let (Some(request), Some(team_scope)) =
-            (self.request.clone(), self.request_team_scope.clone())
+        let (Some(request), Some(team_scope)) = (self.request.clone(), self.request_team_scope)
         else {
             return;
         };

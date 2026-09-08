@@ -28,7 +28,8 @@ use warp::tui_export::{
     descendant_conversation_ids_in_spawn_order, descendant_conversations_in_pill_order,
     finish_local_oz_child_conversation, inherit_child_agent_settings, loaded_subtree_rollup,
     orchestration_root_conversation_id, oz_run_url, prepare_local_oz_child_launch,
-    prepare_remote_child_launch, register_agent_event_consumer, unregister_agent_event_consumer,
+    prepare_remote_child_launch, register_agent_event_consumer, request_team_scope,
+    unregister_agent_event_consumer,
 };
 use warp_core::features::FeatureFlag;
 use warpui::SingletonEntity;
@@ -559,7 +560,7 @@ impl TuiOrchestrationModel {
                         runner_id,
                         agent_identity_uid,
                     },
-                    warp::tui_export::request_team_scope(team_context),
+                    request_team_scope(team_context),
                     ctx,
                 );
             }
@@ -574,8 +575,7 @@ impl TuiOrchestrationModel {
         team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let prepared = match prepare_remote_child_launch(&request, config, team_scope.clone(), ctx)
-        {
+        let prepared = match prepare_remote_child_launch(&request, config, team_scope, ctx) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.fail_child_request(&request, error.user_message(), ctx);
@@ -777,7 +777,7 @@ impl TuiOrchestrationModel {
         team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        let request_team_scope = warp::tui_export::request_team_scope(team_context);
+        let request_team_scope = request_team_scope(team_context);
         let team_scope = ResolvedTeamScope::from_scope(team_context);
         let launch = prepare_local_oz_child_launch(
             &request.name,

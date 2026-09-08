@@ -16,7 +16,7 @@ use crate::server::ids::ServerId;
 use crate::server::server_api::factory::{MockFactoryClient, UpsertedRunner};
 use crate::server::server_api::team::MockTeamClient;
 use crate::server::server_api::workspace::MockWorkspaceClient;
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::workspaces::team::{Team, TeamVisibility};
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::workspaces::workspace::{Workspace, WorkspaceUid};
@@ -60,8 +60,8 @@ fn update_args(id: Option<&str>, name: Option<&str>) -> UpdateRunnerArgs {
     }
 }
 
-fn request_team_scope() -> RequestTeamScope {
-    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(
+fn test_scope() -> RequestTeamScope {
+    request_team_scope(&TeamContextForOperation::new_for_test(
         ServerId::from_string_lossy("team_uid00000000000123"),
     ))
 }
@@ -121,14 +121,11 @@ fn create_without_explicit_team_uses_unscoped_request_for_sole_team_user() {
 
 #[tokio::test]
 async fn name_update_scopes_discovery_but_not_uid_mutation() {
-    let team_scope = request_team_scope();
-    let expected_team_scope = team_scope.clone();
+    let team_scope = test_scope();
     let mut factory = MockFactoryClient::new();
     factory
         .expect_get_runners()
-        .withf(move |sort_by, actual_scope| {
-            sort_by.is_none() && actual_scope.as_ref() == Some(&expected_team_scope)
-        })
+        .withf(move |sort_by, actual_scope| sort_by.is_none() && *actual_scope == Some(team_scope))
         .once()
         .return_once(|_, _| Ok(vec![runner("runner-1", "runner-name")]));
     factory

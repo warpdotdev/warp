@@ -1,7 +1,31 @@
-pub use warp_request_context::RequestTeamScope;
-
+use crate::server::ids::ServerId;
 use crate::workspaces::user_workspaces::TeamScope;
 
+/// The team an outbound request is scoped to, as sent in `X-Warp-Team-Uid`.
+///
+/// A [`TeamScope`] is the only way to name one; there is no constructor from a bare `ServerId`,
+/// because a loose uid cannot say which team resolved it, and "no team" is a scope's answer to
+/// give rather than a value to pass. The field is private to this module, and
+/// [`request_team_scope`] only accepts the sealed [`TeamScope`] capability.
+///
+/// `Copy`, unlike the [`TeamScope`] types it comes from -- those are deliberately not, so a live
+/// scope cannot be stashed where it outlives its window. A resolved snapshot has no such hazard,
+/// so `ResponseStream` can reuse one capture across every retry rather than re-resolving to
+/// whatever team its window switched to since.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestTeamScope(Option<ServerId>);
+
+impl RequestTeamScope {
+    fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
+        Self(scope.team_uid())
+    }
+
+    /// The wire uid. `None` sends no team header, leaving the server to its own default.
+    pub(crate) fn team_uid(self) -> Option<ServerId> {
+        self.0
+    }
+}
+
 pub fn request_team_scope(scope: &(impl TeamScope + ?Sized)) -> RequestTeamScope {
-    RequestTeamScope::new(scope.team_uid().map(|team_uid| team_uid.uid()))
+    RequestTeamScope::from_scope(scope)
 }

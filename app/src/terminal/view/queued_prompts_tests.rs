@@ -29,7 +29,7 @@ use crate::ai::blocklist::{
 use crate::features::FeatureFlag;
 use crate::search::slash_command_menu::static_commands::commands;
 use crate::server::server_api::ai::SpawnAgentRequest;
-use crate::server::team_scope::RequestTeamScope;
+use crate::server::team_scope::{RequestTeamScope, request_team_scope};
 use crate::terminal::input::{Event as InputEvent, Input};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModelEvent;
@@ -37,8 +37,8 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 use crate::workspaces::user_workspaces::TeamlessScopeForTest;
 
-fn request_team_scope() -> RequestTeamScope {
-    crate::server::team_scope::request_team_scope(&TeamlessScopeForTest)
+fn test_scope() -> RequestTeamScope {
+    request_team_scope(&TeamlessScopeForTest)
 }
 
 fn user_query(text: &str) -> QueuedQuery {
@@ -227,7 +227,7 @@ fn dispatched_cloud_prompt_uses_locked_queue_row_when_v2_is_enabled() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         cloud_spawn_request("write tests"),
-                        request_team_scope(),
+                        test_scope(),
                         ctx,
                     );
                 });
@@ -399,7 +399,7 @@ fn cloud_setup_enter_queues_followup_input_when_v2_is_enabled() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         cloud_spawn_request("initial"),
-                        request_team_scope(),
+                        test_scope(),
                         ctx,
                     );
                 });
@@ -439,7 +439,7 @@ fn cloud_setup_enter_does_not_queue_followup_for_third_party_harness() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         cloud_spawn_request("initial"),
-                        request_team_scope(),
+                        test_scope(),
                         ctx,
                     );
                     model.set_harness(Harness::Claude, ctx);
@@ -520,7 +520,7 @@ fn cloud_setup_enter_remains_blocked_when_v2_is_disabled() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         cloud_spawn_request("initial"),
-                        request_team_scope(),
+                        test_scope(),
                         ctx,
                     );
                 });
@@ -646,7 +646,7 @@ fn promptless_setup_complete_auto_sends_queued_prompt_to_viewer() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         promptless_cloud_spawn_request(),
-                        request_team_scope(),
+                        test_scope(),
                         ctx,
                     );
                 });
@@ -711,7 +711,7 @@ fn promptless_setup_complete_with_initial_prompt_does_not_drain_queue() {
                 .update(ctx, |model, ctx| {
                     model.spawn_agent_with_request(
                         cloud_spawn_request("initial prompt"),
-                        request_team_scope(),
+                        test_scope(),
                         ctx,
                     );
                 });

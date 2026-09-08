@@ -264,6 +264,7 @@ use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AttachmentInput;
 use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
 use crate::server::server_api::presigned_upload::upload_to_target;
+use crate::server::team_scope::request_team_scope;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -14376,9 +14377,8 @@ impl Input {
         };
 
         let server_api = self.server_api.clone();
-        let team_scope = crate::server::team_scope::request_team_scope(
-            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
-        );
+        let team_scope =
+            request_team_scope(&UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx));
 
         self.predict_am_queries_future_handle = Some(ctx.spawn(
             async move {
