@@ -86,6 +86,38 @@ const BIDI_CHARS: [char; 9] = [
     '\u{2069}', // POP DIRECTIONAL ISOLATE
 ];
 
+struct DiffMaterializationBudget {
+    remaining_bytes: usize,
+    remaining_files: usize,
+}
+
+impl DiffMaterializationBudget {
+    fn new(remaining_bytes: usize, remaining_files: usize) -> Self {
+        Self {
+            remaining_bytes,
+            remaining_files,
+        }
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.remaining_bytes == 0 || self.remaining_files == 0
+    }
+
+    fn can_reserve(&self, bytes: usize) -> bool {
+        self.remaining_files > 0 && bytes <= self.remaining_bytes
+    }
+
+    fn try_reserve(&mut self, bytes: usize) -> bool {
+        if !self.can_reserve(bytes) {
+            return false;
+        }
+
+        self.remaining_bytes -= bytes;
+        self.remaining_files -= 1;
+        true
+    }
+}
+
 /// Internal representation of the diffs we've loaded against all bases.
 /// This could include changes against both the latest commit/HEAD
 /// and changes against the main branch.
@@ -1786,6 +1818,19 @@ impl LocalDiffStateModel {
     }
 
     async fn diff_state_against_head(repo_path: &Path) -> Result<GitDiffWithBaseContent> {
+        Self::diff_state_against_head_with_limits(
+            repo_path,
+            MAX_TOTAL_DIFF_BYTES,
+            MAX_TOTAL_DIFF_FILES,
+        )
+        .await
+    }
+
+    async fn diff_state_against_head_with_limits(
+        repo_path: &Path,
+        max_total_diff_bytes: usize,
+        max_total_diff_files: usize,
+    ) -> Result<GitDiffWithBaseContent> {
         let changed_files = Self::file_statuses_against_head(repo_path).await?;
 
         // Get binary file information using git diff --numstat
@@ -1795,40 +1840,65 @@ impl LocalDiffStateModel {
         let mut files = Vec::new();
         let mut total_additions = 0;
         let mut total_deletions = 0;
-        let mut total_diff_bytes = 0usize;
+        let mut budget = DiffMaterializationBudget::new(max_total_diff_bytes, max_total_diff_files);
+        let mut budget_exhausted = false;
 
         for (file_path, status) in changed_files {
-            // Bound the cumulative diff/editor state we materialize. Repos with a
-            // large untracked tree (e.g. a non-gitignored `node_modules`) can
-            // report tens of thousands of changed files; retaining every one has
-            // caused multi-GB heap spikes (see APP-4827).
-            if files.len() >= MAX_TOTAL_DIFF_FILES || total_diff_bytes >= MAX_TOTAL_DIFF_BYTES {
-                log::warn!(
-                    "LocalDiffStateModel: reached diff materialization cap \
-                     ({} files, {} bytes); skipping remaining files to bound memory",
-                    files.len(),
-                    total_diff_bytes
-                );
-                break;
-            }
             let is_binary = binary_files.contains(&file_path);
+
+            if !is_binary && (budget_exhausted || budget.is_exhausted()) {
+                if !budget_exhausted {
+                    log::warn!(
+                        "LocalDiffStateModel: reached the aggregate diff materialization budget"
+                    );
+                    budget_exhausted = true;
+                }
+                files.push(Self::over_budget_file_diff(file_path, status));
+                continue;
+            }
+
             let mut file_diff =
                 Self::get_file_diff(repo_path, &file_path, &status, is_binary, None).await?;
-            // Never read or ship base content for binary files: it can't be
-            // inline-rendered and, after lossy UTF-8 decoding, can balloon ~3x.
-            let content_at_head = if is_binary {
-                None
-            } else {
-                Self::get_file_content_at_head(repo_path, &file_path, &status).await
-            };
+            total_additions += file_diff.additions();
+            total_deletions += file_diff.deletions();
+
+            if is_binary {
+                files.push(FileDiffAndContent {
+                    file_diff,
+                    content_at_head: None,
+                });
+                continue;
+            }
+            if matches!(file_diff.size, DiffSize::Unrenderable(_)) {
+                files.push(Self::file_diff_without_materialized_content(file_diff));
+                continue;
+            }
+
+            let diff_bytes = approx_file_diff_bytes(&file_diff.hunks, None);
+            if !budget.can_reserve(diff_bytes) {
+                log::warn!(
+                    "LocalDiffStateModel: reached the aggregate diff materialization budget"
+                );
+                budget_exhausted = true;
+                files.push(Self::mark_file_diff_over_budget(file_diff));
+                continue;
+            }
+
+            let content_at_head =
+                Self::get_file_content_at_head(repo_path, &file_path, &status).await;
 
             file_diff.is_autogenerated =
                 is_file_autogenerated(&file_path, content_at_head.as_deref());
-
-            total_additions += file_diff.additions();
-            total_deletions += file_diff.deletions();
-            total_diff_bytes +=
+            let retained_bytes =
                 approx_file_diff_bytes(&file_diff.hunks, content_at_head.as_deref());
+            if !budget.try_reserve(retained_bytes) {
+                log::warn!(
+                    "LocalDiffStateModel: reached the aggregate diff materialization budget"
+                );
+                budget_exhausted = true;
+                files.push(Self::mark_file_diff_over_budget(file_diff));
+                continue;
+            }
 
             files.push(FileDiffAndContent {
                 file_diff,
@@ -1842,6 +1912,34 @@ impl LocalDiffStateModel {
             total_additions,
             total_deletions,
         })
+    }
+
+    fn over_budget_file_diff(file_path: String, status: GitFileStatus) -> FileDiffAndContent {
+        Self::mark_file_diff_over_budget(FileDiff {
+            file_path,
+            status,
+            hunks: Arc::new(Vec::new()),
+            is_binary: false,
+            is_autogenerated: false,
+            max_line_number: 0,
+            has_hidden_bidi_chars: false,
+            size: DiffSize::Normal,
+        })
+    }
+
+    fn mark_file_diff_over_budget(mut file_diff: FileDiff) -> FileDiffAndContent {
+        file_diff.size = DiffSize::Unrenderable(UnrenderableReason::FileTooLarge);
+        Self::file_diff_without_materialized_content(file_diff)
+    }
+
+    fn file_diff_without_materialized_content(mut file_diff: FileDiff) -> FileDiffAndContent {
+        file_diff.hunks = Arc::new(Vec::new());
+        file_diff.max_line_number = 0;
+        file_diff.has_hidden_bidi_chars = false;
+        FileDiffAndContent {
+            file_diff,
+            content_at_head: None,
+        }
     }
 
     async fn diff_state_against_base_branch(
@@ -2115,22 +2213,8 @@ impl LocalDiffStateModel {
         let mut files = Vec::new();
         let mut total_additions = 0;
         let mut total_deletions = 0;
-        let mut total_diff_bytes = 0usize;
 
         for (file_path, status) in changed_files {
-            // Bound the cumulative diff/editor state we materialize. Repos with a
-            // large untracked tree (e.g. a non-gitignored `node_modules`) can
-            // report tens of thousands of changed files; retaining every one has
-            // caused multi-GB heap spikes (see APP-4827).
-            if files.len() >= MAX_TOTAL_DIFF_FILES || total_diff_bytes >= MAX_TOTAL_DIFF_BYTES {
-                log::warn!(
-                    "LocalDiffStateModel: reached diff materialization cap \
-                     ({} files, {} bytes); skipping remaining files to bound memory",
-                    files.len(),
-                    total_diff_bytes
-                );
-                break;
-            }
             let is_binary = binary_files.contains(&file_path);
             let file_diff = Self::file_diff_for_path(
                 is_binary,
@@ -2144,10 +2228,6 @@ impl LocalDiffStateModel {
             if let Some(file_diff) = file_diff {
                 total_additions += file_diff.file_diff.additions();
                 total_deletions += file_diff.file_diff.deletions();
-                total_diff_bytes += approx_file_diff_bytes(
-                    &file_diff.file_diff.hunks,
-                    file_diff.content_at_head.as_deref(),
-                );
 
                 files.push(file_diff);
             }

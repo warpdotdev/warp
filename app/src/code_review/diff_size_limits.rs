@@ -13,30 +13,13 @@ use super::diff_state::{DiffHunk, DiffLineType};
  */
 pub const MAX_DIFF_SIZE: usize = 4_375_000; // 4.375MB in decimal
 
-/**
- * Maximum number of files whose full diff (parsed hunks) plus base content the
- * local diff-state will materialize and retain in a single load.
- *
- * `MAX_DIFF_SIZE` bounds any *single* file, but a repository with a very large
- * untracked tree (e.g. a non-gitignored `node_modules`) can still have tens of
- * thousands of changed files. Materializing every one of them into in-memory
- * `DiffHunk`/`DiffLine` structs plus a code-review editor buffer has caused
- * multi-GB heap spikes / OOMs. This caps the number of files we fully
- * materialize; the (cheap) aggregate metadata path still counts every file.
- */
+/// Maximum number of files whose parsed hunks and base content a local Head diff retains.
+/// This bounds per-file editor overhead that is not represented by [`MAX_TOTAL_DIFF_BYTES`].
 pub const MAX_TOTAL_DIFF_FILES: usize = 2_000;
 
-/**
- * Maximum cumulative in-memory footprint (parsed hunk text + retained base file
- * content) the local diff-state will materialize in a single load. Once this is
- * exceeded, remaining files are skipped to bound memory. Sized to comfortably
- * fit any realistic code review while preventing pathological repos from
- * retaining gigabytes of diff/editor state.
- */
+/// Maximum cumulative diff-line text and base content retained by a local Head diff.
 pub const MAX_TOTAL_DIFF_BYTES: usize = 256 * 1024 * 1024; // 256MB
 
-// The cumulative byte budget must comfortably exceed the per-file limit so
-// realistic multi-file reviews are never truncated by the aggregate guard.
 const _: () = assert!(MAX_TOTAL_DIFF_BYTES > MAX_DIFF_SIZE);
 const _: () = assert!(MAX_TOTAL_DIFF_FILES > 0);
 
@@ -80,9 +63,7 @@ pub enum UnrenderableReason {
     /// The diff/patch itself is too large to render performantly (computed
     /// locally from the patch via [`compute_diff_size`]).
     DiffTooLarge,
-    /// The base file content was withheld because it exceeded the per-file wire
-    /// budget ([`MAX_DIFF_SIZE`]). Only produced when serializing a diff for a
-    /// remote subscriber.
+    /// The base file content was withheld because the file or aggregate diff exceeded its budget.
     FileTooLarge,
 }
 
@@ -95,17 +76,14 @@ impl fmt::Display for UnrenderableReason {
     }
 }
 
-/// Approximate in-memory byte footprint of a single parsed file diff: the sum
-/// of every hunk line's text plus the base file content retained for rendering.
-/// Used to bound the *cumulative* memory of a full diff load (see
-/// [`MAX_TOTAL_DIFF_BYTES`]).
+/// Estimates the variable-size text retained for a parsed file diff and its base content.
 pub fn approx_file_diff_bytes(hunks: &[DiffHunk], content_at_head: Option<&str>) -> usize {
-    let hunk_bytes: usize = hunks
+    let hunk_bytes = hunks
         .iter()
         .flat_map(|hunk| &hunk.lines)
         .map(|line| line.text.len())
-        .sum();
-    hunk_bytes + content_at_head.map_or(0, str::len)
+        .fold(0usize, usize::saturating_add);
+    hunk_bytes.saturating_add(content_at_head.map_or(0, str::len))
 }
 
 /// Determines if a diff size exceeds the maximum renderable limit
