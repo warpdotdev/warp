@@ -246,6 +246,29 @@ fn droid_default_handler_forwards_permission_request() {
 }
 
 #[test]
+fn hermes_end_to_end_parsing_and_handling() {
+    assert!(is_agent_supported(&CLIAgent::Hermes));
+    let mut handler = create_handler(&CLIAgent::Hermes).expect("should create handler");
+
+    let stop_body =
+        r#"{"v":1,"agent":"hermes","event":"stop","session_id":"sess-7","query":"fix the bug"}"#;
+    let parsed_stop = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), stop_body, false)
+        .expect("should parse stop");
+    assert_eq!(parsed_stop.agent, CLIAgent::Hermes);
+    assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
+    assert_eq!(parsed_stop.payload.query.as_deref(), Some("fix the bug"));
+    assert!(handler.handle_event(parsed_stop).is_some());
+
+    let approval_body = r#"{"v":1,"agent":"hermes","event":"permission_request","summary":"Approve?","tool_name":"Bash"}"#;
+    let parsed_approval = handler
+        .try_parse(Some(CLI_AGENT_NOTIFICATION_SENTINEL), approval_body, false)
+        .expect("should parse permission_request");
+    assert_eq!(parsed_approval.event, CLIAgentEventType::PermissionRequest);
+    assert!(handler.handle_event(parsed_approval).is_some());
+}
+
+#[test]
 fn warp_tui_notifications_are_supported() {
     assert!(is_agent_supported(&CLIAgent::WarpTui));
     let mut handler = create_handler(&CLIAgent::WarpTui).expect("should create handler");
