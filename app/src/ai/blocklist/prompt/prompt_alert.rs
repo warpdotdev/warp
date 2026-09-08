@@ -327,14 +327,6 @@ impl PromptAlertView {
         let has_admin_permissions = current_team.is_some_and(|team| {
             team.has_admin_permissions(user_email.as_deref().unwrap_or_default())
         });
-        let native_workspace_limit_cta = if current_team.is_none() {
-            native_workspace_limit_cta(
-                UserWorkspaces::as_ref(app).current_workspace(),
-                user_email.as_deref(),
-            )
-        } else {
-            None
-        };
 
         match state {
             PromptAlertState::NoConnection => {}
@@ -379,9 +371,7 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::MonthlyOveragesSpendLimitReached => {
-                if let Some(cta) = native_workspace_limit_cta.as_ref() {
-                    text_fragments.extend(cta.iter().cloned());
-                } else if has_admin_permissions {
+                if has_admin_permissions {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
                         MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
@@ -414,8 +404,11 @@ impl PromptAlertView {
                             "mailto:support@warp.dev".to_owned(),
                         ));
                     }
-                } else if let Some(cta) = native_workspace_limit_cta.as_ref() {
-                    text_fragments.extend(cta.iter().cloned());
+                } else if let Some(cta) = native_workspace_limit_cta(
+                    UserWorkspaces::as_ref(app).current_workspace(),
+                    user_email.as_deref(),
+                ) {
+                    text_fragments.extend(cta);
                 } else {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     let user_id = auth_state.user_id().unwrap_or_default();
