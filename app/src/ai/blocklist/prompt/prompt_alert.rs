@@ -333,6 +333,11 @@ impl PromptAlertView {
         let has_admin_permissions = current_team.is_some_and(|team| {
             team.has_admin_permissions(user_email.as_deref().unwrap_or_default())
         });
+        let enterprise_limit_cta = enterprise_limit_cta(
+            UserWorkspaces::as_ref(app).current_workspace(),
+            current_team,
+            user_email.as_deref(),
+        );
 
         match state {
             PromptAlertState::NoConnection => {}
@@ -377,7 +382,9 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::MonthlyOveragesSpendLimitReached => {
-                if has_admin_permissions {
+                if let Some(cta) = enterprise_limit_cta {
+                    text_fragments.extend(cta);
+                } else if has_admin_permissions {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
                         MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
@@ -390,11 +397,7 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::RequestLimitReached => {
-                if let Some(cta) = enterprise_limit_cta(
-                    UserWorkspaces::as_ref(app).current_workspace(),
-                    current_team,
-                    user_email.as_deref(),
-                ) {
+                if let Some(cta) = enterprise_limit_cta {
                     text_fragments.extend(cta);
                 } else if let Some(team) = current_team {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
