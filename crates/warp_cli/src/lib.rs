@@ -249,15 +249,6 @@ impl Args {
                     }
                 }
 
-                if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-                    let args: Vec<String> = env::args().collect();
-                    if args.len() > 1 && args[1] == "secret" {
-                        eprintln!("error: unrecognized subcommand 'secret'\n");
-                        eprintln!("For more information, try '--help'");
-                        std::process::exit(2);
-                    }
-                }
-
                 if !FeatureFlag::OzIdentityFederation.is_enabled() {
                     let args: Vec<String> = env::args().collect();
                     if args.len() > 1 && args[1] == "federate" {
@@ -375,11 +366,6 @@ impl Args {
         // Hide the schedule subcommand from help text.
         if !FeatureFlag::ScheduledAmbientAgents.is_enabled() {
             command = command.mut_subcommand("schedule", |c| c.hide(true));
-        }
-
-        // Hide the secret subcommand from help text.
-        if !FeatureFlag::WarpManagedSecrets.is_enabled() {
-            command = command.mut_subcommand("secret", |c| c.hide(true));
         }
 
         // Hide the federate subcommand from help text.
