@@ -399,7 +399,9 @@ impl PromptAlertView {
             PromptAlertState::RequestLimitReached => {
                 if let Some(cta) = enterprise_limit_cta {
                     text_fragments.extend(cta);
-                } else if let Some(team) = current_team {
+                    return;
+                }
+                if let Some(team) = current_team {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
