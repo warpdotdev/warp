@@ -1,12 +1,19 @@
 use std::iter::once;
 use std::path::PathBuf;
 
+use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::Vector2F;
+use pathfinder_geometry::vector::{Vector2F, vec2f};
 use warp_core::ui::Icon as WarpIcon;
 use warp_core::ui::theme::AnsiColorIdentifier;
-use warpui::EntityId;
-use warpui::elements::PositionedElementOffsetBounds;
+use warpui::elements::{
+    ConstrainedBox, Empty, ParentElement, PositionedElementOffsetBounds, SavePosition, Stack,
+};
+use warpui::platform::WindowStyle;
+use warpui::{
+    App, Element, Entity, EntityId, EntityIdSet, Presenter, TypedActionView, View,
+    WindowInvalidation,
+};
 
 use super::{
     AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
@@ -34,6 +41,11 @@ use crate::safe_triangle::SafeTriangle;
 use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentDisplayState;
+use crate::themes::default_themes::dark_theme;
+use crate::ui_components::icon_with_status::{
+    StatusBadgeMode, StatusBadgeStyle, TEST_BADGE_ICON_POSITION_ID, TEST_BADGE_RING_POSITION_ID,
+    render_element_with_status_badge_override,
+};
 use crate::user_config::agent_tab_styles::{
     AgentTabBadgeSize, AgentTabColor, AgentTabStateStyle, AgentTabStyleLayer,
 };
@@ -62,6 +74,51 @@ fn agent_style_config(
     }
 }
 
+const TEST_BADGE_ROOT_POSITION_ID: &str = "cli_agent_badge_root";
+
+struct BadgeGeometryView(StatusBadgeStyle);
+
+impl Entity for BadgeGeometryView {
+    type Event = ();
+}
+
+impl View for BadgeGeometryView {
+    fn ui_name() -> &'static str {
+        "AgentStateBadgeGeometryTestView"
+    }
+
+    fn render(&self, _app: &warpui::AppContext) -> Box<dyn warpui::Element> {
+        let theme = dark_theme();
+        let base = ConstrainedBox::new(Empty::new().finish())
+            .with_width(40.)
+            .with_height(40.)
+            .finish();
+        Stack::new()
+            .with_child(
+                SavePosition::new(
+                    render_element_with_status_badge_override(
+                        base,
+                        40.,
+                        self.0,
+                        StatusBadgeMode::Override {
+                            icon: WarpIcon::Check,
+                            color: ColorU::new(0, 200, 120, 255),
+                        },
+                        &theme,
+                        theme.background(),
+                    ),
+                    TEST_BADGE_ROOT_POSITION_ID,
+                )
+                .finish(),
+            )
+            .finish()
+    }
+}
+
+impl TypedActionView for BadgeGeometryView {
+    type Action = ();
+}
+
 #[test]
 fn cli_agent_visual_layers_and_badge_sizes() {
     for (layer, expected) in [
@@ -78,20 +135,49 @@ fn cli_agent_visual_layers_and_badge_sizes() {
         assert_eq!(style.color, AnsiColorIdentifier::Magenta);
     }
 
-    for (size, scale) in [
-        (AgentTabBadgeSize::Regular, 1.),
-        (AgentTabBadgeSize::Big, 1.25),
-        (AgentTabBadgeSize::Bigger, 1.5),
-    ] {
-        let style = style_for_display_state(
-            CLIAgentDisplayState::Success,
-            WarpIcon::Check,
-            &agent_style_config(size, vec![AgentTabStyleLayer::BadgeIcon]),
-        );
-        let badge = style.badge_style();
-        assert_eq!(badge.ring_ratio, 0.57 * scale);
-        assert_eq!(badge.icon_ratio, 0.34 * scale);
-    }
+    App::test((), |mut app| async move {
+        for (size, scale) in [
+            (AgentTabBadgeSize::Regular, 1.),
+            (AgentTabBadgeSize::Big, 1.25),
+            (AgentTabBadgeSize::Bigger, 1.5),
+        ] {
+            let style = style_for_display_state(
+                CLIAgentDisplayState::Success,
+                WarpIcon::Check,
+                &agent_style_config(size, vec![AgentTabStyleLayer::BadgeIcon]),
+            );
+            let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, move |_| {
+                BadgeGeometryView(style.badge_style())
+            });
+            let root_id = app.root_view_id(window_id).expect("root view should exist");
+            let mut presenter = Presenter::new(window_id);
+            app.update(|ctx| {
+                presenter.invalidate(
+                    WindowInvalidation {
+                        updated: EntityIdSet::from_iter([root_id]),
+                        ..Default::default()
+                    },
+                    ctx,
+                );
+                presenter.build_scene(vec2f(80., 80.), 1., None, ctx);
+                let cache = presenter.position_cache();
+                let root = cache
+                    .get_position(TEST_BADGE_ROOT_POSITION_ID)
+                    .expect("rendered badge root should be positioned");
+                let ring = cache
+                    .get_position(TEST_BADGE_RING_POSITION_ID)
+                    .expect("rendered badge ring should be positioned");
+                let icon = cache
+                    .get_position(TEST_BADGE_ICON_POSITION_ID)
+                    .expect("rendered badge icon should be positioned");
+                assert_eq!((root.width(), root.height()), (40., 40.));
+                assert!((ring.width() - 40. * 0.57 * scale).abs() < 0.01);
+                assert!((ring.height() - 40. * 0.57 * scale).abs() < 0.01);
+                assert!((icon.width() - 40. * 0.34 * scale).abs() < 0.01);
+                assert!((icon.height() - 40. * 0.34 * scale).abs() < 0.01);
+            });
+        }
+    })
 }
 
 #[test]

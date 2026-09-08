@@ -3,6 +3,8 @@ use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::icons::Icon as WarpIcon;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{ColorScheme, Fill as WarpThemeFill, WarpTheme};
+#[cfg(test)]
+use warpui::elements::SavePosition;
 use warpui::elements::{
     ChildAnchor, ConstrainedBox, Container, CornerRadius, Element, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, Stack,
@@ -32,6 +34,11 @@ const DEFAULT_BADGE_RATIO: f32 = 0.57;
 const DEFAULT_BADGE_ICON_RATIO: f32 = 0.34;
 const CLOUD_RATIO: f32 = 0.57;
 const STATUS_IN_CLOUD_RATIO: f32 = 0.285;
+
+#[cfg(test)]
+pub(crate) const TEST_BADGE_RING_POSITION_ID: &str = "icon_with_status_badge_ring";
+#[cfg(test)]
+pub(crate) const TEST_BADGE_ICON_POSITION_ID: &str = "icon_with_status_badge_icon";
 
 /// Status-badge geometry override. Pass [`StatusBadgeStyle::DEFAULT`] for today's look.
 #[derive(Clone, Copy)]
@@ -519,6 +526,8 @@ fn render_with_optional_status_badge(
         .with_width(badge_icon_diameter)
         .with_height(badge_icon_diameter)
         .finish();
+    #[cfg(test)]
+    let badge_icon = SavePosition::new(badge_icon, TEST_BADGE_ICON_POSITION_ID).finish();
     let inner_radius = match badge_style.inner_shape {
         BadgeInnerShape::Circle => Radius::Percentage(50.),
         BadgeInnerShape::RoundedSquare { radius_px } => Radius::Pixels(radius_px),
@@ -533,6 +542,8 @@ fn render_with_optional_status_badge(
         .with_background(status_container_background)
         .with_corner_radius(CornerRadius::with_all(Radius::Percentage(50.)))
         .finish();
+    #[cfg(test)]
+    let badge_with_ring = SavePosition::new(badge_with_ring, TEST_BADGE_RING_POSITION_ID).finish();
 
     let badge_corner_offset = corner_overlay_offset(total_size, overlay_extra_overhang_ratio);
     let mut stack = Stack::new().with_child(

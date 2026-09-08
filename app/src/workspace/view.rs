@@ -5338,6 +5338,42 @@ impl Workspace {
         self.tabs.get(index).and_then(|tab| tab.color())
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_agent_tab_styles_toast_count(&self, ctx: &AppContext) -> usize {
+        self.toast_stack
+            .as_ref(ctx)
+            .integration_test_object_id_count("agent_tab_styles_error")
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_set_all_tab_colors(
+        &mut self,
+        color: AnsiColorIdentifier,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for index in 0..self.tabs.len() {
+            self.set_tab_color(index, SelectedTabColor::Color(color), ctx);
+        }
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn integration_test_group_all_tabs(
+        &mut self,
+        color: AnsiColorIdentifier,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let mut group = TabGroup::new();
+        group.name = Some("Agent state group".to_string());
+        group.color = SelectedTabColor::Color(color);
+        let group_id = group.id;
+        self.tab_groups.insert(group_id, group);
+        for tab in &mut self.tabs {
+            tab.group_id = Some(group_id);
+            tab.pinned = false;
+        }
+        ctx.notify();
+    }
+
     /// Finds the pane containing a terminal viewing the given ambient agent conversation,
     /// returning None if the ambient conversation is not open in any tab.
     fn find_pane_with_ambient_agent_conversation(

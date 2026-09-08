@@ -418,6 +418,9 @@ fn register_tests() -> HashMap<&'static str, BoxedBuilderFn> {
     register_test!(test_execution_profile_model_persists_and_hot_reloads_settings_file);
     register_test!(test_settings_file_migration_from_native_store);
     register_test!(test_settings_file_hot_reload_applies_new_values);
+    register_test!(test_agent_tab_styles_config_lifecycle);
+    register_test!(test_cli_agent_event_routes_and_acknowledgement);
+    register_test!(vertical_tabs_state_and_badge_matrix_warposs);
 
     register_test!(test_settings_error_banner_on_startup_with_invalid_toml);
     register_test!(test_settings_error_banner_on_startup_with_invalid_value);
