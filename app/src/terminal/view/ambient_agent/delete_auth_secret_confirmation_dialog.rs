@@ -9,6 +9,7 @@ use warpui::{
 };
 
 use crate::appearance::Appearance;
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::dialog::{Dialog, dialog_styles};
 use crate::view_components::action_button::{ActionButton, DangerPrimaryTheme, NakedTheme};
 
@@ -16,6 +17,7 @@ const DIALOG_WIDTH: f32 = 450.;
 
 #[derive(Clone, Debug)]
 pub(super) struct PendingAuthSecretDeletion {
+    pub(super) team_scope: RequestTeamScope,
     pub(super) harness: Harness,
     pub(super) name: String,
     pub(super) owner: SecretOwner,

@@ -258,43 +258,48 @@ impl OrchestrationConfigBlockView {
         // "Loading…" forever after the lazy fetch completes.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
-            |me, _, event, ctx| match event {
-                HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
-                    if me.pickers_initialized {
-                        oc::apply_created_auth_secret_if_matches(
-                            &mut me.orchestration_edit_state.orchestration_config_state,
-                            *harness,
-                            name,
-                            ctx,
-                        );
-                        oc::repopulate_all_pickers(
-                            &mut me.orchestration_edit_state.orchestration_config_state,
-                            &me.pickers,
-                            ctx,
-                        );
-                    }
-                    ctx.notify();
+            |me, _, event, ctx| {
+                let team_scope = oc::request_team_scope(ctx);
+                if event
+                    .team_scope()
+                    .is_some_and(|event_scope| event_scope != team_scope)
+                {
+                    return;
                 }
-                HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
-                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
-                    // Repopulate even on fetch failure to replace "Loading…".
-                    // The Deleted event also triggers a refresh so any
-                    // already-mounted picker drops the deleted entry from
-                    // its menu.
-                    if me.pickers_initialized {
-                        oc::repopulate_all_pickers(
-                            &mut me.orchestration_edit_state.orchestration_config_state,
-                            &me.pickers,
-                            ctx,
-                        );
+                match event {
+                    HarnessAvailabilityEvent::AuthSecretCreated { harness, name, .. } => {
+                        if me.pickers_initialized {
+                            oc::apply_created_auth_secret_if_matches(
+                                &mut me.orchestration_edit_state.orchestration_config_state,
+                                *harness,
+                                name,
+                                ctx,
+                            );
+                            oc::repopulate_all_pickers(
+                                &mut me.orchestration_edit_state.orchestration_config_state,
+                                &me.pickers,
+                                ctx,
+                            );
+                        }
+                        ctx.notify();
                     }
-                    me.maybe_auto_open_create_modal(ctx);
-                    ctx.notify();
+                    HarnessAvailabilityEvent::Changed
+                    | HarnessAvailabilityEvent::AuthSecretsLoaded { .. }
+                    | HarnessAvailabilityEvent::AuthSecretsFetchFailed { .. }
+                    | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
+                        if me.pickers_initialized {
+                            oc::repopulate_all_pickers(
+                                &mut me.orchestration_edit_state.orchestration_config_state,
+                                &me.pickers,
+                                ctx,
+                            );
+                        }
+                        me.maybe_auto_open_create_modal(ctx);
+                        ctx.notify();
+                    }
+                    HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                    | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
                 }
-                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
-                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 
@@ -426,7 +431,8 @@ impl OrchestrationConfigBlockView {
         // Only auto-open on `Loaded([])`. Other fetch states are
         // ambiguous; the `AuthSecretsLoaded` subscription will retry.
         let has_zero_loaded = matches!(
-            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness),
+            HarnessAvailabilityModel::as_ref(ctx)
+                .auth_secrets_for(oc::request_team_scope(ctx), harness),
             AuthSecretFetchState::Loaded(secrets) if secrets.is_empty()
         );
         if !has_zero_loaded {
@@ -629,6 +635,7 @@ impl OrchestrationConfigBlockView {
             self.orchestration_edit_state
                 .orchestration_config_state
                 .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
+                oc::request_team_scope(ctx),
                 &self
                     .orchestration_edit_state
                     .orchestration_config_state
@@ -1129,7 +1136,11 @@ impl TypedActionView for OrchestrationConfigBlockView {
                 // persisted side-channel, not baked into `OrchestrationConfig`.
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
+                    .apply_auth_secret_change(
+                        oc::request_team_scope(ctx),
+                        auth_secret_name.clone(),
+                        ctx,
+                    );
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::CreateNewAuthSecretRequested => {

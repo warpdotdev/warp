@@ -504,42 +504,56 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 fn list_secrets(
     ctx: &mut AppContext,
     output_format: OutputFormat,
-    _args: ListSecretsArgs,
+    args: ListSecretsArgs,
 ) -> Result<()> {
-    ManagedSecretManager::handle(ctx).update(ctx, |manager, ctx| {
-        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
-        ctx.spawn(
-            manager.list_secrets(request_scope),
-            move |_, result, ctx| match result {
-                Ok(secrets) => {
-                    let secret_infos = secrets.into_iter().map(|secret| {
-                        let owner = match secret.owner.type_ {
-                            SpaceType::User => Owner::User {
-                                user_uid: UserUid::new(secret.owner.uid.inner()),
-                            },
-                            SpaceType::Team => Owner::Team {
-                                team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
-                            },
-                        };
+    ManagedSecretManager::handle(ctx).update(ctx, move |_manager, ctx| {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh_future, move |manager, refresh_result, ctx| {
+            if let Err(err) = refresh_result {
+                super::report_fatal_error(err, ctx);
+                return;
+            }
+            let request_scope =
+                match super::common::request_team_scope_for_cli(&args.team_selection, ctx) {
+                    Ok(request_scope) => request_scope,
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                };
+            ctx.spawn(
+                manager.list_secrets(request_scope),
+                move |_, result, ctx| match result {
+                    Ok(secrets) => {
+                        let secret_infos = secrets.into_iter().map(|secret| {
+                            let owner = match secret.owner.type_ {
+                                SpaceType::User => Owner::User {
+                                    user_uid: UserUid::new(secret.owner.uid.inner()),
+                                },
+                                SpaceType::Team => Owner::Team {
+                                    team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
+                                },
+                            };
 
-                        SecretInfo {
-                            name: secret.name,
-                            scope: super::common::format_owner(&owner).to_string(),
-                            secret_type: secret.type_,
-                            created_at: secret.created_at.utc(),
-                            updated_at: secret.updated_at.utc(),
-                        }
-                    });
+                            SecretInfo {
+                                name: secret.name,
+                                scope: super::common::format_owner(&owner).to_string(),
+                                secret_type: secret.type_,
+                                created_at: secret.created_at.utc(),
+                                updated_at: secret.updated_at.utc(),
+                            }
+                        });
 
-                    output::print_list(secret_infos, output_format);
+                        output::print_list(secret_infos, output_format);
 
-                    ctx.terminate_app(TerminationMode::ForceTerminate, None);
-                }
-                Err(err) => {
-                    super::report_fatal_error(err, ctx);
-                }
-            },
-        );
+                        ctx.terminate_app(TerminationMode::ForceTerminate, None);
+                    }
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                    }
+                },
+            );
+        });
     });
     Ok(())
 }
