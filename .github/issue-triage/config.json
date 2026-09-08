@@ -4,21 +4,25 @@
       "color": "d73a4a",
       "description": "Something isn't working."
     },
-    "feature": {
+    "agent:bug": {
+      "color": "8ff8fd",
+      "description": "Bugs/regressions. Assigned by Warp triage agent."
+    },
+    "agent:feature": {
       "color": "f47f64",
-      "description": "This issue is a feature request, not a bug report."
+      "description": "This issue is a feature request, not a bug report. Assigned by Warp triage agent."
+    },
+    "agent:security": {
+      "color": "a0ce9f",
+      "description": "Security issues/vulnerabilities that are immediately escalated. Assigned by Warp triage agent."
+    },
+    "agent:documentation": {
+      "color": "5f966f",
+      "description": "Missing documentation. Assigned by Warp triage agent."
     },
     "enhancement": {
       "color": "a2eeef",
       "description": "New feature or request."
-    },
-    "documentation": {
-      "color": "0075ca",
-      "description": "Improvements or additions to documentation."
-    },
-    "security": {
-      "color": "e11d48",
-      "description": "Security vulnerability or report."
     },
     "duplicate": {
       "color": "cfd3d7",
@@ -46,7 +50,7 @@
     },
     "priority:high": {
       "color": "b60205",
-      "description": "High-priority regression, crash, data loss, or security issue."
+      "description": "High-priority issues that are immediately escalated for internal review."
     },
     "repro:high": {
       "color": "b60205",
