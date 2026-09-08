@@ -676,7 +676,7 @@ fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_supp
         app.update(init);
         let (window_id, view) = app.add_window(WindowStyle::NotStealFocus, |_| View::default());
 
-        let mut presenter = Presenter::new(window_id);
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
 
         let mut updated = EntityIdSet::default();
         updated.insert(app.root_view_id(window_id).unwrap());
@@ -685,48 +685,65 @@ fn consecutive_synthetic_hover_changes_spaced_like_animation_frames_are_not_supp
             ..Default::default()
         };
 
-        app.update(move |ctx| {
-            presenter.invalidate(invalidation, ctx);
-            presenter.build_scene(vec2f(100., 100.), 1., None, ctx);
-            let presenter = Rc::new(RefCell::new(presenter));
+        app.update(|ctx| {
+            presenter.borrow_mut().invalidate(invalidation, ctx);
+            presenter
+                .borrow_mut()
+                .build_scene(vec2f(100., 100.), 1., None, ctx);
+        });
 
-            let synthetic_move_at = |position: Vector2F| Event::MouseMoved {
-                position,
-                cmd: false,
-                shift: false,
-                is_synthetic: true,
-            };
+        let synthetic_move_at = |position: Vector2F| Event::MouseMoved {
+            position,
+            cmd: false,
+            shift: false,
+            is_synthetic: true,
+        };
 
-            // Simulate four repaint frames of a scroll animation: the physical mouse never
-            // moves, but content underneath it does, so each frame's synthetic MouseMoved hit
-            // -tests against a different position relative to the (stationary) hoverables --
-            // exactly as if the hoverables themselves shifted underneath a fixed cursor.
-            // Frame 1: enters the bottom-left hoverable.
+        // Simulate four repaint frames of a scroll animation: the physical mouse never moves,
+        // but content underneath it does, so each frame's synthetic MouseMoved hit-tests
+        // against a different position relative to the (stationary) hoverables -- exactly as if
+        // the hoverables themselves shifted underneath a fixed cursor. A real gap separates each
+        // frame (the shortest is bounded below by `SMOOTH_SCROLL_FRAME_INTERVAL`), comfortably
+        // longer than the guard's window.
+
+        // Frame 1: enters the bottom-left hoverable.
+        app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(10., 90.)),
                 window_id,
                 presenter.clone(),
             );
-            // A real gap between repaint frames (the shortest is bounded below by
-            // `SMOOTH_SCROLL_FRAME_INTERVAL`); comfortably longer than the guard's window.
-            std::thread::sleep(Duration::from_millis(10));
-            // Frame 2: leaves the bottom-left hoverable (still a synthetic move, still no real
-            // mouse movement).
+        });
+        Timer::after(Duration::from_millis(10)).await;
+
+        // Frame 2: leaves the bottom-left hoverable (still a synthetic move, still no real mouse
+        // movement).
+        app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(100., 100.)),
                 window_id,
                 presenter.clone(),
             );
-            std::thread::sleep(Duration::from_millis(10));
-            // Frame 3: enters the top-right hoverable.
+        });
+        Timer::after(Duration::from_millis(10)).await;
+
+        // Frame 3: enters the top-right hoverable.
+        app.update(|ctx| {
             ctx.simulate_window_event(
                 synthetic_move_at(vec2f(90., 10.)),
                 window_id,
                 presenter.clone(),
             );
-            std::thread::sleep(Duration::from_millis(10));
-            // Frame 4: leaves the top-right hoverable.
-            ctx.simulate_window_event(synthetic_move_at(vec2f(100., 100.)), window_id, presenter);
+        });
+        Timer::after(Duration::from_millis(10)).await;
+
+        // Frame 4: leaves the top-right hoverable.
+        app.update(|ctx| {
+            ctx.simulate_window_event(
+                synthetic_move_at(vec2f(100., 100.)),
+                window_id,
+                presenter.clone(),
+            );
         });
 
         // Every transition above should have been handled -- none of them were truly
@@ -806,6 +823,32 @@ fn truly_back_to_back_synthetic_hover_changes_are_still_suppressed() {
             );
         });
     });
+}
+
+/// Unit-level coverage for the suppression predicate itself, deterministic via injected
+/// `Instant`s rather than real sleeps: two synthetic changes spaced further apart than
+/// [`BACK_TO_BACK_SYNTHETIC_WINDOW`] are not suppressed, but two within it are, and a real
+/// (non-synthetic) change in between resets the guard.
+#[test]
+fn should_suppress_synthetic_hover_change_only_within_the_back_to_back_window() {
+    let mut state = MouseState::default();
+    let start = Instant::now();
+
+    // The first synthetic change has nothing before it to collide with.
+    assert!(!state.should_suppress_synthetic_hover_change(true, start));
+
+    // A second synthetic change comfortably outside the window is not suppressed.
+    let second_at = start + BACK_TO_BACK_SYNTHETIC_WINDOW + Duration::from_millis(1);
+    assert!(!state.should_suppress_synthetic_hover_change(true, second_at));
+
+    // A third synthetic change immediately after that one, within the window, is suppressed.
+    let third_at = second_at + Duration::from_millis(1);
+    assert!(state.should_suppress_synthetic_hover_change(true, third_at));
+
+    // A real (non-synthetic) change resets the guard, so the next synthetic change -- even
+    // immediately after -- is not suppressed.
+    assert!(!state.should_suppress_synthetic_hover_change(false, third_at));
+    assert!(!state.should_suppress_synthetic_hover_change(true, third_at));
 }
 
 // Why would Elements that haven't been painted need to receive any mouse events?
