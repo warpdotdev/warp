@@ -16,8 +16,12 @@ use super::{
     default_collapsible_state_for_orchestration_action,
     default_collapsible_state_for_orchestration_message, received_message_collapsible_id,
     recording_artifact_view_url, user_avatar_info_for_conversation_creator,
+    visit_code_sections_for_editor_materialization,
 };
-use crate::ai::agent::{AIAgentActionType, StartAgentExecutionMode};
+use crate::ai::agent::{
+    AIAgentActionType, AIAgentOutput, AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentText,
+    AIAgentTextSection, MessageId, StartAgentExecutionMode,
+};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::action_model::{
     compose_run_agents_child_prompt, run_agents_to_start_agent_mode,
@@ -131,6 +135,46 @@ fn recording_artifact_view_url_uses_configured_oz_origin() {
 #[test]
 fn recording_artifact_view_url_requires_task_id() {
     assert_eq!(recording_artifact_view_url(None, "recording-123"), None);
+}
+
+#[test]
+fn restored_code_sections_do_not_materialize_editor_views() {
+    let output = AIAgentOutput {
+        messages: vec![AIAgentOutputMessage {
+            id: MessageId::new("code-message".to_owned()),
+            message: AIAgentOutputMessageType::Text(AIAgentText {
+                sections: vec![
+                    AIAgentTextSection::Code {
+                        code: "first".to_owned(),
+                        language: None,
+                        source: None,
+                    },
+                    AIAgentTextSection::Code {
+                        code: "second".to_owned(),
+                        language: None,
+                        source: None,
+                    },
+                ],
+            }),
+            citations: vec![],
+        }],
+        ..Default::default()
+    };
+
+    let mut restored_visits = 0;
+    visit_code_sections_for_editor_materialization(&output, true, |_, _, _, _| {
+        restored_visits += 1;
+    });
+    assert_eq!(restored_visits, 0);
+
+    let mut live_sections = vec![];
+    visit_code_sections_for_editor_materialization(&output, false, |index, code, _, _| {
+        live_sections.push((index, code.to_owned()));
+    });
+    assert_eq!(
+        live_sections,
+        vec![(0, "first".to_owned()), (1, "second".to_owned())]
+    );
 }
 
 #[cfg(feature = "local_fs")]

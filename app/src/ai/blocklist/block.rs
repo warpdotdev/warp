@@ -2218,22 +2218,16 @@ impl AIBlock {
                 _ => (),
             }
         }
-        // Build the views and stream new content for suggested code snippets.
-        output
-            .all_text()
-            .flat_map(|text| text.sections.iter())
-            .filter_map(|section| match section {
-                AIAgentTextSection::Code {
-                    code,
-                    language,
-                    source,
-                } => Some((code, language, source)),
-                _ => None,
-            })
-            .enumerate()
-            .for_each(|(index, (code, language, source))| {
+        // Restored code sections use the lightweight selectable-text renderer. Avoiding
+        // CodeEditorView construction here also avoids its model/buffer graph, subscriptions,
+        // render effects, and layout work during workspace restore.
+        visit_code_sections_for_editor_materialization(
+            output,
+            self.model.is_restored(),
+            |index, code, language, source| {
                 self.handle_code_section_stream_update(index, code, language, source, ctx);
-            });
+            },
+        );
 
         // Register the mouse state handles for citations.
         for citation in &output.citations {
@@ -7333,6 +7327,34 @@ impl AIBlock {
         }
     }
 }
+
+/// Visits code sections that should own a full editor view.
+fn visit_code_sections_for_editor_materialization(
+    output: &AIAgentOutput,
+    is_restored: bool,
+    mut visit: impl FnMut(usize, &str, &Option<ProgrammingLanguage>, &Option<CodeSource>),
+) {
+    if is_restored {
+        return;
+    }
+
+    output
+        .all_text()
+        .flat_map(|text| text.sections.iter())
+        .filter_map(|section| match section {
+            AIAgentTextSection::Code {
+                code,
+                language,
+                source,
+            } => Some((code, language, source)),
+            _ => None,
+        })
+        .enumerate()
+        .for_each(|(index, (code, language, source))| {
+            visit(index, code, language, source);
+        });
+}
+
 #[cfg(test)]
 #[path = "block_tests.rs"]
 mod tests;
