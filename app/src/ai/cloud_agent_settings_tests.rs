@@ -63,10 +63,11 @@ fn scoped_auth_secret_preferences_are_isolated_by_team() {
 }
 
 #[test]
-fn teamless_scoped_write_replaces_legacy_preference() {
+fn scoped_preferences_override_legacy_fallback() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
         let teamless = TeamlessScopeForTest;
+        let team = team_scope(7);
 
         CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings
@@ -85,6 +86,10 @@ fn teamless_scoped_write_replaces_legacy_preference() {
                 CloudAgentSettings::as_ref(ctx).auth_secret_preference(&teamless, Harness::Claude),
                 Some(AuthSecretPreference::Named("legacy".to_string()))
             );
+            assert_eq!(
+                CloudAgentSettings::as_ref(ctx).auth_secret_preference(&team, Harness::Claude),
+                Some(AuthSecretPreference::Named("legacy".to_string()))
+            );
         });
 
         CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
@@ -101,7 +106,18 @@ fn teamless_scoped_write_replaces_legacy_preference() {
                 settings.auth_secret_preference(&teamless, Harness::Claude),
                 Some(AuthSecretPreference::Inherit)
             );
-            assert!(settings.last_selected_auth_secret.value().is_empty());
+            assert_eq!(
+                settings.auth_secret_preference(&team, Harness::Claude),
+                Some(AuthSecretPreference::Named("legacy".to_string()))
+            );
+            assert_eq!(
+                settings
+                    .last_selected_auth_secret
+                    .value()
+                    .get(Harness::Claude.config_name())
+                    .map(String::as_str),
+                Some("legacy")
+            );
         });
     });
 }

@@ -169,9 +169,6 @@ impl CloudAgentSettings {
             })
             .map(|entry| entry.preference.clone())
             .or_else(|| {
-                if persisted_scope.team_uid.is_some() {
-                    return None;
-                }
                 if self
                     .inherit_auth_secret_harnesses
                     .value()
@@ -205,8 +202,8 @@ impl CloudAgentSettings {
         });
         if let Some(preference) = preference {
             preferences.push(ScopedAuthSecretPreference {
-                team_scope: persisted_scope.clone(),
-                harness: harness_key.clone(),
+                team_scope: persisted_scope,
+                harness: harness_key,
                 preference,
             });
         }
@@ -214,18 +211,6 @@ impl CloudAgentSettings {
             self.scoped_auth_secret_preferences
                 .set_value(preferences, ctx)
         );
-
-        if persisted_scope.team_uid.is_none() {
-            let mut legacy_named = self.last_selected_auth_secret.value().clone();
-            let mut legacy_inherit = self.inherit_auth_secret_harnesses.value().clone();
-            legacy_named.remove(&harness_key);
-            legacy_inherit.remove(&harness_key);
-            report_if_error!(self.last_selected_auth_secret.set_value(legacy_named, ctx));
-            report_if_error!(
-                self.inherit_auth_secret_harnesses
-                    .set_value(legacy_inherit, ctx)
-            );
-        }
     }
     pub fn is_harness_auth_ftux_completed(&self, harness: Harness) -> bool {
         self.harness_auth_ftux_completed
