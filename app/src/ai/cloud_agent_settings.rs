@@ -124,6 +124,8 @@ define_settings_group!(CloudAgentSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
+    // Legacy migration fallback. New code must use `auth_secret_preference` and
+    // `persist_auth_secret_preference`.
     last_selected_auth_secret: LastSelectedAuthSecret {
         type: HashMap<String, String>,
         default: HashMap::new(),
@@ -132,10 +134,8 @@ define_settings_group!(CloudAgentSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: true,
     },
-    // Per-harness record of whether the user explicitly chose "Inherit
-    // key from environment" in the orchestration auth secret picker.
-    // Distinct from "never picked anything" (entry absent) so the plan
-    // card's Inherit choice survives across the RunAgents handoff.
+    // Legacy migration fallback for explicit Inherit choices. New code must use
+    // `auth_secret_preference` and `persist_auth_secret_preference`.
     inherit_auth_secret_harnesses: InheritAuthSecretHarnesses {
         type: HashMap<String, bool>,
         default: HashMap::new(),
