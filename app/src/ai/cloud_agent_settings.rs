@@ -11,7 +11,7 @@ use warp_cli::agent::Harness;
 use warp_errors::report_if_error;
 
 use crate::server::ids::SyncId;
-use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::TeamScope;
 
 #[derive(
     Clone,
@@ -59,8 +59,8 @@ struct AuthSecretPreferenceScope {
     team_uid: Option<String>,
 }
 
-impl From<RequestTeamScope> for AuthSecretPreferenceScope {
-    fn from(scope: RequestTeamScope) -> Self {
+impl AuthSecretPreferenceScope {
+    fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
         Self {
             team_uid: scope.team_uid().map(|team_uid| team_uid.uid()),
         }
@@ -155,12 +155,12 @@ define_settings_group!(CloudAgentSettings, settings: [
 ]);
 
 impl CloudAgentSettings {
-    pub fn auth_secret_preference(
+    pub fn auth_secret_preference<S: TeamScope + ?Sized>(
         &self,
-        team_scope: RequestTeamScope,
+        team_scope: &S,
         harness: Harness,
     ) -> Option<AuthSecretPreference> {
-        let persisted_scope = AuthSecretPreferenceScope::from(team_scope);
+        let persisted_scope = AuthSecretPreferenceScope::from_scope(team_scope);
         self.scoped_auth_secret_preferences
             .value()
             .iter()
@@ -190,14 +190,14 @@ impl CloudAgentSettings {
             })
     }
 
-    pub fn persist_auth_secret_preference(
+    pub fn persist_auth_secret_preference<S: TeamScope + ?Sized>(
         &mut self,
-        team_scope: RequestTeamScope,
+        team_scope: &S,
         harness: Harness,
         preference: Option<AuthSecretPreference>,
         ctx: &mut warpui::ModelContext<Self>,
     ) {
-        let persisted_scope = AuthSecretPreferenceScope::from(team_scope);
+        let persisted_scope = AuthSecretPreferenceScope::from_scope(team_scope);
         let harness_key = harness.config_name().to_string();
         let mut preferences = self.scoped_auth_secret_preferences.value().clone();
         preferences.retain(|entry| {

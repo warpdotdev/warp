@@ -64,7 +64,6 @@ use crate::server::cloud_objects::listener::Listener;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::sync_queue::SyncQueue;
-use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::import::model::ImportedConfigModel;
 use crate::settings::{
@@ -1697,17 +1696,13 @@ fn auth_secret_selectors_follow_their_own_window_team() {
             });
             CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                 settings.persist_auth_secret_preference(
-                    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
-                        team_a.uid,
-                    )),
+                    &TeamContextForOperation::new_for_test(team_a.uid),
                     Harness::Claude,
                     Some(AuthSecretPreference::Named("team-a-key".to_string())),
                     ctx,
                 );
                 settings.persist_auth_secret_preference(
-                    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
-                        team_b.uid,
-                    )),
+                    &TeamContextForOperation::new_for_test(team_b.uid),
                     Harness::Claude,
                     Some(AuthSecretPreference::Named("team-b-key".to_string())),
                     ctx,
@@ -1790,18 +1785,14 @@ fn auth_secret_selectors_follow_their_own_window_team() {
             let settings = CloudAgentSettings::as_ref(ctx);
             assert_eq!(
                 settings.auth_secret_preference(
-                    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
-                        team_a.uid
-                    )),
+                    &TeamContextForOperation::new_for_test(team_a.uid),
                     Harness::Claude,
                 ),
                 Some(AuthSecretPreference::Named("team-a-ftux-key".to_string()))
             );
             assert_eq!(
                 settings.auth_secret_preference(
-                    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
-                        team_b.uid
-                    )),
+                    &TeamContextForOperation::new_for_test(team_b.uid),
                     Harness::Claude,
                 ),
                 Some(AuthSecretPreference::Named("team-b-key".to_string()))
@@ -1834,18 +1825,14 @@ fn auth_secret_selectors_follow_their_own_window_team() {
             let settings = CloudAgentSettings::as_ref(ctx);
             assert_eq!(
                 settings.auth_secret_preference(
-                    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
-                        team_a.uid
-                    )),
+                    &TeamContextForOperation::new_for_test(team_a.uid),
                     Harness::Claude,
                 ),
                 Some(AuthSecretPreference::Named("team-a-ftux-key".to_string()))
             );
             assert_eq!(
                 settings.auth_secret_preference(
-                    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(
-                        team_b.uid
-                    )),
+                    &TeamContextForOperation::new_for_test(team_b.uid),
                     Harness::Claude,
                 ),
                 Some(AuthSecretPreference::Inherit)

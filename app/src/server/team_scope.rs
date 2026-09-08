@@ -17,7 +17,7 @@ use crate::workspaces::user_workspaces::TeamScope;
 pub struct RequestTeamScope(Option<ServerId>);
 
 impl RequestTeamScope {
-    pub fn from_scope(scope: &impl TeamScope) -> Self {
+    pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
         Self(scope.team_uid())
     }
 

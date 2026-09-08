@@ -22,6 +22,7 @@ use super::providers::{
 };
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::server::team_scope::RequestTeamScope;
+use crate::workspaces::user_workspaces::TeamScope;
 
 impl OrchestrationConfigState {
     /// Toggles Local ↔ Cloud, pre-fills the default environment when
@@ -49,9 +50,9 @@ impl OrchestrationConfigState {
 
     /// Records the auth-secret picker choice (`None` means Inherit) and
     /// persists it to `CloudAgentSettings`.
-    pub fn apply_auth_secret_change(
+    pub fn apply_auth_secret_change<S: TeamScope + ?Sized>(
         &mut self,
-        team_scope: RequestTeamScope,
+        team_scope: &S,
         new_name: Option<String>,
         ctx: &mut AppContext,
     ) {
@@ -73,15 +74,18 @@ impl OrchestrationConfigState {
     /// secret, and re-seeds an `Unset` selection from persisted settings.
     /// This is the frontend-neutral core of the GUI's
     /// `repopulate_all_pickers`.
-    pub fn revalidate_after_catalog_change(
+    pub fn revalidate_after_catalog_change<S: TeamScope + ?Sized>(
         &mut self,
-        team_scope: RequestTeamScope,
+        team_scope: &S,
         ctx: &AppContext,
     ) {
+        let request_team_scope = RequestTeamScope::from_scope(team_scope);
         let loaded_secret_names = Harness::parse_orchestration_harness(&self.harness_type)
             .filter(|harness| *harness != Harness::Oz)
             .and_then(|harness| {
-                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(team_scope, harness) {
+                match HarnessAvailabilityModel::as_ref(ctx)
+                    .auth_secrets_for(request_team_scope, harness)
+                {
                     AuthSecretFetchState::Loaded(secrets) => {
                         Some(secrets.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
                     }
@@ -213,9 +217,9 @@ impl OrchestrationEditState {
     /// harness, restores a previously saved (still valid) model for the
     /// new harness or falls back to a default, and re-resolves the auth
     /// secret selection for the new harness.
-    pub fn apply_harness_change(
+    pub fn apply_harness_change<S: TeamScope + ?Sized>(
         &mut self,
-        team_scope: RequestTeamScope,
+        team_scope: &S,
         new_harness_type: &str,
         fallback_base_model_id: Option<String>,
         ctx: &mut AppContext,

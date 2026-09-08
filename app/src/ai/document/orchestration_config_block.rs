@@ -635,7 +635,7 @@ impl OrchestrationConfigBlockView {
             self.orchestration_edit_state
                 .orchestration_config_state
                 .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
-                oc::request_team_scope(ctx),
+                &scope,
                 &self
                     .orchestration_edit_state
                     .orchestration_config_state
@@ -1134,13 +1134,10 @@ impl TypedActionView for OrchestrationConfigBlockView {
             OrchestrationConfigBlockAction::AuthSecretChanged { auth_secret_name } => {
                 // No `apply_field_change`: secrets are user-scoped and
                 // persisted side-channel, not baked into `OrchestrationConfig`.
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(
-                        oc::request_team_scope(ctx),
-                        auth_secret_name.clone(),
-                        ctx,
-                    );
+                    .apply_auth_secret_change(&team_scope, auth_secret_name.clone(), ctx);
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::CreateNewAuthSecretRequested => {

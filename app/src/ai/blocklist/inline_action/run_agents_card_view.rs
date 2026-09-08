@@ -662,9 +662,10 @@ impl RunAgentsCardView {
             new_state.orchestration_config_state.auth_secret_selection,
             AuthSecretSelection::Unset
         ) {
+            let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
             new_state.orchestration_config_state.auth_secret_selection =
                 oc::resolve_auth_secret_selection_for_harness(
-                    oc::request_team_scope(ctx),
+                    &team_scope,
                     &new_state.orchestration_config_state.harness_type,
                     ctx,
                 );
@@ -1003,10 +1004,11 @@ impl RunAgentsCardView {
                     .auth_secret_selection,
                 AuthSecretSelection::Unset
             ) {
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.orchestration_edit_state
                     .orchestration_config_state
                     .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
-                    oc::request_team_scope(ctx),
+                    &team_scope,
                     &self
                         .orchestration_edit_state
                         .orchestration_config_state
@@ -1466,13 +1468,10 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.notify();
             }
             RunAgentsCardViewAction::AuthSecretChanged { auth_secret_name } => {
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(
-                        oc::request_team_scope(ctx),
-                        auth_secret_name.clone(),
-                        ctx,
-                    );
+                    .apply_auth_secret_change(&team_scope, auth_secret_name.clone(), ctx);
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }

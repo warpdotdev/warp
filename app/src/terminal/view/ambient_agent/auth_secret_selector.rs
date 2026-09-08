@@ -250,6 +250,7 @@ impl AuthSecretSelector {
         me.refresh_sidecar(ctx);
         me
     }
+
     fn request_team_scope(&self, ctx: &ViewContext<Self>) -> RequestTeamScope {
         RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx))
     }
@@ -282,12 +283,12 @@ impl AuthSecretSelector {
             return;
         }
         let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-        let saved_name = match CloudAgentSettings::as_ref(ctx)
-            .auth_secret_preference(self.request_team_scope(ctx), harness)
-        {
-            Some(AuthSecretPreference::Named(name)) => Some(name),
-            Some(AuthSecretPreference::Inherit) | None => None,
-        };
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let saved_name =
+            match CloudAgentSettings::as_ref(ctx).auth_secret_preference(&team_scope, harness) {
+                Some(AuthSecretPreference::Named(name)) => Some(name),
+                Some(AuthSecretPreference::Inherit) | None => None,
+            };
         if let Some(saved_name) = saved_name {
             // Apply optimistically — secrets may not be fetched yet, but the UI
             // will update once auth secrets are loaded.
@@ -428,13 +429,14 @@ impl AuthSecretSelector {
         let removed_pending =
             self.pending_deletes
                 .remove(&(team_scope, harness, name.clone(), owner));
+        let preference_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
 
         CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
             if matches!(
-                settings.auth_secret_preference(team_scope, harness),
+                settings.auth_secret_preference(&preference_scope, harness),
                 Some(AuthSecretPreference::Named(selected)) if selected == name
             ) {
-                settings.persist_auth_secret_preference(team_scope, harness, None, ctx);
+                settings.persist_auth_secret_preference(&preference_scope, harness, None, ctx);
             }
         });
 
@@ -755,14 +757,14 @@ impl TypedActionView for AuthSecretSelector {
             AuthSecretSelectorAction::SelectSecret(name) => {
                 let name = name.clone();
                 let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-                let team_scope = self.request_team_scope(ctx);
                 self.ambient_agent_model.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
+                let preference_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
                     settings.persist_auth_secret_preference(
-                        team_scope,
+                        &preference_scope,
                         harness,
                         Some(AuthSecretPreference::Named(name)),
                         ctx,
@@ -772,13 +774,13 @@ impl TypedActionView for AuthSecretSelector {
             }
             AuthSecretSelectorAction::ClearSecret => {
                 let harness = self.ambient_agent_model.as_ref(ctx).selected_harness();
-                let team_scope = self.request_team_scope(ctx);
                 self.ambient_agent_model.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(None, ctx);
                 });
+                let preference_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.persist_auth_secret_preference(
-                        team_scope,
+                        &preference_scope,
                         harness,
                         Some(AuthSecretPreference::Inherit),
                         ctx,

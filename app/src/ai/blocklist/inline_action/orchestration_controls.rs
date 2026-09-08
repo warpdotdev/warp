@@ -727,8 +727,9 @@ pub fn apply_created_auth_secret_if_matches<V: View>(
         return false;
     }
     state.auth_secret_selection = AuthSecretSelection::Named(created_name.to_string());
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     persist_auth_secret_selection(
-        request_team_scope(ctx),
+        &team_scope,
         &state.harness_type,
         &state.auth_secret_selection,
         ctx,
@@ -760,8 +761,9 @@ pub fn apply_harness_change<A: OrchestrationControlAction, V: View>(
     fallback_base_model_id: Option<String>,
     ctx: &mut ViewContext<V>,
 ) {
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     orchestration_edit_state.apply_harness_change(
-        request_team_scope(ctx),
+        &team_scope,
         new_harness_type,
         fallback_base_model_id,
         ctx,
@@ -843,7 +845,8 @@ pub fn repopulate_all_pickers<A: OrchestrationControlAction, V: View>(
     handles: &OrchestrationPickerHandles<A>,
     ctx: &mut ViewContext<V>,
 ) {
-    state.revalidate_after_catalog_change(request_team_scope(ctx), ctx);
+    let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    state.revalidate_after_catalog_change(&team_scope, ctx);
     let is_local = !state.execution_mode.is_remote();
     if let Some(handle) = &handles.harness_picker {
         populate_harness_picker(handle, &state.harness_type, is_local, ctx);

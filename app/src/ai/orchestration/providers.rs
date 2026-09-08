@@ -185,8 +185,8 @@ pub fn persist_environment_selection(environment_id: &str, ctx: &mut AppContext)
 /// `None`. Only promotes a persisted name; never auto-picks the first
 /// loaded secret. Validates against the loaded secrets list when present,
 /// returning `None` if the persisted name has been deleted server-side.
-pub fn resolve_default_auth_secret_for_harness(
-    team_scope: RequestTeamScope,
+pub fn resolve_default_auth_secret_for_harness<S: TeamScope + ?Sized>(
+    team_scope: &S,
     harness_type: &str,
     ctx: &AppContext,
 ) -> Option<String> {
@@ -202,7 +202,7 @@ pub fn resolve_default_auth_secret_for_harness(
     };
 
     let availability = HarnessAvailabilityModel::as_ref(ctx);
-    match availability.auth_secrets_for(team_scope, harness) {
+    match availability.auth_secrets_for(RequestTeamScope::from_scope(team_scope), harness) {
         AuthSecretFetchState::Loaded(secrets) => {
             // Drop the persisted name if the secret was deleted server-side.
             persisted.filter(|name| secrets.iter().any(|s| s.name == *name))
@@ -219,8 +219,8 @@ pub fn resolve_default_auth_secret_for_harness(
 /// this harness. Prefers an explicit `Inherit` choice over a `Named`
 /// fallback so the plan card's "Inherit" survives across the RunAgents
 /// handoff (the `OrchestrationConfig` proto doesn't carry auth state).
-pub fn resolve_auth_secret_selection_for_harness(
-    team_scope: RequestTeamScope,
+pub fn resolve_auth_secret_selection_for_harness<S: TeamScope + ?Sized>(
+    team_scope: &S,
     harness_type: &str,
     ctx: &AppContext,
 ) -> AuthSecretSelection {
@@ -245,8 +245,8 @@ pub fn resolve_auth_secret_selection_for_harness(
 }
 
 /// Persists the user's auth-secret choice for the active scope and harness.
-pub(crate) fn persist_auth_secret_selection(
-    team_scope: RequestTeamScope,
+pub(crate) fn persist_auth_secret_selection<S: TeamScope + ?Sized>(
+    team_scope: &S,
     harness_type: &str,
     selection: &AuthSecretSelection,
     ctx: &mut AppContext,

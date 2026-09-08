@@ -4,18 +4,14 @@ use super::*;
 use crate::server::ids::ServerId;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
-
-fn team_scope(team_uid: i64) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(ServerId::from(
-        team_uid,
-    )))
+fn team_scope(team_uid: i64) -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(team_uid.into())
 }
 
 #[test]
 fn persisted_auth_secret_scope_serializes_only_optional_team_uid() {
-    let team = AuthSecretPreferenceScope::from(team_scope(7));
-    let teamless =
-        AuthSecretPreferenceScope::from(RequestTeamScope::from_scope(&TeamlessScopeForTest));
+    let team = AuthSecretPreferenceScope::from_scope(&team_scope(7));
+    let teamless = AuthSecretPreferenceScope::from_scope(&TeamlessScopeForTest);
 
     assert_eq!(
         serde_json::to_value(team).unwrap(),
@@ -35,13 +31,13 @@ fn scoped_auth_secret_preferences_are_isolated_by_team() {
 
         CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings.persist_auth_secret_preference(
-                team_a,
+                &team_a,
                 Harness::Claude,
                 Some(AuthSecretPreference::Named("team-a".to_string())),
                 ctx,
             );
             settings.persist_auth_secret_preference(
-                team_b,
+                &team_b,
                 Harness::Claude,
                 Some(AuthSecretPreference::Inherit),
                 ctx,
@@ -51,15 +47,15 @@ fn scoped_auth_secret_preferences_are_isolated_by_team() {
         app.read(|ctx| {
             let settings = CloudAgentSettings::as_ref(ctx);
             assert_eq!(
-                settings.auth_secret_preference(team_a, Harness::Claude),
+                settings.auth_secret_preference(&team_a, Harness::Claude),
                 Some(AuthSecretPreference::Named("team-a".to_string()))
             );
             assert_eq!(
-                settings.auth_secret_preference(team_b, Harness::Claude),
+                settings.auth_secret_preference(&team_b, Harness::Claude),
                 Some(AuthSecretPreference::Inherit)
             );
             assert_eq!(
-                settings.auth_secret_preference(team_a, Harness::Codex),
+                settings.auth_secret_preference(&team_a, Harness::Codex),
                 None
             );
         });
@@ -70,7 +66,7 @@ fn scoped_auth_secret_preferences_are_isolated_by_team() {
 fn teamless_scoped_write_replaces_legacy_preference() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
-        let teamless = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+        let teamless = TeamlessScopeForTest;
 
         CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings
@@ -86,14 +82,14 @@ fn teamless_scoped_write_replaces_legacy_preference() {
         });
         app.read(|ctx| {
             assert_eq!(
-                CloudAgentSettings::as_ref(ctx).auth_secret_preference(teamless, Harness::Claude),
+                CloudAgentSettings::as_ref(ctx).auth_secret_preference(&teamless, Harness::Claude),
                 Some(AuthSecretPreference::Named("legacy".to_string()))
             );
         });
 
         CloudAgentSettings::handle(&app).update(&mut app, |settings, ctx| {
             settings.persist_auth_secret_preference(
-                teamless,
+                &teamless,
                 Harness::Claude,
                 Some(AuthSecretPreference::Inherit),
                 ctx,
@@ -102,7 +98,7 @@ fn teamless_scoped_write_replaces_legacy_preference() {
         app.read(|ctx| {
             let settings = CloudAgentSettings::as_ref(ctx);
             assert_eq!(
-                settings.auth_secret_preference(teamless, Harness::Claude),
+                settings.auth_secret_preference(&teamless, Harness::Claude),
                 Some(AuthSecretPreference::Inherit)
             );
             assert!(settings.last_selected_auth_secret.value().is_empty());

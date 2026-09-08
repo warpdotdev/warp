@@ -2653,13 +2653,11 @@ impl Input {
                 vm_for_events.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
-                let team_scope = RequestTeamScope::from_scope(
-                    &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
-                );
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
                     settings.persist_auth_secret_preference(
-                        team_scope,
+                        &team_scope,
                         harness,
                         Some(AuthSecretPreference::Named(name)),
                         ctx,
@@ -2673,13 +2671,11 @@ impl Input {
             }
             AuthSecretFtuxViewEvent::Skipped { harness } => {
                 let harness = *harness;
-                let team_scope = RequestTeamScope::from_scope(
-                    &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
-                );
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
                     settings.persist_auth_secret_preference(
-                        team_scope,
+                        &team_scope,
                         harness,
                         Some(AuthSecretPreference::Inherit),
                         ctx,
