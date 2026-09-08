@@ -28,7 +28,6 @@ use crate::server::ids::ServerId;
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::team_scope::RequestTeamScope;
 use crate::util::time_format::format_approx_duration_from_now_utc;
-use crate::workspaces::user_workspaces::TeamScopeForCli;
 
 #[derive(Serialize)]
 struct SecretInfo {
@@ -508,7 +507,7 @@ fn list_secrets(
     _args: ListSecretsArgs,
 ) -> Result<()> {
     ManagedSecretManager::handle(ctx).update(ctx, |manager, ctx| {
-        let request_scope = RequestTeamScope::from_scope(&TeamScopeForCli::Personal);
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         ctx.spawn(
             manager.list_secrets(request_scope),
             move |_, result, ctx| match result {
