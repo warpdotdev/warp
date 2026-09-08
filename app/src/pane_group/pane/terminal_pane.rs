@@ -1980,7 +1980,7 @@ fn launch_remote_child(
         model.record_new_conversation_request_complete(request_id, conversation_id, ctx);
     });
 
-    let prepared = match prepare_remote_child_launch(&request, config, ctx) {
+    let prepared = match prepare_remote_child_launch(&request, config, team_scope, ctx) {
         Ok(prepared) => prepared,
         Err(error) => {
             let error_message = error.user_message();

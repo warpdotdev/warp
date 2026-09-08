@@ -220,6 +220,11 @@ impl BaseClient {
         self.auth_state.user_id()
     }
 
+    /// Returns whether the authenticated principal is a service account.
+    pub fn is_service_account(&self) -> bool {
+        self.auth_state.is_service_account()
+    }
+
     pub fn access_token_ignoring_validity(&self) -> Option<String> {
         self.auth_state.get_access_token_ignoring_validity()
     }

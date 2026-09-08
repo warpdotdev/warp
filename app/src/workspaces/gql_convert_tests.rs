@@ -45,7 +45,7 @@ fn drop_teams_the_user_is_not_a_member_of() {
         team("member", &["current-user"]),
     ]);
 
-    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), false);
 
     assert_eq!(team_names(&workspace), ["member"]);
 }
@@ -59,7 +59,7 @@ fn preserve_server_order_across_member_teams() {
         team("member-two", &["current-user"]),
     ]);
 
-    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), false);
 
     assert_eq!(team_names(&workspace), ["member-one", "member-two"]);
 }
@@ -73,9 +73,23 @@ fn drop_every_team_when_user_has_no_team_membership() {
         team("second", &["another-user"]),
     ]);
 
-    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"));
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), false);
 
     assert!(team_names(&workspace).is_empty());
+}
+
+#[test]
+fn service_accounts_keep_every_server_returned_team() {
+    // Service accounts aren't recorded as a human `TeamMember`, so the membership check
+    // must be skipped entirely and the server-returned teams trusted as-is.
+    let mut workspace = workspace(vec![
+        team("first", &["other-user"]),
+        team("second", &["another-user"]),
+    ]);
+
+    retain_authenticated_teams(&mut workspace, UserUid::new("current-user"), true);
+
+    assert_eq!(team_names(&workspace), ["first", "second"]);
 }
 
 #[test]

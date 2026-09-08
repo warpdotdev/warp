@@ -76,7 +76,9 @@ use crate::settings::{
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
-use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
+use crate::workspaces::gql_convert::{
+    PLACEHOLDER_WORKSPACE_UID, workspaces_metadata_response_from_gql,
+};
 use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
@@ -4196,7 +4198,10 @@ fn test_team_switcher_drops_teams_the_admin_is_not_a_member_of() {
             gql_team("other-team", "Other Team", &["someone-else"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4222,7 +4227,10 @@ fn test_team_switcher_keeps_every_team_the_user_is_a_member_of() {
             gql_team("second-team", "Second Team", &["test-user"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4250,7 +4258,10 @@ fn test_teamless_user_falls_back_to_workspace_settings() {
         workspace.settings.llm_settings.enabled = true;
         workspace.teams = vec![gql_team("other-team", "Other Team", &["someone-else"])];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4278,7 +4289,10 @@ fn test_member_team_settings_win_over_workspace_settings() {
         team.settings.llm_settings.enabled = false;
         workspace.teams = vec![team];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4334,11 +4348,13 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
         // The real conversion path: a teamless user's ONLY workspace is the
         // placeholder, which must stay filtered out of `workspaces`, while
         // the user-level purchase policy is captured separately.
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
+            ),
+            false,
+        );
         assert!(
             response.workspaces.is_empty(),
             "the placeholder workspace must stay filtered out"
@@ -4392,14 +4408,16 @@ fn test_workspace_policy_wins_over_user_level_policy() {
             premium_enabled: false,
             price_premium_bps: 0,
         };
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![
-                gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
-                gql_workspace("workspace_uid123456789", Some(standard_policy)),
-            ],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![
+                    gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
+                    gql_workspace("workspace_uid123456789", Some(standard_policy)),
+                ],
+            ),
+            false,
+        );
         assert_eq!(response.workspaces.len(), 1);
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
@@ -4483,7 +4501,8 @@ fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
     let mut workspace = gql_workspace("workspace_uid123456789", None);
     workspace.teams = vec![team_a, team_b];
 
-    let response: WorkspacesMetadataResponse = gql_user(None, vec![workspace]).into();
+    let response: WorkspacesMetadataResponse =
+        workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
 
     assert_eq!(response.workspaces.len(), 1);
     let teams = &response.workspaces[0].teams;

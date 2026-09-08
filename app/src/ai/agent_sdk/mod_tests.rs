@@ -13,9 +13,13 @@ use warpui::{App, SingletonEntity, WindowId};
 
 use super::{
     AgentDriverRunner, CommandAuthentication, command_authentication, command_requires_auth,
-    command_to_telemetry_event, reconcile_task_harness, resolve_local_run_team_scope,
+    command_to_telemetry_event, reconcile_task_harness, resolve_agent_driver_team_scope,
+    team_scope_for_task_scope,
 };
 use crate::ai::agent_sdk::driver::AgentDriverOptions;
+use crate::ai::ambient_agents::task::TaskScope;
+use crate::auth::AuthStateProvider;
+use crate::auth::user::{PrincipalType, User};
 use crate::root_view::NewWorkspaceSource;
 use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
@@ -126,7 +130,7 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
             &format!("--team={selected_team_uid}"),
         ]);
         let team_scope = app
-            .read(|ctx| resolve_local_run_team_scope(&args, ctx))
+            .read(|ctx| resolve_agent_driver_team_scope(&args, ctx))
             .unwrap()
             .expect("new local run should resolve a scope");
         assert_eq!(team_scope.team_uid(), Some(selected_team_uid));
@@ -190,12 +194,71 @@ fn task_id_run_skips_cli_team_resolution_and_new_run_scopes() {
     ]);
 
     App::test((), |app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         assert!(
-            app.read(|ctx| resolve_local_run_team_scope(&args, ctx))
+            app.read(|ctx| resolve_agent_driver_team_scope(&args, ctx))
                 .unwrap()
                 .is_none()
         );
     });
+}
+
+#[test]
+fn service_account_task_id_run_uses_sole_team_for_agent_driver() {
+    let args = parse_run_agent_args(&["agent", "run", "--task-id", TASK_ID]);
+
+    App::test((), |mut app| async move {
+        let owning_team = team(7, "Owning team");
+        let owning_team_uid = owning_team.uid;
+        initialize_team_scope_test_app(&mut app, vec![owning_team]);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.update(|ctx| {
+            let mut user = User::test();
+            user.principal_type = PrincipalType::ServiceAccount;
+            AuthStateProvider::as_ref(ctx).get().set_user(Some(user));
+        });
+
+        let team_scope = app
+            .read(|ctx| resolve_agent_driver_team_scope(&args, ctx))
+            .unwrap()
+            .expect("service-account task runs should initialize the driver team scope");
+
+        assert_eq!(team_scope.team_uid(), Some(owning_team_uid));
+    });
+}
+
+#[test]
+fn team_scope_for_task_scope_resolves_a_team_scoped_task() {
+    let owning_team_uid = ServerId::from(7);
+    let scope = TaskScope {
+        scope_type: "team".to_string(),
+        uid: owning_team_uid.to_string(),
+    };
+
+    assert_eq!(
+        team_scope_for_task_scope(&scope).team_uid(),
+        Some(owning_team_uid)
+    );
+}
+
+#[test]
+fn team_scope_for_task_scope_resolves_a_personal_task() {
+    let scope = TaskScope {
+        scope_type: "user".to_string(),
+        uid: "some-user-uid".to_string(),
+    };
+
+    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
+}
+
+#[test]
+fn team_scope_for_task_scope_falls_back_to_personal_for_an_unparseable_team_uid() {
+    let scope = TaskScope {
+        scope_type: "team".to_string(),
+        uid: "not-a-valid-uid".to_string(),
+    };
+
+    assert_eq!(team_scope_for_task_scope(&scope).team_uid(), None);
 }
 
 #[test]
