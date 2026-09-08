@@ -1671,6 +1671,9 @@ fn launch_local_no_harness_child(
                         task_id: child_task_id,
                         working_dir: None,
                     }),
+                    settings_inheritance_scope: ResolvedTeamScope::from_request_scope(
+                        request_team_scope,
+                    ),
                     is_shared_session_creator,
                 },
                 ctx,
@@ -1821,6 +1824,9 @@ fn launch_local_harness_child(
                         orchestration_harness: Some(orchestration_harness),
                         env_vars,
                         task_context: None,
+                        settings_inheritance_scope: ResolvedTeamScope::from_request_scope(
+                            request_team_scope,
+                        ),
                         is_shared_session_creator,
                     },
                     ctx,

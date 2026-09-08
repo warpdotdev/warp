@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -58,9 +57,7 @@ use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::{
-    AvailableLLMs, LLMInfo, LLMPreferences, LLMPreferencesEvent, ModelsByFeature,
-};
+use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::ai::outline::RepoOutlines;
@@ -116,7 +113,7 @@ use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::workspaces::workspace::Workspace;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, experiments,
@@ -312,15 +309,16 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
         });
         let team_a_uid: ServerId = 7.into();
         let team_b_uid: ServerId = 8.into();
-        let team_a_model_id = "team-a-only";
+        let team_a_default_model_id = "team-a-default";
+        let team_a_profile_model_id = "team-a-profile";
         let mut team_a =
             Team::from_local_cache(team_a_uid, "team-a".to_string(), None, None, None, None);
         team_a.feature_model_choice = ModelsByFeature {
             agent_mode: AvailableLLMs::new(
-                "team-a-default".into(),
+                team_a_default_model_id.into(),
                 vec![
-                    LLMInfo::new_for_test("team-a-default"),
-                    LLMInfo::new_for_test(team_a_model_id),
+                    LLMInfo::new_for_test(team_a_default_model_id),
+                    LLMInfo::new_for_test(team_a_profile_model_id),
                 ],
                 None,
             )
@@ -362,10 +360,25 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
         });
         let (terminal_view, parent_conversation_id) = pane_group.update(&mut app, |panes, ctx| {
             let parent_pane_id = panes.focused_pane_id(ctx);
+            let terminal_view = panes
+                .terminal_view_from_pane_id(parent_pane_id, ctx)
+                .unwrap();
+            let team_a_scope = ResolvedTeamScope::from_request_scope(request_team_scope);
+            LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+                assert!(preferences.update_active_profile_base_model(
+                    &LLMId::from(team_a_profile_model_id),
+                    Some(terminal_view.id()),
+                    ctx,
+                ));
+                preferences.set_agent_mode_llm_override(
+                    &team_a_scope,
+                    terminal_view.id(),
+                    LLMId::from(team_a_default_model_id),
+                    ctx,
+                );
+            });
             (
-                panes
-                    .terminal_view_from_pane_id(parent_pane_id, ctx)
-                    .unwrap(),
+                terminal_view,
                 start_parent_conversation(panes, parent_pane_id, ctx),
             )
         });
@@ -387,19 +400,11 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
                 .expect(1)
                 .create()
         };
-        let model_updates = Arc::new(AtomicUsize::new(0));
-        let model_updates_for_subscription = model_updates.clone();
         app.update(|ctx| {
-            ctx.subscribe_to_model(&LLMPreferences::handle(ctx), move |_, event, _| {
-                if matches!(event, LLMPreferencesEvent::UpdatedActiveAgentModeLLM) {
-                    model_updates_for_subscription.fetch_add(1, Ordering::SeqCst);
-                }
-            });
             UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
                 workspaces.switch_window_to_team(window_id, team_b_uid, ctx);
             });
         });
-        let model_updates_before_dispatch = model_updates.load(Ordering::SeqCst);
 
         pane_group.update(&mut app, |_, ctx| {
             terminal_view.update(ctx, |_, ctx| {
@@ -410,7 +415,7 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
                         prompt: "work".to_string(),
                         execution_mode: StartAgentExecutionMode::Local {
                             harness_type: None,
-                            model_id: Some(team_a_model_id.to_string()),
+                            model_id: None,
                         },
                         lifecycle_subscription: None,
                         parent_conversation_id,
@@ -426,9 +431,31 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
         );
 
         assert_eventually!(
-            200 => model_updates.load(Ordering::SeqCst) > model_updates_before_dispatch,
-            "the child model override was not applied through the captured team scope"
+            200 => pane_group.read(&app, |panes, _| panes.child_agent_panes.len()) == 1,
+            "the local dispatch did not materialize a hidden child pane"
         );
+        let child_terminal_view_id = pane_group.read(&app, |panes, ctx| {
+            let child_pane_id = panes
+                .child_agent_panes
+                .values()
+                .next()
+                .expect("the local dispatch should register its hidden child pane");
+            panes
+                .terminal_view_from_pane_id(*child_pane_id, ctx)
+                .expect("the hidden child pane should have a terminal view")
+                .id()
+        });
+        let inherited_model_id = app.read(|ctx| {
+            LLMPreferences::as_ref(ctx)
+                .get_active_base_model(
+                    &ResolvedTeamScope::from_request_scope(request_team_scope),
+                    ctx,
+                    Some(child_terminal_view_id),
+                )
+                .id
+                .clone()
+        });
+        assert_eq!(inherited_model_id.as_str(), team_a_default_model_id);
     });
 }
 
@@ -974,6 +1001,9 @@ fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
                     orchestration_harness: None,
                     env_vars: HashMap::new(),
                     task_context: None,
+                    settings_inheritance_scope: ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    ),
                     is_shared_session_creator: IsSharedSessionCreator::No,
                 },
                 ctx,
@@ -1046,6 +1076,9 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
                         task_id,
                         working_dir: None,
                     }),
+                    settings_inheritance_scope: ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    ),
                     is_shared_session_creator: IsSharedSessionCreator::No,
                 },
                 ctx,
