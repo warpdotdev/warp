@@ -1522,14 +1522,6 @@ fn handle_terminal_view_event(
 /// Dispatches a StartAgent request to the appropriate per-mode helper.
 /// Each helper echoes the child conversation id back via
 /// [`BlocklistAIHistoryModel::record_new_conversation_request_complete`].
-#[cfg(not(target_family = "wasm"))]
-fn local_child_team_scopes(request: &StartAgentRequest) -> (RequestTeamScope, ResolvedTeamScope) {
-    let request_scope = request.request_team_scope;
-    (
-        request_scope,
-        ResolvedTeamScope::from_request_scope(request_scope),
-    )
-}
 #[cfg_attr(target_family = "wasm", allow(unused_variables))]
 fn dispatch_start_agent_conversation(
     group: &mut PaneGroup,
@@ -1651,7 +1643,8 @@ fn launch_local_no_harness_child(
     let host_source = group
         .terminal_view_from_pane_id(parent_pane_id, ctx)
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
-    let (request_team_scope, team_scope) = local_child_team_scopes(&request);
+    let request_team_scope = request.request_team_scope;
+    let team_scope = ResolvedTeamScope::from_request_scope(request_team_scope);
 
     let launch = prepare_local_oz_child_launch(
         &request.name,
@@ -1791,7 +1784,8 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
-    let (request_team_scope, team_scope) = local_child_team_scopes(&request);
+    let request_team_scope = request.request_team_scope;
+    let team_scope = ResolvedTeamScope::from_request_scope(request_team_scope);
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(

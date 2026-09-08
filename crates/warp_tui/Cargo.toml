@@ -112,6 +112,7 @@ dunce.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
+mockito.workspace = true
 tempfile.workspace = true
 # `test-util` exposes `Appearance::mock()`, used to register the `Appearance`
 # singleton that the editor-backed TUI input view depends on in tests.
@@ -119,6 +120,7 @@ warp_core = { workspace = true, features = ["test-util"] }
 # `test-util` exposes `RenderState::layout_complete()`, used to deterministically
 # await async layout (e.g. diff ghost blocks) in tests instead of busy-polling.
 warp_editor = { workspace = true, features = ["test-util"] }
+warp_server_client.workspace = true
 # Process-level worker-dispatch regression test.
 command.workspace = true
 pathfinder_color.workspace = true

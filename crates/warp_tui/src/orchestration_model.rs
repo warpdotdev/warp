@@ -166,13 +166,6 @@ impl Entity for TuiOrchestrationModel {
 }
 
 impl SingletonEntity for TuiOrchestrationModel {}
-fn local_child_team_scopes(request: &StartAgentRequest) -> (RequestTeamScope, ResolvedTeamScope) {
-    let request_scope = request.request_team_scope;
-    (
-        request_scope,
-        ResolvedTeamScope::from_request_scope(request_scope),
-    )
-}
 
 impl TuiOrchestrationModel {
     /// Registers the singleton before sessions are created and wired to it.
@@ -781,7 +774,8 @@ impl TuiOrchestrationModel {
         working_directory: Option<PathBuf>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let (request_team_scope, team_scope) = local_child_team_scopes(&request);
+        let request_team_scope = request.request_team_scope;
+        let team_scope = ResolvedTeamScope::from_request_scope(request_team_scope);
         let launch = prepare_local_oz_child_launch(
             &request.name,
             &request.prompt,

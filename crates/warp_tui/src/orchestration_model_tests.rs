@@ -1,14 +1,20 @@
+use std::time::Duration;
+
+use futures_lite::future;
+use mockito::Matcher;
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
     OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
-    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
-    StartAgentRequest, UserWorkspaces, register_tui_session_view_test_singletons,
-    set_tui_workspace_teams_for_test,
+    ServerApiProvider, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
+    StartAgentOutcome, StartAgentRequest, UserWorkspaces,
+    register_tui_session_view_test_singletons, set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
+use warp_server_client::base_client::TEAM_UID_HEADER;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, Entity, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
+use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
@@ -36,6 +42,104 @@ impl Entity for CapturedRemoteDispatch {
     type Event = ();
 }
 
+#[test]
+fn local_dispatch_uses_request_scope_after_window_team_change() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture_with_session_materialization(&mut app, false);
+        app.read(|ctx| {
+            ServerApiProvider::as_ref(ctx)
+                .get()
+                .set_ambient_workload_token_for_test("test-workload-token".to_string());
+        });
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+        let team_a_uid = 7.into();
+        let team_b_uid = 8.into();
+        app.update(|ctx| {
+            set_tui_workspace_teams_for_test(
+                vec![
+                    (team_a_uid, "team-a".to_string()),
+                    (team_b_uid, "team-b".to_string()),
+                ],
+                ctx,
+            );
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.set_team_for_window(fixture.window_id, team_a_uid, ctx);
+            });
+        });
+        let request_team_scope = app.read(|ctx| {
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
+            )
+        });
+        let team_a_header = team_a_uid.to_string();
+        let request_mock = {
+            let mut server = warp_core::channel::ChannelState::mock_server();
+            server
+                .mock("POST", "/graphql/v2")
+                .match_query(Matcher::UrlEncoded(
+                    "op".to_string(),
+                    "CreateAgentTask".to_string(),
+                ))
+                .match_header(TEAM_UID_HEADER, team_a_header.as_str())
+                .with_status(200)
+                .with_body(
+                    r#"{"data":{"createAgentTask":{"__typename":"CreateAgentTaskOutput","responseContext":{"serverVersion":null},"taskId":"550e8400-e29b-41d4-a716-446655440000"}}}"#,
+                )
+                .expect(1)
+                .create()
+        };
+        let (dispatch_tx, dispatch_rx) = async_channel::bounded(1);
+        let orchestration = app.read(TuiOrchestrationModel::handle);
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&orchestration, move |_, event, _| {
+                if let super::TuiOrchestrationEvent::CreateLocalChildSession {
+                    model_id,
+                    team_scope,
+                    ..
+                } = event
+                {
+                    dispatch_tx
+                        .try_send((RequestTeamScope::from_scope(team_scope), model_id.clone()))
+                        .unwrap();
+                }
+            });
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(fixture.window_id, team_b_uid, ctx);
+            });
+            orchestration.update(ctx, |model, ctx| {
+                model.dispatch_create_agent(
+                    parent_session_id,
+                    StartAgentRequest {
+                        id: Default::default(),
+                        name: "local-child".to_string(),
+                        prompt: "work".to_string(),
+                        execution_mode: StartAgentExecutionMode::Local {
+                            harness_type: None,
+                            model_id: Some("team-a-only".to_string()),
+                        },
+                        lifecycle_subscription: None,
+                        parent_conversation_id,
+                        parent_run_id: Some("parent-run".to_string()),
+                        request_team_scope,
+                    },
+                    None,
+                    ctx,
+                );
+            });
+        });
+
+        let dispatch = future::race(async { dispatch_rx.recv().await.ok() }, async {
+            Timer::after(Duration::from_secs(5)).await;
+            None
+        })
+        .await
+        .expect("local child session was not created");
+        assert_eq!(dispatch.0, request_team_scope);
+        assert_eq!(dispatch.1.as_deref(), Some("team-a-only"));
+        request_mock.assert();
+    });
+}
 fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
     StartAgentRequest {
         id: Default::default(),
@@ -64,6 +168,13 @@ fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest
 
 /// Boots the container + root + orchestration model wiring (no live PTYs).
 fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
+    orchestration_fixture_with_session_materialization(app, true)
+}
+
+fn orchestration_fixture_with_session_materialization(
+    app: &mut App,
+    materialize_sessions: bool,
+) -> OrchestrationFixture {
     register_tui_session_view_test_singletons(app);
     add_test_semantic_selection(app);
     app.update(crate::autoupdate::TuiAutoupdater::register);
@@ -81,7 +192,9 @@ fn orchestration_fixture(app: &mut App) -> OrchestrationFixture {
         ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
     });
     let orchestration = app.update(TuiOrchestrationModel::register);
-    app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
+    if materialize_sessions {
+        app.update(|ctx| TuiSessions::wire_orchestration(&sessions, &orchestration, ctx));
+    }
     OrchestrationFixture {
         sessions,
         window_id,
@@ -348,51 +461,6 @@ fn remote_dispatch_uses_captured_scope_and_auth_secret() {
     });
 }
 
-#[test]
-fn local_dispatch_uses_captured_scope_after_window_team_change() {
-    App::test((), |mut app| async move {
-        let fixture = orchestration_fixture(&mut app);
-        let team_a = 7.into();
-        let team_b = 8.into();
-        app.update(|ctx| {
-            set_tui_workspace_teams_for_test(
-                vec![
-                    (team_a, "team-a".to_string()),
-                    (team_b, "team-b".to_string()),
-                ],
-                ctx,
-            );
-            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
-                workspaces.set_team_for_window(fixture.window_id, team_a, ctx);
-            });
-        });
-        let captured_scope = app.read(|ctx| {
-            RequestTeamScope::from_scope(
-                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
-            )
-        });
-        let mut request = remote_request(AIConversationId::new());
-        request.execution_mode = StartAgentExecutionMode::Local {
-            harness_type: None,
-            model_id: Some("auto".to_string()),
-        };
-        request.request_team_scope = captured_scope;
-
-        let later_window_scope = app.update(|ctx| {
-            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
-                workspaces.switch_window_to_team(fixture.window_id, team_b, ctx);
-            });
-            RequestTeamScope::from_scope(
-                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
-            )
-        });
-        let (task_scope, policy_scope) = super::local_child_team_scopes(&request);
-
-        assert_eq!(task_scope, captured_scope);
-        assert_eq!(RequestTeamScope::from_scope(&policy_scope), captured_scope);
-        assert_ne!(task_scope, later_window_scope);
-    });
-}
 /// Regression for QUALITY-1902 (the TUI counterpart of QUALITY-1897):
 /// `register_local_oz_child_session` must index the run id through
 /// `assign_run_id_for_conversation`, not a bare `set_task_id`, so the SSE
