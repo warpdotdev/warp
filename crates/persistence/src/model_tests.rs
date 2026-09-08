@@ -142,15 +142,15 @@ fn inference_usage_with_web_search(
     output_cost_in_cents: f32,
     web_search_count: u32,
     web_search_cost_in_cents: f32,
-) -> api::response_event::stream_finished::InferenceUsage {
-    api::response_event::stream_finished::InferenceUsage {
-        token_count: Some(api::response_event::stream_finished::TokenCount {
+) -> api::InferenceUsage {
+    api::InferenceUsage {
+        token_count: Some(api::TokenCount {
             input,
             output,
             input_cache_read: 0,
             input_cache_write: 0,
         }),
-        token_cost: Some(api::response_event::stream_finished::TokenCost {
+        token_cost: Some(api::TokenCost {
             input_cost_in_cents,
             output_cost_in_cents,
             input_cache_read_cost_in_cents: 0.0,
@@ -166,7 +166,7 @@ fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
     let mut usage_by_category = HashMap::new();
     usage_by_category.insert(
         "primary_agent".to_string(),
-        api::response_event::stream_finished::ChargedUsage {
+        api::ChargedUsage {
             direct_api_inference_usage: HashMap::from([(
                 "claude-4.5".to_string(),
                 inference_usage_with_web_search(1000, 200, 3.0, 6.0, 2, 5.0),
@@ -174,11 +174,12 @@ fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
             byok_inference_usage: HashMap::new(),
             custom_endpoint_inference_usage: HashMap::new(),
             platform_usage_in_cents: 1.0,
+            ..Default::default()
         },
     );
     usage_by_category.insert(
         "compaction".to_string(),
-        api::response_event::stream_finished::ChargedUsage {
+        api::ChargedUsage {
             direct_api_inference_usage: HashMap::from([(
                 "claude-4.5".to_string(),
                 inference_usage_with_web_search(500, 100, 1.5, 3.0, 1, 2.5),
@@ -186,9 +187,10 @@ fn charged_usage_totals_sums_web_search_fields_across_categories_and_models() {
             byok_inference_usage: HashMap::new(),
             custom_endpoint_inference_usage: HashMap::new(),
             platform_usage_in_cents: 0.0,
+            ..Default::default()
         },
     );
-    let charges = api::response_event::stream_finished::RequestCharges { usage_by_category };
+    let charges = api::RequestCharges { usage_by_category };
 
     let totals = ChargedUsageTotals::from(&charges);
 
