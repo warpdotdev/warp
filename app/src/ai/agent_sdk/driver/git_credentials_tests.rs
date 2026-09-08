@@ -331,6 +331,60 @@ fn init_repo(dir: &std::path::Path) {
 }
 
 #[test]
+#[serial_test::serial]
+fn global_git_identity_reads_the_actual_global_config() -> Result<()> {
+    // #[serial] because this exercises the real `git config --global`
+    // invocation, which reads/writes process-wide state (the `--global`
+    // config file resolved from HOME) rather than a repo-local temp dir.
+    let temp_home = tempfile::tempdir()?;
+    let prev_home = std::env::var_os("HOME");
+    let prev_git_config_global = std::env::var_os("GIT_CONFIG_GLOBAL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp_home.path()) };
+    // A `GIT_CONFIG_GLOBAL` override in the ambient environment would take
+    // priority over HOME and defeat this test's isolation.
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
+
+    let result = (|| -> Result<()> {
+        assert_eq!(
+            global_git_identity(),
+            None,
+            "no global identity should be configured in the fresh temp HOME yet"
+        );
+
+        run_git_config("user.name", "Warp");
+        run_git_config("user.email", "agent@warp.dev");
+
+        // This is the regression this test guards: `global_git_identity()` must
+        // issue `git config --global --get <key>` (an option to the `config`
+        // subcommand). Building it as `git --global config --get <key>` instead
+        // (`--global` as a top-level git option, which git rejects) would make
+        // this call fail silently and always return `None`, permanently
+        // defeating the `configure_repository_git_identity_if_unset` fallback
+        // logic that depends on a real baseline.
+        assert_eq!(
+            global_git_identity(),
+            Some(("Warp".to_string(), "agent@warp.dev".to_string()))
+        );
+        Ok(())
+    })();
+
+    match prev_home {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(home) => unsafe { std::env::set_var("HOME", home) },
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+    match prev_git_config_global {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        Some(value) => unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) },
+        None => {}
+    }
+    result
+}
+
+#[test]
 fn repository_identity_is_unchanged_when_it_matches_the_baseline() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
     init_repo(temp_dir.path());

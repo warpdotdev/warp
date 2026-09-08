@@ -667,14 +667,34 @@ fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &st
     run_repository_git_config(repository_dir, "user.email", &email);
 }
 
-/// Reads a single git config key with `--get`, honoring git's own resolution
-/// order for `location` (e.g. `["--global"]` reads the process-wide value;
-/// `["-C", dir]` reads a repository's effective value, local over global over
-/// system). Returns `None` if the key is unset or the invocation fails.
-fn read_git_config(location: &[&str], key: &str) -> Option<String> {
-    let mut args = location.to_vec();
-    args.extend(["config", "--get", key]);
-    let output = BlockingCommand::new("git").args(&args).output().ok()?;
+/// Where to read a git identity from: either the process-wide `--global`
+/// config, or a specific repository's effective config (local over global
+/// over system, exactly as git resolves it for a commit there).
+///
+/// `--global` is an option to the `config` subcommand, while `-C` is a
+/// top-level git option that must come *before* the subcommand, so the two
+/// scopes need different argument placement — this exists to keep that
+/// placement correct in one place rather than repeated at call sites.
+enum GitIdentityScope<'a> {
+    Global,
+    Repository(&'a std::path::Path),
+}
+
+/// Reads a single git config key with `--get` from `scope`. Returns `None` if
+/// the key is unset or the invocation fails.
+fn read_git_config(scope: &GitIdentityScope, key: &str) -> Option<String> {
+    let output = match scope {
+        GitIdentityScope::Global => BlockingCommand::new("git")
+            .args(["config", "--global", "--get", key])
+            .output(),
+        GitIdentityScope::Repository(dir) => {
+            let dir = dir.to_string_lossy();
+            BlockingCommand::new("git")
+                .args(["-C", dir.as_ref(), "config", "--get", key])
+                .output()
+        }
+    }
+    .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -682,11 +702,11 @@ fn read_git_config(location: &[&str], key: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-/// The `user.name`/`user.email` pair currently in effect at `location` (see
+/// The `user.name`/`user.email` pair currently in effect at `scope` (see
 /// [`read_git_config`]). `None` unless both are set.
-fn read_git_identity(location: &[&str]) -> Option<(String, String)> {
-    let name = read_git_config(location, "user.name")?;
-    let email = read_git_config(location, "user.email")?;
+fn read_git_identity(scope: &GitIdentityScope) -> Option<(String, String)> {
+    let name = read_git_config(scope, "user.name")?;
+    let email = read_git_config(scope, "user.email")?;
     Some((name, email))
 }
 
@@ -694,13 +714,13 @@ fn read_git_identity(location: &[&str]) -> Option<(String, String)> {
 /// right after bootstrap (before any repo is cloned or any setup command
 /// runs), as the `baseline` for [`configure_repository_git_identity_if_unset`].
 pub(crate) fn global_git_identity() -> Option<(String, String)> {
-    read_git_identity(&["--global"])
+    read_git_identity(&GitIdentityScope::Global)
 }
 
 /// The git identity currently in effect for `repository_dir` (local over
 /// global over system, exactly as git itself resolves it for a commit there).
 fn repository_git_identity(repository_dir: &std::path::Path) -> Option<(String, String)> {
-    read_git_identity(&["-C", &repository_dir.to_string_lossy()])
+    read_git_identity(&GitIdentityScope::Repository(repository_dir))
 }
 
 /// Reports whether `repository_dir`'s effective identity differs from
