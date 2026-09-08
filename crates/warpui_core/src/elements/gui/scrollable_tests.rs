@@ -16,6 +16,37 @@ use crate::{
     WindowInvalidation,
 };
 
+/// 500px of content in a 200px viewport leaves 300px of scrollable range.
+fn scroll_data_at(scroll_start: f32) -> ScrollData {
+    ScrollData {
+        scroll_start: scroll_start.into_pixels(),
+        visible_px: 200.0.into_pixels(),
+        total_size: 500.0.into_pixels(),
+    }
+}
+
+#[test]
+fn animate_scroll_by_clamped_stops_the_target_at_the_childs_limit() {
+    let now = Instant::now();
+    let mut state = ScrollState::default();
+
+    let mid_range = scroll_data_at(0.);
+    assert!(state.animate_scroll_by_clamped((-100.0).into_pixels(), &mid_range, now));
+    assert_eq!(state.smooth_scroll_target(0.), 100.);
+
+    // A notch with only 40px of room left is admitted up to the boundary and no further, so the
+    // target stays somewhere the child can actually reach.
+    let near_end = scroll_data_at(260.);
+    let mut state = ScrollState::default();
+    assert!(state.animate_scroll_by_clamped((-100.0).into_pixels(), &near_end, now));
+    assert_eq!(state.smooth_scroll_target(260.), 300.);
+
+    // Already at the boundary: further same-direction notches contribute nothing rather than
+    // accumulating overshoot the child can never apply.
+    assert!(!state.animate_scroll_by_clamped((-100.0).into_pixels(), &near_end, now));
+    assert_eq!(state.smooth_scroll_target(260.), 300.);
+}
+
 /// Since we support scrolling in both vertical and horizontal directions,
 /// this macro makes it easier to define tests for both directions. Simply
 /// define an axis-agnostic "test function" that is _essentially_ a test

@@ -68,6 +68,30 @@ impl ScrollState {
     pub fn smooth_scroll_target(&self, scroll_start: f32) -> f32 {
         scroll_start - self.smooth_scroll.remaining_target_delta()
     }
+
+    /// Adds `delta` as a smooth-scroll contribution, clamped so the animation's target stays
+    /// within the child's scrollable range, and reports whether any movement was added.
+    ///
+    /// Clamping against the target rather than the child's currently displayed position matters
+    /// at a boundary: an unclamped contribution would leave the controller animating overshoot
+    /// the child can never apply, so its target would drift away from the child's real position.
+    pub fn animate_scroll_by_clamped(
+        &mut self,
+        delta: Pixels,
+        scroll_data: &ScrollData,
+        now: Instant,
+    ) -> bool {
+        let target = self.smooth_scroll_target(scroll_data.scroll_start.as_f32());
+        let max_scroll = (scroll_data.total_size - scroll_data.visible_px)
+            .max(Pixels::zero())
+            .as_f32();
+        let contribution = (target - delta.as_f32()).clamp(0., max_scroll) - target;
+        if contribution.abs() <= f32::EPSILON {
+            return false;
+        }
+        self.animate_scroll_by(-contribution, now);
+        true
+    }
 }
 
 pub type ScrollStateHandle = Arc<Mutex<ScrollState>>;
@@ -350,7 +374,13 @@ impl Scrollable {
             .scroll(delta / scrollbar_size_percentage_before_resize, ctx);
     }
 
-    fn mousewheel(&mut self, delta: Vector2F, precise: bool, ctx: &mut EventContext) {
+    fn mousewheel(
+        &mut self,
+        delta: Vector2F,
+        precise: bool,
+        ctx: &mut EventContext,
+        app: &AppContext,
+    ) {
         if self
             .scrollbar_size_percentage
             .expect("should be set at event dispatching time")
@@ -366,8 +396,14 @@ impl Scrollable {
                 // See the comment on [`NUM_PIXELS_PER_LINE`] for more details.
                 let full_delta = delta_along_axis * NUM_PIXELS_PER_LINE;
                 if should_animate_scroll(precise) {
-                    self.state().animate_scroll_by(full_delta, Instant::now());
-                    ctx.notify();
+                    let scroll_data = self.scroll_data(app);
+                    if self.state().animate_scroll_by_clamped(
+                        full_delta.into_pixels(),
+                        &scroll_data,
+                        Instant::now(),
+                    ) {
+                        ctx.notify();
+                    }
                 } else {
                     self.child.scroll(full_delta.into_pixels(), ctx);
                 }
@@ -703,7 +739,7 @@ impl Element for Scrollable {
                 if self.bounds().unwrap().contains_point(*position)
                     && !ctx.is_covered(Point::from_vec2f(*position, z_index))
                 {
-                    self.mousewheel(*delta, *precise, ctx);
+                    self.mousewheel(*delta, *precise, ctx, app);
                     return true;
                 }
                 handled

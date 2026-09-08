@@ -154,15 +154,11 @@ impl AxisConfiguration {
                 let Some(scroll_data) = child.scroll_data(axis, app) else {
                     return;
                 };
-                let mut state = handle.lock().unwrap();
-                let target = state.smooth_scroll_target(scroll_data.scroll_start.as_f32());
-                let max_scroll = (scroll_data.total_size - scroll_data.visible_px)
-                    .max(Pixels::zero())
-                    .as_f32();
-                let new_target = (target - delta.as_f32()).clamp(0.0, max_scroll);
-                let contribution = new_target - target;
-                if contribution.abs() > f32::EPSILON {
-                    state.animate_scroll_by(-contribution, Instant::now());
+                if handle.lock().unwrap().animate_scroll_by_clamped(
+                    delta,
+                    &scroll_data,
+                    Instant::now(),
+                ) {
                     ctx.notify();
                 }
             }
