@@ -65,11 +65,11 @@ impl AxisConfiguration {
         }
     }
 
-    /// Like [`Self::scroll_data`], but for a clipped axis reports the controller's target
-    /// rather than its displayed (possibly lagging) position. Bounds/propagation decisions
-    /// should use this: once a rapid sequence of notches has already targeted the boundary,
-    /// checking the lagging displayed position would keep reporting the axis as scrollable, so
-    /// further same-direction notches would never propagate to a parent.
+    /// Like [`Self::scroll_data`], but reports the controller's target rather than its displayed
+    /// (possibly lagging) position. Bounds/propagation decisions should use this: once a rapid
+    /// sequence of notches has already targeted the boundary, checking the lagging displayed
+    /// position would keep reporting the axis as scrollable, so further same-direction notches
+    /// would never propagate to a parent.
     fn scroll_data_for_bounds(
         &self,
         viewport_size: Vector2F,
@@ -78,7 +78,19 @@ impl AxisConfiguration {
         app: &AppContext,
     ) -> ScrollData {
         match self {
-            Self::Manual(_) => self.scroll_data(viewport_size, child, axis, app),
+            Self::Manual(handle) => {
+                let scroll_data = child
+                    .scroll_data(axis, app)
+                    .expect("Axis is set to manual scrolling. Child should implement this axis");
+                let target = handle
+                    .lock()
+                    .unwrap()
+                    .smooth_scroll_target(scroll_data.scroll_start.as_f32());
+                ScrollData {
+                    scroll_start: target.into_pixels(),
+                    ..scroll_data
+                }
+            }
             Self::Clipped(ClippedAxisConfiguration { handle, .. }) => ScrollData {
                 scroll_start: handle.scroll_target(),
                 visible_px: viewport_size.along(axis).into_pixels(),
@@ -124,9 +136,11 @@ impl AxisConfiguration {
 
     /// Scroll the underlying element with an eligible discrete (non-precise) wheel delta,
     /// composing with or reversing any smooth-scroll animation already in flight rather than
-    /// applying immediately. For a manually-managed child, the delta is accumulated into a
-    /// controller on the shared handle; the incremental amount is applied to the child lazily,
-    /// as further events are dispatched (see `ScrollableState::dispatch_event`).
+    /// applying immediately. For a manually-managed child, the delta is clamped against the
+    /// controller's target (not its lagging displayed position, for the same reason
+    /// [`Self::scroll_data_for_bounds`] does) and accumulated into a controller on the shared
+    /// handle; the incremental amount is applied to the child lazily, as further events are
+    /// dispatched (see `ScrollableState::dispatch_event`).
     fn scroll_to_animated(
         &self,
         child: &mut dyn NewScrollableElement,
@@ -134,14 +148,24 @@ impl AxisConfiguration {
         delta: Pixels,
         axis: Axis,
         ctx: &mut EventContext,
+        app: &AppContext,
     ) {
         match self {
             Self::Manual(handle) => {
-                handle
-                    .lock()
-                    .unwrap()
-                    .animate_scroll_by(delta.as_f32(), Instant::now());
-                ctx.notify();
+                let Some(scroll_data) = child.scroll_data(axis, app) else {
+                    return;
+                };
+                let mut state = handle.lock().unwrap();
+                let target = state.smooth_scroll_target(scroll_data.scroll_start.as_f32());
+                let max_scroll = (scroll_data.total_size - scroll_data.visible_px)
+                    .max(Pixels::zero())
+                    .as_f32();
+                let new_target = (target - delta.as_f32()).clamp(0.0, max_scroll);
+                let contribution = new_target - target;
+                if contribution.abs() > f32::EPSILON {
+                    state.animate_scroll_by(-contribution, Instant::now());
+                    ctx.notify();
+                }
             }
             Self::Clipped(ClippedAxisConfiguration { handle, .. }) => {
                 animate_clipped_scrollable_handle_with_delta(
@@ -159,12 +183,11 @@ impl AxisConfiguration {
         }
     }
 
-    /// Whether this axis is a Manual configuration with a smooth-scroll animation still easing
-    /// in.
+    /// Whether a smooth-scroll animation is still easing in on this axis.
     fn is_animating_smooth_scroll(&self) -> bool {
         match self {
             Self::Manual(handle) => handle.lock().unwrap().is_animating_smooth_scroll(),
-            Self::Clipped { .. } => false,
+            Self::Clipped(ClippedAxisConfiguration { handle, .. }) => handle.is_animating(),
         }
     }
 
@@ -826,14 +849,15 @@ impl DualAxisConfig {
 
     /// Scroll child on the given axis with an eligible discrete (non-precise) wheel delta,
     /// composing with or reversing any smooth-scroll animation already in flight rather than
-    /// applying immediately. A manually-managed child does not support smooth scrolling in
-    /// this phase, so it falls back to the immediate path.
+    /// applying immediately. A `Manual` axis animates its own controller and applies the
+    /// incremental amount to the child lazily; a `Clipped` axis animates its handle directly.
     pub(super) fn scroll_to_animated(
         &mut self,
         viewport_size: Vector2F,
         delta: Pixels,
         axis: Axis,
         ctx: &mut EventContext,
+        app: &AppContext,
     ) {
         if delta.as_f32().abs() < f32::EPSILON {
             return;
@@ -845,12 +869,22 @@ impl DualAxisConfig {
                 vertical,
                 child,
             } => match axis {
-                Axis::Horizontal => {
-                    horizontal.scroll_to_animated(child.as_mut(), viewport_size, delta, axis, ctx)
-                }
-                Axis::Vertical => {
-                    vertical.scroll_to_animated(child.as_mut(), viewport_size, delta, axis, ctx)
-                }
+                Axis::Horizontal => horizontal.scroll_to_animated(
+                    child.as_mut(),
+                    viewport_size,
+                    delta,
+                    axis,
+                    ctx,
+                    app,
+                ),
+                Axis::Vertical => vertical.scroll_to_animated(
+                    child.as_mut(),
+                    viewport_size,
+                    delta,
+                    axis,
+                    ctx,
+                    app,
+                ),
             },
             Self::Clipped {
                 horizontal,

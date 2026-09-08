@@ -1702,6 +1702,108 @@ fn can_scroll_delta_uses_target_not_lagging_displayed_position_for_clipped_axis(
     })
 }
 
+/// A minimal manually-managed scrollable child whose reported `scroll_start` is fixed by the
+/// test, standing in for a real child whose applied position hasn't yet caught up to an
+/// in-flight smooth-scroll animation's target.
+struct ManualProbeElement {
+    scroll_top: f32,
+    total_size: f32,
+    visible_px: f32,
+}
+
+impl Element for ManualProbeElement {
+    fn layout(
+        &mut self,
+        _constraint: SizeConstraint,
+        _ctx: &mut LayoutContext,
+        _app: &AppContext,
+    ) -> Vector2F {
+        vec2f(0., self.total_size)
+    }
+
+    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
+
+    fn paint(&mut self, _origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {}
+
+    fn size(&self) -> Option<Vector2F> {
+        Some(vec2f(0., self.total_size))
+    }
+
+    fn origin(&self) -> Option<Point> {
+        Some(Point::new(0., 0., ZIndex::new(0)))
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &DispatchedEvent,
+        _ctx: &mut EventContext,
+        _app: &AppContext,
+    ) -> bool {
+        false
+    }
+}
+
+impl NewScrollableElement for ManualProbeElement {
+    fn axis(&self) -> ScrollableAxis {
+        ScrollableAxis::Vertical
+    }
+
+    fn scroll_data(&self, axis: Axis, _app: &AppContext) -> Option<ScrollData> {
+        match axis {
+            Axis::Vertical => Some(ScrollData {
+                scroll_start: Pixels::new(self.scroll_top),
+                visible_px: Pixels::new(self.visible_px),
+                total_size: Pixels::new(self.total_size),
+            }),
+            Axis::Horizontal => None,
+        }
+    }
+
+    fn scroll(&mut self, _delta: Pixels, _axis: Axis, _ctx: &mut EventContext) {}
+}
+
+/// Regression test for the manual-axis counterpart of the Clipped-axis bug above:
+/// `SingleAxisConfig::can_scroll_delta`'s `Manual` arm used to delegate straight to
+/// `scroll_data`, i.e. the child's own (possibly lagging) applied position, instead of the
+/// controller's target.
+#[test]
+fn can_scroll_delta_uses_target_not_lagging_displayed_position_for_manual_axis() {
+    let _flag = FeatureFlag::SmoothScrolling.override_enabled(true);
+
+    App::test((), |app| async move {
+        app.read(|ctx| {
+            let handle = ScrollStateHandle::default();
+            // The child is 120px tall; constrain the viewport to 60px so the max scroll position
+            // is exactly 60px. The child's own reported position stays at 0, as if none of a
+            // fast burst's increments had been drained to it yet.
+            let child = ManualProbeElement {
+                scroll_top: 0.,
+                total_size: 120.,
+                visible_px: 60.,
+            };
+            let config = SingleAxisConfig::Manual {
+                handle: handle.clone(),
+                child: Box::new(child).finish_scrollable(),
+            };
+            let viewport_size = vec2f(400., 60.);
+
+            // A raw wheel delta of -60 drives the controller's target to the boundary (60), even
+            // though the child's own reported position (used above as `scroll_top: 0.`) hasn't
+            // moved at all yet.
+            handle
+                .lock()
+                .unwrap()
+                .animate_scroll_by(-60.0, Instant::now());
+            assert_eq!(handle.lock().unwrap().smooth_scroll_target(0.), 60.);
+
+            // A further same-direction notch must be reported as unable to scroll further (so
+            // it propagates to a parent scrollable), even though the child's own applied
+            // position hasn't caught up to the boundary yet.
+            assert!(!config.can_scroll_delta(Axis::Vertical, viewport_size, vec2f(0., -1.), ctx));
+        });
+    })
+}
+
 #[test]
 fn dual_axis_notches_animate_each_axis_independently_to_completion() {
     let _flag = FeatureFlag::SmoothScrolling.override_enabled(true);
@@ -1753,6 +1855,162 @@ fn dual_axis_notches_animate_each_axis_independently_to_completion() {
             assert_eq!(horizontal.scroll_start().as_f32(), 40.);
             assert_eq!(vertical.scroll_start().as_f32(), 40.);
         });
+
+        app.update(|ctx| {
+            ctx.windows()
+                .close_window(window_id, TerminationMode::ForceTerminate)
+        });
+    })
+}
+
+/// A single-axis element that records how many times it's painted, in an `Rc<Cell<usize>>`
+/// shared with the test. Only scrollable on the horizontal axis; the vertical axis in the
+/// mixed-axis test below is handled externally by a `Clipped` `AxisConfiguration`.
+struct MixedAxisPaintCountingChild {
+    size: Vector2F,
+    paint_count: Rc<Cell<usize>>,
+}
+
+impl Element for MixedAxisPaintCountingChild {
+    fn layout(
+        &mut self,
+        _constraint: SizeConstraint,
+        _ctx: &mut LayoutContext,
+        _app: &AppContext,
+    ) -> Vector2F {
+        self.size
+    }
+
+    fn after_layout(&mut self, _ctx: &mut AfterLayoutContext, _app: &AppContext) {}
+
+    fn paint(&mut self, _origin: Vector2F, _ctx: &mut PaintContext, _app: &AppContext) {
+        self.paint_count.set(self.paint_count.get() + 1);
+    }
+
+    fn size(&self) -> Option<Vector2F> {
+        Some(self.size)
+    }
+
+    fn origin(&self) -> Option<Point> {
+        Some(Point::new(0., 0., ZIndex::new(0)))
+    }
+
+    fn dispatch_event(
+        &mut self,
+        _event: &DispatchedEvent,
+        _ctx: &mut EventContext,
+        _app: &AppContext,
+    ) -> bool {
+        false
+    }
+}
+
+impl NewScrollableElement for MixedAxisPaintCountingChild {
+    fn axis(&self) -> ScrollableAxis {
+        ScrollableAxis::Horizontal
+    }
+
+    fn scroll_data(&self, axis: Axis, _app: &AppContext) -> Option<ScrollData> {
+        match axis {
+            // The horizontal (Manual) axis never receives any scroll input in this test, so it
+            // stays idle throughout.
+            Axis::Horizontal => Some(ScrollData {
+                scroll_start: Pixels::zero(),
+                visible_px: Pixels::new(SCROLLABLE_VIEWPORT_SIZE),
+                total_size: Pixels::new(SCROLLABLE_VIEWPORT_SIZE),
+            }),
+            Axis::Vertical => None,
+        }
+    }
+
+    fn scroll(&mut self, _delta: Pixels, _axis: Axis, _ctx: &mut EventContext) {}
+}
+
+struct MixedAxisPaintCountingView {
+    vertical_handle: ClippedScrollStateHandle,
+    paint_count: Rc<Cell<usize>>,
+}
+
+impl Entity for MixedAxisPaintCountingView {
+    type Event = ();
+}
+
+impl View for MixedAxisPaintCountingView {
+    fn render(&self, _: &AppContext) -> Box<dyn Element> {
+        let axis_config = DualAxisConfig::Manual {
+            horizontal: AxisConfiguration::Manual(Default::default()),
+            vertical: AxisConfiguration::Clipped(ClippedAxisConfiguration {
+                handle: self.vertical_handle.clone(),
+                max_size: None,
+                stretch_child: false,
+            }),
+            child: Box::new(MixedAxisPaintCountingChild {
+                size: vec2f(SCROLLABLE_VIEWPORT_SIZE, 500.),
+                paint_count: self.paint_count.clone(),
+            })
+            .finish_scrollable(),
+        };
+        let scrollable =
+            NewScrollable::horizontal_and_vertical(axis_config, Fill::None, Fill::None, Fill::None);
+        ConstrainedBox::new(scrollable.finish())
+            .with_height(SCROLLABLE_VIEWPORT_SIZE)
+            .with_width(SCROLLABLE_VIEWPORT_SIZE)
+            .finish()
+    }
+
+    fn ui_name() -> &'static str {
+        "MixedAxisPaintCountingView"
+    }
+}
+
+impl TypedActionView for MixedAxisPaintCountingView {
+    type Action = ();
+}
+
+/// Regression test for a `Clipped` axis nested inside a mixed `DualAxisConfig::Manual` (one axis
+/// `Manual`, the other `Clipped`) never scheduling its own next frame: `paint_child`'s repaint
+/// gate checked `AxisConfiguration::is_animating_smooth_scroll`, which always returned `false`
+/// for a `Clipped` arm, so an animating `Clipped` axis there never called `ctx.repaint_after` and
+/// the animation stalled after the first paint with nothing else to drive it forward.
+#[test]
+fn mixed_axis_clipped_animation_keeps_self_scheduling_frames() {
+    let _flag = FeatureFlag::SmoothScrolling.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let app = &mut app;
+        let paint_count = Rc::new(Cell::new(0usize));
+        let vertical_handle = ClippedScrollStateHandle::default();
+        // Seed an in-flight vertical (Clipped) animation directly, isolating the paint-scheduling
+        // defect from wheel-dispatch plumbing.
+        vertical_handle.animate_scroll_by(200.0.into_pixels(), Instant::now());
+
+        let (window_id, _view) = app.add_window(WindowStyle::NotStealFocus, {
+            let paint_count = paint_count.clone();
+            let vertical_handle = vertical_handle.clone();
+            move |_| MixedAxisPaintCountingView {
+                vertical_handle,
+                paint_count,
+            }
+        });
+
+        let presenter = Rc::new(RefCell::new(Presenter::new(window_id)));
+        let view_id = app.root_view_id(window_id).unwrap();
+        app.update(|ctx| render(&mut presenter.borrow_mut(), view_id, ctx));
+        let paints_after_first_frame = paint_count.get();
+        assert!(
+            paints_after_first_frame >= 1,
+            "sanity check: at least one paint should have occurred by now"
+        );
+
+        // Real time passes, comfortably longer than the animation's duration, with nothing else
+        // touching the window: no dispatched events, no manual re-render.
+        crate::r#async::Timer::after(Duration::from_millis(300)).await;
+
+        assert!(
+            paint_count.get() > paints_after_first_frame,
+            "a Clipped axis nested in a mixed DualAxisConfig::Manual must keep requesting its \
+             own repaints while animating, the same as a Clipped axis painted on its own does"
+        );
 
         app.update(|ctx| {
             ctx.windows()
@@ -1919,8 +2177,8 @@ fn long_rapid_same_direction_burst_through_wheel_dispatch_clamps_without_losing_
         let (window_id, view, presenter) = setup_vertical_clipped_scrollable(app);
 
         // 25 rapid same-direction notches dispatched back-to-back -- the input pattern a
-        // clicky trackball wheel produces during a fast spin. All 25 land well inside the
-        // 120ms animation window, so every contribution is simultaneously active at once.
+        // clicky trackball wheel produces during a fast spin. All 25 land before any of them
+        // could settle, so every contribution is simultaneously active at once.
         for _ in 0..25 {
             app.update(|ctx| dispatch_non_precise_wheel_down(ctx, window_id, presenter.clone()));
         }

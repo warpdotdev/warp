@@ -60,6 +60,14 @@ impl ScrollState {
     pub fn take_smooth_scroll_increment(&mut self, now: Instant) -> f32 {
         self.smooth_scroll.take_increment(now)
     }
+
+    /// The position this axis's animation is heading toward, given the child's own currently
+    /// reported `scroll_start`. This controller tracks only the raw delta contribution not yet
+    /// applied to the child (not an absolute position, unlike a `Clipped` axis's controller), so
+    /// the eventual settle position is the child's real position plus what it's still owed.
+    pub fn smooth_scroll_target(&self, scroll_start: f32) -> f32 {
+        scroll_start - self.smooth_scroll.remaining_target_delta()
+    }
 }
 
 pub type ScrollStateHandle = Arc<Mutex<ScrollState>>;

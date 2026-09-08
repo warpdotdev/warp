@@ -773,12 +773,14 @@ impl ScrollableState {
                         delta.along(Axis::Horizontal).into_pixels(),
                         Axis::Horizontal,
                         ctx,
+                        app,
                     );
                     config.scroll_to_animated(
                         viewport_size,
                         delta.along(Axis::Vertical).into_pixels(),
                         Axis::Vertical,
                         ctx,
+                        app,
                     );
                 } else {
                     config.scroll_to(
@@ -831,6 +833,7 @@ impl ScrollableState {
                         delta.along(*axis).into_pixels(),
                         *axis,
                         ctx,
+                        app,
                     );
                 } else {
                     config.scroll_to(viewport_size, delta.along(*axis).into_pixels(), *axis, ctx);

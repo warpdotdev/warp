@@ -15,7 +15,8 @@ Figma: none provided. This document defines the interaction.
 ## Behavior
 1. Warp smooths line-based, non-precise wheel input when the `SmoothScrolling` feature flag is
    enabled.
-   - The flag is enabled by default and acts as a rollout gate, not a user preference.
+   - The flag acts as a rollout gate, not a user preference: it is enabled for local and
+     development builds, not in released builds.
    - Pixel-based trackpad and high-resolution wheel input remains immediate.
    - When the flag is disabled, new wheel input follows the immediate path. Changing the flag does
      not itself guarantee cancellation of an animation already in flight.

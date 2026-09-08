@@ -433,6 +433,13 @@ impl SmoothScrollController {
         self.last_taken = current;
         increment
     }
+
+    /// The portion of [`Self::target`] not yet returned by [`Self::take_increment`]: how much
+    /// farther a caller that only applies emitted increments still needs to move before it
+    /// matches where this animation will settle.
+    pub fn remaining_target_delta(&self) -> f32 {
+        self.target() - self.last_taken
+    }
 }
 
 #[cfg(test)]

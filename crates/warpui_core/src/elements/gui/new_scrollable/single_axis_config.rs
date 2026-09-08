@@ -329,26 +329,38 @@ impl SingleAxisConfig {
 
     /// Scroll child on the given axis with an eligible discrete (non-precise) scroll delta,
     /// composing with or reversing any smooth-scroll animation already in flight rather than
-    /// applying immediately. For a manually-managed child, the delta accumulates on the shared
-    /// handle's controller and is applied to the child lazily.
+    /// applying immediately. For a manually-managed child, the delta is clamped against the
+    /// controller's target (not its lagging displayed position, for the same reason
+    /// [`Self::can_scroll_delta`] does) and accumulates on the shared handle's controller,
+    /// applied to the child lazily.
     pub(super) fn scroll_to_animated(
         &mut self,
         viewport_size: Vector2F,
         delta: Pixels,
         axis: Axis,
         ctx: &mut EventContext,
+        app: &AppContext,
     ) {
         if delta.as_f32().abs() < f32::EPSILON {
             return;
         }
 
         match self {
-            Self::Manual { handle, .. } => {
-                handle
-                    .lock()
-                    .unwrap()
-                    .animate_scroll_by(delta.as_f32(), Instant::now());
-                ctx.notify();
+            Self::Manual { handle, child } => {
+                let Some(scroll_data) = child.scroll_data(axis, app) else {
+                    return;
+                };
+                let mut state = handle.lock().unwrap();
+                let target = state.smooth_scroll_target(scroll_data.scroll_start.as_f32());
+                let max_scroll = (scroll_data.total_size - scroll_data.visible_px)
+                    .max(Pixels::zero())
+                    .as_f32();
+                let new_target = (target - delta.as_f32()).clamp(0.0, max_scroll);
+                let contribution = new_target - target;
+                if contribution.abs() > f32::EPSILON {
+                    state.animate_scroll_by(-contribution, Instant::now());
+                    ctx.notify();
+                }
             }
             Self::Clipped { handle, child } => {
                 let child_size = child.size().expect("Size should exist");
@@ -380,10 +392,10 @@ impl SingleAxisConfig {
         delta: Vector2F,
         app: &AppContext,
     ) -> bool {
-        // For a clipped axis, use the controller's target rather than its displayed (possibly
-        // lagging) position: once a rapid sequence of notches has already targeted the
-        // boundary, checking the lagging displayed position would keep reporting the axis as
-        // scrollable, so further same-direction notches would never propagate to a parent.
+        // Use the controller's target rather than its displayed (possibly lagging) position:
+        // once a rapid sequence of notches has already targeted the boundary, checking the
+        // lagging displayed position would keep reporting the axis as scrollable, so further
+        // same-direction notches would never propagate to a parent.
         let scroll_data = match self {
             Self::Clipped { handle, child } => ScrollData {
                 scroll_start: handle.scroll_target(),
@@ -394,7 +406,19 @@ impl SingleAxisConfig {
                     .along(axis)
                     .into_pixels(),
             },
-            Self::Manual { .. } => self.scroll_data(axis, viewport_size, app),
+            Self::Manual { handle, child } => {
+                let scroll_data = child
+                    .scroll_data(axis, app)
+                    .expect("Axis is set to manual scrolling. Child should implement this axis");
+                let target = handle
+                    .lock()
+                    .unwrap()
+                    .smooth_scroll_target(scroll_data.scroll_start.as_f32());
+                ScrollData {
+                    scroll_start: target.into_pixels(),
+                    ..scroll_data
+                }
+            }
         };
         let delta = delta.along(axis);
 
