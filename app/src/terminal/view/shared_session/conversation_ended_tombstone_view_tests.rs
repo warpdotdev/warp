@@ -44,6 +44,8 @@ fn task_with_run_time_and_credits() -> AmbientAgentTask {
         is_sandbox_running: false,
         last_event_sequence: None,
         children: vec![],
+        debug_agent_available: false,
+        scope: None,
     }
 }
 
@@ -70,6 +72,8 @@ fn task_failure_status_message_overrides_conversation_error() {
     task.status_message = Some(TaskStatusMessage {
         message: "task failed".to_string(),
         error_code: None,
+        session_debug_until: None,
+        debug_agent_active: false,
     });
     let mut data = TombstoneDisplayData {
         is_error: true,

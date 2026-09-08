@@ -69,6 +69,9 @@ pub(super) enum DProtoHook {
     InputBuffer {
         value: InputBufferValue,
     },
+    ExternalShellWidgetSelection {
+        value: ExternalShellWidgetSelectionValue,
+    },
     Clear {
         value: ClearValue,
     },
@@ -96,6 +99,7 @@ const DPROTO_HOOK_VARIANTS: &[&str] = &[
     "SSH",
     "InitShell",
     "InputBuffer",
+    "ExternalShellWidgetSelection",
     "Clear",
     "InitSubshell",
     "SourcedRcFileForWarp",
@@ -149,6 +153,9 @@ impl<'de> Deserialize<'de> for DProtoHook {
             "InputBuffer" => DProtoHook::InputBuffer {
                 value: parse_hook_value::<_, D::Error>(raw.value)?,
             },
+            "ExternalShellWidgetSelection" => DProtoHook::ExternalShellWidgetSelection {
+                value: parse_hook_value::<_, D::Error>(raw.value)?,
+            },
             "Clear" => DProtoHook::Clear {
                 value: parse_hook_value::<_, D::Error>(raw.value)?,
             },
@@ -185,6 +192,7 @@ impl DProtoHook {
             DProtoHook::SSH { .. } => "SSH",
             DProtoHook::InitShell { .. } => "InitShell",
             DProtoHook::InputBuffer { .. } => "InputBuffer",
+            DProtoHook::ExternalShellWidgetSelection { .. } => "ExternalShellWidgetSelection",
             DProtoHook::Clear { .. } => "Clear",
             DProtoHook::InitSubshell { .. } => "InitSubshell",
             DProtoHook::SourcedRcFileForWarp { .. } => "SourcedRcFileForWarp",
@@ -204,6 +212,9 @@ impl DProtoHook {
             DProtoHook::CommandFinished { value } => value.session_id.map(SessionId::from),
             DProtoHook::Bootstrapped { value } => value.session_id.map(SessionId::from),
             DProtoHook::InputBuffer { value } => value.session_id.map(SessionId::from),
+            DProtoHook::ExternalShellWidgetSelection { value } => {
+                value.session_id.map(SessionId::from)
+            }
             DProtoHook::Clear { value } => value.session_id.map(SessionId::from),
             DProtoHook::FinishUpdate { value } => value.session_id.map(SessionId::from),
             DProtoHook::PreInteractiveSSHSession { value } => value.session_id.map(SessionId::from),
@@ -225,6 +236,7 @@ impl DProtoHook {
             | DProtoHook::SSH { .. }
             | DProtoHook::InitShell { .. }
             | DProtoHook::InputBuffer { .. }
+            | DProtoHook::ExternalShellWidgetSelection { .. }
             | DProtoHook::Clear { .. }
             | DProtoHook::InitSubshell { .. }
             | DProtoHook::FinishUpdate { .. }
@@ -983,6 +995,24 @@ pub struct InputBufferValue {
     pub buffer: String,
     #[serde(default)]
     pub session_id: HookSessionId,
+}
+
+/// Selection reported by an external shell widget (ctrl-r history or ctrl-t file search).
+/// Empty `buffer` means the user cancelled.
+#[derive(Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct ExternalShellWidgetSelectionValue {
+    pub buffer: String,
+    #[serde(default)]
+    pub session_id: HookSessionId,
+}
+
+impl std::fmt::Debug for ExternalShellWidgetSelectionValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExternalShellWidgetSelectionValue")
+            .field("buffer", &"<redacted>")
+            .field("session_id", &self.session_id)
+            .finish()
+    }
 }
 
 /// Received from the pty when the terminal screen should be cleared (e.g. via

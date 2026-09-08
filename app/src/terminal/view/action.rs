@@ -353,6 +353,7 @@ pub enum TerminalAction {
         index: usize,
     },
     WriteCodebaseIndex,
+    AttachFile,
     ToggleAutoexecuteMode,
     ToggleQueueNextPrompt,
     CodebaseIndexSpeedbumpBanner(CodebaseIndexSpeedbumpBannerAction),
@@ -682,6 +683,7 @@ impl fmt::Debug for TerminalAction {
                 write!(f, "OpenAttachmentLightbox({index:?})")
             }
             WriteCodebaseIndex => write!(f, "PersistCodebaseIndex"),
+            AttachFile => write!(f, "AttachFile"),
             ToggleAutoexecuteMode => write!(f, "ToggleAutoexecuteMode"),
             ToggleQueueNextPrompt => write!(f, "ToggleQueueNextPrompt"),
             CodebaseIndexSpeedbumpBanner(action) => {

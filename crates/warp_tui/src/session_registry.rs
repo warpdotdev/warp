@@ -326,12 +326,14 @@ impl TuiSessions {
                 TuiTerminalSessionEvent::StartAgentConversation {
                     request,
                     working_directory,
+                    team_context,
                 } => {
                     orchestration.update(ctx, |orchestration, ctx| {
                         orchestration.dispatch_create_agent(
                             id,
                             (**request).clone(),
                             working_directory.clone(),
+                            team_context,
                             ctx,
                         );
                     });
@@ -431,6 +433,7 @@ impl TuiSessions {
                 working_directory,
                 task_id,
                 conversation_name,
+                team_scope,
             } => {
                 let window_id = sessions
                     .as_ref(ctx)
@@ -457,6 +460,7 @@ impl TuiSessions {
                             task_id: *task_id,
                             conversation_name: conversation_name.clone(),
                         },
+                        team_scope,
                         ctx,
                     );
                 });
@@ -465,6 +469,7 @@ impl TuiSessions {
                 parent_session_id,
                 request,
                 prepared,
+                team_scope,
             } => {
                 let child = Self::create_remote_child_session(&sessions, *parent_session_id, ctx);
                 orchestration_for_events.update(ctx, |orchestration, ctx| {
@@ -472,6 +477,7 @@ impl TuiSessions {
                         child,
                         (**request).clone(),
                         (**prepared).clone(),
+                        *team_scope,
                         ctx,
                     );
                 });

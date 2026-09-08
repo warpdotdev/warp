@@ -14,8 +14,9 @@ use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use super::response_stream::ResponseStreamId;
 use super::{BlocklistAIController, RequestInput, SessionContext};
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskSyncMode};
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
+use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::attachment_utils::{
     DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
 };
@@ -833,6 +834,37 @@ impl BlocklistAIController {
         );
     }
 
+    /// Whether a no-token shared-session prompt landing right now would bootstrap a debug
+    /// conversation into a retained environment-setup-failure session (REMOTE-2661). Getting
+    /// this wrong only costs a misleading lifecycle update; the server guards against reopening.
+    fn is_open_for_setup_failure_debug_bootstrap(&self, ctx: &AppContext) -> bool {
+        self.ambient_agent_task_id.is_some_and(|task_id| {
+            AgentConversationsModel::as_ref(ctx)
+                .get_task_data(&task_id)
+                .is_some_and(|task| task.is_open_for_setup_failure_debug_bootstrap())
+        })
+    }
+
+    /// Tags `conversation_id` as a setup-failure debug bootstrap so `LocalAgentTaskSyncModel`
+    /// stops deriving task lifecycle updates from it. Must run before the first exchange can
+    /// report a server token, which would otherwise trigger an erroneous `IN_PROGRESS` report.
+    fn tag_conversation_as_setup_failure_debug_bootstrap(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
+            let Some(conversation) = history.conversation_mut(&conversation_id) else {
+                report_error!(
+                    "Tried to tag non-existent conversation as a setup-failure debug bootstrap",
+                    extra: { "conversation_id" => ?conversation_id }
+                );
+                return;
+            };
+            conversation.set_task_sync_mode(TaskSyncMode::PreserveTerminalSetupFailure);
+        });
+    }
+
     /// Helper to send a shared-session query, used both for immediate sends
     /// (no file attachments) and deferred sends (after file downloads complete).
     fn send_shared_session_query(
@@ -863,6 +895,11 @@ impl BlocklistAIController {
                 ctx,
             );
         } else {
+            // Check before any conversation exists, so the tag lands before the first status
+            // update can fire (REMOTE-2661).
+            let bootstraps_setup_failure_debug =
+                self.is_open_for_setup_failure_debug_bootstrap(ctx);
+
             if FeatureFlag::AgentView.is_enabled() {
                 // If we're already in an empty agent view conversation, reuse it
                 // (so that any command blocks remain visible). Otherwise create a new one for the given prompt.
@@ -892,6 +929,10 @@ impl BlocklistAIController {
                     return;
                 };
 
+                if bootstraps_setup_failure_debug {
+                    self.tag_conversation_as_setup_failure_debug_bootstrap(conversation_id, ctx);
+                }
+
                 self.send_user_query_in_conversation_with_attachments(
                     prompt,
                     conversation_id,
@@ -909,6 +950,20 @@ impl BlocklistAIController {
                 Some(participant_id),
                 ctx,
             );
+
+            if bootstraps_setup_failure_debug {
+                // The legacy (non-AgentView) path doesn't hand back the new conversation ID
+                // directly; it becomes this surface's active conversation synchronously above.
+                if let Some(conversation_id) = BlocklistAIHistoryModel::as_ref(ctx)
+                    .active_conversation_id(self.terminal_surface_id)
+                {
+                    self.tag_conversation_as_setup_failure_debug_bootstrap(conversation_id, ctx);
+                } else {
+                    report_error!(
+                        "Could not resolve the bootstrapped debug conversation to tag it"
+                    );
+                }
+            }
         }
     }
 }

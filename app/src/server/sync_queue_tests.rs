@@ -8,7 +8,6 @@ use cloud_object_client::MockObjectClient;
 use cloud_objects::cloud_object::ServerPermissions;
 use firebase::FirebaseError;
 use itertools::Itertools;
-use warpui::r#async::Timer;
 use warpui::{App, Entity, ModelHandle, SingletonEntity};
 
 use super::QueueDependency;
@@ -33,6 +32,7 @@ use crate::server::sync_queue::{
     SyncQueueEvent,
 };
 use crate::system::SystemStats;
+use crate::test_util::assert_eventually;
 use crate::workflows::CloudWorkflowModel;
 use crate::workflows::workflow::{Argument, ArgumentType, Workflow};
 use crate::{NetworkStatus, QueueItem, SyncQueue};
@@ -438,18 +438,10 @@ fn test_dequeue_after_transient_failure() {
         // Wait for the first notebook's creation to fail.
         // The failures are retried, but their futures are spawned on background threads,
         // so we can't access them. Instead, we wait for a SyncQueue event to appear in the model.
-        let mut timeout = Timer::after(std::time::Duration::from_secs(20));
-        let mut has_event = false;
-        while !has_event {
-            if futures::poll!(&mut timeout).is_ready() {
-                panic!("Timed out waiting for failure");
-            }
-
-            Timer::after(std::time::Duration::from_millis(500)).await;
-            sync_queue_events.read(&app, |events, _ctx| {
-                has_event = !events.0.is_empty();
-            });
-        }
+        assert_eventually!(
+            4000 => sync_queue_events.read(&app, |events, _ctx| !events.0.is_empty()),
+            "Timed out waiting for failure"
+        );
 
         sync_queue_events.read(&app, |events, _| {
             assert_eq!(
@@ -588,18 +580,10 @@ fn test_no_dequeue_after_intransient_failure() {
         // Wait for the first notebook's creation to fail.
         // The failures are retried, but their futures are spawned on background threads,
         // so we can't access them. Instead, we wait for a SyncQueue event to appear in the model.
-        let mut timeout = Timer::after(std::time::Duration::from_secs(20));
-        let mut has_event = false;
-        while !has_event {
-            if futures::poll!(&mut timeout).is_ready() {
-                panic!("Timed out waiting for failure");
-            }
-
-            Timer::after(std::time::Duration::from_millis(500)).await;
-            sync_queue_events.read(&app, |events, _ctx| {
-                has_event = !events.0.is_empty();
-            });
-        }
+        assert_eventually!(
+            4000 => sync_queue_events.read(&app, |events, _ctx| !events.0.is_empty()),
+            "Timed out waiting for failure"
+        );
 
         sync_queue_events.read(&app, |events, _| {
             assert_eq!(

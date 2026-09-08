@@ -201,6 +201,22 @@ where
     })
 }
 
+/// Ownership scope for a run: personal or team-owned. Mirrors the public API's
+/// `RunItem.scope`; distinct from `creator`, which is never a team.
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Default)]
+pub struct TaskScope {
+    #[serde(rename = "type", default)]
+    pub scope_type: String,
+    #[serde(default)]
+    pub uid: String,
+}
+
+impl TaskScope {
+    pub fn is_team(&self) -> bool {
+        self.scope_type.eq_ignore_ascii_case("team")
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AmbientAgentTask {
     pub task_id: AmbientAgentTaskId,
@@ -247,6 +263,17 @@ pub struct AmbientAgentTask {
     /// driver case). Empty on older servers.
     #[serde(default)]
     pub children: Vec<String>,
+
+    /// Server-computed: whether a debug agent may be bootstrapped into this run's retained
+    /// environment-setup-failure session right now (REMOTE-2661). `#[serde(default)]` so an
+    /// older or ineligible server deserializes to `false`.
+    #[serde(default)]
+    pub debug_agent_available: bool,
+
+    /// This run's ownership scope. `#[serde(default)]` for an older server that never sends
+    /// it, in which case only the literal creator is recognized as authorized.
+    #[serde(default)]
+    pub scope: Option<TaskScope>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -328,6 +355,20 @@ impl AmbientAgentTask {
 
     pub fn conversation_id(&self) -> Option<&str> {
         self.conversation_id.as_deref()
+    }
+
+    /// Whether this run is a retained environment-setup-failure session whose debug window is
+    /// still usable, so a debug prompt may be routed into it (REMOTE-2661). The server is the
+    /// sole authority here and re-verifies eligibility before accepting a follow-up; this only
+    /// decides what the client presents and where a submission goes.
+    pub fn is_setup_failure_debug_session_open(&self) -> bool {
+        self.debug_agent_available
+    }
+
+    /// Whether a debug conversation may still be *bootstrapped* into this session, i.e. none
+    /// exists yet. A later prompt reuses the persisted conversation instead.
+    pub fn is_open_for_setup_failure_debug_bootstrap(&self) -> bool {
+        self.is_setup_failure_debug_session_open() && self.conversation_id().is_none()
     }
 
     /// Returns true when this task's source must not accept user-triggered cloud follow-ups.
@@ -566,6 +607,14 @@ pub struct TaskStatusMessage {
     pub message: String,
     #[serde(default, alias = "errorCode")]
     pub error_code: Option<TaskStatusErrorCode>,
+    /// Deadline of an open post-failure debug window (REMOTE-2208/REMOTE-2661), if the server
+    /// is holding one open. `#[serde(default)]`; `None` means no window is known to be open.
+    #[serde(default)]
+    pub session_debug_until: Option<DateTime<Utc>>,
+    /// True while a REMOTE-2661 debug turn is actively pinning the idle timer. Display-only;
+    /// can outlast an expired `session_debug_until` while pinned.
+    #[serde(default, alias = "debugAgentActive")]
+    pub debug_agent_active: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]

@@ -628,32 +628,39 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
           WARP_INPUT_REPORTING_SUPPORTED=$(warp_input_reporting_supported)
         fi
 
-        # If we haven't already, cache information about supported features.
-        if [[ -z $WARP_PS1_EXPANSION_SUPPORTED ]]; then
-          WARP_PS1_EXPANSION_SUPPORTED=$(warp_ps1_expanding_supported)
-        fi
-
-        if [[ $WARP_PS1_EXPANSION_SUPPORTED  == "1" ]]; then
-          # When evaluating the PS1, we want to ensure that it's aware of the last exit code.
-          # Since we captured it already and executed multiple other commands, the actual
-          # last exit code has changed. So before the evaluation, we want to trick the shell
-          # into returning the correct value for the $? that may be in PS1
-          exit_code_hack() {
-            return $1
-          }
-          exit_code_hack $exit_code
-          deref_ps1=${WARP_PS1@P}
+        local honor_ps1
+        local deref_ps1=""
+        local escaped_ps1=""
+        if [[ "$WARP_HONOR_PS1" == "1" ]]; then
+          honor_ps1="true"
         else
-          # Tricking the shell into rendering the prompt
-          # Note that in more modern versions of bash we could use ${PS1@P} to achieve the same,
-          # but MacOS comes by default with a much older version of bash, and we want to be compatible.
-          deref_ps1=$(echo -e "\n" | PS1="$WARP_PS1" BASH_SILENCE_DEPRECATION_WARNING=1 "$BASH" --norc -i 2>&1 | command -p head -2 | command -p tail -1)
-        fi
+          honor_ps1="false"
 
-        # Escaped PS1 variable
-        local escaped_ps1
-        if [ "$WARP_IN_MSYS2" = false ]; then
-          escaped_ps1=$(warp_escape_ps1 "$(echo "$deref_ps1")")
+          # If we haven't already, cache information about supported features.
+          if [[ -z $WARP_PS1_EXPANSION_SUPPORTED ]]; then
+            WARP_PS1_EXPANSION_SUPPORTED=$(warp_ps1_expanding_supported)
+          fi
+
+          if [[ $WARP_PS1_EXPANSION_SUPPORTED  == "1" ]]; then
+            # When evaluating the PS1, we want to ensure that it's aware of the last exit code.
+            # Since we captured it already and executed multiple other commands, the actual
+            # last exit code has changed. So before the evaluation, we want to trick the shell
+            # into returning the correct value for the $? that may be in PS1
+            exit_code_hack() {
+              return $1
+            }
+            exit_code_hack $exit_code
+            deref_ps1=${WARP_PS1@P}
+          else
+            # Tricking the shell into rendering the prompt
+            # Note that in more modern versions of bash we could use ${PS1@P} to achieve the same,
+            # but MacOS comes by default with a much older version of bash, and we want to be compatible.
+            deref_ps1=$(echo -e "\n" | PS1="$WARP_PS1" BASH_SILENCE_DEPRECATION_WARNING=1 "$BASH" --norc -i 2>&1 | command -p head -2 | command -p tail -1)
+          fi
+
+          if [ "$WARP_IN_MSYS2" = false ]; then
+            escaped_ps1=$(warp_escape_ps1 "$(echo "$deref_ps1")")
+          fi
         fi
 
         # Flush history
@@ -796,15 +803,6 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # Note WARP_SESSION_ID doesn't need to be escaped since it's a number
         # We also pass the shell's notion of `honor_ps1` to ensure it's synced correctly on the Warp-side for prompt handling.
         # This is passed as a "real boolean" via the JSON payload (string interpolated into JSON string below).
-        local honor_ps1
-        if [[ "$WARP_HONOR_PS1" == "1" ]]; then
-          honor_ps1="true"
-          # The Warp prompt preview can be rendered using the active prompt in this case (which uses prompt markers).
-          escaped_ps1=""
-          deref_ps1=""
-        else
-          honor_ps1="false"
-        fi
         # We send the escaped PS1, if we are in active Warp prompt mode, for prompt preview rendering (note the shell's PS1 is unset in this case).
         if [ "$WARP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "Precmd"
@@ -968,6 +966,41 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         fi
         # This prevents bash from re-printing typeahead after we've removed it.
         READLINE_LINE=""
+    }
+
+    # Runs the shell's ctrl-r history widget as a foreground command.
+    warp_run_external_ctrl_r_widget () {
+        local result=""
+        case "$_WARP_EXTERNAL_CTRL_R_WIDGET" in
+          __fzf_history__)
+            result="$(__fzf_history__)"
+            ;;
+          __atuin_history)
+            # Bypass atuin's own bash key-binding machinery entirely and invoke the underlying
+            # `atuin search` command directly, exactly as atuin's own integration does
+            # (__atuin_search_cmd's non-tmux branch).
+            result="$(ATUIN_SHELL=bash atuin search -i 3>&1 1>&2 2>&3 3>&-)"
+            # If the user has atuin's enter_accept config on, Enter both selects and runs the
+            # command, signaled by this prefix; we only ever want the selection, never to run
+            # it, so strip the prefix in both cases (see atuin's __atuin_history for the same
+            # check).
+            result="${result#__atuin_accept__:}"
+            ;;
+        esac
+        local warp_escaped_selection="$(warp_escape_json "$result")"
+        warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
+    }
+
+    # Runs the shell's own ctrl-t file-search widget as a foreground command.
+    warp_run_external_ctrl_t_widget () {
+        local result=""
+        case "$_WARP_EXTERNAL_CTRL_T_WIDGET" in
+          fzf-file-widget)
+            result="$(__fzf_select__)"
+            ;;
+        esac
+        local warp_escaped_selection="$(warp_escape_json "$result")"
+        warp_send_json_message "{ \"hook\": \"ExternalShellWidgetSelection\", \"value\": { \"buffer\": \"$warp_escaped_selection\", \"session_id\": $WARP_SESSION_ID } }"
     }
 
     # Check whether the prompt-related variables have OSC prompt marker sequences,
@@ -1407,13 +1440,13 @@ esac
     # rcfiles.
     USER_HISTCONTROL="$HISTCONTROL"
 
-    # Add a pattern to ignore in-band commands in shell history, while preserving the user's
+    # Add patterns to ignore in-band commands in shell history, while preserving the user's
     # HISTIGNORE value which may been set in an RC file sourced above. It is important to
     # ensure that this happens _after_ the user's RC files have been sourced.
     if [[ ! -z $HISTIGNORE ]]; then
-        HISTIGNORE="*warp_run_generator_command*:$HISTIGNORE"
+        HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*:$HISTIGNORE"
     else
-        HISTIGNORE="*warp_run_generator_command*"
+        HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*"
     fi
 
     # If the user has PROMPT_COMMAND set in their bootstrap scripts,
@@ -1527,6 +1560,38 @@ esac
     shopt -s histappend
 
     shell_plugins=()
+
+    # Detect whether ctrl-r has been rebound to fzf's or atuin's bash history widget, so Warp
+    # can hand ctrl-r off to it.
+    _WARP_EXTERNAL_CTRL_R_WIDGET=""
+    if [ "$WARP_IN_MSYS2" = false ]; then
+      warp_ctrl_r_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-r"[ :] *"\(.*\)"$/\1/p')"
+      case "$warp_ctrl_r_binding" in
+        __fzf_history__|__atuin_history)
+          _WARP_EXTERNAL_CTRL_R_WIDGET="$warp_ctrl_r_binding"
+          shell_plugins+=(external_ctrl_r_history)
+          ;;
+      esac
+      # atuin >= 18.10 binds ctrl-r through the indirect dispatcher above rather than a plain
+      # `bind -x`. Instead use atuin's own init-time flag ($__atuin_bind_ctrl_r) plus
+        # __atuin_history being defined.
+      if [ -z "$_WARP_EXTERNAL_CTRL_R_WIDGET" ] && [ "$__atuin_bind_ctrl_r" = true ] &&
+        declare -F __atuin_history >/dev/null; then
+        _WARP_EXTERNAL_CTRL_R_WIDGET="__atuin_history"
+        shell_plugins+=(external_ctrl_r_history)
+      fi
+
+      _WARP_EXTERNAL_CTRL_T_WIDGET=""
+      warp_ctrl_t_binding="$(bind -X 2>/dev/null | command -p sed -n 's/^"\\C-t"[ :] *"\(.*\)"$/\1/p')"
+      case "$warp_ctrl_t_binding" in
+        fzf-file-widget)
+          if declare -F __fzf_select__ >/dev/null; then
+            _WARP_EXTERNAL_CTRL_T_WIDGET="$warp_ctrl_t_binding"
+            shell_plugins+=(external_ctrl_t_file)
+          fi
+          ;;
+      esac
+    fi
 
     function warp_bootstrapped () {
         local aliases="`alias`"

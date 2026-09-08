@@ -82,6 +82,8 @@ pub use text::*;
 pub use uniform_list::*;
 pub use viewported_list::*;
 
+#[cfg(any(test, feature = "test-util"))]
+use crate::EntityId;
 use crate::Gradient;
 use crate::event::{DispatchedEvent, ModifiersState};
 use crate::platform::Cursor;
@@ -176,6 +178,12 @@ pub trait Element {
     #[cfg(any(test, feature = "test-util"))]
     fn debug_text_content(&self) -> Option<String> {
         None
+    }
+
+    /// Child-view entity IDs embedded in this subtree, for tests that inspect render output.
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_child_view_ids(&self) -> Vec<EntityId> {
+        Vec::new()
     }
 }
 

@@ -1,13 +1,36 @@
 //! Unit tests for ambient agent CLI argument mapping and message helpers.
+use std::sync::Arc;
+
+use bytes::Bytes;
 use chrono::{TimeZone, Utc};
 use warp_cli::SortOrderArg;
-use warp_cli::json_filter::JsonOutput;
+use warp_cli::json_filter::{JsonOutput, parse_jq_filter};
+use warp_cli::scope::TeamSelection;
 use warp_cli::task::{
     ArtifactTypeArg, ExecutionLocationArg, ListTasksArgs, RunSortByArg, RunSourceArg, RunStateArg,
 };
+use warp_server_client::HttpStatusError;
+use warpui::App;
 
 use super::*;
-use crate::server::server_api::ai::{ArtifactType, ExecutionLocation, RunSortBy, RunSortOrder};
+use crate::auth::AuthStateProvider;
+use crate::network::NetworkStatus;
+use crate::server::ids::ServerId;
+use crate::server::server_api::ai::{
+    ArtifactType, ExecutionLocation, MockAIClient, RunSortBy, RunSortOrder,
+};
+use crate::server::server_api::team::{MockTeamClient, TeamClient};
+use crate::server::server_api::workspace::MockWorkspaceClient;
+use crate::server::team_scope::RequestTeamScope;
+use crate::settings::PrivacySettings;
+use crate::workspaces::team::Team;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::update_manager::TeamUpdateManager;
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamlessScopeForTest, UserWorkspaces, WorkspacesMetadataResponse,
+    WorkspacesMetadataWithPricing,
+};
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 const TASK_ID: &str = "00000000-0000-0000-0000-000000000001";
 const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
@@ -15,6 +38,7 @@ const OTHER_TASK_ID: &str = "00000000-0000-0000-0000-000000000002";
 /// A `ListTasksArgs` whose fields are all at their defaults.
 fn empty_args() -> ListTasksArgs {
     ListTasksArgs {
+        team_selection: TeamSelection { team: None },
         limit: 10,
         state: vec![],
         source: None,
@@ -36,6 +60,14 @@ fn empty_args() -> ListTasksArgs {
         cursor: None,
         json_output: JsonOutput::default(),
     }
+}
+
+fn request_team_scope() -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+}
+
+fn request_scope_for_team(team_uid: ServerId) -> RequestTeamScope {
+    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid))
 }
 
 #[test]
@@ -121,6 +153,7 @@ fn every_field_maps_through() {
     let updated_after = Utc.with_ymd_and_hms(2026, 4, 3, 12, 30, 0).unwrap();
 
     let args = ListTasksArgs {
+        team_selection: TeamSelection { team: None },
         limit: 20,
         state: vec![RunStateArg::InProgress],
         source: Some(RunSourceArg::Api),
@@ -166,6 +199,191 @@ fn every_field_maps_through() {
     assert_eq!(filter.sort_by, Some(RunSortBy::CreatedAt));
     assert_eq!(filter.sort_order, Some(RunSortOrder::Asc));
     assert_eq!(filter.cursor.as_deref(), Some("abcd=="));
+}
+
+#[tokio::test]
+async fn table_run_listing_supplies_cli_scope() {
+    let mut mock = MockAIClient::new();
+    mock.expect_list_ambient_agent_tasks()
+        .withf(|limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.is_some()
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(Vec::new()));
+    mock.expect_list_agent_runs_raw().times(0);
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_team_scope(),
+        OutputFormat::Text,
+        &JsonOutput::default(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn ndjson_run_listing_supplies_cli_scope() {
+    let mut mock = MockAIClient::new();
+    mock.expect_list_ambient_agent_tasks()
+        .withf(|limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.is_some()
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(Vec::new()));
+    mock.expect_list_agent_runs_raw().times(0);
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_team_scope(),
+        OutputFormat::Ndjson,
+        &JsonOutput::default(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn raw_json_run_listing_supplies_cli_scope() {
+    let mut mock = MockAIClient::new();
+    mock.expect_list_agent_runs_raw()
+        .withf(|limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.is_some()
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(serde_json::json!({ "runs": [] })));
+    mock.expect_list_ambient_agent_tasks().times(0);
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_team_scope(),
+        OutputFormat::Json,
+        &JsonOutput::default(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn jq_run_listing_supplies_selected_cli_scope_to_raw_request() {
+    let team_uid = ServerId::from(123);
+    let mut mock = MockAIClient::new();
+    mock.expect_list_agent_runs_raw()
+        .withf(move |limit, filter, request_team_scope| {
+            *limit == 10
+                && filter.creator_uid.is_none()
+                && filter.states.is_none()
+                && request_team_scope.and_then(RequestTeamScope::team_uid) == Some(team_uid)
+        })
+        .times(1)
+        .returning(|_, _, _| Ok(serde_json::json!({ "runs": [] })));
+    mock.expect_list_ambient_agent_tasks().times(0);
+    let json_output = JsonOutput {
+        filter: Some(parse_jq_filter(".runs").expect("jq filter compiles")),
+    };
+
+    load_tasks_for_output(
+        &mock,
+        10,
+        TaskListFilter::default(),
+        request_scope_for_team(team_uid),
+        OutputFormat::Text,
+        &json_output,
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+fn run_list_scope_uses_team_loaded_by_workspace_refresh() {
+    App::test((), |mut app| async move {
+        let team_uid = ServerId::from(123);
+        let workspace_uid = WorkspaceUid::from(ServerId::from(456));
+        let team = Team::from_local_cache(
+            team_uid,
+            "Selected Team".to_string(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let workspace = Workspace::from_local_cache(
+            workspace_uid,
+            "Selected Workspace".to_string(),
+            Some(vec![team]),
+            None,
+        );
+        let mut team_client = MockTeamClient::new();
+        team_client
+            .expect_workspaces_metadata()
+            .times(1)
+            .return_once(move || {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![workspace],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+        let team_client: Arc<dyn TeamClient> = Arc::new(team_client);
+
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(TeamTesterStatus::new);
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model({
+            let team_client = team_client.clone();
+            move |ctx| {
+                UserWorkspaces::mock(
+                    team_client,
+                    Arc::new(MockWorkspaceClient::new()),
+                    vec![],
+                    ctx,
+                )
+            }
+        });
+        app.add_singleton_model(move |ctx| TeamUpdateManager::new(team_client, None, ctx));
+
+        assert!(
+            app.read(|ctx| UserWorkspaces::as_ref(ctx)
+                .team_from_uid(team_uid)
+                .is_none()),
+            "the selected team should not exist in the initial cache"
+        );
+
+        app.update(crate::ai::agent_sdk::common::refresh_workspace_metadata)
+            .await
+            .expect("workspace refresh succeeds");
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&TeamSelection {
+                    team: Some(Some(team_uid.to_string())),
+                })
+                .expect("the selected team resolves from refreshed metadata");
+            let request_scope = RequestTeamScope::from_scope(&scope);
+            assert_eq!(request_scope.team_uid(), Some(team_uid));
+        });
+    });
 }
 
 #[test]
@@ -218,4 +436,305 @@ fn task_id_from_oz_run_id_env_rejects_invalid_value() {
     unsafe { std::env::remove_var(warp_cli::OZ_RUN_ID_ENV) };
 
     assert!(err.to_string().contains("Invalid OZ_RUN_ID"));
+}
+
+fn http_error(status: u16, body: &str) -> anyhow::Error {
+    anyhow::Error::new(HttpStatusError {
+        status,
+        body: body.to_string(),
+    })
+    .context(format!("API request failed with status {status}"))
+}
+
+fn operation_not_supported_error() -> anyhow::Error {
+    http_error(
+        422,
+        r#"{"type":"https://docs.warp.dev/errors/operation_not_supported","title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )
+}
+
+fn native_conversation() -> serde_json::Value {
+    serde_json::json!({
+        "conversation_id": "conv-native",
+        "steps": []
+    })
+}
+
+#[test]
+fn normalized_conversation_unsupported_matches_rfc7807_type() {
+    assert!(is_normalized_conversation_unsupported(
+        &operation_not_supported_error()
+    ));
+}
+
+#[test]
+fn normalized_conversation_unsupported_matches_type_regardless_of_title() {
+    assert!(is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"type":"https://docs.warp.dev/errors/operation_not_supported","title":"forking is not supported"}"#,
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_title_only_rfc7807() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_arbitrary_substrings() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        "https://docs.warp.dev/errors/operation_not_supported normalized conversations are only supported for Warp-native transcripts",
+    )));
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"error":"validation failed"}"#,
+    )));
+    assert!(!is_normalized_conversation_unsupported(&anyhow::anyhow!(
+        "operation_not_supported"
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_wrong_problem_type() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        422,
+        r#"{"type":"https://docs.warp.dev/errors/invalid_request","title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )));
+}
+
+#[test]
+fn normalized_conversation_unsupported_rejects_non_422_status() {
+    assert!(!is_normalized_conversation_unsupported(&http_error(
+        404,
+        r#"{"type":"https://docs.warp.dev/errors/operation_not_supported","title":"normalized conversations are only supported for Warp-native transcripts"}"#,
+    )));
+}
+
+#[test]
+fn write_conversation_cli_output_pretty_prints_normalized_json() {
+    let mut buf = Vec::new();
+    write_conversation_cli_output(
+        &ConversationCliOutput::Normalized(serde_json::json!({"conversation_id": "c-1"})),
+        &mut buf,
+    )
+    .unwrap();
+
+    assert_eq!(buf, b"{\n  \"conversation_id\": \"c-1\"\n}\n");
+}
+
+#[test]
+fn write_conversation_cli_output_writes_raw_transcript_bytes_exactly() {
+    let mut without_newline = Vec::new();
+    write_conversation_cli_output(
+        &ConversationCliOutput::RawTranscript(Bytes::from_static(b"no trailing newline")),
+        &mut without_newline,
+    )
+    .unwrap();
+    assert_eq!(without_newline, b"no trailing newline");
+
+    let mut non_utf8 = Vec::new();
+    write_conversation_cli_output(
+        &ConversationCliOutput::RawTranscript(Bytes::from_static(&[0xff, 0xfe, 0x00, b'x'])),
+        &mut non_utf8,
+    )
+    .unwrap();
+    assert_eq!(non_utf8, vec![0xff, 0xfe, 0x00, b'x']);
+}
+
+#[tokio::test]
+async fn load_run_conversation_returns_normalized_json_for_native_runs() {
+    let conversation = native_conversation();
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation().times(1).returning({
+        let conversation = conversation.clone();
+        move |run_id| {
+            assert_eq!(run_id, TASK_ID);
+            Ok(conversation.clone())
+        }
+    });
+    mock.expect_download_run_transcript().times(0);
+
+    let output = load_run_conversation(&mock, TASK_ID).await.unwrap();
+
+    assert_eq!(output, ConversationCliOutput::Normalized(conversation));
+}
+
+#[tokio::test]
+async fn load_run_conversation_falls_back_to_raw_transcript_for_third_party_harness() {
+    const RAW_TRANSCRIPT: &[u8] = b"{\"type\":\"claude_code\"}\n";
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_run_transcript()
+        .times(1)
+        .returning(|run_id| {
+            assert_eq!(run_id.to_string(), TASK_ID);
+            Ok(Bytes::from_static(RAW_TRANSCRIPT))
+        });
+
+    let output = load_run_conversation(&mock, TASK_ID).await.unwrap();
+
+    assert_eq!(
+        output,
+        ConversationCliOutput::RawTranscript(Bytes::from_static(RAW_TRANSCRIPT))
+    );
+}
+
+#[tokio::test]
+async fn load_run_conversation_preserves_unrelated_422() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| Err(http_error(422, r#"{"error":"validation failed"}"#)));
+    mock.expect_download_run_transcript().times(0);
+
+    let err = load_run_conversation(&mock, TASK_ID).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("API request failed with status 422")
+    );
+    assert!(
+        err.chain().any(|cause| cause
+            .downcast_ref::<HttpStatusError>()
+            .is_some_and(|status| {
+                status.status == 422 && status.body.contains("validation failed")
+            }))
+    );
+}
+
+#[tokio::test]
+async fn load_run_conversation_preserves_not_found() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| {
+            Err(http_error(
+                404,
+                r#"{"type":"https://docs.warp.dev/errors/resource_not_found","title":"conversation not found"}"#,
+            ))
+        });
+    mock.expect_download_run_transcript().times(0);
+
+    let err = load_run_conversation(&mock, TASK_ID).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("API request failed with status 404")
+    );
+}
+
+#[tokio::test]
+async fn load_run_conversation_reports_missing_raw_transcript() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_run_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_run_transcript()
+        .times(1)
+        .returning(|_| {
+            Err(http_error(
+                404,
+                r#"{"type":"https://docs.warp.dev/errors/resource_not_found","title":"no transcript path in manifest"}"#,
+            ))
+        });
+
+    let err = load_run_conversation(&mock, TASK_ID).await.unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Raw transcript not found for run 00000000-0000-0000-0000-000000000001. It may not have been uploaded yet."
+    );
+}
+
+#[tokio::test]
+async fn load_public_conversation_returns_normalized_json() {
+    let conversation = native_conversation();
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation().times(1).returning({
+        let conversation = conversation.clone();
+        move |conversation_id| {
+            assert_eq!(conversation_id, "conv-native");
+            Ok(conversation.clone())
+        }
+    });
+    mock.expect_download_conversation_transcript().times(0);
+
+    let output = load_public_conversation(&mock, "conv-native")
+        .await
+        .unwrap();
+
+    assert_eq!(output, ConversationCliOutput::Normalized(conversation));
+}
+
+#[tokio::test]
+async fn load_public_conversation_falls_back_to_raw_transcript_for_third_party_harness() {
+    const RAW_TRANSCRIPT: &[u8] = b"{\"type\":\"claude_code\"}\n";
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_conversation_transcript()
+        .times(1)
+        .returning(|conversation_id| {
+            assert_eq!(conversation_id, "conv-third-party");
+            Ok(Bytes::from_static(RAW_TRANSCRIPT))
+        });
+
+    let output = load_public_conversation(&mock, "conv-third-party")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        output,
+        ConversationCliOutput::RawTranscript(Bytes::from_static(RAW_TRANSCRIPT))
+    );
+}
+
+#[tokio::test]
+async fn load_public_conversation_preserves_unrelated_422() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation()
+        .times(1)
+        .returning(|_| Err(http_error(422, r#"{"error":"validation failed"}"#)));
+    mock.expect_download_conversation_transcript().times(0);
+
+    let err = load_public_conversation(&mock, "conv-third-party")
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("API request failed with status 422")
+    );
+}
+
+#[tokio::test]
+async fn load_public_conversation_reports_missing_raw_transcript() {
+    let mut mock = MockAIClient::new();
+    mock.expect_get_public_conversation()
+        .times(1)
+        .returning(|_| Err(operation_not_supported_error()));
+    mock.expect_download_conversation_transcript()
+        .times(1)
+        .returning(|_| {
+            Err(http_error(
+                404,
+                r#"{"type":"https://docs.warp.dev/errors/resource_not_found","title":"no transcript path in manifest"}"#,
+            ))
+        });
+
+    let err = load_public_conversation(&mock, "conv-third-party")
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "Raw transcript not found for conversation conv-third-party. It may not have been uploaded yet."
+    );
 }

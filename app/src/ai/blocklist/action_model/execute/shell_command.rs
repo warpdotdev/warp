@@ -12,13 +12,15 @@ use itertools::Itertools;
 use parking_lot::FairMutex;
 use warp_core::command::ExitCode;
 use warp_core::execution_mode::AppExecutionMode;
+use warp_core::features::FeatureFlag;
 use warp_util::path::ShellFamily;
 use warpui::r#async::{Spawnable, Timer};
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use super::lrc_activity::{LrcActivityMonitor, SAMPLE_INTERVAL};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::{
-    AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentPtyWriteMode,
+    AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentPtyWriteMode, LrcActivity,
     ReadShellCommandOutputResult, RequestCommandOutputResult, ShellCommandDelay, ShellCommandError,
     TransferShellCommandControlToUserResult, WriteToLongRunningShellCommandResult,
 };
@@ -31,6 +33,7 @@ use crate::terminal::event::BlockMetadataReceivedEvent;
 use crate::terminal::model::block::{
     Block, BlockId, CURSOR_MARKER, formatted_terminal_contents_for_input,
 };
+use crate::terminal::model::session::SessionType;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
@@ -48,6 +51,9 @@ pub struct ShellCommandExecutor {
     terminal_view_id: EntityId,
     /// Sender to notify when user hands control back to agent after TransferShellCommandControlToUser.
     control_handback_sender: Option<oneshot::Sender<()>>,
+    /// Liveness signals for the long-running commands this agent is monitoring.
+    /// Shared with the snapshot futures, which have no `ModelContext`.
+    activity_monitor: Arc<LrcActivityMonitor>,
 }
 
 impl ShellCommandExecutor {
@@ -73,7 +79,51 @@ impl ShellCommandExecutor {
             force_refresh_senders: HashMap::new(),
             terminal_view_id,
             control_handback_sender: None,
+            activity_monitor: Arc::new(LrcActivityMonitor::new()),
         }
+    }
+
+    /// Begins collecting liveness signals for the command this action will
+    /// snapshot, starting the sampler if it is not already running.
+    ///
+    /// Returns a guard that must be held for the lifetime of the action.
+    /// Sampling is deliberately scoped to actions that can produce a snapshot,
+    /// so ordinary terminal use never pays for it.
+    fn begin_monitoring(&mut self, ctx: &mut ModelContext<Self>) -> LrcMonitoringGuard {
+        // Process signals describe this machine, so they say nothing about a
+        // command running on another host. Remote sessions report no activity.
+        let is_local = matches!(
+            self.active_session.as_ref(ctx).session_type(ctx),
+            Some(SessionType::Local)
+        );
+        self.activity_monitor
+            .set_monitoring_enabled(is_local && lrc_activity_signals_supported());
+
+        let guard = LrcMonitoringGuard {
+            monitor: self.activity_monitor.clone(),
+        };
+        if self.activity_monitor.arm() {
+            self.sample_activity(ctx);
+        }
+        guard
+    }
+
+    /// Takes one activity sample, rescheduling itself until no monitored
+    /// command and no in-flight action remain.
+    fn sample_activity(&mut self, ctx: &mut ModelContext<Self>) {
+        let monitor = self.activity_monitor.clone();
+        let terminal_model = self.terminal_model.clone();
+        ctx.spawn(
+            async move {
+                Timer::after(SAMPLE_INTERVAL).await;
+                monitor.sample(&terminal_model)
+            },
+            move |me, keep_sampling, ctx| {
+                if keep_sampling {
+                    me.sample_activity(ctx);
+                }
+            },
+        );
     }
 
     fn handle_terminal_model_event(
@@ -281,7 +331,7 @@ impl ShellCommandExecutor {
                 drop(model);
 
                 ActionExecution::new_async(
-                    self.action_result_future(block_selector.clone(), None),
+                    self.action_result_future(block_selector.clone(), None, ctx),
                     move |result, ctx| {
                         // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
@@ -363,6 +413,7 @@ impl ShellCommandExecutor {
                     self.action_result_future(
                         block_selector.clone(),
                         Some(ShellCommandDelay::Duration(Duration::from_millis(200))),
+                        ctx,
                     ),
                     move |result, ctx| {
                         // Remove the senders from the maps.
@@ -412,7 +463,7 @@ impl ShellCommandExecutor {
                 let block_selector = BlockSelector::Id(block_id.clone());
                 let conversation_id = input.conversation_id;
                 ActionExecution::new_async(
-                    self.action_result_future(block_selector.clone(), delay.clone()),
+                    self.action_result_future(block_selector.clone(), delay.clone(), ctx),
                     move |result, ctx| {
                         // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {
@@ -470,10 +521,13 @@ impl ShellCommandExecutor {
                     .insert(block_selector.clone(), block_finished_tx);
 
                 // Build the future that captures terminal model and block data.
+                let monitoring = self.begin_monitoring(ctx);
+                let monitor = self.activity_monitor.clone();
                 let transfer_future = {
                     let terminal_model = self.terminal_model.clone();
                     let block_id = block_id.clone();
                     async move {
+                        let _monitoring = monitoring;
                         pin!(handback_rx);
                         pin!(block_finished_rx);
 
@@ -497,6 +551,7 @@ impl ShellCommandExecutor {
                                 match model.block_list().block_with_id(&block_id) {
                                     Some(block) => {
                                         if block.finished() {
+                                            monitor.forget(block.id());
                                             ActionResult::CommandFinished {
                                                 block_id: block.id().clone(),
                                                 output: block.output_with_secrets_unobfuscated(),
@@ -524,6 +579,7 @@ impl ShellCommandExecutor {
                                                 cursor: CURSOR_MARKER,
                                                 is_alt_screen_active: model.is_alt_screen_active(),
                                                 is_preempted: false,
+                                                activity: monitor.report(block.id()),
                                             }
                                         }
                                     }
@@ -564,7 +620,13 @@ impl ShellCommandExecutor {
         &mut self,
         block_selector: BlockSelector,
         delay: Option<ShellCommandDelay>,
+        ctx: &mut ModelContext<Self>,
     ) -> impl Spawnable<Output = ActionResult> + use<> {
+        // Held for the lifetime of the future so liveness sampling runs for as
+        // long as this action might report a snapshot.
+        let monitoring = self.begin_monitoring(ctx);
+        let monitor = self.activity_monitor.clone();
+
         // Create a channel to notify us when we receive block metadata.
         let (block_metadata_received_tx, block_metadata_received_rx) = oneshot::channel();
         self.block_finished_senders
@@ -590,6 +652,7 @@ impl ShellCommandExecutor {
         }
 
         async move {
+            let _monitoring = monitoring;
             // If we support long-running commands, set up a timeout after which we'll
             // treat the command as long-running and give the agent a snapshot of the
             // current state.  Otherwise, we'll wait indefinitely for the command to
@@ -642,6 +705,7 @@ impl ShellCommandExecutor {
             match block_selector.get_block(&model) {
                 Some(block) => {
                     if block.finished() {
+                        monitor.forget(block.id());
                         ActionResult::CommandFinished {
                             block_id: block.id().clone(),
                             output: block.output_with_secrets_unobfuscated(),
@@ -670,6 +734,7 @@ impl ShellCommandExecutor {
                             cursor: CURSOR_MARKER,
                             is_alt_screen_active: model.is_alt_screen_active(),
                             is_preempted,
+                            activity: monitor.report(block.id()),
                         }
                     }
                 }
@@ -777,6 +842,7 @@ fn action_result_for_requested_command(
             grid_contents,
             cursor,
             is_alt_screen_active,
+            activity,
             ..
         } => AIAgentActionResultType::RequestCommandOutput(
             RequestCommandOutputResult::LongRunningCommandSnapshot {
@@ -785,6 +851,7 @@ fn action_result_for_requested_command(
                 grid_contents,
                 cursor: cursor.to_owned(),
                 is_alt_screen_active,
+                activity,
             },
         ),
         ActionResult::BlockNotFound | ActionResult::Cancelled => {
@@ -821,6 +888,7 @@ fn action_result_for_write_to_long_running_shell_command(
             cursor,
             is_alt_screen_active,
             is_preempted,
+            activity,
         } => AIAgentActionResultType::WriteToLongRunningShellCommand(
             WriteToLongRunningShellCommandResult::Snapshot {
                 block_id,
@@ -828,6 +896,7 @@ fn action_result_for_write_to_long_running_shell_command(
                 cursor: cursor.to_owned(),
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             },
         ),
         ActionResult::Cancelled => AIAgentActionResultType::WriteToLongRunningShellCommand(
@@ -867,6 +936,7 @@ fn action_result_for_read_shell_command_output(
             cursor,
             is_alt_screen_active,
             is_preempted,
+            activity,
         } => AIAgentActionResultType::ReadShellCommandOutput(
             ReadShellCommandOutputResult::LongRunningCommandSnapshot {
                 command,
@@ -875,6 +945,7 @@ fn action_result_for_read_shell_command_output(
                 cursor: cursor.to_owned(),
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             },
         ),
         ActionResult::Cancelled => {
@@ -912,6 +983,7 @@ fn action_result_for_transfer_shell_command_control_to_user(
             cursor,
             is_alt_screen_active,
             is_preempted,
+            activity,
         } => AIAgentActionResultType::TransferShellCommandControlToUser(
             TransferShellCommandControlToUserResult::Snapshot {
                 block_id,
@@ -919,6 +991,7 @@ fn action_result_for_transfer_shell_command_control_to_user(
                 cursor: cursor.to_owned(),
                 is_alt_screen_active,
                 is_preempted,
+                activity,
             },
         ),
         ActionResult::Cancelled => AIAgentActionResultType::TransferShellCommandControlToUser(
@@ -976,9 +1049,31 @@ enum ActionResult {
         cursor: &'static str,
         is_alt_screen_active: bool,
         is_preempted: bool,
+        /// Evidence that the command is still doing work, for snapshots where
+        /// the grid alone cannot distinguish silence from a hang.
+        activity: Option<LrcActivity>,
     },
     Cancelled,
     BlockNotFound,
+}
+
+/// Whether liveness signals are trustworthy enough to collect on this platform.
+///
+/// Wasm has no local process table to read at all.
+fn lrc_activity_signals_supported() -> bool {
+    !cfg!(target_family = "wasm") && FeatureFlag::LrcActivitySignal.is_enabled()
+}
+
+/// Keeps liveness sampling armed for as long as an action that might report a
+/// snapshot is in flight.
+struct LrcMonitoringGuard {
+    monitor: Arc<LrcActivityMonitor>,
+}
+
+impl Drop for LrcMonitoringGuard {
+    fn drop(&mut self) {
+        self.monitor.disarm();
+    }
 }
 
 #[cfg(test)]

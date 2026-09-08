@@ -362,6 +362,7 @@ integration_tests! {
 
     // AI document tests
     test_copy_ai_document_as_markdown_from_overflow_menu,
+    test_restored_ai_document_populates_code_block_after_first_layout,
 
     // Keyboard protocol tests
     test_keyboard_protocol_disabled_shift_enter,

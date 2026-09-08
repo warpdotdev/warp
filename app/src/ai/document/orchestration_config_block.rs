@@ -47,9 +47,12 @@ use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::appearance::Appearance;
 use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::workspace::WorkspaceAction;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    TeamContextResolver, UserWorkspaces, UserWorkspacesEvent,
+};
 
 /// True when the mode is remote and `environment_id` is non-empty.
 fn env_presence(execution_mode: &RunAgentsExecutionMode) -> bool {
@@ -162,6 +165,7 @@ pub struct OrchestrationConfigBlockView {
     runners: Vec<(String, String)>,
     /// True while the `getRunners` fetch is in flight.
     runners_loading: bool,
+    team_context_resolver: TeamContextResolver,
 }
 
 impl OrchestrationConfigBlockView {
@@ -319,6 +323,29 @@ impl OrchestrationConfigBlockView {
                 }
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_this_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_this_window {
+                return;
+            }
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
+            if me.pickers_initialized {
+                oc::repopulate_all_pickers(
+                    &mut me.orchestration_edit_state.orchestration_config_state,
+                    &me.pickers,
+                    ctx,
+                );
+            }
+            ctx.notify();
+        });
         let mut view = Self {
             conversation_id,
             plan_id,
@@ -335,6 +362,7 @@ impl OrchestrationConfigBlockView {
             user_has_interacted: false,
             runners: Vec::new(),
             runners_loading: false,
+            team_context_resolver: UserWorkspaces::team_context_resolver(ctx.handle()),
         };
         if view.is_approved {
             view.ensure_pickers(ctx);
@@ -561,6 +589,10 @@ impl OrchestrationConfigBlockView {
             RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
             RunAgentsExecutionMode::Local => oc::ORCHESTRATION_WARP_WORKER_HOST,
         };
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+            model.refresh(&scope, ctx);
+        });
         let host_handle = ctx.add_typed_action_view(HostPicker::new);
         // Paint the open menu in the overlay layer so it doesn't get covered
         // by sibling pickers, matching the other pickers in this view.
@@ -570,8 +602,9 @@ impl OrchestrationConfigBlockView {
         oc::populate_host_picker(&host_handle, initial_host, ctx);
         ctx.subscribe_to_view(&host_handle, |_me, _, event, ctx| match event {
             HostPickerEvent::Opened => {
+                let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
-                    model.refresh(ctx);
+                    model.refresh(&scope, ctx);
                 });
             }
             HostPickerEvent::HostChanged { slug } => {
@@ -717,8 +750,15 @@ impl OrchestrationConfigBlockView {
         }
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         ctx.spawn(
-            async move { client.get_runners(Some(RunnerSortBy::Name)).await },
+            async move {
+                client
+                    .get_runners(Some(RunnerSortBy::Name), Some(team_scope))
+                    .await
+            },
             |me, result, ctx| {
                 me.runners_loading = false;
                 match result {
@@ -928,7 +968,14 @@ impl View for OrchestrationConfigBlockView {
                         .orchestration_edit_state
                         .orchestration_config_state
                         .execution_mode,
-                    app,
+                    oc::environment_snapshot(
+                        &self.orchestration_edit_state.orchestration_config_state,
+                        &(self.team_context_resolver)(app),
+                        app,
+                    )
+                    .rows
+                    .iter()
+                    .any(|row| !row.id.is_empty()),
                 ) {
                     column.add_child(oc::render_validation_error(
                         message,

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::{Hash, Hasher};
 
 use handlebars::{get_arguments, render_template};
@@ -113,7 +113,10 @@ impl TemplatableMCPServerInstallation {
     ///
     /// Variables with no matching explicit refs and no matching secret are left
     /// unchanged.
-    pub fn apply_secrets(&mut self, secrets: &HashMap<String, ManagedSecretValue>) {
+    ///
+    /// Returns the sorted, deduplicated referenced secret names that are not
+    /// available as injectable raw values.
+    pub fn apply_secrets(&mut self, secrets: &HashMap<String, ManagedSecretValue>) -> Vec<String> {
         let secret_strings: HashMap<String, String> = secrets
             .iter()
             .filter_map(|(k, v)| {
@@ -124,15 +127,23 @@ impl TemplatableMCPServerInstallation {
             })
             .collect();
 
+        let mut unresolved_secret_names = BTreeSet::new();
+
         // Access templatable_mcp_server directly instead of using template_variables() to allow mutating
         // variable_values while borrowing the template.
         for variable in self.templatable_mcp_server.template.variables.iter() {
-            let has_explicit_refs = self
+            let explicit_refs = self
                 .variable_values
                 .get(&variable.key)
-                .is_some_and(|v| !get_arguments(&v.value).is_empty());
+                .map(|value| get_arguments(&value.value))
+                .unwrap_or_default();
 
-            if has_explicit_refs {
+            if !explicit_refs.is_empty() {
+                for name in explicit_refs {
+                    if !secret_strings.contains_key(&name) {
+                        unresolved_secret_names.insert(name);
+                    }
+                }
                 let rendered =
                     render_template(&self.variable_values[&variable.key].value, &secret_strings);
                 self.variable_values.insert(
@@ -156,6 +167,8 @@ impl TemplatableMCPServerInstallation {
                 );
             }
         }
+
+        unresolved_secret_names.into_iter().collect()
     }
 
     pub fn gallery_uuid(&self) -> Option<Uuid> {

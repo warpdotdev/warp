@@ -102,8 +102,8 @@ use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::view::ambient_agent::{
     AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
 };
-use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
-use crate::terminal::view::{AIQueryRouting, TerminalAction, resolve_ai_query_routing};
+use crate::terminal::view::init::{ATTACH_FILE_KEYBINDING, OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING};
+use crate::terminal::view::{CloudRoutingIndicator, TerminalAction, resolve_ai_query_routing};
 use crate::terminal::{CLIAgent, TerminalModel};
 use crate::ui_components::icons::Icon;
 use crate::view_components::DismissibleToast;
@@ -420,6 +420,7 @@ impl AgentInputFooter {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Plus)
                 .with_tooltip("Attach file")
+                .with_tooltip_keybinding(ATTACH_FILE_KEYBINDING)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -1099,6 +1100,14 @@ impl AgentInputFooter {
             .is_some()
     }
 
+    pub(crate) fn select_file(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.is_cli_agent_session_active(ctx) {
+            self.select_cli_file(ctx);
+        } else {
+            ctx.emit(AgentInputFooterEvent::SelectFile);
+        }
+    }
+
     fn select_cli_file(&mut self, ctx: &mut ViewContext<Self>) {
         let window_id = ctx.window_id();
         let view_id = ctx.view_id();
@@ -1561,6 +1570,29 @@ impl AgentInputFooter {
         }
     }
 
+    fn cloud_routing_indicator_view(
+        &self,
+        terminal_model: &TerminalModel,
+        app: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        match resolve_ai_query_routing(
+            self.terminal_view_id,
+            self.ambient_agent_view_model.as_ref(),
+            terminal_model,
+            app,
+        )
+        .cloud_routing_indicator()
+        {
+            Some(CloudRoutingIndicator::LiveSession) => {
+                Some(ChildView::new(&self.live_session_indicator).finish())
+            }
+            Some(CloudRoutingIndicator::NewCloudVm) => {
+                Some(ChildView::new(&self.new_cloud_vm_indicator).finish())
+            }
+            None => None,
+        }
+    }
+
     fn render_cli_mode_footer(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let cli_icon_size = ButtonSize::AgentInputButton.icon_size(appearance, app);
@@ -1569,7 +1601,12 @@ impl AgentInputFooter {
         // the lock before calling into helpers like `should_use_manual_mode`
         // and `render_cli_toolbar_item`, which may re-lock the same model and
         // would deadlock since the lock is non-reentrant.
-        let (background_color, shared_status, is_conversation_transcript_context) = {
+        let (
+            background_color,
+            shared_status,
+            is_conversation_transcript_context,
+            cloud_routing_indicator,
+        ) = {
             let terminal_model = self.terminal_model.lock();
             let background_color = if terminal_model.is_alt_screen_active() {
                 terminal_model
@@ -1582,10 +1619,12 @@ impl AgentInputFooter {
             let shared_status = terminal_model.shared_session_status().clone();
             let is_conversation_transcript_context =
                 is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+            let cloud_routing_indicator = self.cloud_routing_indicator_view(&terminal_model, app);
             (
                 background_color,
                 shared_status,
                 is_conversation_transcript_context,
+                cloud_routing_indicator,
             )
         };
 
@@ -1622,6 +1661,10 @@ impl AgentInputFooter {
                 .with_padding_right(8.)
                 .finish(),
             );
+        }
+
+        if let Some(indicator) = cloud_routing_indicator {
+            left_buttons.add_child(indicator);
         }
 
         if let Some(chip_kind) = self.plugin_chip_kind(app) {
@@ -2298,6 +2341,16 @@ impl AgentInputFooter {
             .map(|chip| chip.as_ref(app).chip_kind().clone())
             .collect()
     }
+
+    #[cfg(test)]
+    pub fn live_session_indicator_id(&self) -> EntityId {
+        self.live_session_indicator.id()
+    }
+
+    #[cfg(test)]
+    pub fn new_cloud_vm_indicator_id(&self) -> EntityId {
+        self.new_cloud_vm_indicator.id()
+    }
 }
 
 impl View for AgentInputFooter {
@@ -2348,30 +2401,8 @@ impl View for AgentInputFooter {
         let is_conversation_transcript_context =
             is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
-        // Indicate whether the next follow-up continues on the live remote VM or starts a new one.
-        // The new-cloud-VM chip uses a yellow icon; the live-session chip uses the default color.
-        match resolve_ai_query_routing(
-            self.terminal_view_id,
-            self.ambient_agent_view_model.as_ref(),
-            &terminal_model,
-            app,
-        ) {
-            AIQueryRouting::LiveRemoteVm {
-                ambient_agent_task_id: Some(_),
-                ..
-            } => {
-                left_buttons.add_child(ChildView::new(&self.live_session_indicator).finish());
-            }
-            AIQueryRouting::NewCloudVm { .. } => {
-                left_buttons.add_child(ChildView::new(&self.new_cloud_vm_indicator).finish());
-            }
-            // Shared *local* session viewers (no ambient task) and non-live panes show no indicator.
-            AIQueryRouting::LiveRemoteVm {
-                ambient_agent_task_id: None,
-                ..
-            }
-            | AIQueryRouting::UnconnectedReadOnly
-            | AIQueryRouting::Local => {}
+        if let Some(indicator) = self.cloud_routing_indicator_view(&terminal_model, app) {
+            left_buttons.add_child(indicator);
         }
 
         for item in &left_items {
@@ -2483,14 +2514,7 @@ impl TypedActionView for AgentInputFooter {
                 }
             }
             AgentInputFooterAction::SelectFile => {
-                // Fork based on CLI agent session: in CLI mode, open a file
-                // picker and insert/write the path; in normal mode, use the
-                // standard AI file attachment flow.
-                if self.is_cli_agent_session_active(ctx) {
-                    self.select_cli_file(ctx);
-                } else {
-                    ctx.emit(AgentInputFooterEvent::SelectFile);
-                }
+                self.select_file(ctx);
             }
             AgentInputFooterAction::InsertFilePath(path) => {
                 if let Some(agent) = self.cli_agent(ctx) {
@@ -2982,3 +3006,7 @@ impl ActionButtonTheme for NLDButtonTheme {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;

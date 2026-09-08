@@ -55,6 +55,7 @@ pub mod request_usage_model;
 pub(crate) mod restored_conversations;
 pub(crate) mod runner_display;
 pub(crate) mod skills;
+pub(crate) mod stored_screenshots;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod tui_api_keys;
 pub(crate) mod voice;

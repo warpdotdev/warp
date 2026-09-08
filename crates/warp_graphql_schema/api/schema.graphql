@@ -3266,6 +3266,13 @@ type RootQuery {
 
   """Retrieve execution history for a scheduled agent."""
   scheduledAgentHistory(input: ScheduledAgentHistoryInput!, requestContext: RequestContext!): ScheduledAgentHistoryResult!
+
+  """
+  Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+  session. Requires a workload token scoped to the run, so only the sandbox itself (not an
+  arbitrary caller) can invoke it.
+  """
+  setupFailureDebugAuthorization(input: SetupFailureDebugAuthorizationInput!, requestContext: RequestContext!): SetupFailureDebugAuthorizationResult!
   simpleIntegrations(input: SimpleIntegrationsInput!, requestContext: RequestContext!): SimpleIntegrationsResult!
   suggestCloudEnvironmentImage(input: SuggestCloudEnvironmentImageInput!, requestContext: RequestContext!): SuggestCloudEnvironmentImageResult!
 
@@ -3495,6 +3502,25 @@ type SetTeamMemberRoleOutput implements Response {
 }
 
 union SetTeamMemberRoleResult = SetTeamMemberRoleOutput | UserFacingError
+
+"""
+Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+session. Called by the sharer (the retained agent process) with its own workload token to
+verify a no-token prompt's originating participant before honoring it, since the sharer's
+local task-eligibility view cannot authenticate who is actually asking.
+"""
+input SetupFailureDebugAuthorizationInput {
+  participantFirebaseUid: String!
+  taskId: ID!
+  workloadToken: String!
+}
+
+type SetupFailureDebugAuthorizationOutput implements Response {
+  authorized: Boolean!
+  responseContext: ResponseContext!
+}
+
+union SetupFailureDebugAuthorizationResult = SetupFailureDebugAuthorizationOutput | UserFacingError
 
 type SetUserIsOnboardedOutput implements Response {
   responseContext: ResponseContext!
@@ -3728,6 +3754,17 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  """
+  Whether the caller can handle a response in which one forge's credential is
+  fresh and another's failed. A caller that opts in must merge the fresh
+  credentials over its existing stores rather than rebuilding them from the
+  response, since a host absent from `credentials` may simply not have been
+  refreshed this cycle. Absent or false preserves the all-or-nothing
+  behavior, so a caller that rebuilds its stores wholesale never sees a
+  partial list.
+  """
+  acceptsPartialRefresh: Boolean
+
   """The ID of the task."""
   taskId: ID!
 
@@ -3736,7 +3773,20 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
+
+  """
+  Hosts whose credential could not be issued this cycle because of a
+  transient failure. A host listed here is distinct from one that is simply
+  absent from `credentials`: absent means the run has no repository on that
+  forge and needs no credential there, while listed here means the caller
+  should keep whatever it already has for that host and retry.
+
+  Only populated when the request set `acceptsPartialRefresh`; otherwise a
+  failure on any forge fails the whole request.
+  """
+  failedHosts: [String!]!
   responseContext: ResponseContext!
 }
 
@@ -4198,6 +4248,14 @@ input UpdateAgentTaskInput {
   If set, the task is associated with this AI conversation UUID for follow-up messages.
   """
   conversationId: ID
+
+  """
+  True while a REMOTE-2661 debug turn is actively pinning the post-failure debug window's idle
+  timer; false once the turn ends and the timer re-arms. Display-only, and deliberately separate
+  from statusMessage and sessionDebugUntil for the same reason: a pin/unpin update must not
+  overwrite the failure text or move the deadline.
+  """
+  debugAgentActive: Boolean
 
   """
   When a failed run's shared session stops being held open for debugging.

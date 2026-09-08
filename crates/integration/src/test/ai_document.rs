@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use warp::integration_testing::ai_document::{
     ai_document_overflow_button_position_id, assert_ai_document_overflow_button_position_exists,
-    create_and_open_ai_document,
+    assert_viewed_ai_document_has_code_and_mermaid_controls, create_and_open_ai_document,
+    restore_and_open_ai_document, select_initial_ai_document_version,
 };
 use warp::integration_testing::clipboard::assert_clipboard_contains_string;
 use warp::integration_testing::step::new_step_with_default_assertions;
@@ -34,5 +35,40 @@ pub fn test_copy_ai_document_as_markdown_from_overflow_menu() -> Builder {
                 .add_assertion(assert_clipboard_contains_string(
                     EXPECTED_CLIPBOARD.to_string(),
                 )),
+        )
+}
+
+const RESTORED_V1_MARKDOWN: &str = "```\necho one\n```\n\n```mermaid\ngraph TD\n  A-->B\n```";
+const RESTORED_V2_MARKDOWN: &str = "```\necho two\n```\n\n```mermaid\ngraph TD\n  C-->D\n```";
+
+/// Restored plan editors defer layout until first display. Opening the current version, then
+/// switching to an earlier one, must still populate code-block controls after that first layout.
+pub fn test_restored_ai_document_populates_code_block_after_first_layout() -> Builder {
+    new_builder()
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(restore_and_open_ai_document(
+            "Restored Plan",
+            RESTORED_V1_MARKDOWN,
+            RESTORED_V2_MARKDOWN,
+        ))
+        .with_step(
+            new_step_with_default_assertions("Wait for restored plan to finish first layout")
+                .set_timeout(Duration::from_secs(10))
+                .add_assertion(assert_ai_document_overflow_button_position_exists()),
+        )
+        .with_step(
+            new_step_with_default_assertions(
+                "Current restored version has code and rendered Mermaid controls after first layout",
+            )
+            .set_timeout(Duration::from_secs(10))
+            .add_assertion(assert_viewed_ai_document_has_code_and_mermaid_controls()),
+        )
+        .with_step(select_initial_ai_document_version())
+        .with_step(
+            new_step_with_default_assertions(
+                "Earlier restored version has code and rendered Mermaid controls after first layout",
+            )
+            .set_timeout(Duration::from_secs(10))
+            .add_assertion(assert_viewed_ai_document_has_code_and_mermaid_controls()),
         )
 }

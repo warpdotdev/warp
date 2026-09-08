@@ -57,9 +57,11 @@ use crate::server::retry_strategies::{
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::TaskListFilter;
 use crate::server::server_api::presigned_upload::HttpStatusError;
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 use crate::ui_components::icons::Icon;
 use crate::workspace::{RestoreConversationLayout, WorkspaceAction};
+use crate::workspaces::user_workspaces::{TeamContextResolver, TeamScope};
 
 const POLLING_INTERVAL: Duration = Duration::from_secs(30);
 const RTC_TASK_REFRESH_THROTTLE: Duration = Duration::from_secs(5);
@@ -632,9 +634,9 @@ pub struct AgentConversationsModel {
     in_flight_poll_abort_handle: Option<AbortHandle>,
     /// Handle to abort the timer for initiating the next poll.
     next_poll_abort_handle: Option<AbortHandle>,
-    /// Set of view IDs actively consuming this model's data per window.
+    /// Team resolvers for views actively consuming this model's data per window.
     /// When a window has at least one consumer, we poll for new tasks while that window is active.
-    active_data_consumers_per_window: HashMap<WindowId, HashSet<EntityId>>,
+    active_data_consumers_per_window: HashMap<WindowId, HashMap<EntityId, TeamContextResolver>>,
     initial_load_state: InitialConversationLoadState,
     /// Per-task fetch state for `get_or_async_fetch_task_data`. See [`TaskFetchState`] for
     /// the meaning of each variant. Tasks that have been successfully fetched live in `tasks`
@@ -784,6 +786,7 @@ impl AgentConversationsModel {
             StateEvent::ValueChanged { current, previous } => {
                 // If the active window changed, check if we need to start/stop polling
                 if current.active_window != previous.active_window {
+                    self.abort_existing_poll();
                     self.update_polling_state(ctx);
                 }
             }
@@ -920,6 +923,9 @@ impl AgentConversationsModel {
                                 updated_after: Some(updated_after),
                                 ..Default::default()
                             },
+                            // TODO: Scope RTC refreshes per open window if cross-team updates can
+                            // exceed this page limit during one throttle window.
+                            None,
                         )
                         .await
                 }
@@ -992,6 +998,7 @@ impl AgentConversationsModel {
                             creator_uid: Some(creator_uid),
                             ..Default::default()
                         },
+                        None,
                     );
                     let conversation_metadata_future =
                         ai_client.list_ai_conversation_metadata(None);
@@ -1116,12 +1123,13 @@ impl AgentConversationsModel {
         &mut self,
         window_id: WindowId,
         view_id: EntityId,
+        team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) {
         self.active_data_consumers_per_window
             .entry(window_id)
             .or_default()
-            .insert(view_id);
+            .insert(view_id, team_context_resolver);
         self.update_polling_state(ctx);
 
         // Flush dirty tasks accumulated while no list surface was open.
@@ -1144,46 +1152,44 @@ impl AgentConversationsModel {
                 self.active_data_consumers_per_window.remove(&window_id);
             }
         }
+        self.abort_existing_poll();
         self.update_polling_state(ctx);
     }
 
     /// Updates the polling state based on whether the active window has the view open.
     fn update_polling_state(&mut self, ctx: &mut ModelContext<Self>) {
-        let should_poll = self.should_be_polling(ctx);
-
-        if should_poll && self.next_poll_abort_handle.is_none() {
-            self.poll_for_tasks(ctx);
-        } else if !should_poll {
-            self.abort_existing_poll();
+        match self.polling_team_context_resolver(ctx) {
+            Some(team_context_resolver) if self.next_poll_abort_handle.is_none() => {
+                self.poll_for_tasks(team_context_resolver, ctx);
+            }
+            None => self.abort_existing_poll(),
+            Some(_) => {}
         }
     }
 
-    /// Returns true if we should be polling: online, not loading, and active window has the view open.
-    fn should_be_polling(&self, ctx: &ModelContext<Self>) -> bool {
+    fn polling_team_context_resolver(
+        &self,
+        ctx: &ModelContext<Self>,
+    ) -> Option<TeamContextResolver> {
         if !self.initial_load_state.can_poll() {
-            return false;
+            return None;
         }
 
         // Don't poll if we're using RTC
         if FeatureFlag::AmbientAgentsRTC.is_enabled() {
-            return false;
+            return None;
         }
 
-        let is_online = NetworkStatus::as_ref(ctx).is_online();
-
-        if !is_online {
-            return false;
+        if !NetworkStatus::as_ref(ctx).is_online() {
+            return None;
         }
 
-        let active_window = WindowManager::as_ref(ctx).active_window();
-
-        match active_window {
-            Some(window_id) => self
-                .active_data_consumers_per_window
-                .get(&window_id)
-                .is_some_and(|views| !views.is_empty()),
-            None => false,
-        }
+        let active_window = WindowManager::as_ref(ctx).active_window()?;
+        self.active_data_consumers_per_window
+            .get(&active_window)?
+            .values()
+            .next()
+            .cloned()
     }
 
     /// Abort the current in-flight poll (does NOT abort initial sync)
@@ -1196,37 +1202,50 @@ impl AgentConversationsModel {
         }
     }
 
-    fn schedule_next_poll(&mut self, ctx: &mut ModelContext<Self>) {
+    fn schedule_next_poll(
+        &mut self,
+        team_context_resolver: TeamContextResolver,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let future_handle = ctx.spawn(
             async move {
                 Timer::after(duration_with_jitter(POLLING_INTERVAL, 0.2)).await;
             },
-            |model, _, ctx| {
-                model.poll_for_tasks(ctx);
+            move |model, _, ctx| {
+                model.poll_for_tasks(team_context_resolver, ctx);
             },
         );
         self.next_poll_abort_handle = Some(future_handle.abort_handle());
     }
-
-    fn poll_for_tasks(&mut self, ctx: &mut ModelContext<Self>) {
+    fn poll_for_tasks(
+        &mut self,
+        team_context_resolver: TeamContextResolver,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.abort_existing_poll();
-        if !self.should_be_polling(ctx) {
+        if self.polling_team_context_resolver(ctx).is_none() {
             return;
         }
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
+        let scope = team_context_resolver(ctx);
+        let request_team_scope = RequestTeamScope::from_scope(&scope);
 
         let future = ctx.spawn_with_retry_on_error(
             move || {
                 let ai_client = ai_client.clone();
                 async move {
                     ai_client
-                        .list_ambient_agent_tasks(100, TaskListFilter::default())
+                        .list_ambient_agent_tasks(
+                            100,
+                            TaskListFilter::default(),
+                            Some(request_team_scope),
+                        )
                         .await
                 }
             },
             PERIODIC_POLL_RETRY_STRATEGY,
-            |model, result, ctx| {
+            move |model, result, ctx| {
                 let should_poll_again = !result.has_pending_retries();
 
                 if let RequestState::RequestSucceeded(tasks) = result {
@@ -1234,7 +1253,7 @@ impl AgentConversationsModel {
                 }
 
                 if should_poll_again {
-                    model.schedule_next_poll(ctx);
+                    model.schedule_next_poll(team_context_resolver.clone(), ctx);
                 }
             },
         );
@@ -1271,11 +1290,6 @@ impl AgentConversationsModel {
         }
     }
 
-    /// Returns whether the unfiltered conversation list contains any entries.
-    pub fn has_items(&self, app: &AppContext) -> bool {
-        !self.unfiltered_entries(app).is_empty()
-    }
-
     /// Returns an iterator over all ambient agent tasks.
     pub fn tasks_iter(&self) -> impl Iterator<Item = &AmbientAgentTask> {
         self.tasks.values()
@@ -1304,16 +1318,43 @@ impl AgentConversationsModel {
     }
 
     /// Returns normalized, owned entries for agent management/navigation surfaces.
-    pub fn get_entries(
+    pub fn get_entries<S: TeamScope + ?Sized>(
         &self,
         filters: &AgentManagementFilters,
+        scope: &S,
         app: &AppContext,
     ) -> Vec<AgentConversationEntry> {
         self.unfiltered_entries(app)
             .into_iter()
+            .filter(|entry| self.entry_matches_scope(entry, scope.team_uid()))
             .filter(|entry| entry.matches_filters(filters, app))
             .sorted_by(|a, b| b.display.last_updated.cmp(&a.display.last_updated))
             .collect()
+    }
+
+    pub fn has_items<S: TeamScope + ?Sized>(&self, scope: &S, app: &AppContext) -> bool {
+        self.unfiltered_entries(app)
+            .into_iter()
+            .any(|entry| self.entry_matches_scope(&entry, scope.team_uid()))
+    }
+
+    fn entry_matches_scope(
+        &self,
+        entry: &AgentConversationEntry,
+        team_uid: Option<ServerId>,
+    ) -> bool {
+        entry
+            .identity
+            .ambient_agent_task_id
+            .and_then(|task_id| self.tasks.get(&task_id))
+            .is_none_or(|task| Self::task_matches_team(task, team_uid))
+    }
+
+    fn task_matches_team(task: &AmbientAgentTask, team_uid: Option<ServerId>) -> bool {
+        task.scope
+            .as_ref()
+            .filter(|scope| scope.is_team())
+            .is_none_or(|scope| team_uid.is_some_and(|team_uid| scope.uid == team_uid.to_string()))
     }
 
     /// Returns normalized entries before user-selected filters are applied.
@@ -1889,10 +1930,15 @@ impl AgentConversationsModel {
     ///
     /// We use this function to populate the available creator filter list
     /// based on the tasks we have.
-    pub fn get_all_creators(&self, app: &AppContext) -> Vec<(String, String)> {
+    pub fn get_all_creators<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        app: &AppContext,
+    ) -> Vec<(String, String)> {
         let mut creators: Vec<(String, String)> = self
             .tasks
             .values()
+            .filter(|task| Self::task_matches_team(task, scope.team_uid()))
             .filter_map(|task| {
                 let name = entry::task_creator_name(task, app)?;
                 let uid = entry::task_creator_uid(task)?;
@@ -1916,10 +1962,17 @@ impl AgentConversationsModel {
     ///
     /// When multiple environments share the same name, each is disambiguated
     /// as "<name> (<id>)".
-    pub fn get_all_environment_ids_and_names(&self, ctx: &AppContext) -> HashMap<String, String> {
+    pub fn get_all_environment_ids_and_names<S: TeamScope + ?Sized>(
+        &self,
+        scope: &S,
+        ctx: &AppContext,
+    ) -> HashMap<String, String> {
         let mut envs = HashMap::<String, String>::new();
-
-        for task in self.tasks.values() {
+        for task in self
+            .tasks
+            .values()
+            .filter(|task| Self::task_matches_team(task, scope.team_uid()))
+        {
             let Some(environment_id) = task
                 .agent_config_snapshot
                 .as_ref()
@@ -2023,6 +2076,7 @@ impl AgentConversationsModel {
         &mut self,
         filters: &AgentManagementFilters,
         current_user_uid: &str,
+        request_team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
         let ai_client = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
@@ -2035,7 +2089,11 @@ impl AgentConversationsModel {
                 let task_filter = task_filter.clone();
                 async move {
                     ai_client
-                        .list_ambient_agent_tasks(INITIAL_TASK_AMOUNT, task_filter)
+                        .list_ambient_agent_tasks(
+                            INITIAL_TASK_AMOUNT,
+                            task_filter,
+                            Some(request_team_scope),
+                        )
                         .await
                 }
             },
@@ -2083,21 +2141,52 @@ impl AgentConversationsModel {
         if self.tasks.len() <= total_cap {
             return;
         }
-
-        let (mut personal, mut team): (Vec<_>, Vec<_>) =
-            self.tasks.drain().partition(|(_, task)| {
+        let mut retained_task_ids = HashSet::new();
+        let mut personal_tasks = self
+            .tasks
+            .values()
+            .filter(|task| {
                 task.creator
                     .as_ref()
-                    .is_some_and(|c| c.uid == current_user_uid)
-            });
+                    .is_some_and(|creator| creator.uid == current_user_uid)
+            })
+            .collect::<Vec<_>>();
+        personal_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        retained_task_ids.extend(
+            personal_tasks
+                .into_iter()
+                .take(MAX_PERSONAL_TASKS)
+                .map(|task| task.task_id),
+        );
 
-        // Sort each by updated_at (newest first), truncate
-        personal.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
-        team.sort_by(|a, b| b.1.updated_at.cmp(&a.1.updated_at));
-        personal.truncate(MAX_PERSONAL_TASKS);
-        team.truncate(MAX_TEAM_TASKS);
+        let mut team_tasks = HashMap::<String, Vec<&AmbientAgentTask>>::new();
+        let mut unscoped_shared_tasks = Vec::new();
+        for task in self.tasks.values() {
+            if let Some(scope) = task.scope.as_ref().filter(|scope| scope.is_team()) {
+                team_tasks.entry(scope.uid.clone()).or_default().push(task);
+            } else if task
+                .creator
+                .as_ref()
+                .is_none_or(|creator| creator.uid != current_user_uid)
+            {
+                unscoped_shared_tasks.push(task);
+            }
+        }
 
-        self.tasks = personal.into_iter().chain(team).collect();
+        for tasks in team_tasks.values_mut() {
+            tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            retained_task_ids.extend(tasks.iter().take(MAX_TEAM_TASKS).map(|task| task.task_id));
+        }
+        unscoped_shared_tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        retained_task_ids.extend(
+            unscoped_shared_tasks
+                .into_iter()
+                .take(MAX_TEAM_TASKS)
+                .map(|task| task.task_id),
+        );
+
+        self.tasks
+            .retain(|task_id, _| retained_task_ids.contains(task_id));
     }
 
     /// Clears all stored conversation and task data in memory.

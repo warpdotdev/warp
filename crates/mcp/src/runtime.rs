@@ -77,6 +77,94 @@ fn build_header_map(headers: &HashMap<String, String>) -> reqwest::header::Heade
     headers.try_into().unwrap_or_default()
 }
 
+/// Header names whose value Warp treats as a caller-supplied credential when
+/// deciding whether a `401` means "authenticate me" or "your token was
+/// rejected".
+///
+/// `Authorization` is the standard, but MCP servers behind API gateways
+/// commonly take a bearer-equivalent in a bespoke key header instead.
+const CREDENTIAL_HEADER_NAMES: [&str; 3] = ["authorization", "x-api-key", "api-key"];
+
+/// Reports whether the caller configured a header that carries its own
+/// credential, i.e. whether a `401` should be read as a rejection of that
+/// credential rather than as an invitation to start OAuth.
+fn has_caller_supplied_credential(headers: &HashMap<String, String>) -> bool {
+    headers.iter().any(|(name, value)| {
+        !value.trim().is_empty()
+            && CREDENTIAL_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
+    })
+}
+
+/// Reports whether a `WWW-Authenticate` value is an OAuth protected-resource
+/// challenge, which is what the MCP authorization spec (via RFC 9728) requires
+/// a server to return when it wants a client to begin an OAuth flow.
+///
+/// The `resource_metadata` parameter is the discriminator: a server that simply
+/// rejected a bearer token answers with a plain `Bearer` challenge (often
+/// `error="invalid_token"`) and no discovery pointer.
+///
+/// Matching is on the parameter *name*. A substring test over the raw value
+/// would also fire on a rejection whose quoted `error_description` happened to
+/// mention the term, routing that rejection back into OAuth and undoing the
+/// distinction this function exists to draw.
+fn is_oauth_challenge(www_authenticate: &str) -> bool {
+    challenge_parameter_names(www_authenticate)
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("resource_metadata"))
+}
+
+/// Collects the parameter names of a `WWW-Authenticate` value, stepping over
+/// quoted parameter values so their contents never contribute structure.
+///
+/// Deliberately lenient rather than a full RFC 9110 parser: the only question
+/// asked of it is whether a given parameter name was present, and anything it
+/// cannot make sense of yields no name, which fails safe toward treating the
+/// challenge as a plain rejection.
+fn challenge_parameter_names(www_authenticate: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = www_authenticate;
+
+    while let Some(equals) = rest.find('=') {
+        // The name is the last delimiter-separated token before `=`; anything
+        // earlier belongs to a previous parameter or to the auth scheme (the
+        // `Bearer` in `Bearer realm="x", error="y"`).
+        let name = rest[..equals]
+            .trim_end()
+            .rsplit([',', ' ', '\t'])
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if !name.is_empty() {
+            names.push(name);
+        }
+
+        let after_equals = rest[equals + 1..].trim_start();
+        rest = match after_equals.strip_prefix('"') {
+            Some(unquoted) => {
+                let mut escaped = false;
+                let closing_quote = unquoted.char_indices().find_map(|(index, character)| {
+                    if escaped {
+                        escaped = false;
+                        return None;
+                    }
+                    if character == '\\' {
+                        escaped = true;
+                        return None;
+                    }
+                    (character == '"').then_some(index)
+                });
+                closing_quote.map_or("", |closing| &unquoted[closing + 1..])
+            }
+            None => match after_equals.find(',') {
+                Some(comma) => &after_equals[comma + 1..],
+                None => "",
+            },
+        };
+    }
+
+    names
+}
+
 /// Builds a reqwest client with custom headers for MCP HTTP/SSE connections.
 #[allow(clippy::result_large_err)]
 pub fn build_client_with_headers(
@@ -361,10 +449,33 @@ async fn determine_transport(
             "Unexpected status code: {status}"
         ))
     }
-    match send_initialize_request(url, headers, None).await? {
+
+    let preflight = send_initialize_request(url, headers, None).await?;
+    match preflight.status {
         StatusCode::OK => Ok(Transport::Http(None)),
         StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => Ok(Transport::Sse(None)),
         StatusCode::UNAUTHORIZED => {
+            // A server that wants OAuth says so with a protected-resource
+            // challenge. Without one, a `401` on a request that already carried
+            // the caller's own credential means that credential was rejected —
+            // starting an OAuth flow there would replace an accurate error with
+            // a misleading one.
+            if !preflight
+                .www_authenticate
+                .iter()
+                .any(|value| is_oauth_challenge(value))
+                && has_caller_supplied_credential(headers)
+            {
+                return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
+                    format!(
+                        "MCP server '{server_name}' rejected the configured credentials (HTTP 401). \
+                         The request included the credential header(s) you configured, so the \
+                         server did not accept that value — check the token itself, its expiry, \
+                         and its scope. The server did not ask for OAuth."
+                    ),
+                ));
+            }
+
             let Some(mut auth_context) = auth_context else {
                 return Err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>(
                     "Server requires authentication, which is not yet supported.".to_string(),
@@ -393,7 +504,10 @@ async fn determine_transport(
                 }
             };
 
-            match send_initialize_request(url, headers, Some(&client)).await? {
+            match send_initialize_request(url, headers, Some(&client))
+                .await?
+                .status
+            {
                 StatusCode::OK => {
                     emit_authenticated_notification().await;
                     Ok(Transport::Http(Some(client)))
@@ -409,13 +523,23 @@ async fn determine_transport(
     }
 }
 
-/// Sends an InitializeRequest to the server, and returns the HTTP status code from the response.
+/// What the preflight InitializeRequest told us about the server.
+struct PreflightResponse {
+    status: reqwest::StatusCode,
+    /// The `WWW-Authenticate` challenges the server sent. Retained because
+    /// they are the only reliable way to tell an OAuth-protected resource apart
+    /// from a server that merely rejected the credential we sent.
+    www_authenticate: Vec<String>,
+}
+
+/// Sends an InitializeRequest to the server and returns the parts of the
+/// response that transport selection depends on.
 #[allow(clippy::result_large_err)]
 async fn send_initialize_request(
     url: &str,
     headers: &HashMap<String, String>,
     auth_client: Option<&rmcp::transport::auth::AuthClient<reqwest::Client>>,
-) -> Result<reqwest::StatusCode, rmcp::RmcpError> {
+) -> Result<PreflightResponse, rmcp::RmcpError> {
     use rmcp::transport::common::http_header::{EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE};
 
     let request = rmcp::model::InitializeRequest::new(make_client_info());
@@ -445,7 +569,18 @@ async fn send_initialize_request(
         .await
         .map_err(rmcp::RmcpError::transport_creation::<ReqwestHttpTransport>)?;
 
-    Ok(response.status())
+    let www_authenticate = response
+        .headers()
+        .get_all(http::header::WWW_AUTHENTICATE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(ToString::to_string)
+        .collect();
+
+    Ok(PreflightResponse {
+        status: response.status(),
+        www_authenticate,
+    })
 }
 
 /// Creates a [`ClientInfo`] for the MCP client.

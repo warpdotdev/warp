@@ -138,7 +138,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
             ConfigPage::Harness => harness_snapshot(state, ctx),
             ConfigPage::ApiKey => api_key_snapshot(state, ctx),
             ConfigPage::Host => host_snapshot(state, scope, ctx),
-            ConfigPage::Environment => environment_snapshot(state, ctx),
+            ConfigPage::Environment => environment_snapshot(state, scope, ctx),
             ConfigPage::Model => model_snapshot(state, ctx),
         }
     }

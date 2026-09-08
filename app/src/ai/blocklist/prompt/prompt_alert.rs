@@ -16,10 +16,12 @@ use crate::ai::credit_availability::{AICreditAvailability, AICreditDenialReason}
 use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
 use crate::server::ids::ServerId;
-use crate::settings_view::SettingsSection;
+use crate::settings_view::{AdminActions, SettingsSection};
 use crate::ui_components::icons::Icon;
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::team::Team;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
+use crate::workspaces::workspace::Workspace;
 
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PERCENTAGE: f32 = 0.5;
 
@@ -33,13 +35,40 @@ const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI cred
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT: &str = "Manage billing";
 const OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT: &str = "Enable premium overages";
 const MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT: &str = "Increase monthly spend limit";
+const MANAGE_LIMIT_TEXT: &str = "Manage limit";
 const UPGRADE_TEXT: &str = "Upgrade";
 const COMPARE_PLANS_TEXT: &str = "Compare plans";
 const CONTACT_SUPPORT_TEXT: &str = "Contact support";
 const NON_ADMIN_CONTACT_ADMIN_TEXT: &str = ", contact a team admin";
+const NON_ADMIN_CONTACT_ANY_ADMIN_TEXT: &str = ", contact an admin";
 const NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT: &str = ", ask a team admin to enable overages";
 const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
     ", ask a team admin to increase overages";
+
+fn enterprise_limit_cta(
+    workspace: Option<&Workspace>,
+    team: Option<&Team>,
+    user_email: Option<&str>,
+) -> Option<Vec<FormattedTextFragment>> {
+    let workspace =
+        workspace.filter(|workspace| workspace.billing_metadata.is_enterprise_plan())?;
+    let user_email = user_email.unwrap_or_default();
+    let admin_panel_link = if workspace.is_native_workspaces_admin(user_email) {
+        Some(AdminActions::admin_panel_link_for_workspace())
+    } else {
+        team.filter(|team| team.has_admin_permissions(user_email))
+            .map(|team| AdminActions::admin_panel_link_for_team(team.uid))
+    };
+    Some(match admin_panel_link {
+        Some(link) => vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
+        ],
+        None => vec![FormattedTextFragment::plain_text(
+            NON_ADMIN_CONTACT_ANY_ADMIN_TEXT,
+        )],
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptAlertAction {
@@ -299,10 +328,16 @@ impl PromptAlertView {
         app: &AppContext,
     ) {
         let auth_state = AuthStateProvider::as_ref(app).get();
+        let user_email = auth_state.user_email();
         let current_team = UserWorkspaces::as_ref(app).team_for_view_handle(&self.view_handle, app);
         let has_admin_permissions = current_team.is_some_and(|team| {
-            team.has_admin_permissions(&auth_state.user_email().unwrap_or_default())
+            team.has_admin_permissions(user_email.as_deref().unwrap_or_default())
         });
+        let enterprise_limit_cta = enterprise_limit_cta(
+            UserWorkspaces::as_ref(app).current_workspace(),
+            current_team,
+            user_email.as_deref(),
+        );
 
         match state {
             PromptAlertState::NoConnection => {}
@@ -347,7 +382,9 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::MonthlyOveragesSpendLimitReached => {
-                if has_admin_permissions {
+                if let Some(cta) = enterprise_limit_cta {
+                    text_fragments.extend(cta);
+                } else if has_admin_permissions {
                     text_fragments.push(FormattedTextFragment::plain_text("  "));
                     text_fragments.push(FormattedTextFragment::hyperlink_action(
                         MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT,
@@ -360,8 +397,12 @@ impl PromptAlertView {
                 }
             }
             PromptAlertState::RequestLimitReached => {
-                text_fragments.push(FormattedTextFragment::plain_text("  "));
+                if let Some(cta) = enterprise_limit_cta {
+                    text_fragments.extend(cta);
+                    return;
+                }
                 if let Some(team) = current_team {
+                    text_fragments.push(FormattedTextFragment::plain_text("  "));
                     if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
                         let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
                         let upgrade_text = if !has_admin_permissions {
@@ -381,6 +422,7 @@ impl PromptAlertView {
                         ));
                     }
                 } else {
+                    text_fragments.push(FormattedTextFragment::plain_text("  "));
                     let user_id = auth_state.user_id().unwrap_or_default();
                     let upgrade_url = UserWorkspaces::upgrade_link(user_id);
                     let label =

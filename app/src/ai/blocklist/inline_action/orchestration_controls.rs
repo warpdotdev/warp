@@ -28,6 +28,7 @@ use warpui::{
 
 use crate::LLMPreferences;
 use crate::ai::blocklist::inline_action::host_picker::HostPicker;
+use crate::ai::cloud_environments::{CloudEnvironmentCatalog, environment_matches_scope};
 use crate::ai::execution_profiles::model_menu_items::{
     CollapsedModelVariants, available_model_menu_items,
 };
@@ -35,15 +36,15 @@ use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::harness_display;
 use crate::ai::orchestration::{
     AUTH_SECRET_INHERIT_LABEL, OptionBadge, OptionFooter, OptionRow, OptionSnapshot,
-    OptionSourceStatus, api_key_snapshot, build_runner_snapshot, environment_snapshot,
-    harness_snapshot, host_snapshot, model_snapshot, persist_auth_secret_selection,
+    OptionSourceStatus, api_key_snapshot, build_runner_snapshot, harness_snapshot, host_snapshot,
+    model_snapshot, persist_auth_secret_selection,
 };
 pub use crate::ai::orchestration::{
     AuthSecretSelection, ORCHESTRATION_WARP_WORKER_HOST, OrchestrationConfigState,
     OrchestrationEditState, accept_disabled_reason_with_auth, empty_env_recommendation_message,
-    persist_environment_selection, persist_host_selection,
-    resolve_auth_secret_selection_for_harness, resolve_default_environment_id,
-    resolve_default_host_slug, should_show_auth_secret_picker,
+    environment_snapshot, persist_environment_selection, persist_host_selection,
+    resolve_auth_secret_selection_for_harness, resolve_default_host_slug,
+    should_show_auth_secret_picker,
 };
 use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
@@ -80,6 +81,16 @@ pub fn runner_controls_enabled(ctx: &AppContext) -> bool {
     FeatureFlag::CloudAgentRunners.is_enabled()
         && ServerExperiments::as_ref(ctx)
             .is_experiment_enabled(&ServerExperiment::MacosRunnersExperiment)
+}
+
+/// Resolves the default environment visible to the current window.
+pub fn resolve_default_environment_id<V: View>(ctx: &ViewContext<V>) -> Option<String> {
+    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    CloudEnvironmentCatalog::as_ref(ctx)
+        .orchestration_default_environment_id_matching(ctx, |environment| {
+            environment_matches_scope(environment, &scope, true)
+        })
+        .map(|id| id.uid())
 }
 
 // ── Action trait ────────────────────────────────────────────────────
@@ -435,7 +446,8 @@ pub fn populate_environment_picker<A: OrchestrationControlAction, V: View>(
         },
     );
     dropdown_handle.update(ctx, |dropdown, ctx_dropdown| {
-        let snapshot = environment_snapshot(&state, ctx_dropdown);
+        let scope = UserWorkspaces::as_ref(ctx_dropdown).team_context_for_view(ctx_dropdown);
+        let snapshot = environment_snapshot(&state, &scope, ctx_dropdown);
         let selected_label = selected_row_label(&snapshot);
         let items = snapshot
             .rows
@@ -777,7 +789,15 @@ pub fn apply_execution_mode_change<A: OrchestrationControlAction, V: View>(
     fallback_base_model_id: Option<String>,
     ctx: &mut ViewContext<V>,
 ) {
+    let needs_environment_default = is_remote
+        && match &state.execution_mode {
+            RunAgentsExecutionMode::Local => true,
+            RunAgentsExecutionMode::Remote { environment_id, .. } => environment_id.is_empty(),
+        };
     state.apply_execution_mode_change(is_remote, fallback_base_model_id, ctx);
+    if needs_environment_default {
+        state.set_environment_id(resolve_default_environment_id(ctx).unwrap_or_default());
+    }
     let is_local = !state.execution_mode.is_remote();
     if let Some(handle) = &handles.harness_picker {
         populate_harness_picker(handle, &state.harness_type, is_local, ctx);
@@ -862,7 +882,8 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
         });
     }
     if let Some(environment_picker) = handles.environment_picker.clone() {
-        let snapshot = environment_snapshot(state, ctx);
+        let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+        let snapshot = environment_snapshot(state, &scope, ctx);
         if let Some(label) = selected_row_label(&snapshot) {
             environment_picker.update(ctx, |dropdown, ctx_dropdown| {
                 dropdown.set_selected_by_name(&label, ctx_dropdown);

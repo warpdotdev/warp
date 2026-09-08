@@ -940,6 +940,7 @@ pub(crate) fn open_new_from_path(
                 NewTerminalOptions::default()
                     .with_initial_directory_opt(path_if_directory(&arg.path).map(Into::into)),
             ),
+            initial_team_uid: None,
         },
         ctx,
     )
@@ -974,6 +975,7 @@ fn create_environment(arg: &CreateEnvironmentArg, ctx: &mut AppContext) {
     let (window_id, root_handle) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::default(),
+            initial_team_uid: None,
         },
         ctx,
     );
@@ -1007,6 +1009,7 @@ fn create_environment_and_run(arg: &CreateEnvironmentArg, ctx: &mut AppContext) 
     let (window_id, root_handle) = open_new_with_workspace_source(
         NewWorkspaceSource::Session {
             options: Box::default(),
+            initial_team_uid: None,
         },
         ctx,
     );
@@ -1590,6 +1593,7 @@ pub enum NewWorkspaceSource {
     },
     Session {
         options: Box<NewTerminalOptions>,
+        initial_team_uid: Option<ServerId>,
     },
     SharedSessionAsViewer {
         session_id: SessionId,
@@ -1662,6 +1666,13 @@ impl NewWorkspaceSource {
     }
 
     pub fn team_uid(&self, ctx: &AppContext) -> Option<ServerId> {
+        if let Self::Session {
+            initial_team_uid: Some(team_uid),
+            ..
+        } = self
+        {
+            return Some(*team_uid);
+        }
         let source_window_id = match self {
             Self::Empty {
                 previous_active_window,

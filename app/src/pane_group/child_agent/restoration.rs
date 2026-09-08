@@ -204,7 +204,7 @@ impl PaneGroup {
         ctx.spawn(
             async move {
                 ai_client
-                    .list_ambient_agent_tasks(RESTORE_CHILD_SEED_FETCH_LIMIT, filter)
+                    .list_ambient_agent_tasks(RESTORE_CHILD_SEED_FETCH_LIMIT, filter, None)
                     .await
             },
             move |me, result, ctx| {

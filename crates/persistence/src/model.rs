@@ -1299,10 +1299,10 @@ impl ModelTokenUsage {
             self.model_id.clone(),
             stream_finished::ModelTokenUsage {
                 model_id: self.model_id.clone(),
-                total_tokens,
+                total_tokens: u64::from(total_tokens),
                 token_usage_by_category: usage_by_category
                     .iter()
-                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .map(|(cat, tokens)| (cat.clone(), u64::from(*tokens)))
                     .collect(),
             },
         ))
@@ -1326,11 +1326,11 @@ impl ModelTokenUsage {
             self.model_id.clone(),
             stream_finished::ModelTokenUsage {
                 model_id: self.model_id.clone(),
-                total_tokens: self.custom_endpoint_tokens,
+                total_tokens: u64::from(self.custom_endpoint_tokens),
                 token_usage_by_category: self
                     .custom_endpoint_token_usage_by_category
                     .iter()
-                    .map(|(cat, tokens)| (cat.clone(), *tokens))
+                    .map(|(cat, tokens)| (cat.clone(), u64::from(*tokens)))
                     .collect(),
             },
         ))
@@ -1340,14 +1340,16 @@ impl ModelTokenUsage {
     pub fn to_proto_combined(&self) -> stream_finished::ModelTokenUsage {
         stream_finished::ModelTokenUsage {
             model_id: self.model_id.clone(),
-            total_tokens: self.warp_tokens + self.byok_tokens + self.custom_endpoint_tokens,
+            total_tokens: u64::from(self.warp_tokens)
+                + u64::from(self.byok_tokens)
+                + u64::from(self.custom_endpoint_tokens),
             token_usage_by_category: self
                 .warp_token_usage_by_category
                 .iter()
                 .chain(self.byok_token_usage_by_category.iter())
                 .chain(self.custom_endpoint_token_usage_by_category.iter())
                 .fold(HashMap::new(), |mut acc, (cat, tokens)| {
-                    *acc.entry(cat.clone()).or_insert(0) += tokens;
+                    *acc.entry(cat.clone()).or_insert(0) += u64::from(*tokens);
                     acc
                 }),
         }

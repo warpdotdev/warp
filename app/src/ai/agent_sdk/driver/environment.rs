@@ -19,10 +19,10 @@ use warp_core::{safe_info, safe_warn};
 use warpui::r#async::FutureExt;
 use warpui::{ModelContext, ModelSpawner, SingletonEntity};
 
-use super::AgentDriverError;
 #[cfg(feature = "local_fs")]
 use super::cache_setup;
 use super::terminal::TerminalDriver;
+use super::{AgentDriverError, git_credentials};
 use crate::ai::agent_sdk::environment_snapshot::{
     EnvironmentSnapshot, EnvironmentSnapshotReporter, RepositoryRevision,
 };
@@ -124,7 +124,7 @@ fn environment_snapshot(
         .zip(resolved_heads)
         .filter_map(|(request, resolved_head_sha)| {
             Some(RepositoryRevision {
-                code_forge: request.repo.code_forge.unwrap_or_default(),
+                code_forge: request.repo.code_forge?,
                 repo_owner: request.repo.owner.clone(),
                 repo_name: request.repo.repo.clone(),
                 checkout_path: checkout_path(working_dir, &request.repo.repo),
@@ -225,6 +225,8 @@ pub(crate) fn validate_repository_head_overrides(
 /// 3. Run any setup commands.
 /// 4. If there is only one repository, navigate into it.
 ///
+/// Returns the directory where the harness will run.
+///
 /// `is_sandbox` tells the preparer that `working_dir` only exists inside a
 /// Docker sandbox container and therefore the host filesystem can't be used
 /// for repo detection or indexing. This is an explicit signal from the
@@ -239,7 +241,7 @@ pub(crate) fn prepare_environment(
     setup_events: SetupClientEventReporter,
     environment_snapshot_reporter: EnvironmentSnapshotReporter,
     ctx: &mut ModelContext<TerminalDriver>,
-) -> impl Future<Output = Result<(), PrepareEnvironmentError>> + use<> {
+) -> impl Future<Output = Result<PathBuf, PrepareEnvironmentError>> + use<> {
     let spawner = ctx.spawner();
     async move {
         let RepositoryPreparationOptions {
@@ -294,11 +296,11 @@ pub(crate) fn merge_repos_deduped(
     additional_repos: Vec<SourceRepo>,
 ) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
     let mut seen = HashSet::new();
-    let mut names = HashMap::<String, (String, CodeForge)>::new();
+    let mut names = HashMap::<String, (String, Option<CodeForge>)>::new();
     let mut merged = Vec::with_capacity(environment_repos.len() + additional_repos.len());
 
     for repo in environment_repos.into_iter().chain(additional_repos) {
-        let forge = repo.code_forge.unwrap_or_default();
+        let forge = repo.code_forge;
         let key = (forge, repo.owner.to_lowercase(), repo.repo.to_lowercase());
         if !seen.insert(key) {
             continue;
@@ -380,7 +382,7 @@ async fn prepare_environment_impl(
     repo_channels: Arc<Mutex<HashMap<PathBuf, oneshot::Sender<()>>>>,
     setup_events: SetupClientEventReporter,
     environment_snapshot_reporter: EnvironmentSnapshotReporter,
-) -> Result<(), PrepareEnvironmentError> {
+) -> Result<PathBuf, PrepareEnvironmentError> {
     let working_dir_string = working_dir.to_string_lossy().to_string();
 
     // Position the session in `working_dir` before running any probes / clones.
@@ -413,6 +415,10 @@ async fn prepare_environment_impl(
 
     if !source_repos.is_empty() {
         for repo in source_repos {
+            git_credentials::configure_repository_git_identity(
+                &working_dir.join(&repo.repo),
+                repo.code_forge.map(CodeForge::host).unwrap_or(""),
+            );
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
                 let receiver = index_repo_codebase(
@@ -520,7 +526,7 @@ async fn prepare_environment_impl(
 
     // If there's only one repo in the environment, start the agent in that repo.
     // This way, it doesn't have to locate the correct repo to work on.
-    if let Some(repo_name) = single_repo_name(source_repos) {
+    let harness_working_dir = if let Some(repo_name) = single_repo_name(source_repos) {
         safe_info!(
             safe: ("Changing directory into single repository"),
             full: ("Changing directory into single repository: {repo_name}")
@@ -529,8 +535,11 @@ async fn prepare_environment_impl(
         if exit_code != 0.into() {
             return Err(PrepareEnvironmentError::ChangeDirectory { repo_name });
         }
-    }
-    Ok(())
+        working_dir.join(repo_name)
+    } else {
+        working_dir.to_path_buf()
+    };
+    Ok(harness_working_dir)
 }
 
 fn record_codebase_indexing(
@@ -576,10 +585,11 @@ fn record_codebase_indexing(
 // a real repository before this client updates, so callers must treat it as
 // an ordinary "can't clone this" outcome rather than an invariant violation.
 fn repository_forge_for_repo(repo: &SourceRepo) -> Option<RepositoryForge> {
-    match repo.code_forge.unwrap_or_default() {
-        CodeForge::GitHub => Some(RepositoryForge::GitHub),
-        CodeForge::GitLab => Some(RepositoryForge::GitLab),
-        CodeForge::None | CodeForge::Unknown => None,
+    match repo.code_forge {
+        Some(CodeForge::GitHub) => Some(RepositoryForge::GitHub),
+        Some(CodeForge::GitLab) => Some(RepositoryForge::GitLab),
+        Some(CodeForge::AzureDevOps) => Some(RepositoryForge::AzureDevOps),
+        Some(CodeForge::None | CodeForge::Unknown) | None => None,
     }
 }
 fn head_override_matches_repo(head_override: &RepositoryHeadOverride, repo: &SourceRepo) -> bool {

@@ -19,6 +19,7 @@ use crate::terminal::model::blocks::TotalIndex;
 use crate::terminal::model::grid::grid_handler::AbsolutePoint;
 use crate::terminal::model::index::Point;
 use crate::terminal::model::terminal_model::{BlockIndex, BlockSortDirection};
+use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::view_components::find::FindDirection;
 
@@ -95,20 +96,16 @@ fn test_async_find_produces_same_results_as_sync_find() {
 
         // Wait for async find to complete. The stream-based delivery processes
         // results automatically; we just need to yield to the executor.
-        for _ in 0..100 {
-            let is_complete = test_model.update(&mut app, |model, _ctx| {
+        assert_eventually!(
+            200 => test_model.update(&mut app, |model, _ctx| {
                 model
                     .async_find_controller
                     .as_ref()
                     .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
                     .unwrap_or(false)
-            });
-            if is_complete {
-                break;
-            }
-            // Small delay to let background task and stream delivery run.
-            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
-        }
+            }),
+            "Async find should complete"
+        );
 
         let (status, async_count) = test_model.update(&mut app, |model, _ctx| {
             let c = model.async_find_controller.as_ref().unwrap();
@@ -720,19 +717,16 @@ fn assert_async_focused_order_matches_sync(block_sort_direction: BlockSortDirect
                 .start_find(&find_options, block_sort_direction, ctx);
         });
 
-        for _ in 0..100 {
-            let is_complete = test_model.update(&mut app, |model, _ctx| {
+        assert_eventually!(
+            200 => test_model.update(&mut app, |model, _ctx| {
                 model
                     .async_find_controller
                     .as_ref()
                     .map(|c| matches!(c.status(), AsyncFindStatus::Complete))
                     .unwrap_or(false)
-            });
-            if is_complete {
-                break;
-            }
-            warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
-        }
+            }),
+            "Async find should complete."
+        );
 
         let (status, async_match_count) = test_model.update(&mut app, |model, _ctx| {
             let controller = model

@@ -4,6 +4,8 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
+use thiserror::Error;
+use warp_errors::{ErrorExt, register_error};
 
 use super::context::ViewContext;
 use crate::core::RefCounts;
@@ -71,6 +73,18 @@ impl<T: Entity> ViewHandle<T> {
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
     {
         app.update_view(self, update)
+    }
+
+    /// A [`ViewHandle`] keeps the view's ref count alive but does not keep its window open, so any
+    /// update that can outlive its window — typically one driven by a spawned task that resolves
+    /// after the user closed the window — would otherwise panic. Only the checkout is fallible; the
+    /// `update` closure is free to panic on its own terms.
+    pub fn try_update<A, F, S>(&self, app: &mut A, update: F) -> Result<S, ViewUpdateError>
+    where
+        A: UpdateView,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S,
+    {
+        app.try_update_view(self, update)
     }
 
     pub fn is_focused(&self, app: &AppContext) -> bool {
@@ -319,11 +333,49 @@ pub trait ReadView: ViewAsRef {
         F: FnOnce(&T, &AppContext) -> S;
 }
 
+/// Why a view could not be checked out for an update.
+///
+/// [`UpdateView::update_view`] panics in both of these cases. [`ViewHandle::try_update`] reports
+/// them instead, so callers can tell an expected teardown race apart from a genuine reentrancy
+/// bug — and so that only the latter reaches Sentry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ViewUpdateError {
+    /// The view's window has been closed, so the view is no longer registered. Expected whenever
+    /// queued work outlives the window it targets.
+    #[error("the view's window no longer exists")]
+    WindowClosed,
+    /// The view is already checked out by an update further up the stack, so updating it again
+    /// would be a circular update.
+    #[error("the view is already being updated")]
+    CircularUpdate,
+}
+
+impl ErrorExt for ViewUpdateError {
+    fn is_actionable(&self) -> bool {
+        match self {
+            // A window can always close before queued work runs; there is nothing to fix.
+            ViewUpdateError::WindowClosed => false,
+            // Reentrancy means a caller nested two updates of the same view.
+            ViewUpdateError::CircularUpdate => true,
+        }
+    }
+}
+register_error!(ViewUpdateError);
+
 pub trait UpdateView: ReadView {
     // `update_view` keeps the `Entity` bound because it hands the closure a
     // `&mut ViewContext<T>`, which exposes `emit(T::Event)` and therefore needs
     // `T: Entity`.
     fn update_view<T, F, S>(&mut self, handle: &ViewHandle<T>, update: F) -> S
+    where
+        T: Entity,
+        F: FnOnce(&mut T, &mut ViewContext<T>) -> S;
+
+    fn try_update_view<T, F, S>(
+        &mut self,
+        handle: &ViewHandle<T>,
+        update: F,
+    ) -> Result<S, ViewUpdateError>
     where
         T: Entity,
         F: FnOnce(&mut T, &mut ViewContext<T>) -> S;
