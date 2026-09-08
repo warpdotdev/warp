@@ -837,11 +837,7 @@ impl<V: EditorView> RichTextElement<V> {
 
     /// Builds a [`RenderableBlock`] for each block in the current viewport. This is done lazily,
     /// during layout.
-    fn renderable_blocks(
-        &mut self,
-        styles: &RichTextStyles,
-        app: &AppContext,
-    ) {
+    fn renderable_blocks(&mut self, styles: &RichTextStyles, app: &AppContext) {
         let parent = match self.parent_view.upgrade(app) {
             Some(handle) => handle.as_ref(app),
             None => {

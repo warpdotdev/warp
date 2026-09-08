@@ -128,10 +128,7 @@ impl<'a> TextLayout<'a> {
         .with_container_scrolls_horizontally(model.container_scrolls_horizontally())
     }
 
-    pub fn for_materialization(
-        app: &'a AppContext,
-        model: &'a RenderState,
-    ) -> Self {
+    pub fn for_materialization(app: &'a AppContext, model: &'a RenderState) -> Self {
         let mut layout = Self::for_render_state(app, model);
         if matches!(model.width_setting(), WidthSetting::InfiniteWidth) {
             layout.max_width = f32::MAX;

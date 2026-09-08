@@ -39,9 +39,7 @@ use crate::render::model::{
 fn test_large_temporary_diff_uses_deferred_paragraphs() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -361,19 +359,13 @@ fn test_layout_delta_never_takes_ownership_of_new_lines_with_multiple_owners() {
 fn test_layout_delta_defers_unwrapped_paragraph_payloads_without_changing_geometry() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let unwrapped_layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
             );
-            let wrapped_layout = TextLayout::new(
-                &layout_cache,
-                ctx.font_cache().text_layout_system(),
-                &TEST_STYLES,
-                80.0,
-            );
+            let wrapped_layout =
+                TextLayout::new(ctx.font_cache().text_layout_system(), &TEST_STYLES, 80.0);
             let new_lines = vec![
                 identifiable_text_block(6),
                 identifiable_text_block(9),

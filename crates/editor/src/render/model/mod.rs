@@ -3846,15 +3846,13 @@ impl RenderState {
                 }
             },
             LayoutAction::Autoscroll { mode } => {
-                let layout_cache = LayoutCache::new();
-                let layout = self.layout_context(&layout_cache, ctx);
+                let layout = self.layout_context(ctx);
                 self.materialize_geometry_offsets(&layout, &mode.offsets(self));
                 self.autoscroll(mode, ctx);
                 self.materialized_blocks.borrow_mut().clear();
             }
             LayoutAction::ScrollTo(position) => {
-                let layout_cache = LayoutCache::new();
-                let layout = self.layout_context(&layout_cache, ctx);
+                let layout = self.layout_context(ctx);
                 self.materialize_geometry_offsets(&layout, &[position.first_character_offset()]);
                 if self
                     .viewport

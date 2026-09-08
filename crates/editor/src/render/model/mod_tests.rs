@@ -13,7 +13,7 @@ use warpui_core::elements::ListIndentLevel;
 use warpui_core::fonts::FamilyId;
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::vec2f;
-use warpui_core::text_layout::{LayoutCache, TextFrame};
+use warpui_core::text_layout::TextFrame;
 use warpui_core::units::{IntoPixels, Pixels};
 
 use super::debug::Describe;
@@ -132,9 +132,7 @@ fn test_fair_layout_allocations_redistribute_skewed_demands_in_both_orders() {
 fn test_viewport_materializes_only_visible_code_block_paragraphs() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -192,9 +190,7 @@ fn test_viewport_materializes_only_visible_code_block_paragraphs() {
 fn test_main_viewport_and_simultaneous_lenses_share_one_materialization_budget() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -258,9 +254,7 @@ fn test_main_viewport_and_simultaneous_lenses_share_one_materialization_budget()
 fn test_materialized_layout_retention_prunes_dead_reusable_ranges() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -301,9 +295,7 @@ fn test_materialized_layout_retention_prunes_dead_reusable_ranges() {
 fn test_multiline_materialization_shares_indexed_backing_and_keeps_sparse_overlays() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -411,9 +403,7 @@ fn test_positioned_paragraph_range_starts_at_late_index_without_visiting_prefix(
 fn test_deferred_paragraph_caches_demand_at_layout_cap() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -456,9 +446,7 @@ fn test_table_viewport_snapshot_uses_model_backed_layout() {
                 };
                 table.as_ref() as *const LaidOutTable
             };
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -488,9 +476,7 @@ fn test_table_viewport_snapshot_uses_model_backed_layout() {
 fn test_deferred_viewport_materialization_is_visible_first_fair_and_bounded() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -663,9 +649,7 @@ fn test_deferred_viewport_materialization_is_visible_first_fair_and_bounded() {
 fn test_main_and_lens_materialization_snapshots_are_stable_in_both_orders() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -794,9 +778,7 @@ fn test_layout_edit_delta_uses_deferred_paragraphs_in_render_state() {
 fn test_temporary_blocks_at_one_offset_materialize_distinct_text() {
     App::test((), |app| async move {
         app.read(|ctx| {
-            let layout_cache = LayoutCache::new();
             let layout = TextLayout::new(
-                &layout_cache,
                 ctx.font_cache().text_layout_system(),
                 &TEST_STYLES,
                 f32::MAX,
@@ -909,9 +891,8 @@ fn test_post_edit_autoscroll_materializes_the_interior_selection_geometry() {
         let edit_complete = render.read(&app, |render, _| render.layout_complete());
         edit_complete.await;
 
-        let layout_cache = LayoutCache::new();
         let retained = render.read(&app, |render, ctx| {
-            let layout = render.layout_context(&layout_cache, ctx);
+            let layout = render.layout_context(ctx);
             render.materialize_viewport_with_max_chars(
                 &layout,
                 8.0.into_pixels(),
@@ -928,7 +909,7 @@ fn test_post_edit_autoscroll_materializes_the_interior_selection_geometry() {
             12
         );
         render.read(&app, |render, ctx| {
-            let layout = render.layout_context(&layout_cache, ctx);
+            let layout = render.layout_context(ctx);
             render.materialize_geometry_offsets(&layout, &[interior_offset]);
             let second_offset = CharOffset::from(first_text.chars().count());
             let materialized = render.materialized_blocks.borrow();
