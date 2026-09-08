@@ -264,7 +264,6 @@ use crate::server::server_api::ServerApi;
 use crate::server::server_api::ai::AttachmentInput;
 use crate::server::server_api::ai::{AIClient, AttachmentFileInfo};
 use crate::server::server_api::presigned_upload::upload_to_target;
-use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{
     AICommandSearchEntrypoint, AgentModeAutoDetectionFalsePositivePayload,
     AgentModeAutoDetectionSettingOrigin, AnonymousUserSignupEntrypoint, CommandXRayTrigger,
@@ -2646,7 +2645,7 @@ impl Input {
             | AuthSecretFtuxViewEvent::Created { harness, name } => {
                 let harness = *harness;
                 let name = name.clone();
-                let team_scope = RequestTeamScope::from_scope(&me.team_scope(ctx));
+                let team_scope = crate::server::team_scope::request_team_scope(&me.team_scope(ctx));
                 vm_for_events.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
@@ -14379,7 +14378,7 @@ impl Input {
         };
 
         let server_api = self.server_api.clone();
-        let team_scope = RequestTeamScope::from_scope(
+        let team_scope = crate::server::team_scope::request_team_scope(
             &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
         );
 

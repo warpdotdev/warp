@@ -106,7 +106,7 @@ impl RunAgentsExecutor {
     }
 
     fn request_team_scope(&self, ctx: &ModelContext<Self>) -> RequestTeamScope {
-        RequestTeamScope::from_scope(&(self.team_context_resolver)(ctx))
+        crate::server::team_scope::request_team_scope(&(self.team_context_resolver)(ctx))
     }
 
     pub fn is_pending(&self, action_id: &AIAgentActionId) -> bool {
@@ -289,7 +289,7 @@ impl RunAgentsExecutor {
                     None, /* lifecycle_subscription */
                     parent_conversation_id,
                     parent_run_id.clone(),
-                    team_scope,
+                    team_scope.clone(),
                     exec_ctx,
                 )
             });
@@ -408,7 +408,7 @@ impl RunAgentsExecutor {
             parent_conversation_id,
             self.terminal_view_id,
             &self.launched_agents,
-            team_scope,
+            team_scope.clone(),
             ctx,
         ) {
             let result = RunAgentsResult::Denied { reason };
@@ -472,7 +472,7 @@ impl RunAgentsExecutor {
         let mut resolved_request = request.clone();
         let team_scope = self.request_team_scope(ctx);
         resolve_request_from_approved_config(&mut resolved_request, input.conversation_id, ctx);
-        populate_default_auth_secret_for_execution(&mut resolved_request, team_scope, ctx);
+        populate_default_auth_secret_for_execution(&mut resolved_request, team_scope.clone(), ctx);
         if self
             .duplicate_launched_agents_reason(&resolved_request, input.conversation_id, ctx)
             .is_some()
@@ -547,7 +547,7 @@ fn prepare_request_for_execution(
     ctx: &ModelContext<RunAgentsExecutor>,
 ) -> Option<String> {
     let status = resolve_request_from_approved_config(request, parent_conversation_id, ctx);
-    populate_default_auth_secret_for_execution(request, team_scope, ctx);
+    populate_default_auth_secret_for_execution(request, team_scope.clone(), ctx);
     if let Some(reason) =
         duplicate_launched_agents_reason(request, parent_conversation_id, launched_agents, ctx)
     {

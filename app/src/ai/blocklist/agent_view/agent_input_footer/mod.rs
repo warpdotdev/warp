@@ -1932,7 +1932,7 @@ impl AgentInputFooter {
                     let language = AISettings::as_ref(ctx)
                         .voice_input_language_code()
                         .map(str::to_owned);
-                    let team_scope = RequestTeamScope::from_scope(
+                    let team_scope = crate::server::team_scope::request_team_scope(
                         &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
                     );
                     if !self.cli_voice_input_lifecycle.begin_transcribing() {

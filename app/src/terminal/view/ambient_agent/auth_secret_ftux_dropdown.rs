@@ -179,7 +179,7 @@ impl AuthSecretFtuxDropdown {
     }
 
     fn request_team_scope(&self, ctx: &AppContext) -> RequestTeamScope {
-        RequestTeamScope::from_scope(
+        crate::server::team_scope::request_team_scope(
             &UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx),
         )
     }

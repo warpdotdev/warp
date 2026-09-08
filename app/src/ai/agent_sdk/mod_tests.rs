@@ -130,12 +130,15 @@ fn multi_team_run_passes_selected_team_to_task_creation_and_headless_window() {
             .unwrap()
             .expect("new local run should resolve a scope");
         assert_eq!(team_scope.team_uid(), Some(selected_team_uid));
+        let selected_team_uid_string = selected_team_uid.uid();
 
         let mut ai_client = MockAIClient::new();
         ai_client
             .expect_create_agent_task()
             .times(1)
-            .withf(move |_, _, _, _, scope| scope.team_uid() == Some(selected_team_uid))
+            .withf(move |_, _, _, _, scope| {
+                scope.team_uid() == Some(selected_team_uid_string.as_str())
+            })
             .returning(|_, _, _, _, _| Ok(TASK_ID.parse().unwrap()));
         let ai_client: Arc<dyn AIClient> = Arc::new(ai_client);
         let mut driver_options = agent_driver_options();

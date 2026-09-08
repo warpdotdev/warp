@@ -35,7 +35,6 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::facts::manager::AIFactManager;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::ai::mcp::gallery::MCPGalleryManager;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
@@ -99,7 +98,9 @@ pub(crate) fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(AuthManager::new_for_test);
-    app.add_singleton_model(ManagedSecretsFacade::new_for_test);
+    app.add_singleton_model(
+        crate::server::server_api::managed_secrets::managed_secret_manager_for_test,
+    );
     app.add_singleton_model(|_ctx| PtySpawner::new_for_test());
     app.add_singleton_model(|_| Prompt::mock());
     app.add_singleton_model(|ctx| AutoupdateState::new(ServerApiProvider::as_ref(ctx).get()));

@@ -4,9 +4,10 @@ use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeF
 
 #[test]
 fn auth_secret_cache_key_distinguishes_team_scope() {
-    let personal_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
-    let team_scope =
-        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(ServerId::from(7)));
+    let personal_scope = crate::server::team_scope::request_team_scope(&TeamlessScopeForTest);
+    let team_scope = crate::server::team_scope::request_team_scope(
+        &TeamContextForOperation::new_for_test(ServerId::from(7)),
+    );
 
     assert_ne!(
         AuthSecretCacheKey::new(personal_scope, Harness::Claude),
@@ -16,7 +17,7 @@ fn auth_secret_cache_key_distinguishes_team_scope() {
 
 #[test]
 fn invalidation_rejects_in_flight_auth_secret_fetch_generation() {
-    let personal_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+    let personal_scope = crate::server::team_scope::request_team_scope(&TeamlessScopeForTest);
     let cache_key = AuthSecretCacheKey::new(personal_scope, Harness::Claude);
     let mut model = HarnessAvailabilityModel {
         harnesses: default_harnesses(),
@@ -35,10 +36,10 @@ fn invalidation_rejects_in_flight_auth_secret_fetch_generation() {
 
 #[test]
 fn auth_secret_cache_key_distinguishes_harness() {
-    let personal_scope = RequestTeamScope::from_scope(&TeamlessScopeForTest);
+    let personal_scope = crate::server::team_scope::request_team_scope(&TeamlessScopeForTest);
 
     assert_ne!(
-        AuthSecretCacheKey::new(personal_scope, Harness::Claude),
+        AuthSecretCacheKey::new(personal_scope.clone(), Harness::Claude),
         AuthSecretCacheKey::new(personal_scope, Harness::Codex)
     );
 }

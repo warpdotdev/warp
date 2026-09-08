@@ -81,7 +81,9 @@ impl OrchestrationConfigState {
         let loaded_secret_names = Harness::parse_orchestration_harness(&self.harness_type)
             .filter(|harness| *harness != Harness::Oz)
             .and_then(|harness| {
-                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(team_scope, harness) {
+                match HarnessAvailabilityModel::as_ref(ctx)
+                    .auth_secrets_for(team_scope.clone(), harness)
+                {
                     AuthSecretFetchState::Loaded(secrets) => {
                         Some(secrets.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
                     }

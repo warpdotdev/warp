@@ -544,7 +544,7 @@ pub fn prepare_handoff(
         .map(|environment| environment.id)
         .collect();
     let scope = controller.as_ref(ctx).team_context(ctx);
-    let team_scope = RequestTeamScope::from_scope(&scope);
+    let team_scope = crate::server::team_scope::request_team_scope(&scope);
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
         .get_active_base_model(&scope, ctx, Some(terminal_surface_id))
@@ -758,9 +758,9 @@ async fn execute_validated_handoff(
                 },
                 forked.forked_conversation_id.clone(),
                 None,
-                forked.pending.team_scope,
+                forked.pending.team_scope.clone(),
             ),
-            team_scope: forked.pending.team_scope,
+            team_scope: forked.pending.team_scope.clone(),
             cancel,
         };
         if let Err(error) = materialize_handoff_target(materialization)
@@ -804,7 +804,7 @@ async fn execute_validated_handoff(
         settled.spawn_ready,
         settled.forked_conversation_id,
         settled.initial_snapshot_token,
-        settled.team_scope,
+        settled.team_scope.clone(),
     );
     let response = ai_client
         .spawn_agent(request.clone(), settled.team_scope)

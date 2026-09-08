@@ -16,17 +16,15 @@ use warp_cli::secret::{
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretType};
 use warp_graphql::object::SpaceType;
-use warp_managed_secrets::ManagedSecretValue;
 use warp_managed_secrets::client::SecretOwner;
+use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, SingletonEntity as _};
 
 use super::output::{self, TableFormat};
-use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::auth::UserUid;
 use crate::cloud_object::Owner;
 use crate::server::ids::ServerId;
-use crate::server::team_scope::RequestTeamScope;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 
 #[derive(Serialize)]
@@ -221,7 +219,7 @@ fn create_secret_with_input(
     description: Option<String>,
     scope: ObjectScope,
 ) -> Result<()> {
-    ManagedSecretsFacade::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
+    ManagedSecretManager::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
         // Perform as much validation as possible up-front, before prompting the user for a secret.
         // It's a bad UX if we make them type in a secret and then fail on something we could have
         // checked beforehand.
@@ -243,7 +241,7 @@ fn create_secret_with_input(
                 };
                 let team_scope = match super::common::resolve_team_scope(&scope.team_selection, ctx)
                 {
-                    Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
+                    Ok(team_scope) => crate::server::team_scope::request_team_scope(&team_scope),
                     Err(err) => {
                         super::report_fatal_error(err, ctx);
                         return;
@@ -299,7 +297,7 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
     let force = args.force;
     let scope = args.scope;
 
-    ManagedSecretsFacade::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
+    ManagedSecretManager::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
         let name = name.clone();
         ctx.spawn(refresh_future, move |managed_secrets, refresh_result, ctx| {
@@ -316,7 +314,7 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
                 }
             };
             let team_scope = match super::common::resolve_team_scope(&scope.team_selection, ctx) {
-                Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
+                Ok(team_scope) => crate::server::team_scope::request_team_scope(&team_scope),
                 Err(err) => {
                     super::report_fatal_error(err, ctx);
                     return;
@@ -391,7 +389,7 @@ fn delete_secret(ctx: &mut AppContext, args: DeleteSecretArgs) -> Result<()> {
 
 /// Update a secret.
 fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
-    ManagedSecretsFacade::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
+    ManagedSecretManager::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
         // Perform as much validation as possible up-front, before prompting the user for a secret.
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
         ctx.spawn(
@@ -411,7 +409,9 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
                 };
                 let team_scope =
                     match super::common::resolve_team_scope(&args.scope.team_selection, ctx) {
-                        Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
+                        Ok(team_scope) => {
+                            crate::server::team_scope::request_team_scope(&team_scope)
+                        }
                         Err(err) => {
                             super::report_fatal_error(err, ctx);
                             return;
@@ -446,7 +446,7 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 
                 if let Some(secret_value) = secret_value {
                     // Look up the existing secret's type so we use the correct ManagedSecretValue variant.
-                    let list_future = managed_secrets.list_secrets(team_scope);
+                    let list_future = managed_secrets.list_secrets(team_scope.clone());
                     ctx.spawn(list_future, move |managed_secrets, list_result, ctx| {
                         let secrets = match list_result {
                             Ok(secrets) => secrets,
@@ -525,7 +525,7 @@ fn list_secrets(
     output_format: OutputFormat,
     args: ListSecretsArgs,
 ) -> Result<()> {
-    ManagedSecretsFacade::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
+    ManagedSecretManager::handle(ctx).update(ctx, move |_managed_secrets, ctx| {
         let refresh_future = super::common::refresh_workspace_metadata(ctx);
         ctx.spawn(
             refresh_future,
@@ -536,7 +536,7 @@ fn list_secrets(
                 }
                 let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx)
                 {
-                    Ok(team_scope) => RequestTeamScope::from_scope(&team_scope),
+                    Ok(team_scope) => crate::server::team_scope::request_team_scope(&team_scope),
                     Err(err) => {
                         super::report_fatal_error(err, ctx);
                         return;

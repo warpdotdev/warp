@@ -7,6 +7,7 @@ use vec1::vec1;
 use warp_core::features::FeatureFlag;
 use warp_graphql::managed_secrets::ManagedSecret;
 use warp_graphql::queries::task_secrets::ManagedSecretValue as GqlManagedSecretValue;
+use warp_request_context::RequestTeamScope;
 use warpui_core::{Entity, SingletonEntity};
 
 use crate::ManagedSecretValue;
@@ -18,6 +19,7 @@ use crate::envelope::UploadKey;
 use crate::gcp::{self, GcpWorkloadIdentityFederationError, GcpWorkloadIdentityFederationToken};
 
 /// Singleton model for working with Warp-managed secrets.
+#[derive(Clone)]
 pub struct ManagedSecretManager {
     client: Arc<dyn ManagedSecretsClient>,
     actor_provider: Arc<dyn ActorProvider>,
@@ -41,6 +43,7 @@ impl ManagedSecretManager {
 
     pub fn create_secret(
         &self,
+        team_scope: RequestTeamScope,
         owner: SecretOwner,
         name: String,
         value: ManagedSecretValue,
@@ -57,7 +60,9 @@ impl ManagedSecretManager {
 
             // We retrieve all upload keys on demand. These should potentially be fetched and stored
             // ahead of time instead.
-            let configs = client.get_managed_secret_configs().await?;
+            let configs = client
+                .get_managed_secret_configs(team_scope.clone())
+                .await?;
 
             let Some(actor) = actor_provider.actor_uid() else {
                 return Err(anyhow::anyhow!("No authenticated user"));
@@ -76,6 +81,7 @@ impl ManagedSecretManager {
 
             let managed_secret = client
                 .create_managed_secret(
+                    team_scope,
                     owner,
                     name,
                     value.secret_type(),
@@ -89,6 +95,7 @@ impl ManagedSecretManager {
 
     pub fn delete_secret(
         &self,
+        team_scope: RequestTeamScope,
         owner: SecretOwner,
         name: String,
     ) -> impl Future<Output = anyhow::Result<()>> + use<> {
@@ -98,13 +105,16 @@ impl ManagedSecretManager {
                 return Err(anyhow::anyhow!("This feature is not enabled"));
             }
 
-            client.delete_managed_secret(owner, name).await?;
+            client
+                .delete_managed_secret(team_scope, owner, name)
+                .await?;
             Ok(())
         }
     }
 
     pub fn update_secret(
         &self,
+        team_scope: RequestTeamScope,
         owner: SecretOwner,
         name: String,
         value: Option<ManagedSecretValue>,
@@ -124,7 +134,9 @@ impl ManagedSecretManager {
             let encrypted_value = if let Some(value) = value {
                 // We retrieve all upload keys on demand. These should potentially be fetched and stored
                 // ahead of time instead.
-                let configs = client.get_managed_secret_configs().await?;
+                let configs = client
+                    .get_managed_secret_configs(team_scope.clone())
+                    .await?;
 
                 let Some(actor) = actor_provider.actor_uid() else {
                     return Err(anyhow::anyhow!("No authenticated user"));
@@ -146,17 +158,34 @@ impl ManagedSecretManager {
             };
 
             let managed_secret = client
-                .update_managed_secret(owner, name, encrypted_value, description)
+                .update_managed_secret(team_scope, owner, name, encrypted_value, description)
                 .await?;
             Ok(managed_secret)
         }
     }
 
     /// List all managed secrets accessible to the current user.
-    pub fn list_secrets(&self) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
+    pub fn list_secrets(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
         let client = self.client.clone();
         async move {
-            let secrets = client.list_secrets().await?;
+            let secrets = client.list_secrets(team_scope).await?;
+            Ok(secrets)
+        }
+    }
+
+    pub fn list_harness_auth_secrets(
+        &self,
+        team_scope: RequestTeamScope,
+        harness: warp_graphql::ai::AgentHarness,
+    ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<> {
+        let client = self.client.clone();
+        async move {
+            let secrets = client
+                .list_harness_auth_secrets(team_scope, harness)
+                .await?;
             Ok(secrets)
         }
     }

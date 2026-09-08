@@ -30,7 +30,6 @@ use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::{LLMId, LLMPreferences};
-use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::request_usage_model::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
@@ -359,7 +358,9 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AuthManager::new_for_test);
-    app.add_singleton_model(ManagedSecretsFacade::new_for_test);
+    app.add_singleton_model(
+        crate::server::server_api::managed_secrets::managed_secret_manager_for_test,
+    );
     app.add_singleton_model(|_| TuiOnboardingMarkers::new_ready_for_test(false, false));
     app.add_singleton_model(PrivacySettings::mock);
     app.add_singleton_model(|ctx| {

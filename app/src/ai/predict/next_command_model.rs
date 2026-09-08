@@ -33,7 +33,6 @@ use crate::completer::SessionContext;
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::{AIApiError, ServerApi};
-use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
 #[cfg(feature = "local_fs")]
 use crate::terminal::ShellHost;
@@ -377,8 +376,9 @@ impl NextCommandModel {
         let server_api = self.server_api.clone();
         let terminal_model = self.model.clone();
         let cached_next_command_context = self.cached_zerostate_next_command_context.clone();
-        let team_scope =
-            RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
+        let team_scope = crate::server::team_scope::request_team_scope(
+            &self.ai_controller.as_ref(ctx).team_context(ctx),
+        );
 
         let completion_context = completer_data.completion_session_context(ctx);
         // This is only needed if we have a prefix.

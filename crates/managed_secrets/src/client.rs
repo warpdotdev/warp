@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use vec1::Vec1;
 use warp_graphql::managed_secrets::{ManagedSecret, ManagedSecretConfig, ManagedSecretType};
 pub use warp_graphql::queries::task_secrets::ManagedSecretValue;
+use warp_request_context::RequestTeamScope;
 
 /// An OIDC identity token issued for a task workload.
 #[derive(Debug, Clone)]
@@ -48,10 +49,14 @@ pub enum SecretOwner {
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
 pub trait ManagedSecretsClient: 'static + Send + Sync {
-    async fn get_managed_secret_configs(&self) -> Result<ManagedSecretConfigs>;
+    async fn get_managed_secret_configs(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> Result<ManagedSecretConfigs>;
 
     async fn create_managed_secret(
         &self,
+        team_scope: RequestTeamScope,
         owner: SecretOwner,
         name: String,
         secret_type: ManagedSecretType,
@@ -59,22 +64,29 @@ pub trait ManagedSecretsClient: 'static + Send + Sync {
         description: Option<String>,
     ) -> Result<ManagedSecret>;
 
-    async fn delete_managed_secret(&self, owner: SecretOwner, name: String) -> Result<()>;
+    async fn delete_managed_secret(
+        &self,
+        team_scope: RequestTeamScope,
+        owner: SecretOwner,
+        name: String,
+    ) -> Result<()>;
 
     async fn update_managed_secret(
         &self,
+        team_scope: RequestTeamScope,
         owner: SecretOwner,
         name: String,
         encrypted_value: Option<String>,
         description: Option<String>,
     ) -> Result<ManagedSecret>;
 
-    async fn list_secrets(&self) -> Result<Vec<ManagedSecret>>;
+    async fn list_secrets(&self, team_scope: RequestTeamScope) -> Result<Vec<ManagedSecret>>;
 
     /// List managed secrets that authenticate the given harness.
     /// Returns an empty list for harnesses that do not use auth secrets (e.g. Oz).
     async fn list_harness_auth_secrets(
         &self,
+        team_scope: RequestTeamScope,
         harness: warp_graphql::ai::AgentHarness,
     ) -> Result<Vec<ManagedSecret>>;
 

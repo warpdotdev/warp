@@ -30,7 +30,6 @@ use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
 use crate::ai::llms::LLMPreferences;
-use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::ai::mcp::gallery::MCPGalleryManager;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::outline::RepoOutlines;
@@ -133,7 +132,9 @@ pub fn initialize_app_for_terminal_view(app: &mut App) {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
     app.add_singleton_model(AuthManager::new_for_test);
-    app.add_singleton_model(ManagedSecretsFacade::new_for_test);
+    app.add_singleton_model(
+        crate::server::server_api::managed_secrets::managed_secret_manager_for_test,
+    );
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(HarnessAvailabilityModel::new);
     app.add_singleton_model(|ctx| AITipModel::new_for_agent_tips(ctx));

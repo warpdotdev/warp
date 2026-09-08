@@ -105,7 +105,7 @@ fn scoped_auth_secret_defaults_do_not_cross_team_scope() {
         persist_default_auth_secret(&mut app, "claude", "legacy-personal-key");
         persist_scoped_default_auth_secret(
             &mut app,
-            team_a_scope,
+            team_a_scope.clone(),
             Harness::Claude,
             "team-a-anthropic-key",
         );
@@ -122,7 +122,7 @@ fn scoped_auth_secret_defaults_do_not_cross_team_scope() {
             populate_default_auth_secret_for_execution(&mut team_a_request, team_a_scope, ctx);
             populate_default_auth_secret_for_execution(
                 &mut personal_request,
-                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
                 ctx,
             );
         });
@@ -140,9 +140,9 @@ fn scoped_auth_secret_defaults_do_not_cross_team_scope() {
 }
 
 fn request_scope_for_team(team_uid: i64) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(ServerId::from(
-        team_uid,
-    )))
+    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(
+        ServerId::from(team_uid),
+    ))
 }
 
 fn persist_scoped_default_auth_secret(
@@ -638,7 +638,7 @@ fn delayed_dispatch_keeps_auth_secret_and_team_scope_together() {
                 action_id,
                 request,
                 state.conversation_id,
-                team_a_scope,
+                team_a_scope.clone(),
                 ctx,
             );
         });
@@ -1011,7 +1011,7 @@ fn populate_default_auth_secret_for_autoexecute_uses_persisted_secret() {
         state.executor.update(&mut app, |_, ctx| {
             populate_default_auth_secret_for_execution(
                 &mut request,
-                RequestTeamScope::from_scope(&TeamlessScopeForTest),
+                crate::server::team_scope::request_team_scope(&TeamlessScopeForTest),
                 ctx,
             );
         });

@@ -195,7 +195,7 @@ pub fn resolve_default_auth_secret_for_harness(
         return None;
     }
     let persisted = match CloudAgentSettings::as_ref(ctx)
-        .auth_secret_preference(team_scope, harness)
+        .auth_secret_preference(team_scope.clone(), harness)
     {
         Some(AuthSecretPreference::Named(name)) if !name.trim().is_empty() => Some(name),
         Some(AuthSecretPreference::Named(_)) | Some(AuthSecretPreference::Inherit) | None => None,
@@ -232,7 +232,7 @@ pub fn resolve_auth_secret_selection_for_harness(
     }
     // Explicit Inherit wins over a stale Named fallback.
     let inherit_chosen = matches!(
-        CloudAgentSettings::as_ref(ctx).auth_secret_preference(team_scope, harness),
+        CloudAgentSettings::as_ref(ctx).auth_secret_preference(team_scope.clone(), harness),
         Some(AuthSecretPreference::Inherit)
     );
     if inherit_chosen {

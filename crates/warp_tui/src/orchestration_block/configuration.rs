@@ -137,7 +137,9 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         match page {
             ConfigPage::Location => location_snapshot(state, ctx),
             ConfigPage::Harness => harness_snapshot(state, ctx),
-            ConfigPage::ApiKey => api_key_snapshot(state, RequestTeamScope::from_scope(scope), ctx),
+            ConfigPage::ApiKey => {
+                api_key_snapshot(state, warp::tui_export::request_team_scope(scope), ctx)
+            }
             ConfigPage::Host => host_snapshot(state, scope, ctx),
             ConfigPage::Environment => environment_snapshot(state, ctx),
             ConfigPage::Model => model_snapshot(state, ctx),

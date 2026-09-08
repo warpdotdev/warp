@@ -1155,7 +1155,11 @@ impl AmbientAgentViewModel {
             orchestration_handoff: None,
         };
 
-        self.spawn_internal(request, RequestTeamScope::from_scope(scope), ctx);
+        self.spawn_internal(
+            request,
+            crate::server::team_scope::request_team_scope(scope),
+            ctx,
+        );
     }
 
     /// Spawn an ambient agent with a fully-constructed request.
@@ -1204,7 +1208,7 @@ impl AmbientAgentViewModel {
     ) {
         request.interactive = Some(true);
         self.request = Some(request.clone());
-        self.request_team_scope = Some(team_scope);
+        self.request_team_scope = Some(team_scope.clone());
         self.source = None;
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let stream = spawn_task(request, team_scope, ai_client, None);
@@ -1527,7 +1531,8 @@ impl AmbientAgentViewModel {
         if !matches!(self.status, Status::NeedsGithubAuth { .. }) {
             return;
         }
-        let (Some(request), Some(team_scope)) = (self.request.clone(), self.request_team_scope)
+        let (Some(request), Some(team_scope)) =
+            (self.request.clone(), self.request_team_scope.clone())
         else {
             return;
         };

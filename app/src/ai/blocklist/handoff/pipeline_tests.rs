@@ -280,7 +280,9 @@ fn pending(
         },
         snapshot_disabled: true,
         orchestration_handoff: Some(true),
-        team_scope: RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into())),
+        team_scope: crate::server::team_scope::request_team_scope(
+            &TeamContextForOperation::new_for_test(7.into()),
+        ),
     }
 }
 
@@ -301,7 +303,9 @@ fn request_for_prompt(
         },
         None,
         snapshot,
-        RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into())),
+        crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(
+            7.into(),
+        )),
     )
 }
 
@@ -768,6 +772,7 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
     let materialized = Arc::new(AtomicBool::new(false));
     let spawn_count = Arc::new(AtomicUsize::new(0));
     let observed_request = Arc::new(Mutex::new(None));
+    let expected_team_uid = ServerId::from(7).uid();
     let mut mock = MockAIClient::new();
     mock.expect_fork_conversation()
         .times(1)
@@ -785,7 +790,7 @@ async fn fork_materialization_precedes_exactly_one_spawn() {
         let observed_request = observed_request.clone();
         move |request, team_scope| {
             assert!(materialized.load(Ordering::SeqCst));
-            assert_eq!(team_scope.team_uid(), Some(7.into()));
+            assert_eq!(team_scope.team_uid(), Some(expected_team_uid.as_str()));
             spawn_count.fetch_add(1, Ordering::SeqCst);
             *observed_request.lock().expect("request lock") = Some(request);
             Ok(SpawnAgentResponse {

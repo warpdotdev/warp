@@ -212,7 +212,7 @@ impl AuthSecretFtuxView {
                         state.is_saving
                             && state.harness == *harness
                             && state.pending_name.as_deref() == Some(name.as_str())
-                            && state.pending_team_scope == Some(*team_scope)
+                            && state.pending_team_scope == Some(team_scope.clone())
                     });
                     if is_ours {
                         me.handle_secret_created(*harness, name.clone(), ctx);
@@ -222,7 +222,8 @@ impl AuthSecretFtuxView {
                     // Only react if *we* are mid-save; otherwise this
                     // failure belongs to another FTUX view's request.
                     if let Some(state) = me.creation_state.as_mut() {
-                        if !state.is_saving || state.pending_team_scope != Some(*team_scope) {
+                        if !state.is_saving || state.pending_team_scope != Some(team_scope.clone())
+                        {
                             return;
                         }
                         state.is_saving = false;
@@ -284,7 +285,7 @@ impl AuthSecretFtuxView {
     }
 
     fn request_team_scope(&self, ctx: &AppContext) -> RequestTeamScope {
-        RequestTeamScope::from_scope(
+        crate::server::team_scope::request_team_scope(
             &UserWorkspaces::as_ref(ctx).team_context(&self.view_handle, ctx),
         )
     }
@@ -712,7 +713,7 @@ impl AuthSecretFtuxView {
         let (team_scope, owner) = {
             let workspaces = UserWorkspaces::as_ref(ctx);
             let team_context = workspaces.team_context_for_operation(ctx);
-            let team_scope = RequestTeamScope::from_scope(&team_context);
+            let team_scope = crate::server::team_scope::request_team_scope(&team_context);
             let owner = if self.share_with_team {
                 workspaces
                     .team_for_view(ctx)
@@ -726,7 +727,7 @@ impl AuthSecretFtuxView {
             (team_scope, owner)
         };
         if let Some(state) = self.creation_state.as_mut() {
-            state.pending_team_scope = Some(team_scope);
+            state.pending_team_scope = Some(team_scope.clone());
         }
         ctx.notify();
         HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {

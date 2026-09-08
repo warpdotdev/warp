@@ -322,7 +322,7 @@ impl TuiVoiceInputModel {
         let language = AISettings::as_ref(ctx)
             .voice_input_language_code()
             .map(str::to_owned);
-        let team_scope = RequestTeamScope::from_scope(&(self.team_context_resolver)(ctx));
+        let team_scope = warp::tui_export::request_team_scope(&(self.team_context_resolver)(ctx));
         VoiceInput::handle(ctx).update(ctx, |voice_input, _| {
             voice_input.set_transcribing_active(true);
         });

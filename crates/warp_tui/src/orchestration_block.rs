@@ -19,7 +19,7 @@ use warp::tui_export::{
     BlocklistOrchestrationTelemetryEvent, Harness, HarnessAvailabilityEvent,
     HarnessAvailabilityModel, LLMPreferences, LLMPreferencesEvent, ORCHESTRATION_WARP_WORKER_HOST,
     OptionSnapshot, OrchestrationConfig, OrchestrationConfigState, OrchestrationConfigStatus,
-    OrchestrationEditState, OrchestrationEnteredEvent, OrchestrationEntrySource, RequestTeamScope,
+    OrchestrationEditState, OrchestrationEnteredEvent, OrchestrationEntrySource,
     RunAgentsCardDecision, RunAgentsExecutionMode, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsRequest, RunAgentsSpawningSnapshot, TeamContextResolver, UserWorkspaces,
     UserWorkspacesEvent, persist_host_selection, resolve_auth_secret_selection_for_harness,
@@ -244,7 +244,7 @@ impl TuiOrchestrationBlock {
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| {
                 let team_context = (me.team_context_resolver)(ctx);
-                let team_scope = RequestTeamScope::from_scope(&team_context);
+                let team_scope = warp::tui_export::request_team_scope(&team_context);
                 if event
                     .team_scope()
                     .is_some_and(|event_scope| event_scope != team_scope)
@@ -274,7 +274,7 @@ impl TuiOrchestrationBlock {
         ctx.subscribe_to_model(&LLMPreferences::handle(ctx), |me, _, event, ctx| {
             if let LLMPreferencesEvent::UpdatedAvailableLLMs = event {
                 let team_context = (me.team_context_resolver)(ctx);
-                let team_scope = RequestTeamScope::from_scope(&team_context);
+                let team_scope = warp::tui_export::request_team_scope(&team_context);
                 me.orchestration_edit_state
                     .orchestration_config_state
                     .revalidate_after_catalog_change(team_scope, ctx);
@@ -429,7 +429,7 @@ impl TuiOrchestrationBlock {
         }
         if matches!(state.auth_secret_selection, AuthSecretSelection::Unset) {
             state.auth_secret_selection = resolve_auth_secret_selection_for_harness(
-                RequestTeamScope::from_scope(&team_context),
+                warp::tui_export::request_team_scope(&team_context),
                 &state.harness_type,
                 ctx,
             );
@@ -438,7 +438,7 @@ impl TuiOrchestrationBlock {
 
     fn handle_team_scope_change(&mut self, ctx: &mut ViewContext<Self>) {
         let team_context = (self.team_context_resolver)(ctx);
-        let team_scope = RequestTeamScope::from_scope(&team_context);
+        let team_scope = warp::tui_export::request_team_scope(&team_context);
         let state = &mut self.orchestration_edit_state.orchestration_config_state;
         state.auth_secret_selection = AuthSecretSelection::Unset;
         state.revalidate_after_catalog_change(team_scope, ctx);
@@ -632,7 +632,7 @@ impl TuiOrchestrationBlock {
             return;
         };
         let team_context = (self.team_context_resolver)(ctx);
-        let team_scope = RequestTeamScope::from_scope(&team_context);
+        let team_scope = warp::tui_export::request_team_scope(&team_context);
         HarnessAvailabilityModel::handle(ctx).update(ctx, |availability, ctx| {
             availability.ensure_auth_secrets_fetched(team_scope, harness, ctx);
         });
@@ -695,7 +695,7 @@ impl TuiOrchestrationBlock {
                 };
                 let team_scope = {
                     let team_context = (self.team_context_resolver)(ctx);
-                    RequestTeamScope::from_scope(&team_context)
+                    warp::tui_export::request_team_scope(&team_context)
                 };
                 self.controller.apply_page_selection(
                     page,

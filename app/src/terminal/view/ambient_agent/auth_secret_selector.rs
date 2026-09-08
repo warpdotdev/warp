@@ -271,7 +271,9 @@ impl AuthSecretSelector {
     }
 
     fn request_team_scope(&self, ctx: &ViewContext<Self>) -> RequestTeamScope {
-        RequestTeamScope::from_scope(&UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx))
+        crate::server::team_scope::request_team_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        )
     }
 
     fn handle_team_scope_changed(&mut self, ctx: &mut ViewContext<Self>) {
@@ -422,7 +424,7 @@ impl AuthSecretSelector {
         let team_scope = self.request_team_scope(ctx);
         CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
             if matches!(
-                settings.auth_secret_preference(team_scope, harness),
+                settings.auth_secret_preference(team_scope.clone(), harness),
                 Some(AuthSecretPreference::Named(selected)) if selected == name
             ) {
                 settings.persist_auth_secret_preference(team_scope, harness, None, ctx);

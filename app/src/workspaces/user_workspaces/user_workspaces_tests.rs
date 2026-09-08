@@ -69,7 +69,6 @@ use crate::server::ids::ClientId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::team::{MockTeamClient, TeamClient};
 use crate::server::sync_queue::SyncQueue;
-use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::{
     AISettings, AgentModeCommandExecutionPredicate, CodeSettings, FocusedTerminalInfo,
@@ -109,15 +108,16 @@ fn long_lived_view_resolvers_follow_only_their_own_window_team_switch() {
         });
         let resolver_a = UserWorkspaces::team_context_resolver(view_a.downgrade());
         let resolver_b = UserWorkspaces::team_context_resolver(view_b.downgrade());
-        let original_scope = app.read(|ctx| RequestTeamScope::from_scope(&resolver_a(ctx)));
+        let original_scope =
+            app.read(|ctx| crate::server::team_scope::request_team_scope(&resolver_a(ctx)));
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.switch_window_to_team(window_a, security.uid, ctx);
         });
 
         app.read(|ctx| {
-            let switched_scope = RequestTeamScope::from_scope(&resolver_a(ctx));
-            let sibling_scope = RequestTeamScope::from_scope(&resolver_b(ctx));
+            let switched_scope = crate::server::team_scope::request_team_scope(&resolver_a(ctx));
+            let sibling_scope = crate::server::team_scope::request_team_scope(&resolver_b(ctx));
             assert_ne!(switched_scope, original_scope);
             assert_eq!(sibling_scope, original_scope);
         });

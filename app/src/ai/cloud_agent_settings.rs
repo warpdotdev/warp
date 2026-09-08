@@ -143,7 +143,7 @@ impl CloudAgentSettings {
             .find(|entry| entry.team_scope == team_scope && entry.harness == harness.config_name())
             .map(|entry| entry.preference.clone())
             .or_else(|| {
-                if !team_scope.is_personal() {
+                if !team_scope.is_unscoped() {
                     return None;
                 }
                 if self
@@ -178,7 +178,7 @@ impl CloudAgentSettings {
         });
         if let Some(preference) = preference {
             preferences.push(ScopedAuthSecretPreference {
-                team_scope,
+                team_scope: team_scope.clone(),
                 harness: harness_key.clone(),
                 preference,
             });
@@ -188,7 +188,7 @@ impl CloudAgentSettings {
                 .set_value(preferences, ctx)
         );
 
-        if team_scope.is_personal() {
+        if team_scope.is_unscoped() {
             let mut legacy_named = self.last_selected_auth_secret.value().clone();
             let mut legacy_inherit = self.inherit_auth_secret_harnesses.value().clone();
             legacy_named.remove(&harness_key);

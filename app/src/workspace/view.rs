@@ -337,7 +337,6 @@ use crate::server::ids::{ObjectUid, ServerId, SyncId};
 use crate::server::network_log_pane_manager::NetworkLogPaneManager;
 use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::{ServerApi, ServerApiProvider, ServerTime};
-use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
@@ -15413,7 +15412,7 @@ impl Workspace {
             | AuthSecretFtuxViewEvent::Created { harness, name } => {
                 let harness = *harness;
                 let name = name.clone();
-                let team_scope = RequestTeamScope::from_scope(
+                let team_scope = crate::server::team_scope::request_team_scope(
                     &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
                 );
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {

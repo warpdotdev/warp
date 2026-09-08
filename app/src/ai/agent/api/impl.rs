@@ -145,7 +145,7 @@ pub async fn generate_multi_agent_output(
     let response_stream = warp_multi_agent_client::generate_multi_agent_output(
         server_api.as_ref(),
         &request,
-        team_scope.team_uid().map(|uid| uid.uid()),
+        team_scope.team_uid().map(str::to_string),
     )
     .await;
     match response_stream {

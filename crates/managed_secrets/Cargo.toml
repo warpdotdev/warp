@@ -26,6 +26,7 @@ warp_core.workspace = true
 warp_graphql.workspace = true
 vec1.workspace = true
 warp_isolation_platform.workspace = true
+warp_request_context.workspace = true
 
 # Pure-Rust HPKE implementation (RFC 9180).
 hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }

@@ -1,9 +1,9 @@
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
-    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
-    StartAgentRequest, UserWorkspaces, register_tui_session_view_test_singletons,
+    OrchestrationEventStreamerEvent, RenderableAIError, ResolvedTeamScope, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    UserWorkspaces, register_tui_session_view_test_singletons,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
@@ -45,7 +45,7 @@ fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest
         lifecycle_subscription: None,
         parent_conversation_id,
         parent_run_id: Some("parent-run-1".to_string()),
-        request_team_scope: RequestTeamScope::from_scope(
+        request_team_scope: warp::tui_export::request_team_scope(
             &UserWorkspaces::teamless_context_for_operation_for_test(),
         ),
     }
@@ -224,7 +224,7 @@ fn dispatch_and_recv(
             None,
             parent_conversation_id,
             Some("parent-run-1".to_string()),
-            RequestTeamScope::from_scope(
+            warp::tui_export::request_team_scope(
                 &UserWorkspaces::teamless_context_for_operation_for_test(),
             ),
             ctx,
@@ -311,7 +311,7 @@ fn local_oz_child_session_indexes_run_id_immediately() {
             lifecycle_subscription: None,
             parent_conversation_id,
             parent_run_id: Some("parent-run-1".to_string()),
-            request_team_scope: RequestTeamScope::from_scope(
+            request_team_scope: warp::tui_export::request_team_scope(
                 &UserWorkspaces::teamless_context_for_operation_for_test(),
             ),
         };

@@ -46,7 +46,6 @@ use crate::server::server_api::ai::{
     ListAgentMessagesRequest, ReadAgentMessageResponse, RunSortBy, RunSortOrder,
     SendAgentMessageRequest, SendAgentMessageResponse, SpawnAgentRequest, TaskListFilter,
 };
-use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::shared_session;
 use crate::util::time_format::format_approx_duration_from_now_utc;
 use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces};
@@ -555,7 +554,7 @@ impl AmbientAgentRunner {
             let should_open = args.open;
             let oz_root_url = ChannelState::oz_root_url();
             let ai_client_clone = ai_client.clone();
-            let request_team_scope = RequestTeamScope::from_scope(&team_scope);
+            let request_team_scope = crate::server::team_scope::request_team_scope(&team_scope);
             let spawn_future = async move {
                 let mut stream = Box::pin(spawn_task(
                     request,

@@ -3,7 +3,6 @@ use warp_core::channel::{Channel, ChannelState};
 use super::{RequestParams, ServerConversationToken};
 use crate::ai::agent::ServerOutputId;
 use crate::server::ids::ServerId;
-use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
 
 #[test]
@@ -69,11 +68,11 @@ fn request_team_scope_sends_the_team_its_scope_named() {
     let scope = TeamContextForOperation::new_for_test(team_uid);
 
     assert_eq!(
-        RequestTeamScope::from_scope(&scope).team_uid(),
-        Some(team_uid)
+        crate::server::team_scope::request_team_scope(&scope).team_uid(),
+        Some(team_uid.uid().as_str())
     );
     assert_eq!(
-        RequestTeamScope::from_scope(&TeamlessScopeForTest).team_uid(),
+        crate::server::team_scope::request_team_scope(&TeamlessScopeForTest).team_uid(),
         None
     );
 }

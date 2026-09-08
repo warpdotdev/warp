@@ -7,12 +7,11 @@ use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_errors::report_error;
-use warp_managed_secrets::ManagedSecretValue;
 use warp_managed_secrets::client::SecretOwner;
+use warp_managed_secrets::{ManagedSecretManager, ManagedSecretValue};
 use warpui::{Entity, ModelContext, RequestState, SingletonEntity};
 
 use crate::ai::harness_display;
-use crate::ai::managed_secrets::ManagedSecretsFacade;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
@@ -86,7 +85,7 @@ pub struct AuthSecretEntry {
     pub name: String,
     pub owner: SecretOwner,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct AuthSecretCacheKey {
     team_scope: RequestTeamScope,
     harness: Harness,
@@ -146,7 +145,7 @@ impl HarnessAvailabilityEvent {
             | Self::AuthSecretCreated { team_scope, .. }
             | Self::AuthSecretCreationFailed { team_scope, .. }
             | Self::AuthSecretDeleted { team_scope, .. }
-            | Self::AuthSecretDeletionFailed { team_scope, .. } => Some(*team_scope),
+            | Self::AuthSecretDeletionFailed { team_scope, .. } => Some(team_scope.clone()),
         }
     }
 }
@@ -246,10 +245,10 @@ impl HarnessAvailabilityModel {
         harness: Harness,
         ctx: &mut ModelContext<Self>,
     ) {
-        match self.auth_secrets_for(team_scope, harness) {
+        match self.auth_secrets_for(team_scope.clone(), harness) {
             AuthSecretFetchState::NotFetched => self.fetch_auth_secrets(team_scope, harness, ctx),
             AuthSecretFetchState::Failed(_)
-                if self.can_retry_auth_secret_fetch(team_scope, harness) =>
+                if self.can_retry_auth_secret_fetch(team_scope.clone(), harness) =>
             {
                 self.fetch_auth_secrets(team_scope, harness, ctx);
             }
@@ -273,17 +272,19 @@ impl HarnessAvailabilityModel {
             return;
         }
 
-        let cache_key = AuthSecretCacheKey::new(team_scope, harness);
+        let cache_key = AuthSecretCacheKey::new(team_scope.clone(), harness);
         self.auth_secrets
-            .insert(cache_key, AuthSecretFetchState::Loading);
+            .insert(cache_key.clone(), AuthSecretFetchState::Loading);
         self.auth_secret_retry_after.remove(&cache_key);
         let generation = self.auth_secret_generation;
 
-        let managed_secrets = ManagedSecretsFacade::as_ref(ctx).clone();
+        let managed_secrets = ManagedSecretManager::as_ref(ctx).clone();
+        let request_team_scope = team_scope.clone();
         ctx.spawn_with_retry_on_error_when(
             move || {
                 let managed_secrets = managed_secrets.clone();
                 let agent_harness = agent_harness.clone();
+                let team_scope = request_team_scope.clone();
                 async move {
                     managed_secrets
                         .list_harness_auth_secrets(team_scope, agent_harness)
@@ -308,9 +309,11 @@ impl HarnessAvailabilityModel {
                             })
                             .collect();
                         me.auth_secrets
-                            .insert(cache_key, AuthSecretFetchState::Loaded(entries));
+                            .insert(cache_key.clone(), AuthSecretFetchState::Loaded(entries));
                         me.auth_secret_retry_after.remove(&cache_key);
-                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsLoaded { team_scope });
+                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsLoaded {
+                            team_scope: team_scope.clone(),
+                        });
                     }
                     RequestState::RequestFailedRetryPending(e) => {
                         log::warn!("Failed to fetch harness auth secrets; retrying: {e:#}");
@@ -319,15 +322,17 @@ impl HarnessAvailabilityModel {
                         let msg = e.to_string();
                         report_error!(e.context("Failed to fetch harness auth secrets"));
                         me.auth_secrets
-                            .insert(cache_key, AuthSecretFetchState::Failed(msg));
+                            .insert(cache_key.clone(), AuthSecretFetchState::Failed(msg));
                         me.auth_secret_retry_after.insert(
-                            cache_key,
+                            cache_key.clone(),
                             Instant::now() + AUTH_SECRET_FETCH_FAILURE_COOLDOWN,
                         );
                         // Notify subscribers so they can drop any
                         // "Loading…" placeholder rendered during the
                         // in-flight fetch and surface the error state.
-                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsFetchFailed { team_scope });
+                        ctx.emit(HarnessAvailabilityEvent::AuthSecretsFetchFailed {
+                            team_scope: team_scope.clone(),
+                        });
                     }
                 }
             },
@@ -360,15 +365,20 @@ impl HarnessAvailabilityModel {
         owner: SecretOwner,
         ctx: &mut ModelContext<Self>,
     ) {
-        let create_future =
-            ManagedSecretsFacade::as_ref(ctx).create_secret(team_scope, owner, name, value, None);
+        let create_future = ManagedSecretManager::as_ref(ctx).create_secret(
+            team_scope.clone(),
+            owner,
+            name,
+            value,
+            None,
+        );
         ctx.spawn(create_future, move |me, result, ctx| match result {
             Ok(secret) => {
                 let entry = AuthSecretEntry {
                     name: secret.name.clone(),
                     owner: secret_owner_from_space(&secret.owner),
                 };
-                let cache_key = AuthSecretCacheKey::new(team_scope, harness);
+                let cache_key = AuthSecretCacheKey::new(team_scope.clone(), harness);
                 match me.auth_secrets.get_mut(&cache_key) {
                     Some(AuthSecretFetchState::Loaded(entries)) => {
                         entries.push(entry);
@@ -379,7 +389,7 @@ impl HarnessAvailabilityModel {
                     }
                 }
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretCreated {
-                    team_scope,
+                    team_scope: team_scope.clone(),
                     harness,
                     name: secret.name,
                 });
@@ -388,7 +398,7 @@ impl HarnessAvailabilityModel {
                 let msg = e.to_string();
                 report_error!(e.context("Failed to create harness auth secret"));
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretCreationFailed {
-                    team_scope,
+                    team_scope: team_scope.clone(),
                     error: msg,
                 });
             }
@@ -403,8 +413,8 @@ impl HarnessAvailabilityModel {
         owner: SecretOwner,
         ctx: &mut ModelContext<Self>,
     ) {
-        let delete_future = ManagedSecretsFacade::as_ref(ctx).delete_secret(
-            team_scope,
+        let delete_future = ManagedSecretManager::as_ref(ctx).delete_secret(
+            team_scope.clone(),
             owner.clone(),
             name.clone(),
         );
@@ -412,12 +422,12 @@ impl HarnessAvailabilityModel {
             Ok(()) => {
                 if let Some(AuthSecretFetchState::Loaded(entries)) = me
                     .auth_secrets
-                    .get_mut(&AuthSecretCacheKey::new(team_scope, harness))
+                    .get_mut(&AuthSecretCacheKey::new(team_scope.clone(), harness))
                 {
                     remove_deleted_auth_secret_entry(entries, &name, &owner);
                 }
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretDeleted {
-                    team_scope,
+                    team_scope: team_scope.clone(),
                     harness,
                     name,
                     owner,
@@ -427,7 +437,7 @@ impl HarnessAvailabilityModel {
                 let msg = e.to_string();
                 report_error!(e.context("Failed to delete harness auth secret"));
                 ctx.emit(HarnessAvailabilityEvent::AuthSecretDeletionFailed {
-                    team_scope,
+                    team_scope: team_scope.clone(),
                     harness,
                     name,
                     owner,

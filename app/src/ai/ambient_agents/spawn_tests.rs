@@ -693,19 +693,20 @@ fn run_id() -> crate::ai::ambient_agents::AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
 fn request_team_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(7.into()))
+    crate::server::team_scope::request_team_scope(&TeamContextForOperation::new_for_test(7.into()))
 }
 
 #[tokio::test]
 async fn spawn_uses_resolved_team_scope() {
     use futures::StreamExt;
 
-    let team_uid = 7.into();
+    let team_uid = crate::server::ids::ServerId::from(7);
+    let expected_team_uid = team_uid.uid();
     let mut mock = MockAIClient::new();
     mock.expect_spawn_agent()
         .times(1)
         .withf(move |request, team_scope| {
-            request.team == Some(true) && team_scope.team_uid() == Some(team_uid)
+            request.team == Some(true) && team_scope.team_uid() == Some(expected_team_uid.as_str())
         })
         .returning(|_, _| {
             Ok(SpawnAgentResponse {
@@ -736,7 +737,9 @@ async fn spawn_uses_resolved_team_scope() {
         snapshot_disabled: None,
         orchestration_handoff: None,
     };
-    let team_scope = RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(team_uid));
+    let team_scope = crate::server::team_scope::request_team_scope(
+        &TeamContextForOperation::new_for_test(team_uid),
+    );
     let mut stream = Box::pin(spawn_task(request, team_scope, Arc::new(mock), None));
 
     assert!(matches!(

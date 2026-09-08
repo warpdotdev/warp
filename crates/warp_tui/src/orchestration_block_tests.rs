@@ -179,7 +179,7 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
                 workspaces.register_window(window_id, Some(team_a), ctx);
                 workspaces.switch_window_to_team(window_id, team_b, ctx);
             });
-            let team_b_scope = RequestTeamScope::from_scope(
+            let team_b_scope = warp::tui_export::request_team_scope(
                 &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
             );
             set_tui_auth_secret_preference_for_test(

@@ -605,7 +605,7 @@ pub fn populate_host_picker<V: View>(
 
 pub fn request_team_scope<V: View>(ctx: &ViewContext<V>) -> RequestTeamScope {
     let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
-    RequestTeamScope::from_scope(&team_context)
+    crate::server::team_scope::request_team_scope(&team_context)
 }
 
 /// Trigger label for the auth-secret dropdown. `Unset` falls back to
@@ -641,7 +641,7 @@ pub fn populate_auth_secret_picker_for_harness<A: OrchestrationControlAction, V:
     let team_scope = request_team_scope(ctx);
     // Trigger lazy fetch so the next paint shows real entries.
     HarnessAvailabilityModel::handle(ctx).update(ctx, |model, ctx| {
-        model.ensure_auth_secrets_fetched(team_scope, harness, ctx);
+        model.ensure_auth_secrets_fetched(team_scope.clone(), harness, ctx);
     });
 
     let mut state = OrchestrationConfigState::from_run_agents_fields(

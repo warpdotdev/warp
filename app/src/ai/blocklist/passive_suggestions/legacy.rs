@@ -31,7 +31,6 @@ use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::network::NetworkStatus;
 use crate::safe_warn;
 use crate::server::server_api::ServerApiProvider;
-use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::PromptSuggestionFallbackReason;
 use crate::settings::AISettings;
 use crate::terminal::event::{BlockType, UserBlockCompleted};
@@ -299,8 +298,9 @@ impl PassiveSuggestionsModel {
 
         let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get();
         // Resolved before spawning, so a mid-flight team switch cannot re-attribute the request.
-        let team_scope =
-            RequestTeamScope::from_scope(&self.ai_controller.as_ref(ctx).team_context(ctx));
+        let team_scope = crate::server::team_scope::request_team_scope(
+            &self.ai_controller.as_ref(ctx).team_context(ctx),
+        );
         let request_future = async move {
             server_api
                 .generate_am_query_suggestions(&request, team_scope)

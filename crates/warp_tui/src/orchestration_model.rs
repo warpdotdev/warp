@@ -538,7 +538,7 @@ impl TuiOrchestrationModel {
                 runner_id,
                 agent_identity_uid,
             } => {
-                let request_team_scope = request.request_team_scope;
+                let request_team_scope = request.request_team_scope.clone();
                 self.register_event_consumer(
                     parent_session_id,
                     request.parent_conversation_id,
@@ -575,7 +575,8 @@ impl TuiOrchestrationModel {
         team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let prepared = match prepare_remote_child_launch(&request, config, team_scope, ctx) {
+        let prepared = match prepare_remote_child_launch(&request, config, team_scope.clone(), ctx)
+        {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.fail_child_request(&request, error.user_message(), ctx);
@@ -777,7 +778,7 @@ impl TuiOrchestrationModel {
         team_context: &TeamContextForOperation,
         ctx: &mut ModelContext<Self>,
     ) {
-        let request_team_scope = RequestTeamScope::from_scope(team_context);
+        let request_team_scope = warp::tui_export::request_team_scope(team_context);
         let team_scope = ResolvedTeamScope::from_scope(team_context);
         let launch = prepare_local_oz_child_launch(
             &request.name,
