@@ -1443,10 +1443,12 @@ esac
     # Add patterns to ignore in-band commands in shell history, while preserving the user's
     # HISTIGNORE value which may been set in an RC file sourced above. It is important to
     # ensure that this happens _after_ the user's RC files have been sourced.
+    # `warp_resume_agent_session` is the trailing-comment marker Warp appends to the
+    # invocation it runs when restoring a pane onto an agent's previous session.
     if [[ ! -z $HISTIGNORE ]]; then
-        HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*:$HISTIGNORE"
+        HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*:*warp_resume_agent_session*:$HISTIGNORE"
     else
-        HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*"
+        HISTIGNORE="*warp_run_generator_command*:*warp_run_external_ctrl_r_widget*:*warp_run_external_ctrl_t_widget*:*warp_resume_agent_session*"
     fi
 
     # If the user has PROMPT_COMMAND set in their bootstrap scripts,

@@ -263,6 +263,16 @@ impl NextCommandModel {
         self.zerostate_suggestion_info.as_ref()
     }
 
+    /// Seeds the state a completed zero-state prediction would have left behind, so tests can
+    /// exercise the command-text telemetry arm without a server round trip.
+    #[cfg(test)]
+    pub(crate) fn set_zero_state_suggestion_info_for_test(
+        &mut self,
+        info: ZeroStateSuggestionInfo,
+    ) {
+        self.zerostate_suggestion_info = Some(info);
+    }
+
     pub fn clear_state(&mut self) {
         self.next_command_state = NextCommandSuggestionState::None;
         self.cached_zerostate_next_command_context = None;

@@ -108,7 +108,9 @@ use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
-use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
+use crate::workspace::{
+    ActiveSession, OneTimeModalModel, ToastStack, ToastStackEvent, WorkspaceRegistry,
+};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -1893,6 +1895,7 @@ fn queued_command_completion_preserves_draft() {
                         String::new(),
                         String::new(),
                         false,
+                        false,
                         None,
                         0,
                         0,
@@ -1925,6 +1928,7 @@ fn user_block_completed_for_test(command: &str) -> BlockType {
         String::new(),
         String::new(),
         false,
+        false, /* was_warp_authored: a block the user typed */
         None,
         0,
         0,
@@ -10475,4 +10479,307 @@ mod completion_sources_resolution_tests {
             CompletionSources::WarpOnly
         );
     }
+}
+
+/// The invocation a restored Claude pane would run, marker and all.
+const RESUME_INVOCATION: &str = "claude --resume 'session-1' # warp_resume_agent_session";
+
+/// Records every command the input hands to the shell, together with the two facts a resume has
+/// to differ on: whether Warp's history is asked to keep it, and who authored it.
+fn observe_executed_commands(
+    input: &ViewHandle<Input>,
+    app: &mut App,
+) -> Rc<RefCell<Vec<(String, bool, bool)>>> {
+    let executed = Rc::new(RefCell::new(Vec::new()));
+    let executed_for_subscription = executed.clone();
+    app.update(|ctx| {
+        ctx.subscribe_to_view(input, move |_, event: &super::Event, _| {
+            if let super::Event::ExecuteCommand(event) = event {
+                executed_for_subscription.borrow_mut().push((
+                    event.command.clone(),
+                    event.should_add_command_to_history,
+                    event.source.is_warp_authored(),
+                ));
+            }
+        });
+    });
+    executed
+}
+
+/// AE10/R18: the resume reaches the shell but never Warp's own history, which is the same flag
+/// that gates the persisted commands table (`terminal_manager_util`).
+#[test]
+fn agent_session_resume_runs_without_entering_warps_history() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let session_info = SessionInfo::new_for_test();
+        let session_id = session_info.session_id;
+        let terminal =
+            add_window_with_bootstrapped_terminal(&mut app, None, Some(session_info)).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let executed = observe_executed_commands(&input, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.execute_agent_session_resume(RESUME_INVOCATION, ctx);
+        });
+
+        assert_eq!(
+            executed.borrow().as_slice(),
+            [(RESUME_INVOCATION.to_owned(), false, true)],
+            "the resume has to run, and to run as Warp's own line kept out of history"
+        );
+        History::handle(&app).read(&app, |history, _| {
+            assert!(
+                history
+                    .commands(session_id)
+                    .is_some_and(|commands| commands.is_empty()),
+                "no resume invocation may reach the session's command history"
+            );
+        });
+    });
+}
+
+/// AE14/R24: the one-time state Warp spends on a user's first command in a pane — the
+/// create-block tip and their dismissed suggestions — survives a resume untouched.
+#[test]
+fn agent_session_resume_spends_no_first_command_state() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let executed = observe_executed_commands(&input, &mut app);
+
+        IgnoredSuggestionsModel::handle(&app).update(&mut app, |model, ctx| {
+            model.add_ignored_suggestion(
+                RESUME_INVOCATION.to_owned(),
+                crate::suggestions::ignored_suggestions_model::SuggestionType::ShellCommand,
+                ctx,
+            );
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.execute_agent_session_resume(RESUME_INVOCATION, ctx);
+        });
+
+        assert_eq!(
+            executed.borrow().len(),
+            1,
+            "the resume has to have run for its silence to mean anything"
+        );
+        let tips = input.read(&app, |input, _| input.tips_completed.clone());
+        tips.read(&app, |tips, _| {
+            assert!(
+                !tips
+                    .features_used
+                    .contains(&Tip::Hint(TipHint::CreateBlock)),
+                "a resume is not the user creating their first block"
+            );
+        });
+        IgnoredSuggestionsModel::handle(&app).read(&app, |model, _| {
+            assert!(
+                model.is_ignored(
+                    RESUME_INVOCATION,
+                    crate::suggestions::ignored_suggestions_model::SuggestionType::ShellCommand,
+                ),
+                "a resume must not un-ignore a suggestion the user dismissed"
+            );
+        });
+    });
+}
+
+/// The command-text telemetry arm carries the executed command verbatim, so it must not fire for
+/// a line the user never typed. `last_intelligent_autosuggestion_result` is set inside that same
+/// arm, which makes it the observable that says whether the arm ran.
+#[test]
+fn agent_session_resume_does_not_report_command_text_telemetry() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+
+        let seed_prediction = |app: &mut App| {
+            let next_command_model = input.read(app, |input, _| input.next_command_model.clone());
+            next_command_model.update(app, |model, _| {
+                model.set_zero_state_suggestion_info_for_test(ZeroStateSuggestionInfo {
+                    request: Box::default(),
+                    response: Default::default(),
+                    request_duration_ms: 1,
+                    is_from_ai: false,
+                    history_based_autosuggestion_state: Default::default(),
+                });
+            });
+        };
+
+        seed_prediction(&mut app);
+        input.update(&mut app, |input, ctx| {
+            input.execute_agent_session_resume(RESUME_INVOCATION, ctx);
+        });
+        input.read(&app, |input, _| {
+            assert!(
+                input.last_intelligent_autosuggestion_result.is_none(),
+                "a resume must not reach the arm that sends the executed command text"
+            );
+        });
+
+        // The same seeded prediction and a command the user typed: the arm still fires, so the
+        // silence above is the source and not a dead code path.
+        seed_prediction(&mut app);
+        input.update(&mut app, |input, ctx| {
+            input.try_execute_command("echo hi", ctx);
+        });
+        input.read(&app, |input, _| {
+            assert!(
+                input.last_intelligent_autosuggestion_result.is_some(),
+                "a user command still reports its prediction outcome"
+            );
+        });
+    });
+}
+
+/// R7/KTD10: an armed resume waits on the gate a launch-config command waits on. Nothing reaches
+/// the shell until the pane says it is ready for a command.
+#[test]
+fn armed_agent_session_resume_sends_nothing_until_the_pane_is_ready() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let executed = observe_executed_commands(&input, &mut app);
+
+        terminal.update(&mut app, |view, _| {
+            view.arm_agent_session_resume(RESUME_INVOCATION.to_owned());
+        });
+        assert!(
+            executed.borrow().is_empty(),
+            "arming alone must not write to the pty"
+        );
+
+        terminal.update(&mut app, |view, ctx| {
+            view.execute_pending_command((), ctx);
+        });
+        assert_eq!(
+            executed.borrow().len(),
+            1,
+            "the ready gate is what releases the invocation"
+        );
+
+        // R7: the invocation is everything Warp sends. No prompt follows it, and running the gate
+        // again does not repeat it.
+        terminal.update(&mut app, |view, ctx| {
+            view.execute_pending_command((), ctx);
+        });
+        assert_eq!(
+            executed.borrow().as_slice(),
+            [(RESUME_INVOCATION.to_owned(), false, true)],
+            "Warp sends the invocation and nothing else"
+        );
+    });
+}
+
+/// AE11: a pane already holding the user's text is not a pane Warp may write into. The two
+/// commands must never be merged, and the draft must survive.
+#[test]
+fn agent_session_resume_refuses_a_pane_holding_user_text() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let executed = observe_executed_commands(&input, &mut app);
+
+        input.update(&mut app, |input, ctx| {
+            input.replace_buffer_content("git status", ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.arm_agent_session_resume(RESUME_INVOCATION.to_owned());
+            view.execute_pending_command((), ctx);
+        });
+
+        assert!(
+            executed.borrow().is_empty(),
+            "a pane with a draft in it runs neither the resume nor a merge of the two"
+        );
+        assert_eq!(
+            input.read(&app, |input, ctx| input.buffer_text(ctx)),
+            "git status",
+            "the user's draft must be left exactly as they left it"
+        );
+    });
+}
+
+/// AE11: the refusal is permanent. A user who typed and then cleared the buffer has still made
+/// the pane theirs, so the injection is dropped rather than deferred.
+#[test]
+fn agent_session_resume_refuses_a_pane_the_user_has_typed_into() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let executed = observe_executed_commands(&input, &mut app);
+
+        terminal.update(&mut app, |view, _| {
+            view.arm_agent_session_resume(RESUME_INVOCATION.to_owned());
+        });
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("l", ctx);
+        });
+        input.update(&mut app, |input, ctx| {
+            input.clear_buffer_and_reset_undo_stack(ctx);
+        });
+        terminal.update(&mut app, |view, ctx| {
+            view.execute_pending_command((), ctx);
+        });
+
+        assert!(
+            executed.borrow().is_empty(),
+            "a pane the user has typed into is theirs, empty buffer or not"
+        );
+    });
+}
+
+/// A launch-config command queue lands in the same buffer a draft would. The resume yields to it
+/// rather than concatenating onto it, and the queued command still runs on its own.
+#[test]
+fn agent_session_resume_yields_to_a_pending_launch_config_command() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |view, _| view.input().clone());
+        let executed = observe_executed_commands(&input, &mut app);
+
+        let toasts = Rc::new(RefCell::new(Vec::<String>::new()));
+        let toasts_for_subscription = toasts.clone();
+        app.update(|ctx| {
+            let toast_stack = ToastStack::handle(ctx);
+            ctx.subscribe_to_model(&toast_stack, move |_, event: &ToastStackEvent, _| {
+                if let ToastStackEvent::AddEphemeralToast { toast, .. } = event {
+                    toasts_for_subscription
+                        .borrow_mut()
+                        .push(toast.main_text().to_owned());
+                }
+            });
+        });
+
+        terminal.update(&mut app, |view, ctx| {
+            view.arm_agent_session_resume(RESUME_INVOCATION.to_owned());
+            view.set_pending_command_queue(vec!["echo setup".to_owned()], ctx);
+            view.execute_pending_command((), ctx);
+        });
+
+        assert_eq!(
+            executed.borrow().as_slice(),
+            [("echo setup".to_owned(), true, false)],
+            "the queued setup command runs alone, unmerged and un-rewritten"
+        );
+        assert!(
+            toasts.borrow().is_empty(),
+            "yielding is not an error the user has to be told about"
+        );
+    });
 }

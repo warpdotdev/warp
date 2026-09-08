@@ -421,6 +421,11 @@ $null = New-Module -Name Warp-Module -ScriptBlock {
             if ($line -match '^Warp-Run-GeneratorCommand') {
                 return $false
             }
+            # Trailing-comment marker Warp appends to the invocation it runs when
+            # restoring a pane onto an agent's previous session.
+            if ($line -match 'warp_resume_agent_session') {
+                return $false
+            }
             return $true
         }
 

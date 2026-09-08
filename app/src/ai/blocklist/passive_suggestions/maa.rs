@@ -386,7 +386,7 @@ impl PassiveSuggestionsModel {
                     return;
                 }
                 if let BlockType::User(block_completed) = &after_block_completed_event.block_type
-                    && !block_completed.was_part_of_agent_interaction
+                    && block_completed.was_user_authored()
                 {
                     self.handle_user_block_completed(block_completed, ctx);
                 }

@@ -118,6 +118,55 @@ fn auggie_is_supported() {
     assert!(is_agent_supported(&CLIAgent::Auggie));
 }
 
+/// Builds a `session_start` event as the rich plugin reports it.
+fn session_start_event(session_id: Option<&str>) -> CLIAgentEvent {
+    CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event: CLIAgentEventType::SessionStart,
+        session_id: session_id.map(str::to_owned),
+        cwd: None,
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    }
+}
+
+#[test]
+fn default_handler_forwards_session_start_with_new_session_id() {
+    let mut handler = DefaultSessionListener;
+    let forwarded = handler
+        .handle_event(
+            session_start_event(Some("conversation-b")),
+            Some("conversation-a"),
+        )
+        .expect("a new conversation must reach the sessions model");
+    assert_eq!(forwarded.session_id.as_deref(), Some("conversation-b"));
+}
+
+#[test]
+fn default_handler_skips_session_start_repeating_recorded_session_id() {
+    let mut handler = DefaultSessionListener;
+    assert!(
+        handler
+            .handle_event(
+                session_start_event(Some("conversation-a")),
+                Some("conversation-a")
+            )
+            .is_none()
+    );
+}
+
+#[test]
+fn default_handler_skips_session_start_without_session_id() {
+    let mut handler = DefaultSessionListener;
+    assert!(
+        handler
+            .handle_event(session_start_event(None), Some("conversation-a"))
+            .is_none()
+    );
+}
+
 #[test]
 fn auggie_default_handler_skips_session_start() {
     let mut handler = DefaultSessionListener;
@@ -131,7 +180,7 @@ fn auggie_default_handler_skips_session_start() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_none());
+    assert!(handler.handle_event(event, None).is_none());
 }
 
 #[test]
@@ -147,7 +196,7 @@ fn auggie_default_handler_forwards_stop() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_some());
+    assert!(handler.handle_event(event, None).is_some());
 }
 
 #[test]
@@ -173,7 +222,7 @@ fn pi_default_handler_skips_session_start() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_none());
+    assert!(handler.handle_event(event, None).is_none());
 }
 
 #[test]
@@ -189,7 +238,7 @@ fn pi_default_handler_forwards_stop() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_some());
+    assert!(handler.handle_event(event, None).is_some());
 }
 
 #[test]
@@ -210,7 +259,7 @@ fn droid_default_handler_skips_session_start() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_none());
+    assert!(handler.handle_event(event, None).is_none());
 }
 
 #[test]
@@ -226,7 +275,7 @@ fn droid_default_handler_forwards_stop() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_some());
+    assert!(handler.handle_event(event, None).is_some());
 }
 
 #[test]
@@ -242,7 +291,7 @@ fn droid_default_handler_forwards_permission_request() {
         project: None,
         payload: CLIAgentEventPayload::default(),
     };
-    assert!(handler.handle_event(event).is_some());
+    assert!(handler.handle_event(event, None).is_some());
 }
 
 #[test]
@@ -255,7 +304,7 @@ fn warp_tui_notifications_are_supported() {
         .expect("should parse stop");
     assert_eq!(parsed_stop.agent, CLIAgent::WarpTui);
     assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
-    assert!(handler.handle_event(parsed_stop).is_some());
+    assert!(handler.handle_event(parsed_stop, None).is_some());
 }
 
 #[test]
@@ -269,7 +318,7 @@ fn oh_my_pi_end_to_end_parsing_and_handling() {
         .expect("should successfully parse session_start payload");
     assert_eq!(parsed_start.agent, CLIAgent::OhMyPi);
     assert_eq!(parsed_start.event, CLIAgentEventType::SessionStart);
-    assert!(handler.handle_event(parsed_start).is_none());
+    assert!(handler.handle_event(parsed_start, None).is_none());
 
     // Test stop payload: proves Stop forwards with CLIAgent::OhMyPi
     let stop_body = r#"{"v":1,"agent":"omp","event":"stop"}"#;
@@ -280,7 +329,7 @@ fn oh_my_pi_end_to_end_parsing_and_handling() {
     assert_eq!(parsed_stop.event, CLIAgentEventType::Stop);
 
     let handled_stop = handler
-        .handle_event(parsed_stop)
+        .handle_event(parsed_stop, None)
         .expect("should forward stop event");
     assert_eq!(handled_stop.agent, CLIAgent::OhMyPi);
     assert_eq!(handled_stop.event, CLIAgentEventType::Stop);

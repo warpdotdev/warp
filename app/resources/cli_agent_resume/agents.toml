@@ -1,0 +1,80 @@
+# Per-agent support for resuming a CLI agent session after Warp restarts.
+#
+# This file is embedded into the binary at build time and is the only place an
+# agent is added: there is no per-agent restore path in code.
+#
+# It deliberately never names an executable. The binary comes from the detected
+# agent's `CLIAgent::command_prefixes()`, so a declaration here cannot introduce
+# a new process for Warp to run.
+#
+# Each declaration supplies:
+#   resume     - the invocation shape that reattaches to a prior session.
+#   identifier - the value shape the recorded session id must satisfy.
+#   flags      - the allowlist of flags carried over from the user's own
+#                invocation, each with the shape its value must satisfy.
+#
+# Every recorded value is untrusted: it comes from a local database file that
+# any process running as the user can write, and the built string is handed to
+# an interactive shell. A value that does not match its declared shape is
+# dropped, never repaired, and every surviving value is shell-quoted. Widening a
+# shape here widens what can reach the shell, so keep each character set as
+# narrow as the CLI actually needs.
+#
+# Value shapes:
+#   boolean    - the flag stands alone and carries no value.
+#   bare_token - ASCII letters, digits and `._-+:@`, not starting with `-`.
+#   path_like  - `bare_token` plus `/`.
+#
+# A flag that chooses the agent's permission posture rather than describing the
+# session is marked `permission_posture = true`. Those flags are the only ones
+# bounded by a freshness window (`PERMISSION_POSTURE_FRESHNESS`): a recording
+# older than the window resumes the same conversation without them, so a
+# long-abandoned elevation is not revived by a restart. Mark every spelling that
+# can elevate, including one that carries its posture as a value.
+#
+# Only flags that take at most one value belong here. A variadic flag cannot be
+# told apart from a trailing prompt positional once the command line is
+# tokenized, so carrying one risks turning the user's prompt into an argument.
+# That rules out Claude Code's `--add-dir` and `--mcp-config`.
+#
+# Nor does a flag whose value names a file Warp cannot validate belong here. A
+# shape checks the string, never what the file says, and a resume runs unattended
+# at startup — so replaying such a pointer replays whatever the file has come to
+# hold since. That rules out Claude Code's `--settings`, which can carry hooks
+# and a permission mode: a code-execution pointer, and one the posture freshness
+# window does not bound because it is not a posture flag.
+#
+# An agent absent from this file simply does not offer resume, which is the safe
+# default and needs no code change:
+#   Gemini  - its `--resume` has not been verified against a released CLI, and
+#             the in-repo harness still reports no conversation resume.
+#   WarpTui - the session id it reports over OSC is a process-local entity id
+#             rather than the token its `--resume` accepts, so a resume built
+#             from what we record could never reattach.
+
+[agents.Claude]
+# Verified against Claude Code 2.1.227: `claude --resume <session-id>`.
+resume = { form = "flag", flag = "--resume" }
+identifier = { shape = "bare_token", max_length = 128 }
+
+# `--fork-session` and `--session-id` are deliberately absent: the first asks
+# for a new session id when resuming and the second starts a new session
+# outright, so either one would defeat the resume it rode in on.
+[agents.Claude.flags]
+"--model" = { shape = "path_like", max_length = 128 }
+"--permission-mode" = { shape = "bare_token", max_length = 32, permission_posture = true }
+# The permission posture the user chose. Carried because a pane that comes back
+# re-prompting is not the session it replaced; never added when it was absent.
+"--dangerously-skip-permissions" = { shape = "boolean", permission_posture = true }
+"--strict-mcp-config" = { shape = "boolean" }
+"--agent" = { shape = "bare_token", max_length = 64 }
+
+[agents.Codex]
+# `codex resume <session-id>`, the shape Warp's own headless driver already
+# uses. Codex is not installed here, so only flags with in-repo evidence are
+# allowlisted.
+resume = { form = "subcommand", subcommand = "resume" }
+identifier = { shape = "bare_token", max_length = 128 }
+
+[agents.Codex.flags]
+"--dangerously-bypass-approvals-and-sandbox" = { shape = "boolean", permission_posture = true }

@@ -790,6 +790,7 @@ list_skills = []
 local_tty = ["warp_terminal/local_tty"]
 local_computer_use = []
 local_claude_codex_child_harnesses = []
+agent_session_resume = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to
 # conditionally include dependencies that should only exist in such

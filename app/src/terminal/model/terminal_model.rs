@@ -1698,6 +1698,16 @@ impl TerminalModel {
         self.start_command_execution_for_kind(CommandStartKind::UserOrQueued)
     }
 
+    /// Starts the active block for a command Warp wrote itself, marking it so that nothing
+    /// downstream reads it as the user's own line.
+    pub fn start_command_execution_as_warp_authored(&mut self) -> StartCommandOutcome {
+        let outcome = self.start_command_execution_for_kind(CommandStartKind::UserOrQueued);
+        if outcome.is_accepted() {
+            self.block_list.active_block_mut().set_warp_authored();
+        }
+        outcome
+    }
+
     pub fn start_command_execution_from_env_var_collection(
         &mut self,
         env_var_metadata: BlocklistEnvVarMetadata,

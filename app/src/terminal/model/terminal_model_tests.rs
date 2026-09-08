@@ -14,6 +14,7 @@ use warpui::text::{SelectionType, str_to_byte_vec};
 use super::*;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::terminal::color;
+use crate::terminal::event::BlockType;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::ObfuscateSecrets;
 use crate::terminal::model::ansi::{CompletionMetadata, Handler, Processor};
@@ -2333,4 +2334,49 @@ fn cloud_mode_setup_phase_ended_does_not_emit_when_not_sharing() {
     rx.close();
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert!(events.is_empty());
+}
+
+/// KTD7 layer two: a source variant cannot reach `was_part_of_agent_interaction`, which is
+/// derived from `ai_metadata` and is structurally `false` for a resume. The block carries its own
+/// marker so that everything reading a completed user block can tell Warp's line from the user's.
+#[test]
+fn warp_authored_command_start_marks_its_block_as_not_the_users() {
+    let user_block_type = {
+        let mut terminal = TerminalModel::mock(None, None);
+        terminal.block_list_mut().set_bootstrapped();
+        assert_eq!(
+            terminal.start_command_execution(),
+            StartCommandOutcome::Accepted
+        );
+        assert!(!terminal.block_list().active_block().is_warp_authored());
+        BlockType::from(terminal.block_list().active_block())
+    };
+    let BlockType::User(user_block) = user_block_type else {
+        panic!("a started command block completes as a user block");
+    };
+    assert!(
+        user_block.was_user_authored(),
+        "a command the user submitted is theirs"
+    );
+
+    let mut terminal = TerminalModel::mock(None, None);
+    terminal.block_list_mut().set_bootstrapped();
+    assert_eq!(
+        terminal.start_command_execution_as_warp_authored(),
+        StartCommandOutcome::Accepted
+    );
+    assert!(terminal.block_list().active_block().is_warp_authored());
+
+    let BlockType::User(resume_block) = BlockType::from(terminal.block_list().active_block())
+    else {
+        panic!("a resume still starts an ordinary user block");
+    };
+    assert!(
+        !resume_block.was_part_of_agent_interaction,
+        "a resume carries no agent interaction metadata, which is why the marker is needed"
+    );
+    assert!(
+        !resume_block.was_user_authored(),
+        "nobody authored the resume; Warp did"
+    );
 }

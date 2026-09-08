@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
@@ -13,12 +14,15 @@ use persistence::model::{
 use repo_metadata::RepoMetadataModel;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::watcher::DirectoryWatcher;
+use serde_json::Value;
 use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
+use warp_core::telemetry::TelemetryEvent as _;
 use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
+use warpui::telemetry::EventPayload;
 use warpui::windowing::WindowManager;
 use warpui::windowing::state::ApplicationStage;
 use warpui::{App, ModelHandle};
@@ -29,6 +33,7 @@ use super::child_agent::{
     HiddenChildAgentConversationRequest, HiddenChildAgentTaskContext,
     create_hidden_child_agent_conversation,
 };
+use super::telemetry::{AgentSessionResumeTelemetryEvent, RecordedAgeBucket, ResumeOutcome};
 use super::*;
 use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
@@ -84,13 +89,25 @@ use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
 use crate::system::SystemStats;
+use crate::terminal::CLIAgent;
 use crate::terminal::alt_screen_reporting::AltScreenReporting;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_resume::{
+    PERMISSION_POSTURE_FRESHNESS, RESUME_HISTORY_MARKER, RecordedFlag,
+};
+use crate::terminal::cli_agent_sessions::event::parse_event;
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
+    CLIAgentSessionsModel,
+};
+use crate::terminal::event::{BlockCompletedEvent, BlockType, UserBlockCompleted};
+use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::history::History;
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::local_tty::TerminalManager;
 use crate::terminal::local_tty::spawner::PtySpawner;
-use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
+use crate::terminal::model::terminal_model::{BlockIndex, ConversationTranscriptViewerStatus};
+use crate::terminal::model_events::ModelEvent as TerminalModelEvent;
 use crate::terminal::resizable_data::ResizableData;
 use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
@@ -258,6 +275,7 @@ fn mock_pane_group(app: &mut App, options: MockOptions) -> ViewHandle<PaneGroup>
                 ServerApiProvider::as_ref(ctx).get(),
                 options.layout,
                 block_lists,
+                AgentSessionRestore::default(),
                 None,
                 ctx,
             )
@@ -3831,6 +3849,7 @@ fn test_focused_pane_is_synchronized_with_application_focus() {
                         ServerApiProvider::as_ref(ctx).get(),
                         panes_layout,
                         block_lists,
+                        AgentSessionRestore::default(),
                         None,
                         ctx,
                     )
@@ -3975,5 +3994,1906 @@ fn test_undo_close_keeps_a_file_pane_watching_its_file() {
                 "a permanently discarded pane should release its file"
             );
         });
+    });
+}
+
+// A resume can only be offered if the recorded map and the restored pane agree on the key. The
+// map is keyed by pane uuid, so the pane the snapshot rebuilds has to report that same uuid.
+#[test]
+fn restored_terminal_pane_reports_the_uuid_its_recorded_session_is_keyed_by() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let pane_uuid = vec![7, 7, 7];
+        let recorded = app_state::RecordedAgentSession {
+            agent: CLIAgent::Claude,
+            session_id: "session-1".to_owned(),
+            flags: vec![RecordedFlag {
+                name: "--model".to_owned(),
+                value: Some("opus".to_owned()),
+            }],
+            directory: PathBuf::from("/tmp/project"),
+            observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+                .expect("date should be valid")
+                .and_hms_opt(9, 30, 0)
+                .expect("time should be valid"),
+        };
+        let agent_restore = AgentSessionRestore {
+            sessions: Arc::new(HashMap::from([(
+                PaneUuid(pane_uuid.clone()),
+                recorded.clone(),
+            )])),
+            claimed_panes: Arc::new(HashSet::from([PaneUuid(pane_uuid.clone())])),
+            is_startup_restore: true,
+        };
+
+        let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+            is_focused: true,
+            custom_vertical_tabs_title: None,
+            contents: LeafContents::Terminal(TerminalPaneSnapshot {
+                uuid: pane_uuid,
+                cwd: None,
+                shell_launch_data: None,
+                is_active: true,
+                is_read_only: false,
+                input_config: None,
+                llm_model_override: None,
+                active_profile_id: None,
+                conversation_ids_to_restore: vec![],
+                active_conversation_id: None,
+            }),
+        })));
+
+        let tips_model = app.add_model(|_| TipsCompleted::default());
+        let restore_for_group = agent_restore.clone();
+        let (_, pane_group) = app.add_window_with_bounds(
+            WindowStyle::NotStealFocus,
+            WindowBounds::ExactPosition(RectF::new(Vector2F::zero(), Vector2F::new(1024., 768.))),
+            |ctx| {
+                let banner_model_handle = ctx.add_model(|_| BannerState::default());
+                PaneGroup::new_with_panes_layout(
+                    tips_model,
+                    banner_model_handle,
+                    ServerApiProvider::as_ref(ctx).get(),
+                    layout,
+                    Arc::new(HashMap::new()),
+                    restore_for_group,
+                    None,
+                    ctx,
+                )
+            },
+        );
+
+        let reported_uuid = pane_group.read(&app, |panes, _ctx| {
+            panes
+                .panes_of::<TerminalPane>()
+                .map(|pane| pane.session_uuid())
+                .next()
+                .expect("the snapshot should have restored a terminal pane")
+        });
+
+        assert_eq!(
+            agent_restore.sessions.get(&PaneUuid(reported_uuid)),
+            Some(&recorded)
+        );
+    });
+}
+
+/// A pane group whose panes report their persistence writes to the returned receiver, so a test
+/// can read exactly what a pane asked the writer thread to store.
+fn pane_group_reporting_model_events(
+    app: &mut App,
+) -> (ViewHandle<PaneGroup>, Receiver<ModelEvent>) {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(64);
+    let tips_model = app.add_model(|_| TipsCompleted::default());
+    let (_, pane_group) = app.add_window_with_bounds(
+        WindowStyle::NotStealFocus,
+        WindowBounds::ExactPosition(RectF::new(Vector2F::zero(), Vector2F::new(1024., 768.))),
+        |ctx| {
+            let banner_model_handle = ctx.add_model(|_| BannerState::default());
+            PaneGroup::new_with_panes_layout(
+                tips_model,
+                banner_model_handle,
+                ServerApiProvider::as_ref(ctx).get(),
+                Default::default(),
+                Arc::new(HashMap::new()),
+                AgentSessionRestore::default(),
+                Some(sender),
+                ctx,
+            )
+        },
+    );
+    (pane_group, receiver)
+}
+
+/// Starts a CLI agent session for `terminal_view_id`, as detection does once a recognized agent
+/// has been the pane's foreground command for long enough.
+fn start_cli_agent_session(
+    terminal_view_id: EntityId,
+    agent: CLIAgent,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+        sessions.set_session(
+            terminal_view_id,
+            CLIAgentSession {
+                agent,
+                status: CLIAgentSessionStatus::InProgress,
+                session_context: CLIAgentSessionContext::default(),
+                input_state: CLIAgentInputState::Closed,
+                should_auto_toggle_input: false,
+                listener: None,
+                plugin_version: None,
+                remote_host: None,
+                draft_text: None,
+                custom_command_prefix: None,
+                received_rich_notification: false,
+            },
+            ctx,
+        );
+    });
+}
+
+/// Delivers the plugin event in which the agent reports `session_id`, the same shape the OSC 777
+/// listener parses out of the PTY.
+fn report_agent_session_id(
+    terminal_view_id: EntityId,
+    session_id: &str,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    report_agent_event(terminal_view_id, "session_start", session_id, ctx);
+}
+
+/// Delivers one of the agent's own lifecycle events. `tool_complete` is the one that fires once
+/// per tool call, which is what makes an agent task a burst rather than a handful of events.
+fn report_agent_event(
+    terminal_view_id: EntityId,
+    event: &str,
+    session_id: &str,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    let body =
+        format!(r#"{{"v":1,"agent":"claude","event":"{event}","session_id":"{session_id}"}}"#);
+    let event = parse_event(Some("warp://cli-agent"), &body).expect("the test event should parse");
+    CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+        sessions.update_from_event(terminal_view_id, &event, ctx);
+    });
+}
+
+/// The capture writes the panes sent, oldest first. A `None` session is a pane reporting that it
+/// has no agent left to resume.
+fn captured_agent_session_writes(
+    events: &Receiver<ModelEvent>,
+) -> Vec<(Vec<u8>, Option<RecordedAgentSession>)> {
+    events
+        .try_iter()
+        .filter_map(|event| match event {
+            ModelEvent::SetAgentSession { pane_id, session } => Some((pane_id, session)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The identifiers the panes recorded, oldest first.
+fn captured_agent_sessions(events: &Receiver<ModelEvent>) -> Vec<(Vec<u8>, String)> {
+    captured_agent_session_writes(events)
+        .into_iter()
+        .filter_map(|(pane_id, session)| Some((pane_id, session?.session_id)))
+        .collect()
+}
+
+/// Completes a block in the pane's terminal, which is how the agent process exiting (a `User`
+/// block) and the agent being suspended (a `Background` block) reach the sessions model.
+fn complete_block_in_pane(
+    terminal_view: &ViewHandle<TerminalView>,
+    block_type: BlockType,
+    ctx: &mut ViewContext<PaneGroup>,
+) {
+    let dispatcher = terminal_view
+        .as_ref(ctx)
+        .model_event_dispatcher()
+        .to_owned();
+    dispatcher.update(ctx, |_, ctx| {
+        ctx.emit(TerminalModelEvent::BlockCompleted(BlockCompletedEvent {
+            block_type,
+            num_secrets_obfuscated: 0,
+            block_index: BlockIndex::zero(),
+            block_id: BlockId::new(),
+            session_id: None,
+            restored_block_was_local: None,
+        }));
+    });
+}
+
+/// The block a finished agent command leaves behind.
+fn completed_user_block(command: &str) -> BlockType {
+    BlockType::User(UserBlockCompleted::new_for_test(
+        BlockIndex::zero(),
+        Arc::new(SerializedBlock::new_for_test(
+            command.as_bytes().to_vec(),
+            vec![],
+        )),
+        command.to_owned(),
+        command.to_owned(),
+        String::new(),
+        String::new(),
+        false,
+        false,
+        None,
+        0,
+        0,
+    ))
+}
+
+/// The uuid of the group's only terminal pane, which is the key its recorded state is stored
+/// under.
+fn only_terminal_pane_uuid(pane_group: &ViewHandle<PaneGroup>, app: &App) -> Vec<u8> {
+    pane_group.read(app, |panes, _ctx| {
+        panes
+            .panes_of::<TerminalPane>()
+            .map(|pane| pane.session_uuid())
+            .next()
+            .expect("the group should hold one terminal pane")
+    })
+}
+
+/// The id of the group's first terminal pane, for tests that add a second one afterwards.
+fn first_terminal_pane_id(pane_group: &ViewHandle<PaneGroup>, app: &App) -> PaneId {
+    pane_group.read(app, |panes, _ctx| {
+        panes
+            .terminal_pane_ids()
+            .next()
+            .expect("the group should hold a terminal pane")
+    })
+}
+
+/// The uuid recorded state is keyed to for the terminal pane with `pane_id`.
+fn terminal_pane_uuid(pane_group: &ViewHandle<PaneGroup>, pane_id: PaneId, app: &App) -> Vec<u8> {
+    pane_group.read(app, |panes, _ctx| {
+        panes
+            .terminal_session_by_id(pane_id)
+            .expect("the group should hold a terminal pane with that id")
+            .session_uuid()
+    })
+}
+
+// AE1/R2: a pane whose agent reports a second identifier has to persist the second one, and the
+// writes have to reach the writer in the order they were observed — an older identifier landing
+// after a newer one would resume the wrong conversation.
+#[test]
+fn pane_records_each_identifier_its_agent_reports_in_order() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+
+        let terminal_view_id = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view_id = panes
+                .active_session_view(ctx)
+                .expect("the group should have an active terminal view")
+                .id();
+            start_cli_agent_session(terminal_view_id, CLIAgent::Claude, ctx);
+            terminal_view_id
+        });
+
+        pane_group.update(&mut app, |_, ctx| {
+            report_agent_session_id(terminal_view_id, "first-identifier", ctx);
+        });
+        pane_group.update(&mut app, |_, ctx| {
+            report_agent_session_id(terminal_view_id, "second-identifier", ctx);
+        });
+
+        assert_eq!(
+            captured_agent_sessions(&model_events),
+            vec![
+                (pane_uuid.clone(), "first-identifier".to_owned()),
+                (pane_uuid, "second-identifier".to_owned()),
+            ],
+            "both identifiers must reach the writer in the order the agent reported them"
+        );
+    });
+}
+
+/// Starts an agent in the group's terminal pane and has it report `session_id`, leaving one
+/// recorded write behind. Returns the pane's terminal view.
+fn record_agent_session_in_pane(
+    pane_group: &ViewHandle<PaneGroup>,
+    session_id: &str,
+    app: &mut App,
+) -> ViewHandle<TerminalView> {
+    let terminal_view = pane_group.update(app, |panes, ctx| {
+        let terminal_view = panes
+            .active_session_view(ctx)
+            .expect("the group should have an active terminal view");
+        start_cli_agent_session(terminal_view.id(), CLIAgent::Claude, ctx);
+        terminal_view
+    });
+    let terminal_view_id = terminal_view.id();
+    pane_group.update(app, |_, ctx| {
+        report_agent_session_id(terminal_view_id, session_id, ctx);
+    });
+    terminal_view
+}
+
+// AE2/R3: the agent process exiting completes the pane's user block, which ends the session while
+// the pane stays attached. That pane has nothing left to resume, and saying so is the only way
+// the next launch does not offer a dead session.
+#[test]
+fn pane_whose_agent_exited_records_that_it_has_nothing_to_resume() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let _ = captured_agent_session_writes(&model_events);
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(&terminal_view, completed_user_block("claude"), ctx);
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![(pane_uuid, None)],
+            "an agent that ended in a live pane must leave that pane recording no session"
+        );
+    });
+}
+
+// AE16/R21: suspending the agent completes a background block, which leaves the session — and the
+// process — alive. The pane must keep what it recorded; the agent is still there to resume.
+#[test]
+fn pane_whose_agent_is_suspended_keeps_its_recorded_state() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(
+                &terminal_view,
+                BlockType::Background(Arc::new(SerializedBlock::new_for_test(
+                    b"claude".to_vec(),
+                    vec![],
+                ))),
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a suspended agent must not make the pane clear what it recorded"
+        );
+    });
+}
+
+// AE15/R20: a pane hidden for a close the user can undo, and a pane torn down at app teardown,
+// both end their CLI agent session on the way out. Neither says anything about the agent, which
+// is still running — clearing there would erase exactly the state a restart needs.
+#[test]
+fn pane_detached_for_close_or_teardown_keeps_its_recorded_state() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+
+        // Closing the tab hides its panes so an undo can bring them back, and closing the window
+        // at teardown detaches every pane down the same path.
+        pane_group.update(&mut app, |panes, ctx| panes.detach_panes(ctx));
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a pane hidden for close must keep its recorded state so an undo (and the next \
+             launch) still finds the agent it was running"
+        );
+    });
+}
+
+// AE15/R20: the undo that the hide-for-close exists for. The pane comes back under the uuid its
+// recorded state is keyed to, and nothing on the way out or the way back said that state was
+// stale, so the next launch still resumes it.
+#[test]
+fn undone_close_leaves_the_pane_still_owning_its_recorded_state() {
+    let _undo_closed_panes = FeatureFlag::UndoClosedPanes.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+        let agent_pane_id = first_terminal_pane_id(&pane_group, &app);
+        let pane_uuid = terminal_pane_uuid(&pane_group, agent_pane_id, &app);
+
+        // A second pane, so closing the agent's pane hides it rather than emptying the group.
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+        });
+        pane_group.update(&mut app, |panes, ctx| panes.close_pane(agent_pane_id, ctx));
+        assert!(
+            pane_group.read(&app, |panes, _ctx| panes
+                .is_pane_hidden_for_close(agent_pane_id)),
+            "precondition: the close hid the pane instead of removing it"
+        );
+
+        assert!(
+            pane_group.update(&mut app, |panes, ctx| panes
+                .restore_closed_pane(agent_pane_id, ctx)),
+            "the hidden pane should restore"
+        );
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "an undone close must leave the recorded state exactly as the pane left it"
+        );
+        assert_eq!(
+            terminal_pane_uuid(&pane_group, agent_pane_id, &app),
+            pane_uuid,
+            "the restored pane is the same pane, so it still owns the row keyed to its uuid"
+        );
+    });
+}
+
+// R20/KTD13: once the undo window has passed, the stack discards the closed item and detaches its
+// panes as permanently closed. Nothing brings that pane back, so the row keyed to its uuid is
+// garbage whatever its agent was doing, and the same hook that drops its blocks drops it too.
+#[test]
+fn permanently_removed_pane_has_its_recorded_state_cleared() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+
+        // What the undo stack runs when it discards a closed tab for good.
+        pane_group.update(&mut app, |panes, ctx| panes.clean_up_panes(ctx));
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![(pane_uuid, None)],
+            "a pane that is gone for good must not leave a row behind for a launch to resume"
+        );
+    });
+}
+
+// A move detaches the pane from the group it is leaving, but the pane, its uuid and its running
+// agent all survive into the destination. Clearing there would lose the state mid-drag.
+#[test]
+fn pane_moved_out_of_its_group_keeps_its_recorded_state() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let recorded = captured_agent_sessions(&model_events);
+        assert_eq!(
+            recorded.len(),
+            1,
+            "precondition: the pane recorded a session"
+        );
+        let agent_pane_id = first_terminal_pane_id(&pane_group, &app);
+
+        pane_group.update(&mut app, |panes, ctx| {
+            panes.add_terminal_pane(Direction::Right, None, ctx);
+        });
+        let moved = pane_group.update(&mut app, |panes, ctx| {
+            panes.remove_pane_for_move(&agent_pane_id, ctx)
+        });
+        assert!(
+            moved.is_some(),
+            "precondition: the pane was taken for a move"
+        );
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a pane that only moved is still running its agent and must keep what it recorded"
+        );
+    });
+}
+
+// KTD14: the session event fires once per tool call, so an agent task is a burst of observations
+// of a row that has not changed. Only what changed is worth a write — the channel these go down
+// is bounded and shared with a sender that blocks the main thread when it fills.
+#[test]
+fn burst_of_tool_call_events_from_one_agent_collapses_to_one_write() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let terminal_view_id = terminal_view.id();
+
+        for _ in 0..20 {
+            pane_group.update(&mut app, |_, ctx| {
+                report_agent_event(terminal_view_id, "tool_complete", "conversation-a", ctx);
+            });
+        }
+
+        assert_eq!(
+            captured_agent_sessions(&model_events)
+                .into_iter()
+                .map(|(_, session_id)| session_id)
+                .collect::<Vec<_>>(),
+            vec!["conversation-a".to_owned()],
+            "an agent task's worth of tool calls must cost one write, not one per call"
+        );
+    });
+}
+
+// Starting a second agent in the same pane ends the first session with the second one already
+// registered. The pane is still running an agent, so it has something to resume and must not
+// record that it has nothing.
+#[test]
+fn pane_that_replaced_its_agent_does_not_record_an_absent_session() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+        let terminal_view_id = terminal_view.id();
+        let _ = captured_agent_session_writes(&model_events);
+
+        pane_group.update(&mut app, |_, ctx| {
+            start_cli_agent_session(terminal_view_id, CLIAgent::Codex, ctx);
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "a pane that swapped one agent for another still has an agent to resume"
+        );
+    });
+}
+
+// The eligibility gate reads a recorded directory that still resolves as the proof that the pane
+// ran its agent here. A pane whose session is not local has no directory to report, and giving
+// it one would let a session that never ran on this machine be relaunched on it.
+#[test]
+fn pane_without_a_local_directory_records_none_and_stays_ineligible() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let pane_uuid = only_terminal_pane_uuid(&pane_group, &app);
+        record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+
+        let writes = captured_agent_session_writes(&model_events);
+        let (_, session) = writes.first().expect("the pane should have recorded state");
+        let session = session
+            .as_ref()
+            .expect("the recording should hold the reported session")
+            .clone();
+        assert_eq!(
+            session.directory,
+            PathBuf::new(),
+            "a pane that reports no local working directory must record no directory"
+        );
+
+        let restore = startup_restore_for_test(
+            [(PaneUuid(pane_uuid.clone()), session)],
+            [PaneUuid(pane_uuid.clone())],
+        );
+        assert_eq!(
+            resume_eligibility(
+                &restore,
+                &PaneUuid(pane_uuid.clone()),
+                &local_pane_snapshot_for_test(&pane_uuid, Some(Path::new("/tmp"))),
+                Some(Path::new("/tmp")),
+            ),
+            Err(ResumeIneligibility::RecordedDirectoryMissing),
+            "a recording without a directory must not pass the gate that treats one as proof the \
+             agent ran here"
+        );
+    });
+}
+
+// The capture is part of session restore, so a user who turned session restore off has nothing
+// recorded about their agents at all.
+#[test]
+fn pane_records_nothing_when_session_restore_is_off() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        GeneralSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .restore_session
+                .set_value(false, ctx)
+                .expect("the setting should be writable in tests");
+        });
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(&terminal_view, completed_user_block("claude"), ctx);
+        });
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "with session restore off, a pane records neither its agent nor its absence"
+        );
+    });
+}
+
+// The capture is the feature, not a preparation for it: with the flag off nothing can act on what
+// a pane records, and writing the agent, identifier, flags and directory of every pane for a
+// disabled feature is state the user never opted into.
+#[test]
+fn pane_records_nothing_while_the_feature_is_off() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+        let terminal_view = record_agent_session_in_pane(&pane_group, "conversation-a", &mut app);
+
+        pane_group.update(&mut app, |_, ctx| {
+            complete_block_in_pane(&terminal_view, completed_user_block("claude"), ctx);
+        });
+        // The permanent-close path writes on its own, and it is behind the same flag.
+        pane_group.update(&mut app, |panes, ctx| panes.clean_up_panes(ctx));
+
+        assert_eq!(
+            captured_agent_session_writes(&model_events),
+            vec![],
+            "with the feature off, a pane records neither its agent nor its absence"
+        );
+    });
+}
+
+// R19: the persisted value is a purpose-built struct, and the session context it is derived from
+// carries the user's prompts, the agent's replies, its summaries and its tool previews. None of
+// that may reach the store, so this pins the recorded field set exhaustively and checks each
+// field against a context stuffed with every sensitive value the model can hold.
+#[test]
+fn recorded_agent_session_carries_no_prompt_response_summary_or_tool_preview() {
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        let (pane_group, model_events) = pane_group_reporting_model_events(&mut app);
+
+        let terminal_view_id = pane_group.update(&mut app, |panes, ctx| {
+            let terminal_view_id = panes
+                .active_session_view(ctx)
+                .expect("the group should have an active terminal view")
+                .id();
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions, ctx| {
+                sessions.set_session(
+                    terminal_view_id,
+                    CLIAgentSession {
+                        agent: CLIAgent::Claude,
+                        status: CLIAgentSessionStatus::InProgress,
+                        session_context: CLIAgentSessionContext {
+                            cwd: Some("SENSITIVE-cwd".to_owned()),
+                            project: Some("SENSITIVE-project".to_owned()),
+                            session_id: Some("conversation-a".to_owned()),
+                            tool_name: Some("SENSITIVE-tool-name".to_owned()),
+                            tool_input_preview: Some("SENSITIVE-tool-preview".to_owned()),
+                            summary: Some("SENSITIVE-summary".to_owned()),
+                            query: Some("SENSITIVE-prompt".to_owned()),
+                            response: Some("SENSITIVE-response".to_owned()),
+                        },
+                        input_state: CLIAgentInputState::Closed,
+                        should_auto_toggle_input: false,
+                        listener: None,
+                        plugin_version: None,
+                        remote_host: None,
+                        draft_text: Some("SENSITIVE-draft".to_owned()),
+                        custom_command_prefix: None,
+                        received_rich_notification: false,
+                    },
+                    ctx,
+                );
+            });
+            terminal_view_id
+        });
+        pane_group.update(&mut app, |_, ctx| {
+            report_agent_session_id(terminal_view_id, "conversation-a", ctx);
+        });
+
+        let writes = captured_agent_session_writes(&model_events);
+        let (_, session) = writes.first().expect("the pane should have recorded state");
+        let session = session
+            .as_ref()
+            .expect("the recording should hold the reported session");
+        // Destructured exhaustively on purpose: a field added to the recorded state has to be
+        // looked at here before it can be persisted.
+        let RecordedAgentSession {
+            agent,
+            session_id,
+            flags,
+            directory,
+            observed_at,
+        } = session;
+        let persisted = format!(
+            "{agent:?} {session_id} {flags:?} {} {observed_at}",
+            directory.display()
+        );
+        assert!(
+            !persisted.contains("SENSITIVE"),
+            "the recorded state must carry nothing of the session context but the identifier, \
+             got: {persisted}"
+        );
+        assert_eq!(session_id, "conversation-a");
+    });
+}
+
+/// A recording for a pane that was running Claude in `directory` under `session_id`.
+fn recorded_session_for_test(session_id: &str, directory: &Path) -> RecordedAgentSession {
+    RecordedAgentSession {
+        agent: CLIAgent::Claude,
+        session_id: session_id.to_owned(),
+        flags: vec![],
+        directory: directory.to_path_buf(),
+        observed_at: chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+            .expect("date should be valid")
+            .and_hms_opt(9, 30, 0)
+            .expect("time should be valid"),
+    }
+}
+
+/// A snapshot of a first-party local terminal pane that came up in `cwd`. A local pane always
+/// carries an input config and a cwd; the branches that null either belong to panes the gate has
+/// to reject.
+fn local_pane_snapshot_for_test(uuid: &[u8], cwd: Option<&Path>) -> TerminalPaneSnapshot {
+    TerminalPaneSnapshot {
+        uuid: uuid.to_vec(),
+        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+        shell_launch_data: None,
+        is_active: true,
+        is_read_only: false,
+        input_config: Some(InputConfig {
+            input_type: crate::ai::blocklist::InputType::Shell,
+            is_locked: false,
+        }),
+        llm_model_override: None,
+        active_profile_id: None,
+        conversation_ids_to_restore: vec![],
+        active_conversation_id: None,
+    }
+}
+
+fn startup_restore_for_test(
+    sessions: impl IntoIterator<Item = (PaneUuid, RecordedAgentSession)>,
+    claimed_panes: impl IntoIterator<Item = PaneUuid>,
+) -> AgentSessionRestore {
+    AgentSessionRestore {
+        sessions: Arc::new(sessions.into_iter().collect()),
+        claimed_panes: Arc::new(claimed_panes.into_iter().collect()),
+        is_startup_restore: true,
+    }
+}
+
+/// A window snapshot holding `panes` in one tab, so claim resolution has a window layout to
+/// reason about without a window existing.
+fn window_snapshot_for_test(panes: Vec<TerminalPaneSnapshot>) -> WindowSnapshot {
+    WindowSnapshot {
+        tabs: vec![app_state::TabSnapshot {
+            custom_title: None,
+            root: PaneNodeSnapshot::Branch(BranchSnapshot {
+                direction: app_state::SplitDirection::Horizontal,
+                children: panes
+                    .into_iter()
+                    .map(|pane| {
+                        (
+                            app_state::PaneFlex(1.),
+                            PaneNodeSnapshot::Leaf(LeafSnapshot {
+                                is_focused: false,
+                                custom_vertical_tabs_title: None,
+                                contents: LeafContents::Terminal(pane),
+                            }),
+                        )
+                    })
+                    .collect(),
+            }),
+            default_directory_color: None,
+            selected_color: Default::default(),
+            left_panel: None,
+            right_panel: None,
+            group_id: None,
+            pinned: false,
+        }],
+        active_tab_index: 0,
+        team_uid: None,
+        bounds: None,
+        fullscreen_state: Default::default(),
+        quake_mode: false,
+        universal_search_width: None,
+        warp_ai_width: None,
+        voltron_width: None,
+        warp_drive_index_width: None,
+        left_panel_open: false,
+        vertical_tabs_panel_open: false,
+        left_panel_width: None,
+        right_panel_width: None,
+        agent_management_filters: None,
+        tab_groups: vec![],
+    }
+}
+
+// AE8: a pane recorded in a git worktree that was deleted before the restart restores as a plain
+// shell. Resuming would run the agent in the fallback directory, which is not where it was.
+#[test]
+fn resume_is_ineligible_when_the_recorded_directory_no_longer_exists() {
+    let worktree = tempfile::tempdir().expect("temp dir");
+    let recorded_directory = worktree.path().to_path_buf();
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", &recorded_directory),
+        )],
+        [pane_uuid.clone()],
+    );
+    let snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(&recorded_directory));
+    worktree.close().expect("the worktree should be removable");
+
+    assert_eq!(
+        resume_eligibility(&agent_restore, &pane_uuid, &snapshot, None),
+        Err(ResumeIneligibility::RecordedDirectoryMissing)
+    );
+}
+
+// AE12: the recorded directory still resolves, but the pane's shell came up somewhere else, so
+// the session belongs to a directory this pane is not in.
+#[test]
+fn resume_is_ineligible_when_the_pane_restored_into_another_directory() {
+    let recorded_directory = tempfile::tempdir().expect("temp dir");
+    let restored_directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", recorded_directory.path()),
+        )],
+        [pane_uuid.clone()],
+    );
+    let snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(restored_directory.path()));
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &snapshot,
+            Some(restored_directory.path())
+        ),
+        Err(ResumeIneligibility::RestoredElsewhere)
+    );
+}
+
+// A pane that came up in the directory its session was recorded in is the only shape that
+// resumes, so the gate has to say yes to it.
+#[test]
+fn resume_is_eligible_when_the_pane_restored_into_its_recorded_directory() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let recorded = recorded_session_for_test("session-1", directory.path());
+    let agent_restore =
+        startup_restore_for_test([(pane_uuid.clone(), recorded.clone())], [pane_uuid.clone()]);
+    let snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path()));
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &snapshot,
+            Some(directory.path())
+        ),
+        Ok(&recorded)
+    );
+}
+
+// AE9: two panes in different windows recorded one identifier. The claim is resolved over the
+// whole store before any window is created — this test creates none — and it goes to the pane in
+// the window the user lands in, which restore creates last.
+#[test]
+fn resume_claims_go_to_the_pane_in_the_window_the_user_lands_in() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let background_pane = PaneUuid(vec![1]);
+    let landing_pane = PaneUuid(vec![2]);
+    let undisputed_pane = PaneUuid(vec![3]);
+    let sessions = HashMap::from([
+        (
+            background_pane.clone(),
+            recorded_session_for_test("shared", directory.path()),
+        ),
+        (
+            landing_pane.clone(),
+            recorded_session_for_test("shared", directory.path()),
+        ),
+        (
+            undisputed_pane.clone(),
+            recorded_session_for_test("its-own", directory.path()),
+        ),
+    ]);
+    let windows = vec![
+        window_snapshot_for_test(vec![
+            local_pane_snapshot_for_test(&background_pane.0, Some(directory.path())),
+            local_pane_snapshot_for_test(&undisputed_pane.0, Some(directory.path())),
+        ]),
+        window_snapshot_for_test(vec![local_pane_snapshot_for_test(
+            &landing_pane.0,
+            Some(directory.path()),
+        )]),
+    ];
+
+    let claims = resolve_agent_session_claims(&windows, Some(1), &sessions);
+
+    assert_eq!(
+        claims,
+        HashSet::from([landing_pane.clone(), undisputed_pane.clone()]),
+        "the disputed identifier goes to the landing window, and an undisputed one is untouched"
+    );
+
+    // The landing window is not a position in the list: with the same layout landing elsewhere,
+    // the identifier follows the user rather than the restore order.
+    let claims = resolve_agent_session_claims(&windows, Some(0), &sessions);
+
+    assert_eq!(claims, HashSet::from([background_pane, undisputed_pane]));
+}
+
+// AE9: the claim is settled before a window exists, so a pane that could never resume must not
+// take an identifier with it. Ranking it first and rejecting it later leaves the pane that would
+// have resumed holding a lost claim, and neither comes back.
+#[test]
+fn a_pane_that_could_not_resume_does_not_win_a_claim_from_one_that_could() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let eligible = PaneUuid(vec![1]);
+    let ineligible = PaneUuid(vec![2]);
+    let sessions = HashMap::from([
+        (
+            eligible.clone(),
+            recorded_session_for_test("shared", directory.path()),
+        ),
+        (
+            ineligible.clone(),
+            RecordedAgentSession {
+                // Observed last, and last in a window that ranks every other way the same, so the
+                // tie-break would hand it the identifier.
+                observed_at: recorded_session_for_test("shared", directory.path()).observed_at
+                    + chrono::Duration::hours(1),
+                ..recorded_session_for_test("shared", &directory.path().join("gone"))
+            },
+        ),
+    ]);
+    let windows = vec![window_snapshot_for_test(vec![
+        local_pane_snapshot_for_test(&eligible.0, Some(directory.path())),
+        local_pane_snapshot_for_test(&ineligible.0, Some(directory.path())),
+    ])];
+
+    assert_eq!(
+        resolve_agent_session_claims(&windows, Some(0), &sessions),
+        HashSet::from([eligible])
+    );
+}
+
+// AE9: exactly one pane resumes per identifier, so the pane that lost the claim is ineligible
+// even though everything about the pane itself is fine.
+#[test]
+fn resume_is_ineligible_for_the_pane_that_lost_a_duplicated_identifier() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let losing_pane = PaneUuid(vec![1]);
+    let winning_pane = PaneUuid(vec![2]);
+    let agent_restore = startup_restore_for_test(
+        [
+            (
+                losing_pane.clone(),
+                recorded_session_for_test("shared", directory.path()),
+            ),
+            (
+                winning_pane.clone(),
+                recorded_session_for_test("shared", directory.path()),
+            ),
+        ],
+        [winning_pane.clone()],
+    );
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &losing_pane,
+            &local_pane_snapshot_for_test(&losing_pane.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::IdentifierClaimedByAnotherPane)
+    );
+    assert!(
+        resume_eligibility(
+            &agent_restore,
+            &winning_pane,
+            &local_pane_snapshot_for_test(&winning_pane.0, Some(directory.path())),
+            Some(directory.path())
+        )
+        .is_ok(),
+        "the pane that won the identifier still resumes"
+    );
+}
+
+// AE4: a pane running a recognized agent that never reported an identifier has nothing to
+// reattach to, and Warp picks a session on no other basis.
+#[test]
+fn resume_is_ineligible_without_a_recorded_identifier() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let mut recorded = recorded_session_for_test("", directory.path());
+    recorded.session_id = String::new();
+    let agent_restore =
+        startup_restore_for_test([(pane_uuid.clone(), recorded)], [pane_uuid.clone()]);
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::NoSessionIdentifier)
+    );
+}
+
+// An agent with no resume declaration has no invocation that reattaches, so a recording for it
+// can only be dropped.
+#[test]
+fn resume_is_ineligible_for_an_agent_without_a_resume_declaration() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let mut recorded = recorded_session_for_test("session-1", directory.path());
+    recorded.agent = CLIAgent::Gemini;
+    let agent_restore =
+        startup_restore_for_test([(pane_uuid.clone(), recorded)], [pane_uuid.clone()]);
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::AgentNotDeclared)
+    );
+}
+
+// R16: a pane whose session ran over SSH restores as a local shell, where the recorded
+// identifier means nothing. The save path proves locality by writing a cwd only for a local
+// session, so a snapshot without one is not a pane to resume in.
+#[test]
+fn resume_is_ineligible_for_a_pane_whose_session_was_not_local() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", directory.path()),
+        )],
+        [pane_uuid.clone()],
+    );
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, None),
+            None
+        ),
+        Err(ResumeIneligibility::SessionNotLocal)
+    );
+}
+
+// A viewer of someone else's shared session never ran the agent locally. Its snapshot is written
+// by the viewer branch, which carries no input config.
+#[test]
+fn resume_is_ineligible_for_a_shared_session_viewer_pane() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = startup_restore_for_test(
+        [(
+            pane_uuid.clone(),
+            recorded_session_for_test("session-1", directory.path()),
+        )],
+        [pane_uuid.clone()],
+    );
+    let mut snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path()));
+    snapshot.input_config = None;
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &snapshot,
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::SharedSessionViewer)
+    );
+}
+
+// A tab restored from a snapshot mid-session reaches the same restore path as startup. Resuming
+// there would relaunch an agent the user never lost.
+#[test]
+fn resume_is_ineligible_outside_the_startup_restore_pass() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let agent_restore = AgentSessionRestore {
+        is_startup_restore: false,
+        ..startup_restore_for_test(
+            [(
+                pane_uuid.clone(),
+                recorded_session_for_test("session-1", directory.path()),
+            )],
+            [pane_uuid.clone()],
+        )
+    };
+
+    assert_eq!(
+        resume_eligibility(
+            &agent_restore,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path())),
+            Some(directory.path())
+        ),
+        Err(ResumeIneligibility::NotStartupRestore)
+    );
+}
+
+// U8 reports why a resume did not happen, which is only worth reporting if each rejection is its
+// own reason: a gate that answered with one "not eligible" would make every cause look alike.
+#[test]
+fn every_resume_rejection_carries_its_own_reason() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let pane_uuid = PaneUuid(vec![1]);
+    let unrecorded_pane = PaneUuid(vec![9]);
+    let recorded = recorded_session_for_test("session-1", directory.path());
+    let local_snapshot = local_pane_snapshot_for_test(&pane_uuid.0, Some(directory.path()));
+
+    let mut viewer_snapshot = local_snapshot.clone();
+    viewer_snapshot.input_config = None;
+    let mut without_identifier = recorded.clone();
+    without_identifier.session_id = String::new();
+    let mut undeclared_agent = recorded.clone();
+    undeclared_agent.agent = CLIAgent::Gemini;
+    let missing_directory = recorded_session_for_test("session-1", &directory.path().join("gone"));
+
+    let claimed =
+        startup_restore_for_test([(pane_uuid.clone(), recorded.clone())], [pane_uuid.clone()]);
+    let reject = |restore: &AgentSessionRestore,
+                  pane: &PaneUuid,
+                  snapshot: &TerminalPaneSnapshot,
+                  restored_directory: Option<&Path>| {
+        resume_eligibility(restore, pane, snapshot, restored_directory)
+            .expect_err("every case here should be rejected")
+    };
+
+    let reasons = vec![
+        reject(&claimed, &unrecorded_pane, &local_snapshot, None),
+        reject(
+            &AgentSessionRestore {
+                is_startup_restore: false,
+                ..claimed.clone()
+            },
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &startup_restore_for_test(
+                [(pane_uuid.clone(), without_identifier)],
+                [pane_uuid.clone()],
+            ),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &startup_restore_for_test([(pane_uuid.clone(), undeclared_agent)], [pane_uuid.clone()]),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &claimed,
+            &pane_uuid,
+            &viewer_snapshot,
+            Some(directory.path()),
+        ),
+        reject(
+            &claimed,
+            &pane_uuid,
+            &local_pane_snapshot_for_test(&pane_uuid.0, None),
+            None,
+        ),
+        reject(
+            &startup_restore_for_test(
+                [(pane_uuid.clone(), missing_directory)],
+                [pane_uuid.clone()],
+            ),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+        reject(&claimed, &pane_uuid, &local_snapshot, None),
+        reject(
+            &startup_restore_for_test([(pane_uuid.clone(), recorded)], []),
+            &pane_uuid,
+            &local_snapshot,
+            Some(directory.path()),
+        ),
+    ];
+
+    let distinct: HashSet<ResumeIneligibility> = reasons.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        reasons.len(),
+        "each rejection should report a different reason, got {reasons:?}"
+    );
+}
+
+// R10: an ineligible pane restores exactly as it does today. Nothing about the restored pane may
+// hint that a session was skipped, so the pane tree has to come back the way it does with no
+// recording at all.
+#[test]
+fn an_ineligible_recorded_session_restores_the_pane_unchanged() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let pane_uuid = vec![4, 2];
+        let agent_restore = startup_restore_for_test(
+            [(
+                PaneUuid(pane_uuid.clone()),
+                // The pane snapshot carries no cwd and the recorded directory does not resolve,
+                // so this recording cannot produce a resume however it is read.
+                recorded_session_for_test("session-1", Path::new("/warp/no/such/directory")),
+            )],
+            [PaneUuid(pane_uuid.clone())],
+        );
+
+        let restored_panes = |app: &mut App, restore: AgentSessionRestore| {
+            let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
+                is_focused: true,
+                custom_vertical_tabs_title: None,
+                contents: LeafContents::Terminal(local_pane_snapshot_for_test(&pane_uuid, None)),
+            })));
+            let tips_model = app.add_model(|_| TipsCompleted::default());
+            let (_, pane_group) = app.add_window_with_bounds(
+                WindowStyle::NotStealFocus,
+                WindowBounds::ExactPosition(RectF::new(
+                    Vector2F::zero(),
+                    Vector2F::new(1024., 768.),
+                )),
+                |ctx| {
+                    let banner_model_handle = ctx.add_model(|_| BannerState::default());
+                    PaneGroup::new_with_panes_layout(
+                        tips_model,
+                        banner_model_handle,
+                        ServerApiProvider::as_ref(ctx).get(),
+                        layout,
+                        Arc::new(HashMap::new()),
+                        restore,
+                        None,
+                        ctx,
+                    )
+                },
+            );
+            pane_group.read(app, |panes, _ctx| {
+                panes
+                    .panes_of::<TerminalPane>()
+                    .map(|pane| pane.session_uuid())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        let with_ineligible_recording = restored_panes(&mut app, agent_restore);
+        let without_recording = restored_panes(&mut app, AgentSessionRestore::default());
+
+        assert_eq!(with_ineligible_recording, vec![pane_uuid]);
+        assert_eq!(with_ineligible_recording, without_recording);
+    });
+}
+
+/// Restores `panes` through the startup path with `restore` in force, and reports what each pane
+/// came back with: its session uuid and the resume invocation armed for it.
+fn restored_panes_with_armed_resume(
+    app: &mut App,
+    panes: Vec<TerminalPaneSnapshot>,
+    restore: AgentSessionRestore,
+) -> Vec<(Vec<u8>, Option<String>)> {
+    let children = panes
+        .into_iter()
+        .map(|pane| {
+            (
+                app_state::PaneFlex(1.),
+                PaneNodeSnapshot::Leaf(LeafSnapshot {
+                    is_focused: false,
+                    custom_vertical_tabs_title: None,
+                    contents: LeafContents::Terminal(pane),
+                }),
+            )
+        })
+        .collect();
+    let layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Branch(BranchSnapshot {
+        direction: app_state::SplitDirection::Horizontal,
+        children,
+    })));
+
+    let tips_model = app.add_model(|_| TipsCompleted::default());
+    let (_, pane_group) = app.add_window_with_bounds(
+        WindowStyle::NotStealFocus,
+        WindowBounds::ExactPosition(RectF::new(Vector2F::zero(), Vector2F::new(1024., 768.))),
+        |ctx| {
+            let banner_model_handle = ctx.add_model(|_| BannerState::default());
+            PaneGroup::new_with_panes_layout(
+                tips_model,
+                banner_model_handle,
+                ServerApiProvider::as_ref(ctx).get(),
+                layout,
+                Arc::new(HashMap::new()),
+                restore,
+                None,
+                ctx,
+            )
+        },
+    );
+
+    let mut restored: Vec<_> = pane_group.read(app, |panes, ctx| {
+        panes
+            .panes_of::<TerminalPane>()
+            .map(|pane| {
+                let armed = pane.terminal_view(ctx).read(ctx, |view, _| {
+                    view.armed_agent_session_resume().map(str::to_owned)
+                });
+                (pane.session_uuid(), armed)
+            })
+            .collect()
+    });
+    // Sorted by uuid: the restore walks the tree in whatever order it likes, and the question
+    // here is which pane got which invocation, not which pane was built first.
+    restored.sort_by(|(left, _), (right, _)| left.cmp(right));
+    restored
+}
+
+/// AE7/R6: every eligible pane comes back carrying its own invocation, in the ordinary startup
+/// restore, with no per-tab step and nothing for the user to do.
+#[test]
+fn every_eligible_restored_pane_carries_its_own_resume_invocation() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+
+        let first = PaneUuid(vec![1]);
+        let second = PaneUuid(vec![2]);
+        let restore = startup_restore_for_test(
+            [
+                (first.clone(), recorded_session_for_test("session-1", &path)),
+                (
+                    second.clone(),
+                    recorded_session_for_test("session-2", &path),
+                ),
+            ],
+            [first.clone(), second.clone()],
+        );
+
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![
+                local_pane_snapshot_for_test(&first.0, Some(&path)),
+                local_pane_snapshot_for_test(&second.0, Some(&path)),
+            ],
+            restore,
+        );
+
+        assert_eq!(
+            restored,
+            vec![
+                (
+                    first.0.clone(),
+                    Some(format!(
+                        "claude --resume 'session-1' # {RESUME_HISTORY_MARKER}"
+                    ))
+                ),
+                (
+                    second.0.clone(),
+                    Some(format!(
+                        "claude --resume 'session-2' # {RESUME_HISTORY_MARKER}"
+                    ))
+                ),
+            ]
+        );
+    });
+}
+
+/// With the feature off, an eligible pane restores exactly as it does today: a bare shell.
+#[test]
+fn no_resume_is_armed_while_the_feature_is_off() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        initialize_app(&mut app);
+
+        let pane = PaneUuid(vec![7]);
+        let restore = startup_restore_for_test(
+            [(pane.clone(), recorded_session_for_test("session-1", &path))],
+            [pane.clone()],
+        );
+
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![local_pane_snapshot_for_test(&pane.0, Some(&path))],
+            restore,
+        );
+
+        assert_eq!(restored, vec![(pane.0.clone(), None)]);
+    });
+}
+
+/// R8: an eligible pane restores the same pane tree an unrecorded one does. The invocation is
+/// something the pane runs on top of what it restored, not a different restore.
+#[test]
+fn an_eligible_pane_restores_the_same_way_an_unrecorded_one_does() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+
+        let pane = PaneUuid(vec![9]);
+        let snapshot = || vec![local_pane_snapshot_for_test(&pane.0, Some(&path))];
+
+        let with_resume = restored_panes_with_armed_resume(
+            &mut app,
+            snapshot(),
+            startup_restore_for_test(
+                [(pane.clone(), recorded_session_for_test("session-1", &path))],
+                [pane.clone()],
+            ),
+        );
+        let without_recording =
+            restored_panes_with_armed_resume(&mut app, snapshot(), AgentSessionRestore::default());
+
+        assert_eq!(
+            with_resume.iter().map(|(uuid, _)| uuid).collect::<Vec<_>>(),
+            without_recording
+                .iter()
+                .map(|(uuid, _)| uuid)
+                .collect::<Vec<_>>(),
+            "the restored pane tree must not depend on whether a resume is armed"
+        );
+        assert!(with_resume[0].1.is_some());
+        assert!(without_recording[0].1.is_none());
+    });
+}
+
+/// The instant the resume-reporting tests restore at. Ages are expressed against it rather than
+/// against the clock, so a band boundary is a value the test states.
+fn resume_report_now() -> NaiveDateTime {
+    chrono::NaiveDate::from_ymd_opt(2026, 8, 11)
+        .expect("date should be valid")
+        .and_hms_opt(12, 0, 0)
+        .expect("time should be valid")
+}
+
+/// A recording of a Claude session last observed `age` before [`resume_report_now`].
+fn recorded_session_observed_ago(age: chrono::Duration) -> RecordedAgentSession {
+    RecordedAgentSession {
+        observed_at: resume_report_now() - age,
+        ..recorded_session_for_test("session-1", Path::new("/warp/recorded/directory"))
+    }
+}
+
+/// The payload `outcome` produces for a pane whose state was observed `age` ago.
+fn reported_resume_payload(age: chrono::Duration, outcome: ResumeOutcome) -> Value {
+    let recorded = recorded_session_observed_ago(age);
+    AgentSessionResumeTelemetryEvent::pane_restored(&recorded, outcome, resume_report_now())
+        .payload()
+        .expect("a reported resume outcome should carry a payload")
+}
+
+/// U8: the event the rollout gates count. A pane that came back with its session says so, and
+/// says which agent it was running — the two values every other number is read against.
+#[test]
+fn a_resumed_pane_reports_its_agent_and_a_resumed_outcome() {
+    let recorded = recorded_session_observed_ago(chrono::Duration::minutes(20));
+    let outcome = ResumeOutcome::for_verdict(&Ok(&recorded), true)
+        .expect("a pane that carried recorded state has an outcome to report");
+    let event =
+        AgentSessionResumeTelemetryEvent::pane_restored(&recorded, outcome, resume_report_now());
+
+    assert_eq!(event.name(), "AgentSessionResume.PaneRestore.Outcome");
+    assert_eq!(
+        event.payload(),
+        Some(serde_json::json!({
+            "agent": "Claude",
+            "outcome": "resumed",
+            "permission_flags_carried": true,
+            "recorded_age": "up_to_1h",
+        }))
+    );
+}
+
+/// R21: a pane the gate cleared that still armed nothing is the failure the rollout reads as
+/// "resume is not reliable". It must not arrive looking like a pane that was never eligible.
+#[test]
+fn a_resume_that_armed_nothing_reports_a_failed_outcome() {
+    let recorded = recorded_session_observed_ago(chrono::Duration::minutes(20));
+
+    assert_eq!(
+        ResumeOutcome::for_verdict(&Ok(&recorded), false),
+        Some(ResumeOutcome::Failed)
+    );
+    assert_eq!(
+        reported_resume_payload(chrono::Duration::minutes(20), ResumeOutcome::Failed)["outcome"],
+        serde_json::json!("failed")
+    );
+}
+
+/// U8: the outcomes are what a dashboard groups by, so each rejection has to arrive as its own
+/// value — except the one that means "this pane was never running an agent", which is every
+/// ordinary pane and says nothing about this feature.
+#[test]
+fn every_resume_rejection_reports_its_own_outcome() {
+    // Spelled out rather than derived from the mapping under test: these strings are the wire
+    // values a dashboard groups by, and the match stops a rejection added later from quietly
+    // reaching the field without one.
+    let expected_outcome = |reason| match reason {
+        ResumeIneligibility::NoRecordedSession => None,
+        ResumeIneligibility::NotStartupRestore => Some("not_startup_restore"),
+        ResumeIneligibility::NoSessionIdentifier => Some("no_session_identifier"),
+        ResumeIneligibility::AgentNotDeclared => Some("agent_not_declared"),
+        ResumeIneligibility::SharedSessionViewer => Some("shared_session_viewer"),
+        ResumeIneligibility::SessionNotLocal => Some("session_not_local"),
+        ResumeIneligibility::RecordedDirectoryMissing => Some("recorded_directory_missing"),
+        ResumeIneligibility::RestoredElsewhere => Some("restored_elsewhere"),
+        ResumeIneligibility::IdentifierClaimedByAnotherPane => {
+            Some("identifier_claimed_by_another_pane")
+        }
+    };
+    let reasons = [
+        ResumeIneligibility::NoRecordedSession,
+        ResumeIneligibility::NotStartupRestore,
+        ResumeIneligibility::NoSessionIdentifier,
+        ResumeIneligibility::AgentNotDeclared,
+        ResumeIneligibility::SharedSessionViewer,
+        ResumeIneligibility::SessionNotLocal,
+        ResumeIneligibility::RecordedDirectoryMissing,
+        ResumeIneligibility::RestoredElsewhere,
+        ResumeIneligibility::IdentifierClaimedByAnotherPane,
+    ];
+
+    for reason in reasons {
+        let verdict: Result<&RecordedAgentSession, ResumeIneligibility> = Err(reason);
+        let reported = ResumeOutcome::for_verdict(&verdict, false).map(|outcome| {
+            serde_json::to_value(outcome).expect("an outcome should serialize as a plain value")
+        });
+
+        assert_eq!(
+            reported,
+            expected_outcome(reason).map(|expected| serde_json::json!(expected)),
+            "{reason:?} should report its own outcome"
+        );
+    }
+
+    let distinct: HashSet<&str> = reasons
+        .iter()
+        .filter_map(|reason| expected_outcome(*reason))
+        .collect();
+    assert_eq!(
+        distinct.len(),
+        reasons.len() - 1,
+        "every rejection but the ordinary one should have a value of its own"
+    );
+}
+
+/// R22: the elevation the user chose rides along only while the observation behind it is recent,
+/// and whether it did is the half of the window's cost the age bands alone cannot show.
+#[test]
+fn a_resume_outside_the_freshness_window_reports_dropped_posture_flags() {
+    let window = chrono::Duration::from_std(PERMISSION_POSTURE_FRESHNESS)
+        .expect("the freshness window should fit a chrono duration");
+    let carried =
+        |age, outcome| reported_resume_payload(age, outcome)["permission_flags_carried"].clone();
+
+    assert_eq!(
+        carried(
+            window - chrono::Duration::minutes(1),
+            ResumeOutcome::Resumed
+        ),
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        carried(
+            window + chrono::Duration::minutes(1),
+            ResumeOutcome::Resumed
+        ),
+        serde_json::json!(false),
+        "a recording older than the window resumes without the posture the user chose"
+    );
+    assert_eq!(
+        carried(chrono::Duration::minutes(1), ResumeOutcome::Failed),
+        serde_json::json!(false),
+        "a pane that never launched carried nothing, however fresh its recording was"
+    );
+}
+
+/// U8: the bands R22's window is chosen from. They bracket the candidate windows, so the field
+/// distribution answers what moving the window to 6 or 24 hours would cost — the provisional 12
+/// hours is a band edge rather than a band.
+#[test]
+fn a_resume_reports_the_recorded_age_in_bracketing_bands() {
+    let bands = [
+        (chrono::Duration::minutes(2), "up_to_1h"),
+        (chrono::Duration::hours(1), "up_to_1h"),
+        (chrono::Duration::hours(3), "1h_to_6h"),
+        (chrono::Duration::hours(6), "1h_to_6h"),
+        (chrono::Duration::hours(9), "6h_to_12h"),
+        (chrono::Duration::hours(12), "6h_to_12h"),
+        (chrono::Duration::hours(18), "12h_to_24h"),
+        (chrono::Duration::hours(24), "12h_to_24h"),
+        (chrono::Duration::days(3), "1d_to_7d"),
+        (chrono::Duration::days(7), "1d_to_7d"),
+        (chrono::Duration::days(30), "over_7d"),
+        // A recording dated after the restart: the clock moved backwards, and no band can be
+        // claimed for an age nothing vouches for.
+        (chrono::Duration::minutes(-5), "unverifiable"),
+    ];
+
+    for (age, expected) in bands {
+        assert_eq!(
+            reported_resume_payload(age, ResumeOutcome::Resumed)["recorded_age"],
+            serde_json::json!(expected),
+            "state observed {age} before the restart belongs in {expected}"
+        );
+    }
+
+    // The window sits on the 6h_to_12h edge, which is what makes the bands readable as a cost:
+    // everything up to that edge is what carrying the posture flags currently covers.
+    assert_eq!(
+        RecordedAgeBucket::for_observation(
+            resume_report_now()
+                - chrono::Duration::from_std(PERMISSION_POSTURE_FRESHNESS)
+                    .expect("the freshness window should fit a chrono duration"),
+            resume_report_now(),
+        ),
+        RecordedAgeBucket::SixToTwelveHours
+    );
+}
+
+/// R20: the event measures the feature without shipping any of what the user was doing. The
+/// recorded state it is built from holds the session identifier, the flags off the user's own
+/// command and a path on their disk, and none of the three may reach the payload.
+#[test]
+fn the_reported_resume_outcome_carries_nothing_of_the_session() {
+    let recorded = RecordedAgentSession {
+        agent: CLIAgent::Claude,
+        session_id: "SENSITIVE-session-id".to_owned(),
+        flags: vec![RecordedFlag {
+            name: "--SENSITIVE-flag".to_owned(),
+            value: Some("SENSITIVE-flag-value".to_owned()),
+        }],
+        directory: PathBuf::from("/SENSITIVE/directory"),
+        observed_at: resume_report_now() - chrono::Duration::hours(2),
+    };
+
+    let event = AgentSessionResumeTelemetryEvent::pane_restored(
+        &recorded,
+        ResumeOutcome::Resumed,
+        resume_report_now(),
+    );
+    // Destructured exhaustively on purpose: a field added to the event has to be looked at here
+    // before it can be reported.
+    let AgentSessionResumeTelemetryEvent::PaneRestored {
+        agent,
+        outcome,
+        permission_flags_carried,
+        recorded_age,
+    } = &event;
+    let reported = format!("{agent:?} {outcome:?} {permission_flags_carried} {recorded_age:?}");
+    let payload = event
+        .payload()
+        .expect("a reported resume outcome should carry a payload");
+    let serialized = payload.to_string();
+
+    for rendering in [&reported, &serialized] {
+        assert!(
+            !rendering.contains("SENSITIVE"),
+            "the event must carry nothing of the recorded session, got: {rendering}"
+        );
+        assert!(
+            !rendering.contains('/'),
+            "the event must carry no path, got: {rendering}"
+        );
+        assert!(
+            !rendering.contains("--"),
+            "the event must carry no flag off the user's command, got: {rendering}"
+        );
+    }
+    assert_eq!(
+        payload
+            .as_object()
+            .expect("the payload should be an object")
+            .keys()
+            .collect::<Vec<_>>(),
+        vec![
+            "agent",
+            "outcome",
+            "permission_flags_carried",
+            "recorded_age"
+        ],
+        "the payload is these four closed values and nothing else"
+    );
+    assert!(
+        !event.contains_ugc(),
+        "nothing the user generated reaches this event"
+    );
+}
+
+/// The reporting is part of the feature, so it is behind the same flag: nothing about a restart
+/// is measured where nothing about it is attempted.
+#[test]
+fn no_resume_outcome_is_reported_while_the_feature_is_off() {
+    let event = AgentSessionResumeTelemetryEvent::pane_restored(
+        &recorded_session_observed_ago(chrono::Duration::minutes(20)),
+        ResumeOutcome::Resumed,
+        resume_report_now(),
+    );
+
+    {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        assert!(
+            !event.enablement_state().is_enabled(),
+            "the send path drops the event while the feature is off"
+        );
+    }
+
+    let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+    assert!(event.enablement_state().is_enabled());
+}
+
+/// Drains the resume outcomes recorded so far, waiting up to `wait` for `expected` of them: the
+/// send hands the event to the background executor, so a drain taken the instant a pane restored
+/// can be empty for reasons that have nothing to do with the pane.
+async fn recorded_resume_outcomes(
+    expected: usize,
+    wait: std::time::Duration,
+) -> Vec<(Option<Value>, bool)> {
+    let deadline = instant::Instant::now() + wait;
+    let mut recorded = Vec::new();
+    loop {
+        recorded.extend(
+            warpui::telemetry::flush_events()
+                .into_iter()
+                .filter_map(|event| match event.payload {
+                    EventPayload::NamedEvent { name, value, .. }
+                        if name == "AgentSessionResume.PaneRestore.Outcome" =>
+                    {
+                        Some((value, event.contains_ugc))
+                    }
+                    _ => None,
+                }),
+        );
+        if recorded.len() >= expected || instant::Instant::now() >= deadline {
+            return recorded;
+        }
+        warpui::r#async::Timer::after(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// U8: the restore path itself reports, once per pane that carried recorded state — the event is
+/// not a helper the path could be wired up without.
+#[test]
+fn a_restored_pane_reports_its_resume_outcome() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(true);
+        initialize_app(&mut app);
+        warpui::telemetry::flush_events();
+
+        let resuming_pane = PaneUuid(vec![1]);
+        let ordinary_pane = PaneUuid(vec![2]);
+        let recorded = RecordedAgentSession {
+            // Observed as the restart happens, so the age band and the posture rule have a
+            // definite answer here rather than one that depends on when the test runs.
+            observed_at: Utc::now().naive_utc(),
+            ..recorded_session_for_test("session-1", &path)
+        };
+
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![
+                local_pane_snapshot_for_test(&resuming_pane.0, Some(&path)),
+                local_pane_snapshot_for_test(&ordinary_pane.0, Some(&path)),
+            ],
+            startup_restore_for_test([(resuming_pane.clone(), recorded)], [resuming_pane.clone()]),
+        );
+        assert!(restored[0].1.is_some(), "the recorded pane should resume");
+
+        let reported = recorded_resume_outcomes(1, std::time::Duration::from_secs(5)).await;
+
+        assert_eq!(
+            reported.len(),
+            1,
+            "the pane that carried recorded state should report once, got: {reported:?}"
+        );
+        assert!(
+            recorded_resume_outcomes(1, std::time::Duration::from_millis(300))
+                .await
+                .is_empty(),
+            "the pane that carried no recorded state was not running an agent and reports nothing"
+        );
+        assert_eq!(
+            reported[0].0,
+            Some(serde_json::json!({
+                "agent": "Claude",
+                "outcome": "resumed",
+                "permission_flags_carried": true,
+                "recorded_age": "up_to_1h",
+            }))
+        );
+        assert!(!reported[0].1, "the event holds no user-generated content");
+    });
+}
+
+/// With the feature off, a restart is not measured either: the pane restores as a bare shell and
+/// says nothing about having been asked to resume.
+#[test]
+fn a_restored_pane_reports_no_resume_outcome_while_the_feature_is_off() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().to_path_buf();
+
+    App::test((), |mut app| async move {
+        let _resume_flag = FeatureFlag::AgentSessionResume.override_enabled(false);
+        initialize_app(&mut app);
+        warpui::telemetry::flush_events();
+
+        let pane = PaneUuid(vec![1]);
+        let restored = restored_panes_with_armed_resume(
+            &mut app,
+            vec![local_pane_snapshot_for_test(&pane.0, Some(&path))],
+            startup_restore_for_test(
+                [(pane.clone(), recorded_session_for_test("session-1", &path))],
+                [pane.clone()],
+            ),
+        );
+        assert_eq!(restored[0].1, None, "nothing should have been armed");
+
+        let reported = recorded_resume_outcomes(1, std::time::Duration::from_millis(500)).await;
+
+        assert!(
+            reported.is_empty(),
+            "the feature reports nothing while it is off, got: {reported:?}"
+        );
     });
 }

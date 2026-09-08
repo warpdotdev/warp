@@ -221,7 +221,7 @@ impl PassiveSuggestionsModel {
         block_completed: &UserBlockCompleted,
         ctx: &mut ModelContext<Self>,
     ) {
-        if block_completed.was_part_of_agent_interaction {
+        if !block_completed.was_user_authored() {
             return;
         }
 
