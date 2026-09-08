@@ -48,9 +48,9 @@
       "color": "0e8a16",
       "description": "The issue is ready for implementation work."
     },
-    "priority:high": {
+    "agent:priority-high": {
       "color": "b60205",
-      "description": "High-priority issues that are immediately escalated for internal review."
+      "description": "High-priority issues that are immediately escalated. Assigned by Warp triage agent."
     },
     "repro:high": {
       "color": "b60205",
