@@ -1674,7 +1674,7 @@ impl ChargedUsageTotals {
             + self.input_cache_write_tokens
     }
 
-    fn add_inference_usage(&mut self, usage: &stream_finished::InferenceUsage) {
+    fn add_inference_usage(&mut self, usage: &api::InferenceUsage) {
         if let Some(token_count) = usage.token_count.as_ref() {
             self.input_tokens += token_count.input;
             self.output_tokens += token_count.output;
@@ -1708,13 +1708,13 @@ impl std::ops::AddAssign for ChargedUsageTotals {
     }
 }
 
-impl From<&stream_finished::RequestCharges> for ChargedUsageTotals {
+impl From<&api::RequestCharges> for ChargedUsageTotals {
     /// Sums a category-keyed `RequestCharges` map (per-turn or cumulative)
     /// into a single flat breakdown, mirroring the Go `SumChargedUsage`
     /// helper. Categories and models are summed together; per-category/
     /// per-model detail is discarded, matching the single
     /// pricing-breakdown-section display convention (`warp` PR #15015).
-    fn from(charges: &stream_finished::RequestCharges) -> Self {
+    fn from(charges: &api::RequestCharges) -> Self {
         let mut totals = Self::default();
         for usage in charges.usage_by_category.values() {
             for inference_usage in usage
