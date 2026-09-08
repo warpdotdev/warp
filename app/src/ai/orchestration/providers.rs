@@ -15,7 +15,6 @@ use crate::ai::connected_self_hosted_workers::WARP_WORKER_HOST;
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
 use crate::ai::llms::LLMInfo;
 use crate::ai::orchestration::config_state::AuthSecretSelection;
-use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 /// Env var override for the workspace default host (developer testing).
@@ -202,13 +201,13 @@ pub fn resolve_default_auth_secret_for_harness<S: TeamScope + ?Sized>(
     };
 
     let availability = HarnessAvailabilityModel::as_ref(ctx);
-    match availability.auth_secrets_for(RequestTeamScope::from_scope(team_scope), harness) {
+    match availability.auth_secrets_for(team_scope, harness) {
         AuthSecretFetchState::Loaded(secrets) => {
             // Drop the persisted name if the secret was deleted server-side.
             persisted.filter(|name| secrets.iter().any(|s| s.name == *name))
         }
         // Pre-fetch: optimistically show the persisted name; the
-        // `AuthSecretsLoaded` subscription will re-resolve.
+        // `AuthSecretsChanged` subscription will re-resolve.
         AuthSecretFetchState::NotFetched
         | AuthSecretFetchState::Loading
         | AuthSecretFetchState::Failed(_) => persisted,

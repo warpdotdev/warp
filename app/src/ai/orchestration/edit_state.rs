@@ -21,7 +21,6 @@ use super::providers::{
     resolve_default_environment_id,
 };
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
-use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::TeamScope;
 
 impl OrchestrationConfigState {
@@ -79,13 +78,10 @@ impl OrchestrationConfigState {
         team_scope: &S,
         ctx: &AppContext,
     ) {
-        let request_team_scope = RequestTeamScope::from_scope(team_scope);
         let loaded_secret_names = Harness::parse_orchestration_harness(&self.harness_type)
             .filter(|harness| *harness != Harness::Oz)
             .and_then(|harness| {
-                match HarnessAvailabilityModel::as_ref(ctx)
-                    .auth_secrets_for(request_team_scope, harness)
-                {
+                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(team_scope, harness) {
                     AuthSecretFetchState::Loaded(secrets) => {
                         Some(secrets.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
                     }

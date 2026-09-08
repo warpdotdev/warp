@@ -487,50 +487,38 @@ impl RunAgentsCardView {
 
         // Repopulate pickers when the server-provided harness list,
         // harness model catalogs, or per-harness auth secrets change.
-        // Without an `AuthSecretsLoaded` handler the picker stays on
-        // "Loading…" forever after the lazy fetch completes.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
-            |me, _, event, ctx| {
-                let team_scope = oc::request_team_scope(ctx);
-                if event
-                    .team_scope()
-                    .is_some_and(|event_scope| event_scope != team_scope)
-                {
-                    return;
+            |me, _, event, ctx| match event {
+                HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
+                    oc::apply_created_auth_secret_if_matches(
+                        &mut me.orchestration_edit_state.orchestration_config_state,
+                        *harness,
+                        name,
+                        ctx,
+                    );
+                    oc::repopulate_all_pickers(
+                        &mut me.orchestration_edit_state.orchestration_config_state,
+                        &me.handles.pickers,
+                        ctx,
+                    );
+                    me.refresh_accept_button_state(ctx);
+                    ctx.notify();
                 }
-                match event {
-                    HarnessAvailabilityEvent::AuthSecretCreated { harness, name, .. } => {
-                        oc::apply_created_auth_secret_if_matches(
-                            &mut me.orchestration_edit_state.orchestration_config_state,
-                            *harness,
-                            name,
-                            ctx,
-                        );
-                        oc::repopulate_all_pickers(
-                            &mut me.orchestration_edit_state.orchestration_config_state,
-                            &me.handles.pickers,
-                            ctx,
-                        );
-                        me.refresh_accept_button_state(ctx);
-                        ctx.notify();
-                    }
-                    HarnessAvailabilityEvent::Changed
-                    | HarnessAvailabilityEvent::AuthSecretsLoaded { .. }
-                    | HarnessAvailabilityEvent::AuthSecretsFetchFailed { .. }
-                    | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
-                        oc::repopulate_all_pickers(
-                            &mut me.orchestration_edit_state.orchestration_config_state,
-                            &me.handles.pickers,
-                            ctx,
-                        );
-                        me.refresh_accept_button_state(ctx);
-                        me.maybe_auto_open_create_modal(ctx);
-                        ctx.notify();
-                    }
-                    HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
-                    | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
+                HarnessAvailabilityEvent::Changed
+                | HarnessAvailabilityEvent::AuthSecretsChanged => {
+                    oc::repopulate_all_pickers(
+                        &mut me.orchestration_edit_state.orchestration_config_state,
+                        &me.handles.pickers,
+                        ctx,
+                    );
+                    me.refresh_accept_button_state(ctx);
+                    me.maybe_auto_open_create_modal(ctx);
+                    ctx.notify();
                 }
+                HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
 
@@ -610,7 +598,7 @@ impl RunAgentsCardView {
 
         view.ensure_pickers(ctx);
         view.refresh_accept_button_state(ctx);
-        // No-ops if secrets are still in flight; the `AuthSecretsLoaded`
+        // No-ops if secrets are still in flight; the `AuthSecretsChanged`
         // subscription will retry once they resolve.
         view.maybe_auto_open_create_modal(ctx);
 
@@ -856,10 +844,10 @@ impl RunAgentsCardView {
             return;
         };
         // Only auto-open on `Loaded([])`. Other fetch states are
-        // ambiguous; the `AuthSecretsLoaded` subscription will retry.
+        // ambiguous; the `AuthSecretsChanged` subscription will retry.
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let has_zero_loaded = matches!(
-            HarnessAvailabilityModel::as_ref(ctx)
-                .auth_secrets_for(oc::request_team_scope(ctx), harness),
+            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(&team_scope, harness),
             AuthSecretFetchState::Loaded(secrets) if secrets.is_empty()
         );
         if !has_zero_loaded {

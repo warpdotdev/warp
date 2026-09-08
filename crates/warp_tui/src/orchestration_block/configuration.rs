@@ -2,7 +2,7 @@
 
 use warp::tui_export::{
     AIActionStatus, AIAgentActionId, BlocklistAIActionModel, OptionSnapshot,
-    OrchestrationConfigState, OrchestrationEditState, RequestTeamScope, RunAgentsExecutionMode,
+    OrchestrationConfigState, OrchestrationEditState, ResolvedTeamScope, RunAgentsExecutionMode,
     RunAgentsRequest, TeamContext, accept_disabled_reason_with_auth, api_key_snapshot,
     environment_snapshot, harness_snapshot, host_snapshot, location_snapshot, model_snapshot,
     persist_environment_selection, persist_host_selection,
@@ -98,7 +98,7 @@ pub(super) trait OrchestrationBlockController {
         id: &str,
         edit_state: &mut OrchestrationEditState,
         fallback_base_model_id: Option<String>,
-        team_scope: RequestTeamScope,
+        team_scope: &ResolvedTeamScope,
         ctx: &mut AppContext,
     );
 
@@ -137,7 +137,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         match page {
             ConfigPage::Location => location_snapshot(state, ctx),
             ConfigPage::Harness => harness_snapshot(state, ctx),
-            ConfigPage::ApiKey => api_key_snapshot(state, RequestTeamScope::from_scope(scope), ctx),
+            ConfigPage::ApiKey => api_key_snapshot(state, scope, ctx),
             ConfigPage::Host => host_snapshot(state, scope, ctx),
             ConfigPage::Environment => environment_snapshot(state, scope, ctx),
             ConfigPage::Model => model_snapshot(state, ctx),
@@ -150,7 +150,7 @@ impl OrchestrationBlockController for ModelOrchestrationBlockController {
         id: &str,
         edit_state: &mut OrchestrationEditState,
         fallback_base_model_id: Option<String>,
-        team_scope: RequestTeamScope,
+        team_scope: &ResolvedTeamScope,
         ctx: &mut AppContext,
     ) {
         match page {

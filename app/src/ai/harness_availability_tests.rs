@@ -1,45 +1,23 @@
 use super::*;
-use crate::server::ids::ServerId;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, TeamlessScopeForTest};
-
-fn team_scope(team_uid: i64) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamContextForOperation::new_for_test(ServerId::from(
-        team_uid,
-    )))
+fn team_scope(team_uid: i64) -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(team_uid.into())
 }
 
-fn teamless_scope() -> RequestTeamScope {
-    RequestTeamScope::from_scope(&TeamlessScopeForTest)
+fn teamless_scope() -> TeamlessScopeForTest {
+    TeamlessScopeForTest
 }
 
 #[test]
 fn auth_secret_cache_key_distinguishes_team_scope_and_harness() {
     assert_ne!(
-        AuthSecretCacheKey::new(team_scope(7), Harness::Claude),
-        AuthSecretCacheKey::new(team_scope(8), Harness::Claude)
+        AuthSecretCacheKey::new(&team_scope(7), Harness::Claude),
+        AuthSecretCacheKey::new(&team_scope(8), Harness::Claude)
     );
     assert_ne!(
-        AuthSecretCacheKey::new(teamless_scope(), Harness::Claude),
-        AuthSecretCacheKey::new(teamless_scope(), Harness::Codex)
+        AuthSecretCacheKey::new(&teamless_scope(), Harness::Claude),
+        AuthSecretCacheKey::new(&teamless_scope(), Harness::Codex)
     );
-}
-
-#[test]
-fn invalidation_rejects_in_flight_auth_secret_fetch_generation() {
-    let cache_key = AuthSecretCacheKey::new(team_scope(7), Harness::Claude);
-    let mut model = HarnessAvailabilityModel {
-        harnesses: default_harnesses(),
-        auth_secrets: HashMap::from([(cache_key, AuthSecretFetchState::Loading)]),
-        auth_secret_retry_after: HashMap::from([(cache_key, Instant::now())]),
-        auth_secret_generation: 7,
-    };
-    let in_flight_generation = model.auth_secret_generation;
-
-    model.invalidate_auth_secrets();
-
-    assert!(!model.is_auth_secret_fetch_current(in_flight_generation));
-    assert!(model.auth_secrets.is_empty());
-    assert!(model.auth_secret_retry_after.is_empty());
 }
 
 #[test]
@@ -50,14 +28,14 @@ fn window_team_switch_reads_only_the_new_team_cache() {
         harnesses: default_harnesses(),
         auth_secrets: HashMap::from([
             (
-                AuthSecretCacheKey::new(window_a_initial_scope, Harness::Claude),
+                AuthSecretCacheKey::new(&window_a_initial_scope, Harness::Claude),
                 AuthSecretFetchState::Loaded(vec![AuthSecretEntry {
                     name: "team-a".to_string(),
                     owner: SecretOwner::CurrentUser,
                 }]),
             ),
             (
-                AuthSecretCacheKey::new(window_b_scope, Harness::Claude),
+                AuthSecretCacheKey::new(&window_b_scope, Harness::Claude),
                 AuthSecretFetchState::Loaded(vec![AuthSecretEntry {
                     name: "team-b".to_string(),
                     owner: SecretOwner::CurrentUser,
@@ -65,17 +43,91 @@ fn window_team_switch_reads_only_the_new_team_cache() {
             ),
         ]),
         auth_secret_retry_after: HashMap::new(),
-        auth_secret_generation: 0,
     };
 
     assert!(matches!(
-        model.auth_secrets_for(window_a_initial_scope, Harness::Claude),
+        model.auth_secrets_for(&window_a_initial_scope, Harness::Claude),
         AuthSecretFetchState::Loaded(entries) if entries[0].name == "team-a"
     ));
 
     let window_a_after_switch = window_b_scope;
     assert!(matches!(
-        model.auth_secrets_for(window_a_after_switch, Harness::Claude),
+        model.auth_secrets_for(&window_a_after_switch, Harness::Claude),
         AuthSecretFetchState::Loaded(entries) if entries[0].name == "team-b"
+    ));
+}
+
+#[test]
+fn personal_secret_mutations_update_every_team_cache() {
+    let team_a = team_scope(7);
+    let team_b = team_scope(8);
+    let key_a = AuthSecretCacheKey::new(&team_a, Harness::Claude);
+    let key_b = AuthSecretCacheKey::new(&team_b, Harness::Claude);
+    let mut model = HarnessAvailabilityModel {
+        harnesses: default_harnesses(),
+        auth_secrets: HashMap::from([
+            (key_a, AuthSecretFetchState::Loaded(Vec::new())),
+            (key_b, AuthSecretFetchState::Loaded(Vec::new())),
+        ]),
+        auth_secret_retry_after: HashMap::new(),
+    };
+    let entry = AuthSecretEntry {
+        name: "personal".to_string(),
+        owner: SecretOwner::CurrentUser,
+    };
+
+    model.insert_created_auth_secret_entry(key_a, entry);
+
+    assert!(matches!(
+        model.auth_secrets_for(&team_a, Harness::Claude),
+        AuthSecretFetchState::Loaded(entries) if entries.len() == 1
+    ));
+    assert!(matches!(
+        model.auth_secrets_for(&team_b, Harness::Claude),
+        AuthSecretFetchState::Loaded(entries) if entries.len() == 1
+    ));
+
+    model.remove_deleted_auth_secret_entries(key_a, "personal", &SecretOwner::CurrentUser);
+
+    assert!(matches!(
+        model.auth_secrets_for(&team_a, Harness::Claude),
+        AuthSecretFetchState::Loaded(entries) if entries.is_empty()
+    ));
+    assert!(matches!(
+        model.auth_secrets_for(&team_b, Harness::Claude),
+        AuthSecretFetchState::Loaded(entries) if entries.is_empty()
+    ));
+}
+
+#[test]
+fn team_secret_mutations_update_only_the_owner_team_cache() {
+    let team_a = team_scope(7);
+    let team_b = team_scope(8);
+    let key_a = AuthSecretCacheKey::new(&team_a, Harness::Claude);
+    let key_b = AuthSecretCacheKey::new(&team_b, Harness::Claude);
+    let mut model = HarnessAvailabilityModel {
+        harnesses: default_harnesses(),
+        auth_secrets: HashMap::from([
+            (key_a, AuthSecretFetchState::Loaded(Vec::new())),
+            (key_b, AuthSecretFetchState::Loaded(Vec::new())),
+        ]),
+        auth_secret_retry_after: HashMap::new(),
+    };
+    let entry = AuthSecretEntry {
+        name: "team".to_string(),
+        owner: SecretOwner::Team {
+            team_uid: team_a.team_uid().unwrap().uid(),
+        },
+    };
+
+    model.insert_created_auth_secret_entry(key_a, entry);
+
+    assert!(matches!(
+        model.auth_secrets_for(&team_a, Harness::Claude),
+        AuthSecretFetchState::Loaded(entries) if entries.len() == 1
+    ));
+    assert!(matches!(
+        model.auth_secrets_for(&team_b, Harness::Claude),
+        AuthSecretFetchState::Loaded(entries) if entries.is_empty()
     ));
 }
