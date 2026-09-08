@@ -95,13 +95,16 @@ impl TeamScope for TeamContext<'_> {
 
 /// The team a headless CLI invocation acts as, resolved from its command-line selection and
 /// memberships instead of from a window.
+#[cfg(not(target_family = "wasm"))]
 pub enum TeamScopeForCli {
     Personal,
     Team(ServerId),
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl sealed::Sealed for TeamScopeForCli {}
 
+#[cfg(not(target_family = "wasm"))]
 impl TeamScope for TeamScopeForCli {
     fn team_uid(&self) -> Option<ServerId> {
         match self {

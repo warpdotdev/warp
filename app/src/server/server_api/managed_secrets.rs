@@ -347,3 +347,7 @@ impl ManagedSecretsClient for ServerApi {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "managed_secrets_tests.rs"]
+mod tests;

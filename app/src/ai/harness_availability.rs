@@ -21,7 +21,7 @@ use crate::server::retry_strategies::{
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::team_scope::RequestTeamScope;
-use crate::workspaces::user_workspaces::{TeamScopeForCli, UserWorkspaces, UserWorkspacesEvent};
+use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
 const CACHE_KEY: &str = "AvailableHarnesses";
 const AUTH_SECRET_FETCH_FAILURE_COOLDOWN: Duration = Duration::from_secs(60);
@@ -228,7 +228,7 @@ impl HarnessAvailabilityModel {
         self.auth_secret_retry_after.remove(&harness);
 
         let api = ServerApiProvider::as_ref(ctx).get_managed_secrets_client();
-        let request_scope = RequestTeamScope::from_scope(&TeamScopeForCli::Personal);
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         ctx.spawn_with_retry_on_error_when(
             move || {
                 let api = api.clone();
@@ -296,7 +296,7 @@ impl HarnessAvailabilityModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let manager = ManagedSecretManager::handle(ctx);
-        let request_scope = RequestTeamScope::from_scope(&TeamScopeForCli::Personal);
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         let create_future =
             manager
                 .as_ref(ctx)
@@ -337,7 +337,7 @@ impl HarnessAvailabilityModel {
         ctx: &mut ModelContext<Self>,
     ) {
         let manager = ManagedSecretManager::handle(ctx);
-        let request_scope = RequestTeamScope::from_scope(&TeamScopeForCli::Personal);
+        let request_scope = RequestTeamScope::temporary_managed_secrets_server_fallback();
         let delete_future =
             manager
                 .as_ref(ctx)
