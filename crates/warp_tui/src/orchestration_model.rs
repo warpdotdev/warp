@@ -538,6 +538,7 @@ impl TuiOrchestrationModel {
                 runner_id,
                 agent_identity_uid,
             } => {
+                let team_scope = request.request_team_scope;
                 self.register_event_consumer(
                     parent_session_id,
                     request.parent_conversation_id,
@@ -559,7 +560,7 @@ impl TuiOrchestrationModel {
                         runner_id,
                         agent_identity_uid,
                     },
-                    RequestTeamScope::from_scope(team_context),
+                    team_scope,
                     ctx,
                 );
             }

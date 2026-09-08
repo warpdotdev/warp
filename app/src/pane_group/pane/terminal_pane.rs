@@ -1591,7 +1591,7 @@ fn dispatch_start_agent_conversation(
             runner_id,
             agent_identity_uid,
         } => {
-            let request_team_scope = RequestTeamScope::from_scope(&team_context);
+            let request_team_scope = request.request_team_scope;
             let working_dir = group
                 .terminal_view_from_pane_id(parent_pane_id, ctx)
                 .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))

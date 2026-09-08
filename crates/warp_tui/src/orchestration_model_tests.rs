@@ -1,13 +1,14 @@
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, ResolvedTeamScope, StartAgentExecutionMode,
-    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
-    UserWorkspaces, register_tui_session_view_test_singletons,
+    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
+    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, UserWorkspaces, register_tui_session_view_test_singletons,
+    set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
 use warpui::platform::WindowStyle;
-use warpui::{AddWindowOptions, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
+use warpui::{AddWindowOptions, Entity, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
@@ -23,6 +24,16 @@ use crate::test_fixtures::{add_test_semantic_selection, add_test_terminal_sessio
 struct OrchestrationFixture {
     sessions: ModelHandle<TuiSessions>,
     window_id: WindowId,
+}
+
+#[derive(Default)]
+struct CapturedRemoteDispatch {
+    team_scope: Option<RequestTeamScope>,
+    auth_secret_name: Option<String>,
+}
+
+impl Entity for CapturedRemoteDispatch {
+    type Event = ();
 }
 
 fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
@@ -45,6 +56,9 @@ fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest
         lifecycle_subscription: None,
         parent_conversation_id,
         parent_run_id: Some("parent-run-1".to_string()),
+        request_team_scope: RequestTeamScope::from_scope(
+            &UserWorkspaces::teamless_context_for_operation_for_test(),
+        ),
     }
 }
 
@@ -221,6 +235,9 @@ fn dispatch_and_recv(
             None,
             parent_conversation_id,
             Some("parent-run-1".to_string()),
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            ),
             ctx,
         )
     });
@@ -268,6 +285,78 @@ fn assert_failed_launch_cleaned_up(
     );
 }
 
+#[test]
+fn remote_dispatch_uses_captured_scope_and_auth_secret() {
+    App::test((), |mut app| async move {
+        let fixture = orchestration_fixture(&mut app);
+        let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
+        let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
+        app.update(|ctx| {
+            set_tui_workspace_teams_for_test(vec![(7.into(), "team-a".to_string())], ctx);
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.set_team_for_window(fixture.window_id, 7.into(), ctx);
+            });
+        });
+        let mut request = remote_request(parent_conversation_id);
+        let captured_scope = app.read(|ctx| {
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
+            )
+        });
+        request.request_team_scope = captured_scope;
+        let StartAgentExecutionMode::Remote {
+            harness_type,
+            auth_secret_name,
+            ..
+        } = &mut request.execution_mode
+        else {
+            panic!("expected remote request");
+        };
+        *harness_type = "claude".to_string();
+        *auth_secret_name = Some("team-a-key".to_string());
+
+        let captured = app.add_model(|_| CapturedRemoteDispatch::default());
+        let orchestration = app.read(TuiOrchestrationModel::handle);
+        captured.update(&mut app, |_, ctx| {
+            ctx.subscribe_to_model(&orchestration, |captured, _, event, _| {
+                if let super::TuiOrchestrationEvent::CreateRemoteChildSession {
+                    request,
+                    team_scope,
+                    ..
+                } = event
+                {
+                    captured.team_scope = Some(*team_scope);
+                    let StartAgentExecutionMode::Remote {
+                        auth_secret_name, ..
+                    } = &request.execution_mode
+                    else {
+                        panic!("expected remote request");
+                    };
+                    captured.auth_secret_name = auth_secret_name.clone();
+                }
+            });
+        });
+
+        app.update(|ctx| {
+            let ambient_team_context = UserWorkspaces::teamless_context_for_operation_for_test();
+            TuiOrchestrationModel::handle(ctx).update(ctx, |model, ctx| {
+                model.dispatch_create_agent(
+                    parent_session_id,
+                    request,
+                    None,
+                    &ambient_team_context,
+                    ctx,
+                );
+            });
+        });
+
+        captured.read(&app, |captured, _| {
+            assert_eq!(captured.team_scope, Some(captured_scope));
+            assert_eq!(captured.auth_secret_name.as_deref(), Some("team-a-key"));
+        });
+    });
+}
+
 /// Regression for QUALITY-1902 (the TUI counterpart of QUALITY-1897):
 /// `register_local_oz_child_session` must index the run id through
 /// `assign_run_id_for_conversation`, not a bare `set_task_id`, so the SSE
@@ -305,6 +394,9 @@ fn local_oz_child_session_indexes_run_id_immediately() {
             lifecycle_subscription: None,
             parent_conversation_id,
             parent_run_id: Some("parent-run-1".to_string()),
+            request_team_scope: RequestTeamScope::from_scope(
+                &UserWorkspaces::teamless_context_for_operation_for_test(),
+            ),
         };
         app.update(|ctx| {
             let team_scope = ResolvedTeamScope::from_scope(
