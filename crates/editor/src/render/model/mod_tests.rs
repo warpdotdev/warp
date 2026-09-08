@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use markdown_parser::{FormattedTextStyles, Hyperlink};
@@ -19,7 +20,7 @@ use super::debug::Describe;
 use super::test_utils::{layout_paragraph, layout_paragraphs};
 use super::{
     BlockItem, BlockLocation, COMMAND_SPACING, CellLayout, DEFAULT_BLOCK_SPACINGS,
-    HiddenBlockConfig, ImageBlockConfig, LaidOutTable, ParagraphBlock, RenderState,
+    HiddenBlockConfig, ImageBlockConfig, ItemCount, LaidOutTable, ParagraphBlock, RenderState,
     TableBlockConfig, TableStyle, table_offset_map,
 };
 use crate::content::edit::ParsedUrl;
@@ -70,8 +71,105 @@ fn test_height() {
             width: (17.).into_pixels(),
             lines: LineCount(4),
             item_count: 4,
+            has_temporary_block: false,
         }
     );
+}
+
+#[test]
+fn reset_temporary_blocks_reuses_unaffected_subtrees() {
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    for _ in 0..100 {
+        content.push(laid_out_paragraph("line\n", &TEST_STYLES, 200.0));
+    }
+    render_state.set_content(content);
+
+    let original_content = render_state.content.borrow().clone();
+    let mut original_cursor = original_content.cursor::<LineCount, ItemCount>();
+    original_cursor.seek(&LineCount(80), sum_tree::SeekBias::Right);
+    let original_item = original_cursor.item().unwrap() as *const BlockItem;
+
+    let temporary_paragraph = layout_paragraph(
+        "removed\n",
+        &TEST_STYLES,
+        &BufferBlockStyle::PlainText,
+        200.0,
+    );
+    let temporary_block = BlockItem::TemporaryBlock {
+        paragraph_block: ParagraphBlock::new(vec1![temporary_paragraph]),
+        text_decoration: Vec::new(),
+        decoration: None,
+    };
+    render_state.reset_temporary_block(HashMap::from([(LineCount(2), vec![temporary_block])]));
+
+    let updated_content = render_state.content.borrow();
+    let mut updated_cursor = updated_content.cursor::<LineCount, ItemCount>();
+    updated_cursor.seek(&LineCount(80), sum_tree::SeekBias::Right);
+    let updated_item = updated_cursor.item().unwrap() as *const BlockItem;
+
+    assert!(updated_content.summary().has_temporary_block);
+    assert_eq!(original_item, updated_item);
+}
+
+#[test]
+fn reset_temporary_blocks_replaces_all_line_anchored_blocks() {
+    fn temporary_block(content: &str) -> BlockItem {
+        let paragraph =
+            layout_paragraph(content, &TEST_STYLES, &BufferBlockStyle::PlainText, 200.0);
+        BlockItem::TemporaryBlock {
+            paragraph_block: ParagraphBlock::new(vec1![paragraph]),
+            text_decoration: Vec::new(),
+            decoration: None,
+        }
+    }
+
+    let mut render_state = RenderState::new_for_test(
+        TEST_STYLES.clone(),
+        200.0.into_pixels(),
+        160.0.into_pixels(),
+    );
+    let mut content = SumTree::new();
+    for _ in 0..3 {
+        content.push(laid_out_paragraph("line\n", &TEST_STYLES, 200.0));
+    }
+    render_state.set_content(content);
+    let original_line_count = render_state.content.borrow().extent::<LineCount>();
+
+    render_state.reset_temporary_block(HashMap::from([
+        (
+            LineCount(0),
+            vec![temporary_block("start 1\n"), temporary_block("start 2\n")],
+        ),
+        (LineCount(2), vec![temporary_block("middle\n")]),
+        (LineCount(3), vec![temporary_block("end\n")]),
+    ]));
+
+    let line_anchors = {
+        let content = render_state.content.borrow();
+        let mut temporary_blocks =
+            content.filter::<_, LineCount>(|summary| summary.has_temporary_block);
+        let mut line_anchors = Vec::new();
+        while temporary_blocks.item().is_some() {
+            line_anchors.push(*temporary_blocks.start());
+            temporary_blocks.next();
+        }
+        line_anchors
+    };
+    assert_eq!(
+        line_anchors,
+        vec![LineCount(0), LineCount(0), LineCount(2), LineCount(3)]
+    );
+
+    render_state.reset_temporary_block(HashMap::new());
+
+    let content = render_state.content.borrow();
+    assert!(!content.summary().has_temporary_block);
+    assert_eq!(content.extent::<LineCount>(), original_line_count);
 }
 
 #[test]
@@ -145,6 +243,7 @@ fn test_width() {
             width: (26.).into_pixels(),
             lines: LineCount(1),
             item_count: 1,
+            has_temporary_block: false,
         }
     );
 }
