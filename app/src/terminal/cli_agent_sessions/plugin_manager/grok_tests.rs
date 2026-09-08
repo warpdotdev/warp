@@ -1,14 +1,15 @@
 use std::ffi::{OsStr, OsString};
-use std::io::Write;
-use std::path::Path;
-use std::process::Stdio;
+#[cfg(unix)]
+use std::{io::Write, path::Path, process::Stdio};
 
+#[cfg(unix)]
 use command::blocking::Command;
 use serde_json::Value;
 
+#[cfg(unix)]
+use super::PLUGIN_SCRIPT_REL;
 use super::{
-    GrokPluginManager, HOOK_JSON_FILE, MINIMUM_PLUGIN_VERSION, PLUGIN_SCRIPT_REL, VERSION_FILE,
-    install_plugin_files,
+    GrokPluginManager, HOOK_JSON_FILE, MINIMUM_PLUGIN_VERSION, VERSION_FILE, install_plugin_files,
 };
 use crate::terminal::cli_agent_sessions::plugin_manager::CliAgentPluginManager;
 
