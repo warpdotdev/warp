@@ -2570,6 +2570,10 @@ impl Input {
             if !affects_this_window {
                 return;
             }
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
             // `None` has to be applied, not skipped: it means the window's team configures no
             // self-hosted default, and leaving the previous value in place would keep the
             // selector and the run config pointed at another team's worker.

@@ -263,6 +263,27 @@ fn connected_self_hosted_workers_path_uses_public_api_route() {
 }
 
 #[test]
+fn list_connected_self_hosted_workers_sends_selected_team_header() {
+    let team_uid = ServerId::from(124);
+    let _request = {
+        let mut server = warp_core::channel::ChannelState::mock_server();
+        server
+            .mock("GET", "/api/v1/agent/connected-self-hosted-workers")
+            .match_header(TEAM_UID_HEADER, team_uid.to_string().as_str())
+            .with_status(200)
+            .with_body(r#"{"workers":[]}"#)
+            .create()
+    };
+    let server_api = ServerApi::new_for_test();
+
+    let response =
+        block_on(server_api.list_connected_self_hosted_workers(request_scope_for_team(team_uid)))
+            .unwrap();
+
+    assert!(response.workers.is_empty());
+}
+
+#[test]
 fn deserialize_connected_self_hosted_workers_response() {
     let json = r#"{
         "workers": [

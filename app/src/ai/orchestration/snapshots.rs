@@ -487,7 +487,7 @@ pub fn host_snapshot<S: TeamScope + ?Sized>(
     let default_host = resolve_default_host_slug(scope, ctx);
     let recent_host = resolve_recent_host_slug(scope, ctx);
     let mut connected_hosts = ConnectedSelfHostedWorkersModel::as_ref(ctx)
-        .worker_hosts_excluding(default_host.as_deref());
+        .worker_hosts_excluding(scope, default_host.as_deref());
     connected_hosts.sort();
     connected_hosts.dedup();
     let current = match &state.execution_mode {

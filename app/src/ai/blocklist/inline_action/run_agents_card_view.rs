@@ -72,7 +72,9 @@ use crate::view_components::compactible_action_button::{
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
 use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
-use crate::workspaces::user_workspaces::{TeamContextResolver, TeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{
+    TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+};
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
@@ -551,6 +553,27 @@ impl RunAgentsCardView {
                 }
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_this_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_this_window {
+                return;
+            }
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
+            oc::repopulate_all_pickers(
+                &mut me.orchestration_edit_state.orchestration_config_state,
+                &me.handles.pickers,
+                ctx,
+            );
+            ctx.notify();
+        });
         // When auto_launched is true, execution is deferred to the
         // ActionBlockedOnUserConfirmation subscription above — the action
         // hasn't been queued in pending_actions yet at construction time.
@@ -924,6 +947,10 @@ impl RunAgentsCardView {
 
         let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.host_picker.is_none() {
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
             let initial_host = match &state.execution_mode {
                 RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
                 RunAgentsExecutionMode::Local => oc::ORCHESTRATION_WARP_WORKER_HOST,
@@ -941,8 +968,9 @@ impl RunAgentsCardView {
             oc::populate_host_picker(&handle, initial_host, ctx);
             ctx.subscribe_to_view(&handle, |me, _, event, ctx| match event {
                 HostPickerEvent::Opened => {
+                    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
-                        model.refresh(ctx);
+                        model.refresh(&scope, ctx);
                     });
                 }
                 HostPickerEvent::HostChanged { slug } => {

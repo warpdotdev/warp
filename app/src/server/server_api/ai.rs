@@ -1227,6 +1227,7 @@ pub trait AIClient: 'static + Send + Sync {
     async fn get_available_harnesses(&self) -> Result<Vec<HarnessAvailability>, anyhow::Error>;
     async fn list_connected_self_hosted_workers(
         &self,
+        team_scope: RequestTeamScope,
     ) -> Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error>;
 
     /// Fetches the free-tier available models without requiring authentication.
@@ -2408,8 +2409,9 @@ impl AIClient for ServerApi {
 
     async fn list_connected_self_hosted_workers(
         &self,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error> {
-        self.get_public_api(CONNECTED_SELF_HOSTED_WORKERS_PATH)
+        self.get_public_api_for_team(CONNECTED_SELF_HOSTED_WORKERS_PATH, team_scope)
             .await
     }
 

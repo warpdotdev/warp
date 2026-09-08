@@ -111,7 +111,7 @@ use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
@@ -1672,9 +1672,8 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
 }
 
 #[test]
-fn cloud_mode_host_selector_shown_when_connected_workers_present() {
-    // Regression: connected self-hosted workers must surface the host dropdown even
-    // with no default host set.
+fn teamless_cloud_mode_host_selector_ignores_team_worker_cache() {
+    // A personal/teamless window must not surface connected workers cached for a team.
     App::test((), |mut app| async move {
         let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
         initialize_app(&mut app);
@@ -1712,15 +1711,16 @@ fn cloud_mode_host_selector_shown_when_connected_workers_present() {
             );
         });
 
-        // A self-hosted worker connects -> the dropdown becomes visible.
+        // A worker connected under an unrelated team must not leak into this teamless window.
+        let team_scope = TeamContextForOperation::new_for_test(123_i64.into());
         ConnectedSelfHostedWorkersModel::handle(&app).update(&mut app, |model, ctx| {
-            model.set_workers_for_test(&["oz-k8s-worker"], ctx);
+            model.set_workers_for_test(&team_scope, &["oz-k8s-worker"], ctx);
         });
 
         input.read(&app, |input, ctx| {
             assert!(
-                input.visible_host_selector(ctx).is_some(),
-                "host selector must be shown once a self-hosted worker is connected"
+                input.visible_host_selector(ctx).is_none(),
+                "a teamless window must not show another team's connected worker"
             );
         });
     });
