@@ -107,11 +107,13 @@ impl WaterfallGapElement {
                 // Handle Trackpad Scroll by converting pixel height into fractional lines.
                 ctx.dispatch_typed_action(TerminalAction::Scroll {
                     delta: delta.y().into_pixels().to_lines(self.line_height_px),
+                    precise: true,
                 });
             } else {
                 // Handle Mouse Scroll, whose delta is already in terms of lines.
                 ctx.dispatch_typed_action(TerminalAction::Scroll {
                     delta: delta.y().into_lines(),
+                    precise: false,
                 });
             }
             true
@@ -296,6 +298,7 @@ impl ScrollableElement for WaterfallGapElement {
     fn scroll(&mut self, delta: Pixels, ctx: &mut EventContext) {
         ctx.dispatch_typed_action(TerminalAction::Scroll {
             delta: delta.to_lines(self.line_height_px),
+            precise: true,
         });
     }
 

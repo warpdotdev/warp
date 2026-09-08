@@ -169,6 +169,7 @@ use warpui::image_cache::ImageType;
 use warpui::keymap::Keystroke;
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use warpui::platform::{Cursor, OperatingSystem};
+use warpui::smooth_scroll::SMOOTH_SCROLL_FRAME_INTERVAL;
 use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
@@ -387,7 +388,7 @@ use crate::terminal::block_list_element::{
 };
 use crate::terminal::block_list_viewport::{
     AutoscrollBehavior, InputMode, OverhangingBlock, ScrollPosition, ScrollPositionUpdate,
-    ScrollState, ViewportState,
+    ScrollState, SmoothScrollHandle, ViewportState,
 };
 use crate::terminal::bootstrap::init_subshell_command;
 use crate::terminal::cli_agent_sessions::event::{
@@ -2511,6 +2512,10 @@ pub struct TerminalView {
     /// Cached scroll position from before entering agent view, used to restore on exit.
     scroll_position_before_entering_agent_view: Option<ScrollPosition>,
 
+    /// Animates discrete (non-precise) scroll input for the block list's vertical scrollback.
+    /// See [`SmoothScrollHandle`] for why this is separate from `scroll_position`.
+    smooth_scroll: SmoothScrollHandle,
+
     /// Scroll state for scrolling vertically in the blocklist.
     blocklist_vertical_scroll_state: ScrollStateHandle,
 
@@ -4325,6 +4330,7 @@ impl TerminalView {
             colors,
             scroll_position: ScrollState::new(ScrollPosition::FollowsBottomOfMostRecentBlock),
             scroll_position_before_entering_agent_view: None,
+            smooth_scroll: SmoothScrollHandle::default(),
             blocklist_vertical_scroll_state: Default::default(),
             alt_screen_vertical_scroll_state: Default::default(),
             alt_screen_scroll_top: Lines::zero(),
@@ -9269,6 +9275,15 @@ impl TerminalView {
         update: ScrollPositionUpdate,
         ctx: &mut ViewContext<Self>,
     ) {
+        // Every direct/programmatic scroll operation reaches this single choke point, so a
+        // universal guard here covers all of them: cancel any in-flight smooth-scroll animation
+        // before applying anything other than a scroll-wheel event. `AfterScrollEvent` is
+        // exempted because canceling here would cancel the very animation update it's applying;
+        // any path that needs to cancel before one does so explicitly ahead of this call.
+        if !matches!(update, ScrollPositionUpdate::AfterScrollEvent { .. }) {
+            self.smooth_scroll.cancel(Instant::now());
+        }
+
         let mut model = self.model.lock();
         // Clear the cached pre-filter scroll position if a non-filter user
         // event is detected.
@@ -9661,15 +9676,70 @@ impl TerminalView {
         }
     }
 
-    fn scroll(&mut self, delta: Lines, ctx: &mut ViewContext<Self>) {
+    fn scroll(&mut self, delta: Lines, precise: bool, ctx: &mut ViewContext<Self>) {
         self.dismiss_tooltips(ctx);
-        self.update_scroll_position_locking(
-            ScrollPositionUpdate::AfterScrollEvent {
-                scroll_delta: delta,
-            },
-            ctx,
-        );
+        if precise || !FeatureFlag::SmoothScrolling.is_enabled() {
+            // Precise (trackpad) input keeps its current continuous behavior, and disabling the
+            // flag keeps the pre-existing immediate-jump behavior. Cancel explicitly here (rather
+            // than relying on `update_scroll_position_locking`'s guard, which exempts
+            // `AfterScrollEvent`) so a precise scroll arriving mid-animation still cancels it.
+            self.smooth_scroll.cancel(Instant::now());
+            self.update_scroll_position_locking(
+                ScrollPositionUpdate::AfterScrollEvent {
+                    scroll_delta: delta,
+                },
+                ctx,
+            );
+        } else {
+            // Compose with or reverse any animation already in flight; the actual scroll-position
+            // update is applied incrementally by `advance_smooth_scroll`, driven by
+            // `Self::drive_smooth_scroll` below rather than by paint/dispatch, since a window
+            // that has never received a real `MouseMoved` never gets the app's synthetic replay
+            // that the generic WarpUI scrollables rely on to advance (see the doc comment on
+            // `Self::drive_smooth_scroll`).
+            self.smooth_scroll.add_delta(delta, Instant::now());
+            if self.smooth_scroll.try_start_driving() {
+                Self::drive_smooth_scroll(self.smooth_scroll.clone(), ctx);
+            }
+        }
         ctx.notify();
+    }
+
+    /// Applies any pending smooth-scroll increment to `scroll_position`.
+    fn advance_smooth_scroll(&mut self, ctx: &mut ViewContext<Self>) {
+        let increment = self.smooth_scroll.take_increment(Instant::now());
+        if increment != Lines::zero() {
+            self.update_scroll_position_locking(
+                ScrollPositionUpdate::AfterScrollEvent {
+                    scroll_delta: increment,
+                },
+                ctx,
+            );
+        }
+    }
+
+    /// Drives an in-flight smooth-scroll animation to completion independently of the app's
+    /// paint/hover-replay machinery.
+    ///
+    /// The generic scrollables advance off the app's synthetic `MouseMoved` replay after each
+    /// repaint, which never fires for a window that has never received a real one, so an
+    /// animation there would sit registered and unapplied while requesting repaints forever.
+    ///
+    /// Drives its own advance via a single long-lived stream (`ctx.spawn_stream_local`) rather
+    /// than a self-rescheduling `ctx.spawn(Timer::after(...), ...)` per tick, which would pay a
+    /// fresh background-task-spawn-and-channel-bridge round trip every tick -- disproportionate
+    /// for a tight ~8ms cadence. Captures a clone of `self.smooth_scroll` by value rather than
+    /// borrowing `self`, since the stream must be `'static`.
+    fn drive_smooth_scroll(handle: SmoothScrollHandle, ctx: &mut ViewContext<Self>) {
+        let stream = futures::stream::unfold(handle, |handle| async move {
+            Timer::after(SMOOTH_SCROLL_FRAME_INTERVAL).await;
+            handle.is_animating(Instant::now()).then_some(((), handle))
+        });
+        ctx.spawn_stream_local(
+            stream,
+            |view, (), ctx| view.advance_smooth_scroll(ctx),
+            |view, _ctx| view.smooth_scroll.mark_driving_stopped(),
+        );
     }
 
     fn handle_typeahead_event(&mut self, ctx: &mut ViewContext<Self>) {
@@ -19026,7 +19096,7 @@ impl TerminalView {
             }
         }
 
-        self.scroll(delta, ctx);
+        self.scroll(delta, true /* precise */, ctx);
 
         // Clear the selected block index on mouse drag.
         self.clear_selected_blocks(ctx);
@@ -26970,7 +27040,7 @@ impl TypedActionView for TerminalView {
         let input_mode = *InputModeSettings::as_ref(ctx).input_mode.value();
 
         match action {
-            Scroll { delta } => self.scroll(*delta, ctx),
+            Scroll { delta, precise } => self.scroll(*delta, *precise, ctx),
             AltScroll { delta, point } => self.alt_scroll(*delta, *point, ctx),
             SharedSessionViewerAltScroll { new_scroll_top } => {
                 self.alt_screen_scroll_top = *new_scroll_top;
@@ -28153,6 +28223,20 @@ impl View for TerminalView {
         };
         let viewport = self.viewport_state(model.block_list(), input_mode, app);
         let is_alt_screen_active = { model.is_alt_screen_active() };
+        if is_alt_screen_active {
+            // Smooth scrolling applies only to normal block-list scrollback, never to the
+            // alternate screen. `Self::drive_smooth_scroll`'s timer loop keeps running
+            // independently of which element is currently rendered, so an animation already in
+            // flight when alt screen is entered would otherwise keep silently advancing the
+            // hidden block-list `scroll_position` in the background for the rest of its
+            // duration -- never PTY-visible, but semantically wrong and wasted work. Cancelling
+            // settles it at its currently displayed position immediately, so returning to the
+            // normal screen later sees exactly where the animation was and nothing more.
+            // `cancel` is cheap and idempotent when nothing is in-flight, so unconditionally
+            // cancelling on every render while alt screen is active (rather than only on the
+            // entry transition) is deliberate defense in depth.
+            self.smooth_scroll.cancel(Instant::now());
+        }
         // Compute callout positioning early while we have the model lock.
         // For the final Agent Modality callout, always position relative to the input box,
         // even when the zero state is visible.

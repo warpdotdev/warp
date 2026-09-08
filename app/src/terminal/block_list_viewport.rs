@@ -1,12 +1,14 @@
 use std::ops::Range;
 use std::rc::Rc;
-use std::sync::MutexGuard;
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use instant::Instant;
 use pathfinder_geometry::vector::Vector2F;
 use serde::{Deserialize, Serialize};
 use sum_tree::{Cursor, SeekBias};
 use warp_core::features::FeatureFlag;
 use warpui::elements::ClippedScrollStateHandle;
+use warpui::smooth_scroll::{NUM_PIXELS_PER_LINE, SmoothScrollController};
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::{AppContext, ModelHandle};
 
@@ -28,6 +30,81 @@ use super::{
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::model::blocks::RichContentItem;
 use crate::terminal::model::index::Point as IndexPoint;
+
+/// Shared handle to a [`SmoothScrollController`] animating discrete (non-precise) scroll input
+/// for the block list's vertical scrollback, gated by `FeatureFlag::SmoothScrolling`.
+///
+/// Unlike `ClippedScrollStateHandle`, this doesn't own an absolute position -- the block list's
+/// real position stays owned by `ScrollState`/`ScrollPosition`. It tracks only the relative,
+/// unapplied remainder of an in-flight animation; `TerminalView::drive_smooth_scroll` applies
+/// each increment through the same `AfterScrollEvent` path a direct scroll uses, so existing
+/// clamping and `FollowsBottomOfMostRecentBlock` transitions handle content changing
+/// mid-animation without special-casing.
+///
+/// Always operates in pixel-equivalent units (see [`NUM_PIXELS_PER_LINE`]); `Lines` are
+/// converted at the boundary.
+#[derive(Clone, Default)]
+pub struct SmoothScrollHandle(Arc<Mutex<SmoothScrollHandleState>>);
+
+#[derive(Default)]
+struct SmoothScrollHandleState {
+    controller: SmoothScrollController,
+    /// Whether a `TerminalView::drive_smooth_scroll` timer loop is already scheduled for this
+    /// animation, preventing a second, overlapping loop from starting. See
+    /// [`Self::try_start_driving`].
+    driving: bool,
+}
+
+impl SmoothScrollHandle {
+    /// Adds a discrete scroll delta as a smooth-scroll contribution. `delta` is converted to
+    /// pixel-equivalent units before reaching the controller, matching every other
+    /// `SmoothScrollController` consumer.
+    pub fn add_delta(&self, delta: Lines, now: Instant) {
+        self.0
+            .lock()
+            .unwrap()
+            .controller
+            .add_delta(delta.as_f64() as f32 * NUM_PIXELS_PER_LINE, now);
+    }
+
+    /// Cancels any in-flight animation and clears pending emission, so a direct scroll
+    /// operation (precise input, keyboard, jump-to-block, etc.) doesn't inherit stale queued
+    /// movement.
+    pub fn cancel(&self, now: Instant) {
+        self.0.lock().unwrap().controller.cancel(now);
+    }
+
+    /// Whether a segment is still easing in.
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.0.lock().unwrap().controller.is_animating(now)
+    }
+
+    /// Returns the incremental delta (in `Lines`) that hasn't yet been applied to `ScrollState`.
+    /// See [`SmoothScrollController::take_increment`]. Converts back out of the controller's
+    /// pixel-equivalent units.
+    pub fn take_increment(&self, now: Instant) -> Lines {
+        let increment = self.0.lock().unwrap().controller.take_increment(now);
+        ((increment / NUM_PIXELS_PER_LINE) as f64).into_lines()
+    }
+
+    /// Atomically checks whether a drive loop is already scheduled for this animation and, if
+    /// not, marks one as started and returns `true`, so repeated notches while one is already
+    /// running don't each spawn their own overlapping timer loop.
+    pub fn try_start_driving(&self) -> bool {
+        let mut state = self.0.lock().unwrap();
+        if state.driving {
+            false
+        } else {
+            state.driving = true;
+            true
+        }
+    }
+
+    /// Marks the drive loop as stopped, so a later `add_delta` knows to start a fresh one.
+    pub fn mark_driving_stopped(&self) {
+        self.0.lock().unwrap().driving = false;
+    }
+}
 
 /// Wraps a scroll position for the purposes of centralizing update logic.
 pub struct ScrollState {
@@ -1295,7 +1372,13 @@ impl<'a> ViewportState<'a> {
         let current_top = self.scroll_top_in_lines();
 
         let new_top = (current_top - delta).max(Lines::zero()).min(max_scroll_top);
-        let fix_to_bottom = new_top >= max_scroll_top
+        // Use an approximate comparison here rather than a raw `>=`: an animated scroll applies
+        // many small floating-point increments over the course of a tween instead of one
+        // one-shot delta, and summing them can land a hair's breadth short of `max_scroll_top`
+        // due to accumulated rounding error, which would otherwise leave the view stuck in
+        // `FixedAtPosition` right at the boundary instead of settling into sticky-bottom mode
+        // the same way an immediate scroll of the same total delta would.
+        let fix_to_bottom = heights_approx_gte(new_top, max_scroll_top)
             && matches!(
                 self.input_mode,
                 InputMode::PinnedToBottom | InputMode::Waterfall
@@ -2042,5 +2125,51 @@ impl Iterator for ViewportIter<'_> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod smooth_scroll_handle_tests {
+    use std::time::Duration;
+
+    use instant::Instant;
+    use warpui::units::IntoLines;
+
+    use super::SmoothScrollHandle;
+
+    /// A one-line notch is a 40px-equivalent delta, well below the controller's 120px "small
+    /// delta" reference point, so it must take the long end of the duration ramp (~200ms) --
+    /// the same as an equivalent 40px delta would for a generic WarpUI scrollable.
+    #[test]
+    fn one_line_delta_takes_the_long_end_of_the_duration_ramp() {
+        let handle = SmoothScrollHandle::default();
+        let start = Instant::now();
+        handle.add_delta(1.0.into_lines(), start);
+
+        // Comfortably short of the ~200ms this delta should take.
+        assert!(
+            handle.is_animating(start + Duration::from_millis(150)),
+            "a one-line (40px-equivalent) delta should still be easing in at 150ms, since it's \
+             near the slow end of the duration ramp"
+        );
+    }
+
+    /// A 20-line notch is an 800px-equivalent delta, comfortably past the controller's 480px
+    /// "large delta" reference point, so it must take the short end of the duration ramp
+    /// (~100ms). Catches a regression where a raw `20.0` magnitude (nowhere near 480) would
+    /// incorrectly take the long ~200ms duration instead.
+    #[test]
+    fn twenty_line_delta_takes_the_short_end_of_the_duration_ramp() {
+        let handle = SmoothScrollHandle::default();
+        let start = Instant::now();
+        handle.add_delta(20.0.into_lines(), start);
+
+        // Comfortably past the ~100ms this delta should take, but nowhere near the ~200ms it
+        // would incorrectly take if line-to-pixel normalization weren't applied.
+        assert!(
+            !handle.is_animating(start + Duration::from_millis(150)),
+            "a 20-line (800px-equivalent) delta should have already settled by 150ms, since \
+             it's well past the fast end of the duration ramp"
+        );
     }
 }
