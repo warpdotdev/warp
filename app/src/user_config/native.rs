@@ -7,14 +7,15 @@ use itertools::Itertools;
 use repo_metadata::RepositoryUpdate;
 use warpui::{ModelContext, ModelHandle, SingletonEntity};
 
+use super::agent_tab_styles::{ANNOTATED_DEFAULT, AgentTabStyles};
 use super::util::{
     for_each_dir_entry, has_name, is_config_file, parse_model_config_dir_entry,
     parse_multi_launch_config_dir_entry, parse_multi_workflow_dir_entry,
     parse_single_theme_dir_entry, parse_tab_config_dir_entry,
 };
 use super::{
-    LAUNCH_CONFIG_COMMENT, WarpConfigUpdateEvent, custom_model_routers_dir, launch_configs_dir,
-    tab_configs_dir, themes_dir, workflows_dir,
+    LAUNCH_CONFIG_COMMENT, WarpConfigUpdateEvent, agent_tab_styles_path, custom_model_routers_dir,
+    launch_configs_dir, tab_configs_dir, themes_dir, workflows_dir,
 };
 use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::features::FeatureFlag;
@@ -29,6 +30,13 @@ use crate::workflows::workflow::Workflow;
 
 impl super::WarpConfig {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        let agent_tab_styles_path = agent_tab_styles_path();
+        ensure_agent_tab_styles_file(&agent_tab_styles_path);
+        let agent_tab_styles =
+            load_agent_tab_styles(&agent_tab_styles_path).unwrap_or_else(|error| {
+                log::warn!("Failed to load agent tab styles; using defaults: {error}");
+                AgentTabStyles::default()
+            });
         // Load launch configs, and workflows from disk asynchronously on a background
         // thread.
         //
@@ -81,6 +89,7 @@ impl super::WarpConfig {
         );
 
         Self {
+            agent_tab_styles,
             theme_config: load_theme_configs(&themes_dir()),
             ..Default::default()
         }
@@ -93,6 +102,23 @@ impl super::WarpConfig {
         ctx: &mut ModelContext<Self>,
     ) {
         let WarpManagedPathsWatcherEvent::FilesChanged(update) = event;
+
+        if repository_update_touches_path(update, &agent_tab_styles_path()) {
+            let path = agent_tab_styles_path();
+            let _ = ctx.spawn(
+                async move { load_agent_tab_styles(&path) },
+                |me, result, ctx| match result {
+                    Ok(config) => {
+                        me.agent_tab_styles = config;
+                        ctx.emit(WarpConfigUpdateEvent::AgentTabStyles);
+                    }
+                    Err(error) => {
+                        log::warn!("Failed to reload agent tab styles; keeping last-known-good config: {error}");
+                        ctx.emit(WarpConfigUpdateEvent::AgentTabStylesError(error));
+                    }
+                },
+            );
+        }
 
         if update_touches_dir(update, &themes_dir()) {
             let theme_dir = themes_dir();
@@ -240,6 +266,27 @@ impl super::WarpConfig {
         writer.write_all(LAUNCH_CONFIG_COMMENT.as_bytes())?;
         serde_yaml::to_writer(writer, &launch_config)?;
         Ok(file_name)
+    }
+}
+
+fn ensure_agent_tab_styles_file(path: &Path) {
+    let result = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(ANNOTATED_DEFAULT.as_bytes()));
+    if let Err(error) = result
+        && error.kind() != io::ErrorKind::AlreadyExists
+    {
+        log::warn!("Failed to create default agent tab styles file: {error}");
+    }
+}
+
+fn load_agent_tab_styles(path: &Path) -> Result<AgentTabStyles, String> {
+    match fs::read_to_string(path) {
+        Ok(yaml) => AgentTabStyles::parse(&yaml),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AgentTabStyles::default()),
+        Err(error) => Err(error.to_string()),
     }
 }
 

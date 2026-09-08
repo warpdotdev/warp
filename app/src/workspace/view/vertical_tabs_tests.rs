@@ -3,23 +3,26 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
+use warp_core::ui::Icon as WarpIcon;
+use warp_core::ui::theme::AnsiColorIdentifier;
 use warpui::EntityId;
 use warpui::elements::PositionedElementOffsetBounds;
 
 use super::{
     AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
     TerminalPrimaryLineData, TerminalPrimaryLineFont, VerticalTabsDetailTarget,
-    VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
-    VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
+    VerticalTabsDetailTargetKind, VerticalTabsResolvedMode, VerticalTabsSummaryBranchEntry,
+    VerticalTabsSummaryData, VerticalTabsSummaryPrimaryLabel, aggregate_cli_styles,
+    branch_label_display, cli_style_for_vertical_mode, coalesce_summary_branch_entries,
     code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
     should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    sort_summary_primary_labels_status_first, style_for_display_state, summary_overflow_count,
+    summary_search_text_fragments, supports_cli_agent_sidebar_style, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text,
 };
@@ -30,18 +33,161 @@ use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
+use crate::terminal::cli_agent_sessions::CLIAgentDisplayState;
+use crate::user_config::agent_tab_styles::{
+    AgentTabBadgeSize, AgentTabColor, AgentTabStateStyle, AgentTabStyleLayer,
+};
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
         text: text.to_string(),
         status: None,
+        cli_style: None,
     }
 }
 
 fn pane_id() -> PaneId {
     TerminalPaneId::dummy_terminal_pane_id().into()
 }
+
+fn agent_style_config(
+    badge_size: AgentTabBadgeSize,
+    layers: Vec<AgentTabStyleLayer>,
+) -> AgentTabStateStyle {
+    AgentTabStateStyle {
+        color: AgentTabColor::Magenta,
+        badge_size,
+        layers,
+    }
+}
+
+#[test]
+fn cli_agent_visual_layers_and_badge_sizes() {
+    for (layer, expected) in [
+        (AgentTabStyleLayer::TabBg, (true, false, false)),
+        (AgentTabStyleLayer::TabText, (false, true, false)),
+        (AgentTabStyleLayer::BadgeIcon, (false, false, true)),
+    ] {
+        let style = style_for_display_state(
+            CLIAgentDisplayState::Processing,
+            WarpIcon::Circle,
+            &agent_style_config(AgentTabBadgeSize::Regular, vec![layer]),
+        );
+        assert_eq!((style.tab_bg, style.tab_text, style.badge), expected);
+        assert_eq!(style.color, AnsiColorIdentifier::Magenta);
+    }
+
+    for (size, scale) in [
+        (AgentTabBadgeSize::Regular, 1.),
+        (AgentTabBadgeSize::Big, 1.25),
+        (AgentTabBadgeSize::Bigger, 1.5),
+    ] {
+        let style = style_for_display_state(
+            CLIAgentDisplayState::Success,
+            WarpIcon::Check,
+            &agent_style_config(size, vec![AgentTabStyleLayer::BadgeIcon]),
+        );
+        let badge = style.badge_style();
+        assert_eq!(badge.ring_ratio, 0.57 * scale);
+        assert_eq!(badge.icon_ratio, 0.34 * scale);
+    }
+}
+
+#[test]
+fn cli_agent_style_precedence() {
+    let manual_or_directory = Some(AnsiColorIdentifier::Yellow);
+    let enabled = style_for_display_state(
+        CLIAgentDisplayState::Processing,
+        WarpIcon::Circle,
+        &agent_style_config(AgentTabBadgeSize::Regular, vec![AgentTabStyleLayer::TabBg]),
+    );
+    let disabled = style_for_display_state(
+        CLIAgentDisplayState::Processing,
+        WarpIcon::Circle,
+        &agent_style_config(AgentTabBadgeSize::Regular, vec![]),
+    );
+    assert_eq!(
+        Some(enabled.color)
+            .filter(|_| enabled.tab_bg)
+            .or(manual_or_directory),
+        Some(AnsiColorIdentifier::Magenta)
+    );
+    assert_eq!(
+        Some(disabled.color)
+            .filter(|_| disabled.tab_bg)
+            .or(manual_or_directory),
+        manual_or_directory
+    );
+}
+
+#[test]
+fn cli_agent_style_all_vertical_modes() {
+    let config = agent_style_config(
+        AgentTabBadgeSize::Regular,
+        vec![AgentTabStyleLayer::BadgeIcon],
+    );
+    let pane_style =
+        style_for_display_state(CLIAgentDisplayState::Processing, WarpIcon::Circle, &config);
+    let summary_style = aggregate_cli_styles([
+        pane_style,
+        style_for_display_state(CLIAgentDisplayState::Idle, WarpIcon::Circle, &config),
+        style_for_display_state(CLIAgentDisplayState::Success, WarpIcon::Check, &config),
+        style_for_display_state(
+            CLIAgentDisplayState::NeedsAttention,
+            WarpIcon::Circle,
+            &config,
+        ),
+    ]);
+    assert_eq!(
+        summary_style.map(|style| style.state),
+        Some(CLIAgentDisplayState::NeedsAttention)
+    );
+
+    for _is_grouped in [false, true] {
+        assert_eq!(
+            cli_style_for_vertical_mode(VerticalTabsResolvedMode::Panes, Some(pane_style), None),
+            Some(pane_style)
+        );
+        assert_eq!(
+            cli_style_for_vertical_mode(
+                VerticalTabsResolvedMode::FocusedSession,
+                Some(pane_style),
+                None,
+            ),
+            Some(pane_style)
+        );
+        assert_eq!(
+            cli_style_for_vertical_mode(
+                VerticalTabsResolvedMode::Summary,
+                Some(pane_style),
+                summary_style,
+            ),
+            summary_style
+        );
+    }
+}
+
+#[test]
+fn cli_agent_style_surface_isolation() {
+    assert!(supports_cli_agent_sidebar_style(
+        CLIAgent::Claude,
+        true,
+        false,
+        false,
+        true,
+    ));
+    for excluded in [
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, false, false, false, true),
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, true, true, false, true),
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, true, false, true, true),
+        supports_cli_agent_sidebar_style(CLIAgent::Claude, true, false, false, false),
+        supports_cli_agent_sidebar_style(CLIAgent::Unknown, true, false, false, true),
+    ] {
+        assert!(!excluded);
+    }
+}
+
 fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
@@ -1041,12 +1187,13 @@ fn summary_overflow_count_caps_visible_region() {
 fn primary_labels_dedupe_preserves_first_seen_status() {
     let mut values = Vec::new();
     let mut seen = std::collections::HashMap::new();
-    push_normalized_unique_summary_label(&mut values, &mut seen, "  cargo   test  ", None);
+    push_normalized_unique_summary_label(&mut values, &mut seen, "  cargo   test  ", None, None);
     push_normalized_unique_summary_label(
         &mut values,
         &mut seen,
         "cargo test",
         Some(ConversationStatus::InProgress),
+        None,
     );
 
     assert_eq!(
@@ -1054,6 +1201,7 @@ fn primary_labels_dedupe_preserves_first_seen_status() {
         vec![VerticalTabsSummaryPrimaryLabel {
             text: "cargo test".to_string(),
             status: None,
+            cli_style: None,
         }]
     );
 }
@@ -1067,14 +1215,16 @@ fn primary_labels_preserve_status_through_aggregation() {
         &mut seen,
         "Plan a refactor",
         Some(ConversationStatus::InProgress),
+        None,
     );
     push_normalized_unique_summary_label(
         &mut values,
         &mut seen,
         "Investigate failure",
         Some(ConversationStatus::Success),
+        None,
     );
-    push_normalized_unique_summary_label(&mut values, &mut seen, "cargo build", None);
+    push_normalized_unique_summary_label(&mut values, &mut seen, "cargo build", None, None);
 
     assert_eq!(
         values,
@@ -1082,14 +1232,17 @@ fn primary_labels_preserve_status_through_aggregation() {
             VerticalTabsSummaryPrimaryLabel {
                 text: "Plan a refactor".to_string(),
                 status: Some(ConversationStatus::InProgress),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "Investigate failure".to_string(),
                 status: Some(ConversationStatus::Success),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "cargo build".to_string(),
                 status: None,
+                cli_style: None,
             },
         ]
     );
@@ -1101,22 +1254,27 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
         VerticalTabsSummaryPrimaryLabel {
             text: "plain terminal".to_string(),
             status: None,
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "first conversation".to_string(),
             status: Some(ConversationStatus::InProgress),
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "code pane".to_string(),
             status: None,
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "second conversation".to_string(),
             status: Some(ConversationStatus::Success),
+            cli_style: None,
         },
         VerticalTabsSummaryPrimaryLabel {
             text: "last terminal".to_string(),
             status: None,
+            cli_style: None,
         },
     ];
 
@@ -1128,22 +1286,27 @@ fn sort_summary_primary_labels_moves_status_first_and_preserves_order() {
             VerticalTabsSummaryPrimaryLabel {
                 text: "first conversation".to_string(),
                 status: Some(ConversationStatus::InProgress),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "second conversation".to_string(),
                 status: Some(ConversationStatus::Success),
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "plain terminal".to_string(),
                 status: None,
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "code pane".to_string(),
                 status: None,
+                cli_style: None,
             },
             VerticalTabsSummaryPrimaryLabel {
                 text: "last terminal".to_string(),
                 status: None,
+                cli_style: None,
             },
         ]
     );
@@ -1188,6 +1351,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
             VerticalTabsSummaryPrimaryLabel {
                 text: "Claude".to_string(),
                 status: Some(ConversationStatus::InProgress),
+                cli_style: None,
             },
             label("Warp Agent"),
             label("cargo"),
@@ -1230,6 +1394,7 @@ fn summary_search_fragments_include_hidden_overflow_values() {
             },
         ],
         has_unread_activity: false,
+        cli_style: None,
     };
 
     let fragments = summary_search_text_fragments(&summary, Some("Custom tab"));

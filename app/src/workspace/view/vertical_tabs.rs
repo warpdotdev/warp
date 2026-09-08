@@ -59,15 +59,22 @@ use crate::tab::{
     SelectedTabColor, TAB_INDICATOR_SYNCED_COLOR, TabData, reveals_tab_shortcut_hints,
     tab_activate_binding_name, tab_position_id,
 };
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::listener::is_agent_supported;
+use crate::terminal::cli_agent_sessions::{CLIAgentDisplayState, CLIAgentSessionsModel};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
 use crate::terminal::{CLIAgent, TerminalView};
 use crate::themes::theme::Fill as ThemeFill;
 use crate::ui_components::agent_icon::terminal_view_agent_icon_variant;
 use crate::ui_components::buttons::combo_inner_button;
-use crate::ui_components::icon_with_status::{IconWithStatusVariant, render_icon_with_status};
+use crate::ui_components::icon_with_status::{
+    BadgeInnerShape, IconWithStatusVariant, StatusBadgeMode, StatusBadgeStyle,
+    render_element_with_status_badge_override, render_icon_with_status,
+    render_icon_with_status_with_badge_override,
+};
 use crate::ui_components::icons::Icon as UiIcon;
+use crate::user_config::WarpConfig;
+use crate::user_config::agent_tab_styles::{AgentTabStateStyle, AgentTabStyleLayer};
 use crate::util::bindings::keybinding_name_to_display_string;
 use crate::util::color::Opacity;
 use crate::workspace::action::{NewSessionMenuAnchor, WorkspaceAction};
@@ -131,6 +138,126 @@ const VERTICAL_TABS_ICON_SIZE: f32 = 24.;
 /// Icon size for the per-line conversation status pill in Summary mode. Pairs with
 /// `STATUS_ELEMENT_PADDING` (2px) for an overall ~14px element next to a 12pt title.
 const VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE: f32 = 10.;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResolvedCLIAgentStyle {
+    state: CLIAgentDisplayState,
+    color: AnsiColorIdentifier,
+    badge_icon: WarpIcon,
+    badge_scale: f32,
+    tab_bg: bool,
+    tab_text: bool,
+    badge: bool,
+}
+
+impl ResolvedCLIAgentStyle {
+    fn background(self, theme: &WarpTheme) -> Option<ThemeFill> {
+        self.tab_bg.then(|| {
+            self.color
+                .to_ansi_color(&theme.terminal_colors().normal)
+                .into()
+        })
+    }
+
+    fn text_color(self, theme: &WarpTheme) -> Option<WarpThemeFill> {
+        self.tab_text.then(|| {
+            theme
+                .ansi_fg(self.color.to_ansi_color(&theme.terminal_colors().normal))
+                .into()
+        })
+    }
+
+    fn badge_mode(self, theme: &WarpTheme) -> StatusBadgeMode {
+        if self.badge {
+            StatusBadgeMode::Override {
+                icon: self.badge_icon,
+                color: theme.ansi_fg(self.color.to_ansi_color(&theme.terminal_colors().normal)),
+            }
+        } else {
+            StatusBadgeMode::Hidden
+        }
+    }
+
+    fn badge_style(self) -> StatusBadgeStyle {
+        StatusBadgeStyle {
+            ring_ratio: 0.57 * self.badge_scale,
+            icon_ratio: 0.34 * self.badge_scale,
+            inner_shape: BadgeInnerShape::Circle,
+        }
+    }
+}
+
+fn style_for_display_state(
+    state: CLIAgentDisplayState,
+    badge_icon: WarpIcon,
+    config: &AgentTabStateStyle,
+) -> ResolvedCLIAgentStyle {
+    ResolvedCLIAgentStyle {
+        state,
+        color: config.color.into(),
+        badge_icon,
+        badge_scale: config.badge_size.scale(),
+        tab_bg: config.has_layer(AgentTabStyleLayer::TabBg),
+        tab_text: config.has_layer(AgentTabStyleLayer::TabText),
+        badge: config.has_layer(AgentTabStyleLayer::BadgeIcon),
+    }
+}
+
+fn cli_agent_style_for_terminal(
+    terminal_view_id: EntityId,
+    is_ambient: bool,
+    app: &AppContext,
+) -> Option<ResolvedCLIAgentStyle> {
+    let model = CLIAgentSessionsModel::as_ref(app);
+    let session = model.session(terminal_view_id)?;
+    if !supports_cli_agent_sidebar_style(
+        session.agent,
+        session.supports_rich_status(),
+        session.is_remote(),
+        is_ambient,
+        is_agent_supported(&session.agent),
+    ) {
+        return None;
+    }
+    let state = model.display_state(terminal_view_id)?;
+    let styles = &WarpConfig::as_ref(app).agent_tab_styles().states;
+    let config = match state {
+        CLIAgentDisplayState::Idle => &styles.idle,
+        CLIAgentDisplayState::Processing => &styles.processing,
+        CLIAgentDisplayState::Success => &styles.success,
+        CLIAgentDisplayState::NeedsAttention => &styles.needs_attention,
+    };
+    let badge_icon = if state == CLIAgentDisplayState::Idle {
+        WarpIcon::Circle
+    } else {
+        session
+            .status
+            .to_conversation_status()
+            .status_icon_and_color(Appearance::as_ref(app).theme(), StatusColorStyle::Standard)
+            .0
+    };
+    Some(style_for_display_state(state, badge_icon, config))
+}
+
+fn supports_cli_agent_sidebar_style(
+    agent: CLIAgent,
+    supports_rich_status: bool,
+    is_remote: bool,
+    is_ambient: bool,
+    is_supported: bool,
+) -> bool {
+    supports_rich_status
+        && !is_remote
+        && !is_ambient
+        && !matches!(agent, CLIAgent::Unknown)
+        && is_supported
+}
+
+fn aggregate_cli_styles(
+    styles: impl IntoIterator<Item = ResolvedCLIAgentStyle>,
+) -> Option<ResolvedCLIAgentStyle> {
+    styles.into_iter().max_by_key(|style| style.state)
+}
 
 fn vtab_pane_row_position_id(pane_group_id: EntityId, pane_id: PaneId) -> String {
     format!("vertical_tabs:pane_row:{pane_group_id:?}:{pane_id}")
@@ -275,15 +402,27 @@ enum TerminalPrimaryLineFont {
 
 fn render_pane_icon_with_status(
     variant: IconWithStatusVariant,
+    cli_style: Option<ResolvedCLIAgentStyle>,
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
-    render_icon_with_status(
-        variant,
-        VERTICAL_TABS_ICON_SIZE,
-        0.,
-        theme,
-        theme.background(),
-    )
+    match cli_style {
+        Some(style) => render_icon_with_status_with_badge_override(
+            variant,
+            VERTICAL_TABS_ICON_SIZE,
+            0.,
+            style.badge_style(),
+            style.badge_mode(theme),
+            theme,
+            theme.background(),
+        ),
+        None => render_icon_with_status(
+            variant,
+            VERTICAL_TABS_ICON_SIZE,
+            0.,
+            theme,
+            theme.background(),
+        ),
+    }
 }
 
 #[derive(Clone, Default)]
@@ -400,6 +539,7 @@ fn render_pane_row_element(
         is_in_multi_selection,
         is_in_multi_tab_selection,
         pane_color,
+        cli_style,
         badge_mouse_states: _,
         detail_hover_state,
         display_granularity,
@@ -428,7 +568,9 @@ fn render_pane_row_element(
             .with_corner_radius(corner_radius);
 
         if let Some(background) = pane_row_background(
-            pane_color,
+            cli_style
+                .and_then(|style| style.background(theme))
+                .or(pane_color),
             is_selected,
             is_in_multi_selection,
             state.is_hovered(),
@@ -843,6 +985,7 @@ struct PaneProps<'a> {
     /// otherwise the single-pane menu.
     is_in_multi_tab_selection: bool,
     pane_color: Option<ThemeFill>,
+    cli_style: Option<ResolvedCLIAgentStyle>,
     badge_mouse_states: PaneRowBadgeMouseStates,
     detail_hover_state: VerticalTabsDetailHoverState,
     display_granularity: VerticalTabsDisplayGranularity,
@@ -899,6 +1042,17 @@ enum VerticalTabsResolvedMode {
     Summary,
 }
 
+fn cli_style_for_vertical_mode(
+    mode: VerticalTabsResolvedMode,
+    pane_style: Option<ResolvedCLIAgentStyle>,
+    summary_style: Option<ResolvedCLIAgentStyle>,
+) -> Option<ResolvedCLIAgentStyle> {
+    match mode {
+        VerticalTabsResolvedMode::Panes | VerticalTabsResolvedMode::FocusedSession => pane_style,
+        VerticalTabsResolvedMode::Summary => summary_style,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum SummaryPaneKind {
     Terminal,
@@ -944,6 +1098,7 @@ struct VerticalTabsSummaryPrimaryLabel {
     /// Some when the contributing pane is a conversation with a known status. Drives the
     /// per-line status pill prefix in Summary mode.
     status: Option<ConversationStatus>,
+    cli_style: Option<ResolvedCLIAgentStyle>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -952,6 +1107,7 @@ struct VerticalTabsSummaryData {
     working_directories: Vec<String>,
     branch_entries: Vec<VerticalTabsSummaryBranchEntry>,
     has_unread_activity: bool,
+    cli_style: Option<ResolvedCLIAgentStyle>,
 }
 
 impl TabGroupColorMode {
@@ -1027,6 +1183,7 @@ fn push_normalized_unique_summary_label(
     seen: &mut HashMap<String, ()>,
     text: &str,
     status: Option<ConversationStatus>,
+    cli_style: Option<ResolvedCLIAgentStyle>,
 ) {
     let Some(normalized) = normalize_summary_text(text) else {
         return;
@@ -1038,6 +1195,7 @@ fn push_normalized_unique_summary_label(
     values.push(VerticalTabsSummaryPrimaryLabel {
         text: normalized,
         status,
+        cli_style,
     });
 }
 
@@ -2215,7 +2373,7 @@ fn render_tab_group_internal(
                     }
                     handles[..branch_line_count].to_vec()
                 };
-                let Some(pane_props) = PaneProps::new(
+                let Some(mut pane_props) = PaneProps::new(
                     pane_group,
                     *pane_id,
                     pane_group_id,
@@ -2245,6 +2403,11 @@ fn render_tab_group_internal(
                 ) else {
                     return Empty::new().finish();
                 };
+                pane_props.cli_style = cli_style_for_vertical_mode(
+                    resolved_mode,
+                    pane_props.cli_style,
+                    summary.as_ref().and_then(|summary| summary.cli_style),
+                );
                 rows.add_child(render_summary_tab_item(
                     pane_props,
                     summary
@@ -2305,6 +2468,8 @@ fn render_tab_group_internal(
                 ) else {
                     continue;
                 };
+                pane_props.cli_style =
+                    cli_style_for_vertical_mode(resolved_mode, pane_props.cli_style, None);
                 if stack_panes_flush {
                     pane_props.stack_position = PaneRowStackPosition::Flush {
                         is_first: row_idx == 0,
@@ -3294,10 +3459,11 @@ fn render_group_header(props: GroupHeaderProps<'_>, app: &AppContext) -> Box<dyn
 
 fn render_passive_terminal_diff_stats_badge(
     git_line_changes: &GitLineChanges,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     render_badge_container(
-        render_vtab_diff_stats_content(git_line_changes, appearance),
+        render_vtab_diff_stats_content(git_line_changes, text_color, appearance),
         internal_colors::fg_overlay_1(appearance.theme()),
     )
 }
@@ -3448,10 +3614,18 @@ fn shortcut_hint_label(props: &PaneProps<'_>, app: &AppContext) -> Option<String
 
 /// Inline label showing the switch-to-tab keyboard shortcut, mirroring the
 /// horizontal tab bar's `TabComponent::render_shortcut_hint`.
-fn render_shortcut_hint(label: &str, appearance: &Appearance) -> Box<dyn Element> {
+fn render_shortcut_hint(
+    label: &str,
+    text_color: Option<WarpThemeFill>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
     Text::new_inline(label.to_string(), appearance.ui_font_family(), 12.)
-        .with_color(theme.sub_text_color(theme.background()).into())
+        .with_color(
+            text_color
+                .unwrap_or_else(|| theme.sub_text_color(theme.background()))
+                .into(),
+        )
         .finish()
 }
 
@@ -3501,9 +3675,11 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
+    let cli_text_color = props.cli_style.and_then(|style| style.text_color(theme));
 
     let icon = render_pane_icon_with_status(
         resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
+        props.cli_style,
         theme,
     );
 
@@ -3538,11 +3714,15 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
                     || {
                         Text::new_inline(props.displayed_title().to_string(), font_family, 12.)
                             .with_clip(ClipConfig::ellipsis())
-                            .with_color(theme.main_text_color(theme.background()).into())
+                            .with_color(
+                                cli_text_color
+                                    .unwrap_or_else(|| theme.main_text_color(theme.background()))
+                                    .into(),
+                            )
                             .finish()
                     },
                     12.,
-                    theme.main_text_color(theme.background()),
+                    cli_text_color.unwrap_or_else(|| theme.main_text_color(theme.background())),
                     ClipConfig::ellipsis(),
                     appearance,
                     app,
@@ -3559,7 +3739,7 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         }
         if let Some(label) = shortcut_hint_label(&props, app) {
             title_row.add_child(
-                Container::new(render_shortcut_hint(&label, appearance))
+                Container::new(render_shortcut_hint(&label, cli_text_color, appearance))
                     .with_margin_left(4.)
                     .finish(),
             );
@@ -3580,7 +3760,11 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
             content_col.add_child(
                 Text::new_inline(effective_subtitle, font_family, 12.)
                     .with_clip(subtitle_clip)
-                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .with_color(
+                        cli_text_color
+                            .unwrap_or_else(|| theme.sub_text_color(theme.background()))
+                            .into(),
+                    )
                     .finish(),
             );
         }
@@ -3764,6 +3948,7 @@ fn build_vertical_tabs_summary_data(
     let mut working_directory_seen = HashMap::new();
     let mut branch_entries = Vec::new();
     let mut has_unread_activity = false;
+    let mut cli_styles = Vec::new();
 
     for pane_id in visible_pane_ids {
         let Some(pane) = pane_group.pane_by_id(*pane_id) else {
@@ -3804,11 +3989,18 @@ fn build_vertical_tabs_summary_data(
                     terminal_view.last_completed_command_text(),
                 );
                 let status = summary_conversation_status_for_terminal(terminal_view, app);
+                let cli_style = cli_agent_style_for_terminal(
+                    terminal_view.id(),
+                    terminal_view.is_ambient_agent_session(app),
+                    app,
+                );
+                cli_styles.extend(cli_style);
                 push_normalized_unique_summary_label(
                     &mut primary_labels,
                     &mut primary_seen,
                     primary_label.text(),
                     status,
+                    cli_style,
                 );
 
                 if let Some(working_directory) = working_directory {
@@ -3846,6 +4038,7 @@ fn build_vertical_tabs_summary_data(
                     &mut primary_seen,
                     &pane_title,
                     None,
+                    None,
                 );
                 push_normalized_unique_summary_text(
                     &mut working_directories,
@@ -3869,6 +4062,7 @@ fn build_vertical_tabs_summary_data(
                     &mut primary_seen,
                     &pane_title,
                     None,
+                    None,
                 );
             }
         }
@@ -3881,6 +4075,7 @@ fn build_vertical_tabs_summary_data(
         working_directories,
         branch_entries: coalesce_summary_branch_entries(branch_entries),
         has_unread_activity,
+        cli_style: aggregate_cli_styles(cli_styles),
     }
 }
 
@@ -3926,6 +4121,17 @@ impl<'a> PaneProps<'a> {
             pane_configuration.title().trim(),
             pane_configuration.title_secondary().trim(),
         );
+        let cli_style = match &typed {
+            TypedPane::Terminal(terminal_pane) => {
+                let terminal_view = terminal_pane.terminal_view(app);
+                cli_agent_style_for_terminal(
+                    terminal_view.id(),
+                    terminal_view.as_ref(app).is_ambient_agent_session(app),
+                    app,
+                )
+            }
+            _ => None,
+        };
 
         Some(Self {
             pane_id,
@@ -3950,6 +4156,7 @@ impl<'a> PaneProps<'a> {
             is_in_multi_selection,
             is_in_multi_tab_selection,
             pane_color: pane_row_state.pane_color,
+            cli_style,
             badge_mouse_states: pane_row_state.badge_mouse_states,
             detail_hover_state,
             display_granularity,
@@ -4422,8 +4629,10 @@ fn render_terminal_row_content(
     app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let cli_text_color = props.cli_style.and_then(|style| style.text_color(theme));
+    let main_text_color =
+        cli_text_color.unwrap_or_else(|| theme.main_text_color(theme.background()));
+    let sub_text_color = cli_text_color.unwrap_or_else(|| theme.sub_text_color(theme.background()));
     let primary_info = *TabSettings::as_ref(app).vertical_tabs_primary_info.value();
 
     let title_text = terminal_view.terminal_title_from_shell();
@@ -4525,7 +4734,8 @@ fn render_terminal_row_content(
         first_line,
         row_shows_synced_inputs_indicator(props, app),
         has_unread_activity(&props.typed, app),
-        shortcut_hint_label(props, app).map(|label| render_shortcut_hint(&label, appearance)),
+        shortcut_hint_label(props, app)
+            .map(|label| render_shortcut_hint(&label, cli_text_color, appearance)),
         theme,
     );
 
@@ -4542,6 +4752,7 @@ fn render_terminal_row_content(
             metadata_left,
             chip_entrypoint_for_granularity(props.display_granularity),
             &props.badge_mouse_states,
+            cli_text_color,
             appearance,
             app,
         ))
@@ -4731,13 +4942,29 @@ fn render_summary_tab_item(
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let cli_text_color = props.cli_style.and_then(|style| style.text_color(theme));
+    let main_text_color =
+        cli_text_color.unwrap_or_else(|| theme.main_text_color(theme.background()));
+    let sub_text_color = cli_text_color.unwrap_or_else(|| theme.sub_text_color(theme.background()));
     let icon = summary_pane_kind_icons
-        .map(|icons| render_summary_pane_kind_icons(icons, VERTICAL_TABS_ICON_SIZE, appearance))
+        .map(|icons| {
+            let icon = render_summary_pane_kind_icons(icons, VERTICAL_TABS_ICON_SIZE, appearance);
+            match props.cli_style {
+                Some(style) => render_element_with_status_badge_override(
+                    icon,
+                    VERTICAL_TABS_ICON_SIZE,
+                    style.badge_style(),
+                    style.badge_mode(theme),
+                    theme,
+                    theme.background(),
+                ),
+                None => icon,
+            }
+        })
         .unwrap_or_else(|| {
             render_pane_icon_with_status(
                 resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
+                props.cli_style,
                 theme,
             )
         });
@@ -4776,7 +5003,9 @@ fn render_summary_tab_item(
                     .iter()
                     .take(MAX_VISIBLE_PRIMARY_LABELS)
                     .collect();
-                let reserve_prefix_slot = visible_labels.iter().any(|label| label.status.is_some());
+                let reserve_prefix_slot = visible_labels.iter().any(|label| {
+                    label.cli_style.is_some_and(|style| style.badge) || label.status.is_some()
+                });
 
                 for (idx, label) in visible_labels.iter().enumerate() {
                     let line = render_summary_primary_label_line(
@@ -4816,7 +5045,8 @@ fn render_summary_tab_item(
         title_region.finish(),
         row_shows_synced_inputs_indicator(&props, app),
         summary.has_unread_activity,
-        shortcut_hint_label(&props, app).map(|label| render_shortcut_hint(&label, appearance)),
+        shortcut_hint_label(&props, app)
+            .map(|label| render_shortcut_hint(&label, cli_text_color, appearance)),
         theme,
     ));
 
@@ -4881,6 +5111,7 @@ fn render_summary_tab_item(
                 branch_entry,
                 pr_badge_mouse_states.get(idx).cloned(),
                 pr_chip_entrypoint,
+                cli_text_color,
                 appearance,
             ))
             .with_margin_top(REGION_GAP)
@@ -4926,19 +5157,45 @@ fn render_summary_primary_label_line(
     let prefix_slot_size = VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE + STATUS_ELEMENT_PADDING * 2.;
     let text = render_text_line(&label.text, text_color, ClipConfig::end(), appearance);
 
-    let prefix: Option<Box<dyn Element>> = match (label.status.as_ref(), reserve_prefix_slot) {
-        (Some(status), _) => Some(render_status_element(
+    let empty_prefix = || {
+        ConstrainedBox::new(Empty::new().finish())
+            .with_width(prefix_slot_size)
+            .with_height(prefix_slot_size)
+            .finish()
+    };
+    let prefix: Option<Box<dyn Element>> = if let Some(style) = label.cli_style {
+        if style.badge {
+            let size = VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE * style.badge_scale;
+            Some(
+                ConstrainedBox::new(
+                    style
+                        .badge_icon
+                        .to_warpui_icon(WarpThemeFill::Solid(
+                            appearance.theme().ansi_fg(
+                                style
+                                    .color
+                                    .to_ansi_color(&appearance.theme().terminal_colors().normal),
+                            ),
+                        ))
+                        .finish(),
+                )
+                .with_width(size)
+                .with_height(size)
+                .finish(),
+            )
+        } else {
+            reserve_prefix_slot.then(empty_prefix)
+        }
+    } else if let Some(status) = label.status.as_ref() {
+        Some(render_status_element(
             status,
             VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE,
             appearance,
-        )),
-        (None, true) => Some(
-            ConstrainedBox::new(Empty::new().finish())
-                .with_width(prefix_slot_size)
-                .with_height(prefix_slot_size)
-                .finish(),
-        ),
-        (None, false) => None,
+        ))
+    } else if reserve_prefix_slot {
+        Some(empty_prefix())
+    } else {
+        None
     };
 
     let Some(prefix) = prefix else {
@@ -5197,10 +5454,11 @@ fn render_summary_branch_line(
     entry: &VerticalTabsSummaryBranchEntry,
     pr_badge_mouse_state: Option<MouseStateHandle>,
     pr_chip_entrypoint: VerticalTabsChipEntrypoint,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let sub_text_color = text_color.unwrap_or_else(|| theme.sub_text_color(theme.background()));
     let mut row = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
         .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -5219,7 +5477,7 @@ fn render_summary_branch_line(
     let mut has_right_badges = false;
     if let Some(diff_stats) = &entry.diff_stats {
         right_badges.add_child(render_passive_terminal_diff_stats_badge(
-            diff_stats, appearance,
+            diff_stats, text_color, appearance,
         ));
         has_right_badges = true;
     }
@@ -5237,6 +5495,7 @@ fn render_summary_branch_line(
                 pull_request_url.clone(),
                 pr_chip_entrypoint,
                 mouse_state,
+                text_color,
                 appearance,
             ));
             has_right_badges = true;
@@ -5245,6 +5504,7 @@ fn render_summary_branch_line(
             if let Some(pull_request_label) = &entry.pull_request_label {
                 right_badges.add_child(render_passive_terminal_pull_request_badge(
                     pull_request_label,
+                    text_color,
                     appearance,
                 ));
                 has_right_badges = true;
@@ -5358,11 +5618,12 @@ fn render_terminal_metadata_line(
     left_content: MetadataLeftContent,
     row_entrypoint: VerticalTabsChipEntrypoint,
     badge_mouse_states: &PaneRowBadgeMouseStates,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let sub_text_color = text_color.unwrap_or_else(|| theme.sub_text_color(theme.background()));
 
     let mut meta = Flex::row()
         .with_main_axis_size(MainAxisSize::Max)
@@ -5396,10 +5657,10 @@ fn render_terminal_metadata_line(
     // 4px gap between the text and the first chip — matching the spacing between chips.
     if let Some(right_badges) = render_terminal_right_badges(
         terminal_view,
-        pane_group_id,
-        pane_id,
+        (pane_group_id, pane_id),
         row_entrypoint,
         badge_mouse_states,
+        text_color,
         appearance,
         app,
     ) {
@@ -5414,13 +5675,14 @@ fn render_terminal_metadata_line(
 
 fn render_terminal_right_badges(
     terminal_view: &TerminalView,
-    pane_group_id: EntityId,
-    pane_id: PaneId,
+    pane: (EntityId, PaneId),
     entrypoint: VerticalTabsChipEntrypoint,
     badge_mouse_states: &PaneRowBadgeMouseStates,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
+    let (pane_group_id, pane_id) = pane;
     let show_diff_stats = *TabSettings::as_ref(app)
         .vertical_tabs_show_diff_stats
         .value();
@@ -5439,6 +5701,7 @@ fn render_terminal_right_badges(
             pane_id,
             entrypoint,
             badge_mouse_states.diff_stats.clone(),
+            text_color,
             appearance,
         ));
         has_badges = true;
@@ -5451,6 +5714,7 @@ fn render_terminal_right_badges(
             pull_request_url,
             entrypoint,
             badge_mouse_states.pull_request.clone(),
+            text_color,
             appearance,
         ));
         has_badges = true;
@@ -5465,6 +5729,7 @@ fn render_terminal_diff_stats_badge(
     pane_id: PaneId,
     entrypoint: VerticalTabsChipEntrypoint,
     mouse_state: MouseStateHandle,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -5476,7 +5741,7 @@ fn render_terminal_diff_stats_badge(
             internal_colors::fg_overlay_1(theme)
         };
         render_badge_container(
-            render_vtab_diff_stats_content(git_line_changes, appearance),
+            render_vtab_diff_stats_content(git_line_changes, text_color, appearance),
             bg,
         )
     })
@@ -5501,6 +5766,7 @@ fn render_terminal_pull_request_badge(
     url: String,
     entrypoint: VerticalTabsChipEntrypoint,
     mouse_state: MouseStateHandle,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
@@ -5511,7 +5777,10 @@ fn render_terminal_pull_request_badge(
         } else {
             internal_colors::fg_overlay_1(theme)
         };
-        render_badge_container(render_pull_request_badge_content(&label, appearance), bg)
+        render_badge_container(
+            render_pull_request_badge_content(&label, text_color, appearance),
+            bg,
+        )
     })
     .on_click(move |ctx, app, _| {
         send_telemetry_from_app_ctx!(
@@ -5526,10 +5795,11 @@ fn render_terminal_pull_request_badge(
 
 fn render_passive_terminal_pull_request_badge(
     label: &str,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     render_badge_container(
-        render_pull_request_badge_content(label, appearance),
+        render_pull_request_badge_content(label, text_color, appearance),
         internal_colors::fg_overlay_1(appearance.theme()),
     )
 }
@@ -5553,6 +5823,7 @@ fn render_compact_non_terminal_title(
 
 fn render_vtab_diff_stats_content(
     line_changes: &GitLineChanges,
+    text_color: Option<WarpThemeFill>,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let font_family = appearance.ui_font_family();
@@ -5564,13 +5835,17 @@ fn render_vtab_diff_stats_content(
             row.add_child(Text::new_inline(" ", font_family, font_size).finish());
         }
 
-        let color = if token.starts_with('+') {
-            add_color(appearance)
-        } else if token.starts_with('-') {
-            remove_color(appearance)
-        } else {
-            internal_colors::neutral_6(appearance.theme())
-        };
+        let color = text_color
+            .map(WarpThemeFill::into_solid)
+            .unwrap_or_else(|| {
+                if token.starts_with('+') {
+                    add_color(appearance)
+                } else if token.starts_with('-') {
+                    remove_color(appearance)
+                } else {
+                    internal_colors::neutral_6(appearance.theme())
+                }
+            });
 
         row.add_child(
             Text::new_inline(token.clone(), font_family, font_size)
@@ -5591,10 +5866,14 @@ fn render_badge_container(content: Box<dyn Element>, background: ThemeFill) -> B
         .finish()
 }
 
-fn render_pull_request_badge_content(label: &str, appearance: &Appearance) -> Box<dyn Element> {
+fn render_pull_request_badge_content(
+    label: &str,
+    text_color: Option<WarpThemeFill>,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let main_text_color = text_color.unwrap_or_else(|| theme.main_text_color(theme.background()));
+    let sub_text_color = text_color.unwrap_or_else(|| theme.sub_text_color(theme.background()));
     Flex::row()
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.)
@@ -6892,6 +7171,7 @@ fn render_terminal_detail_section(
             props.pane_id,
             VerticalTabsChipEntrypoint::DetailsSidecar,
             props.badge_mouse_states.diff_stats.clone(),
+            None,
             appearance,
         ));
         has_right_badges = true;
@@ -6902,6 +7182,7 @@ fn render_terminal_detail_section(
             pull_request_url,
             VerticalTabsChipEntrypoint::DetailsSidecar,
             props.badge_mouse_states.pull_request.clone(),
+            None,
             appearance,
         ));
         has_right_badges = true;
@@ -7251,13 +7532,16 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
     let effective_subtitle = props.subtitle.clone();
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
-    let main_text_color = theme.main_text_color(theme.background());
-    let sub_text_color = theme.sub_text_color(theme.background());
+    let cli_text_color = props.cli_style.and_then(|style| style.text_color(theme));
+    let main_text_color =
+        cli_text_color.unwrap_or_else(|| theme.main_text_color(theme.background()));
+    let sub_text_color = cli_text_color.unwrap_or_else(|| theme.sub_text_color(theme.background()));
     let font_family = appearance.ui_font_family();
     let has_indicator = props.typed.badge(app).is_some() || has_unread_activity(&props.typed, app);
 
     let icon = render_pane_icon_with_status(
         resolve_icon_with_status_variant(&props.typed, &props.title, appearance, app),
+        props.cli_style,
         theme,
     );
 
@@ -7404,7 +7688,8 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         title_element,
         row_shows_synced_inputs_indicator(&props, app),
         has_indicator,
-        shortcut_hint_label(&props, app).map(|label| render_shortcut_hint(&label, appearance)),
+        shortcut_hint_label(&props, app)
+            .map(|label| render_shortcut_hint(&label, cli_text_color, appearance)),
         theme,
     );
 

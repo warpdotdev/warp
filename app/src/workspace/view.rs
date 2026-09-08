@@ -390,7 +390,10 @@ use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentSessionStatus, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+    should_acknowledge_success,
+};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
 };
@@ -2731,6 +2734,21 @@ impl Workspace {
     ) {
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), move |_me, _, event, ctx| {
             match event {
+                WarpConfigUpdateEvent::AgentTabStyles => {
+                    toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.dismiss_older_toasts("agent_tab_styles_error", ctx);
+                    });
+                    ctx.notify();
+                }
+                WarpConfigUpdateEvent::AgentTabStylesError(error) => {
+                    let toast = DismissibleToast::error(format!(
+                        "Failed to load agent tab styles: {error}"
+                    ))
+                    .with_object_id("agent_tab_styles_error".to_string());
+                    toast_stack.update(ctx, |toast_stack, ctx| {
+                        toast_stack.add_persistent_toast(toast, ctx);
+                    });
+                }
                 WarpConfigUpdateEvent::TabConfigs => {
                     // On every tab config reload, dismiss error toasts for
                     // files that now parse successfully.  The model has already
@@ -3777,6 +3795,24 @@ impl Workspace {
         event: &CLIAgentSessionsModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        if let CLIAgentSessionsModelEvent::StatusChanged {
+            terminal_view_id,
+            status: CLIAgentSessionStatus::Success,
+            ..
+        } = event
+            && should_acknowledge_success(
+                ctx.windows().active_window() == Some(ctx.window_id()),
+                self.active_tab_pane_group()
+                    .as_ref(ctx)
+                    .focused_session_view(ctx)
+                    .map(|view| view.id()),
+                *terminal_view_id,
+            )
+        {
+            CLIAgentSessionsModel::handle(ctx).update(ctx, |model, ctx| {
+                model.acknowledge_success(*terminal_view_id, ctx);
+            });
+        }
         if matches!(
             event,
             CLIAgentSessionsModelEvent::Started { .. }
@@ -5460,6 +5496,9 @@ impl Workspace {
         if let Some(terminal_view_id) = focused_terminal_view_id {
             let is_active_window = ctx.windows().active_window() == Some(ctx.window_id());
             if is_active_window {
+                CLIAgentSessionsModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.acknowledge_success(terminal_view_id, ctx);
+                });
                 AgentNotificationsModel::handle(ctx).update(ctx, |model, ctx| {
                     model.mark_items_from_terminal_view_read(terminal_view_id, ctx);
                 });

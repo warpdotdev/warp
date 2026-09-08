@@ -1,3 +1,4 @@
+pub mod agent_tab_styles;
 pub mod util;
 
 #[cfg_attr(not(target_family = "wasm"), path = "native.rs")]
@@ -16,6 +17,7 @@ use lazy_static::lazy_static;
 use warp_core::ui::theme::WarpTheme;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
+use self::agent_tab_styles::AgentTabStyles;
 use crate::ai::custom_model_routers::{CustomModelRouter, ModelConfigError};
 use crate::launch_configs::launch_config::LaunchConfig;
 use crate::tab_configs::{TabConfig, TabConfigError};
@@ -53,6 +55,8 @@ lazy_static! {
 
 #[derive(Clone)]
 pub enum WarpConfigUpdateEvent {
+    AgentTabStyles,
+    AgentTabStylesError(String),
     Themes,
     #[cfg_attr(not(feature = "local_fs"), expect(dead_code))]
     LocalUserWorkflows,
@@ -88,6 +92,7 @@ pub enum WarpConfigUpdateEvent {
 /// (`settings.toml`, `keybindings.yaml`, `user_preferences.json`).
 #[derive(Default)]
 pub struct WarpConfig {
+    agent_tab_styles: AgentTabStyles,
     launch_configs: Vec<LaunchConfig>,
     tab_configs: Vec<TabConfig>,
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
@@ -117,6 +122,10 @@ impl WarpConfig {
 
     pub fn launch_configs(&self) -> &Vec<LaunchConfig> {
         &self.launch_configs
+    }
+
+    pub fn agent_tab_styles(&self) -> &AgentTabStyles {
+        &self.agent_tab_styles
     }
 
     pub fn tab_configs(&self) -> &Vec<TabConfig> {
@@ -209,6 +218,10 @@ pub fn workflows_dir() -> PathBuf {
 /// configurations.
 pub fn launch_configs_dir() -> PathBuf {
     base_dir().join("launch_configurations")
+}
+
+pub fn agent_tab_styles_path() -> PathBuf {
+    base_dir().join(agent_tab_styles::FILE_NAME)
 }
 
 /// Returns the path to the directory containing the user's tab configs.

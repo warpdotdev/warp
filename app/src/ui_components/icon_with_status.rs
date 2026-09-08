@@ -57,6 +57,13 @@ impl StatusBadgeStyle {
     };
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum StatusBadgeMode {
+    Default,
+    Hidden,
+    Override { icon: WarpIcon, color: ColorU },
+}
+
 // Neutral variants have no overlay, so they fill the full `total_size` bounding box. The
 // inner glyph occupies `NEUTRAL_GLYPH_RATIO * total_size`, matching the old sizing where
 // a 24px container held a 16px glyph (16/24 ≈ 0.667).
@@ -194,6 +201,26 @@ pub(crate) fn render_icon_with_status_with_badge_style(
     theme: &WarpTheme,
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
+    render_icon_with_status_with_badge_override(
+        variant,
+        total_size,
+        overlay_extra_overhang_ratio,
+        badge_style,
+        StatusBadgeMode::Default,
+        theme,
+        status_container_background,
+    )
+}
+
+pub(crate) fn render_icon_with_status_with_badge_override(
+    variant: IconWithStatusVariant,
+    total_size: f32,
+    overlay_extra_overhang_ratio: f32,
+    badge_style: StatusBadgeStyle,
+    badge_mode: StatusBadgeMode,
+    theme: &WarpTheme,
+    status_container_background: WarpThemeFill,
+) -> Box<dyn Element> {
     let sub_text = theme.sub_text_color(theme.background());
 
     match variant {
@@ -221,6 +248,7 @@ pub(crate) fn render_icon_with_status_with_badge_style(
                 total_size,
                 overlay_extra_overhang_ratio,
                 badge_style,
+                badge_mode,
                 theme,
                 status_container_background,
             )
@@ -249,6 +277,7 @@ pub(crate) fn render_icon_with_status_with_badge_style(
                 total_size,
                 overlay_extra_overhang_ratio,
                 badge_style,
+                badge_mode,
                 theme,
                 status_container_background,
             )
@@ -264,10 +293,31 @@ pub(crate) fn render_icon_with_status_with_badge_style(
             total_size,
             overlay_extra_overhang_ratio,
             badge_style,
+            badge_mode,
             theme,
             status_container_background,
         ),
     }
+}
+
+/// Applies an explicit status badge to an already-rendered icon while preserving its footprint.
+pub(crate) fn render_element_with_status_badge_override(
+    element: Box<dyn Element>,
+    total_size: f32,
+    badge_style: StatusBadgeStyle,
+    badge_mode: StatusBadgeMode,
+    theme: &WarpTheme,
+    status_container_background: WarpThemeFill,
+) -> Box<dyn Element> {
+    render_with_optional_status_badge(
+        element,
+        None,
+        total_size,
+        0.,
+        (badge_style, badge_mode),
+        theme,
+        status_container_background,
+    )
 }
 
 fn warp_agent_circle_colors(theme: &WarpTheme, is_ambient: bool) -> (WarpThemeFill, WarpThemeFill) {
@@ -340,6 +390,7 @@ fn attach_status_overlay(
     total_size: f32,
     overlay_extra_overhang_ratio: f32,
     badge_style: StatusBadgeStyle,
+    badge_mode: StatusBadgeMode,
     theme: &WarpTheme,
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
@@ -357,7 +408,7 @@ fn attach_status_overlay(
             status,
             total_size,
             overlay_extra_overhang_ratio,
-            badge_style,
+            (badge_style, badge_mode),
             theme,
             status_container_background,
         )
@@ -439,11 +490,19 @@ fn render_with_optional_status_badge(
     status: Option<&ConversationStatus>,
     total_size: f32,
     overlay_extra_overhang_ratio: f32,
-    badge_style: StatusBadgeStyle,
+    badge: (StatusBadgeStyle, StatusBadgeMode),
     theme: &WarpTheme,
     status_container_background: WarpThemeFill,
 ) -> Box<dyn Element> {
-    let Some(status) = status else {
+    let (badge_style, badge_mode) = badge;
+    let icon_and_color = match badge_mode {
+        StatusBadgeMode::Default => {
+            status.map(|status| status.status_icon_and_color(theme, StatusColorStyle::Standard))
+        }
+        StatusBadgeMode::Hidden => None,
+        StatusBadgeMode::Override { icon, color } => Some((icon, color)),
+    };
+    let Some((icon, color)) = icon_and_color else {
         // No status badge: still reserve the full `total_size` footprint the caller
         // asked for, so badged and un-badged variants occupy identical space.
         // `ConstrainedBox` only tightens constraints — it does not center — so the
@@ -454,7 +513,6 @@ fn render_with_optional_status_badge(
             .with_height(total_size)
             .finish();
     };
-    let (icon, color) = status.status_icon_and_color(theme, StatusColorStyle::Standard);
     let badge_icon_diameter = badge_icon_size(total_size, badge_style);
     let pad = badge_padding(total_size, badge_style);
     let badge_icon = ConstrainedBox::new(icon.to_warpui_icon(WarpThemeFill::Solid(color)).finish())
