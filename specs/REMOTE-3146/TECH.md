@@ -12,10 +12,9 @@ on `master`.
 ## Summary
 
 Build-cache setup detects tools only at each repository root. Nested projects are missed.
-Implement a two-phase flow. First, scan each repository once for detector-aligned markers and
-produce the complete bounded candidate set. Second, detect all candidates across all repositories
-through one shared concurrency limit. Keep cache-directory creation and all real mounts serial.
-Keep the synthetic global mount last.
+Implement one ordered discovery producer that scans repositories for detector-aligned markers and
+pipelines the bounded candidate set into one shared concurrent detector. Keep cache-directory
+creation single-file and keep all real mounts serial. Keep the synthetic global mount last.
 
 ## Context
 
@@ -38,26 +37,54 @@ Keep the synthetic global mount last.
 
 ## Technical design
 
-### 1. Discover candidate roots before starting detection
+### 1. Produce candidate roots with `walkdir`
 
-Add a filesystem-only discovery helper in `crates/build_cache`. Run it once for every
-`RepositoryCacheSource` before any detection future starts.
+Add `walkdir.workspace = true` to `crates/build_cache/Cargo.toml`. Build one producer over
+`RepositoryCacheSource` values sorted by `RepoCacheKey`. The producer yields each repository root
+first, then advances one `walkdir::WalkDir` iterator for that repository.
+
+Configure each iterator with:
+
+- `min_depth(1)`, because the producer handles the always-included root separately;
+- `max_depth(7)`, because a candidate root may be at depth 4 and its deepest relative marker,
+  `.config/mise/config.toml`, is three entries below it;
+- `follow_links(false)` and `follow_root_links(false)`;
+- `sort_by_file_name()`; and
+- `into_iter().filter_entry(...)` to reject ignored directory entries and symlink entries before
+  descent.
+
+`WalkDir` yields a directory before its contents and uses depth-first traversal. Sorted sibling
+names therefore define deterministic depth-first selection. Do not reconstruct breadth-first
+traversal around `WalkDir`; that would restore a custom directory queue and defeat the reuse.
+Changing from breadth-first to depth-first can change which 32 roots a truncated repository retains.
+This is intentional and is covered by fixtures.
+
+Apply these limits and error rules:
 
 - Always include the repository root. It has depth 0 and does not count against the child limit.
-- Use sorted breadth-first traversal. Sort siblings by normalized repository-relative path.
-- Permit candidate roots at depths 1 through 4. Do not enqueue children of a depth-4 directory.
+- Accept a candidate root only at depths 1 through 4. Entries through depth 7 are inspected only to
+  support relative markers for those roots.
 - Visit at most 10,000 non-ignored, non-symlink directories per repository, including the root.
-- Retain at most 32 child candidates per repository. When a 33rd child candidate is found, mark the
-  scan truncated and stop that repository's traversal.
-- When the visit limit is reached with work remaining, mark the scan truncated and stop traversal.
-- On truncation, retain the root and the deterministic candidates already selected. Continue cache
+  Files do not count against this limit.
+- Retain at most 32 child candidates per repository. When a 33rd distinct child candidate is found,
+  mark the scan truncated and stop that repository's iterator.
+- When the directory limit is reached with iterator work remaining, mark the scan truncated and stop
+  that repository's iterator.
+- On truncation, retain the root and the deterministic candidates already yielded. Continue cache
   setup.
-- Skip a directory subtree before counting or reading it when its entry name is `.git`,
-  `node_modules`, `target`, `Pods`, `vendor`, `dist`, `build`, `.venv`, `.tox`, or `DerivedData`.
-- Do not follow symlinks to files or directories. A symlink itself is not a marker.
-- If a non-root directory cannot be read, skip that subtree, record one scan warning, and continue.
+- Reject a directory entry in `filter_entry` when its name is `.git`, `node_modules`, `target`,
+  `Pods`, `vendor`, `dist`, `build`, `.venv`, `.tox`, or `DerivedData`. The rejected directory and
+  its subtree do not count as visited. Do not reject a file with one of these names.
+- Reject symlink entries in `filter_entry`. `follow_links(false)` prevents descent through nested
+  links. `follow_root_links(false)` prevents the special default behavior that otherwise follows a
+  symlink passed as the traversal root. A symlink is not a marker.
+- Handle every `walkdir::Error` in place and continue iteration. Use `Error::depth()` and
+  `Error::path()` only to aggregate the affected repository's unreadable-entry count. `WalkDir`
+  does not descend when it cannot open a directory. Do not log raw error paths in safe telemetry.
   A missing or unreadable repository root still proceeds to root detection, which preserves the
   existing per-invocation error path.
+- Do not set `max_open`; use the crate's bounded default. This setting changes the file-descriptor
+  versus memory trade-off, not yielded results.
 
 Normalize a child root by stripping the repository root and accepting only non-empty normal UTF-8
 components. Join components with `/`. Preserve case and Unicode bytes. Skip a child path that is
@@ -96,8 +123,12 @@ with this table. If detector semantics differ, update this spec and the table in
 
 ### 3. Prepare stable isolated cache roots
 
-Create all selected configuration roots serially before detection. A creation failure skips only
-that candidate and produces the existing non-fatal degradation report.
+Before the producer yields a candidate's detection future, create that candidate's configuration
+root and await any permission fallback. The producer prepares only one directory at a time. A
+preparation may overlap already-running dry-run detections, but it must not overlap another
+preparation or any real mount. This overlap is safe because each candidate has a distinct cache
+root, and dry-run detection does not apply mounts. A creation failure yields a keyed non-fatal
+degradation result for that candidate and does not yield a detection future.
 
 - Preserve the current root cache path: `repos/<repo-key>`.
 - Use `repos/<repo-key>/nested/<stable-id>` for a child root.
@@ -111,25 +142,40 @@ that candidate and produces the existing non-fatal degradation report.
 This scheme preserves existing root cache hits and isolates equal relative mount names such as
 `frontend/target` and `backend/target`.
 
-### 4. Detect the complete candidate set with one shared limit
+### 4. Pipeline candidates through one shared detector limit
 
-After discovery and serial directory preparation complete for every repository, build one ordered
-work list across all repositories. Order by `RepoCacheKey`, then root before children, then normalized
-child path.
+Add `futures.workspace = true` to the normal dependencies in `crates/build_cache/Cargo.toml`; remove
+the duplicate dev-only declaration. Use the existing workspace `futures` dependency and
+`futures::stream::StreamExt::buffer_unordered(8)` as the bounded-concurrency primitive. Do not add a
+custom semaphore.
 
-- Change the command hook from exclusive `FnMut` use to a concurrency-safe `Fn` shape. Tests must
-  use shared synchronization such as `Arc<Mutex<...>>`; do not serialize the production scheduler
-  behind the fake-runner API.
-- Schedule the entire work list through one bounded unordered stream with a limit of 8. The limit is
-  shared across repositories.
+Implement the producer as one ordered stream, such as `futures::stream::unfold`, whose state owns
+the sorted repositories, the current `WalkDir` iterator, per-repository counters, deduplication
+state, and accumulated scan diagnostics. The producer advances synchronously until it finds the
+next distinct candidate, prepares that candidate's cache directory, and yields its detection
+future. Apply `buffer_unordered(8)` once to this stream and collect the results.
+
+- The buffer's limit of 8 is the only detection limit and is shared across all repositories.
+- At most eight yielded detection futures are in flight. The buffer pulls another candidate only
+  when it has capacity. No unbounded candidate queue or channel is permitted.
+- Selection remains deterministic even though production is demand-driven. The producer alone
+  advances each sorted `WalkDir` iterator and applies that repository's 10,000-directory and
+  32-child limits. Detection completion order can change when production resumes, but it cannot
+  change the next candidate selected.
+- Change the command hook from exclusive `FnMut` use to a concurrency-safe `Fn` shape. Wrap it in
+  `Arc` inside `setup_cache`; each yielded future owns an `Arc` clone. Pass shared references to
+  both directory preparation and spacectl invocation. Tests must put mutable fake-runner state
+  behind shared synchronization such as `Arc<Mutex<...>>`; do not serialize the production
+  scheduler behind the fake-runner API.
 - Run `spacectl cache mount --detect='*' --dry_run=true` with each candidate as cwd and its isolated
   cache root.
 - Preserve the 60-second timeout and `kill_on_drop(true)` for every invocation.
 - An invocation failure, timeout, malformed response, or empty mode set affects only that root.
 - Do not cancel siblings after a failure.
-- Reorder results into the canonical work-list order before constructing the plan or returning the
-  report. Completion order must not affect the plan, mount order, environment overlay, or telemetry
-  report order.
+- Attach the canonical key `(RepoCacheKey, root-first flag, normalized child path)` to each
+  preparation failure and detection result. Sort all keyed results before constructing the plan or
+  returning the report. Completion order must not affect the plan, mount order, environment
+  overlay, telemetry report order, or truncation result.
 
 ### 5. Plan and apply mounts serially
 
@@ -173,9 +219,17 @@ detection or mounting.
 - **Marker scan instead of spacectl in every directory.** A bounded marker scan avoids process spam
   and matches cwd-based detector semantics. Calling spacectl for every directory was rejected
   because repository breadth and 60-second per-process timeouts make latency unbounded.
-- **Complete scan before concurrent detection.** Scheduling while walking was rejected. It makes
-  concurrency dependent on traversal order and does not satisfy the request to detect the full root
-  set through one shared scheduler.
+- **Pipeline discovery into detection.** Completing every scan before detection is simpler, but it
+  adds scan latency to the critical path and retains the full candidate set. A single ordered,
+  backpressured producer is safe because selection limits belong only to producer state, each cache
+  root is prepared before its future is yielded, and keyed results are sorted after completion.
+- **Use `buffer_unordered` instead of a custom limiter.** The workspace already depends on
+  `futures`. `StreamExt::buffer_unordered(8)` directly bounds a stream of detection futures and
+  provides backpressure. A custom futures semaphore would duplicate this behavior.
+- **Use sorted depth-first `WalkDir` traversal.** `WalkDir` supplies bounded descriptors, depth
+  limits, symlink controls, subtree filtering, and recoverable errors. Retaining breadth-first
+  selection would require a custom queue. Sorted depth-first selection is deterministic and makes
+  the 32-root truncation policy explicit.
 - **Eight shared detection slots.** This captures the measured concurrency benefit while bounding
   process and detector fan-out. A per-repository limit was rejected because multiple repositories
   could exceed the intended host-wide limit.
@@ -197,13 +251,17 @@ detection or mounting.
   remain unavailable to detection.
 - Overlapping real spacectl mounts are not proven safe on Linux or macOS. V1 does not rely on that
   behavior.
+- `WalkDir::sort_by_file_name()` is deterministic for a fixed filesystem and platform. Cross-platform
+  traversal order for non-UTF-8 entry names is not part of the cache identity contract; such paths
+  cannot become candidates.
 
 ## Out of scope
 
 - Recursive detection changes in spacectl or Namespace.
 - Calling spacectl in directories without detector-aligned markers.
 - Moving cache setup after user setup commands.
-- Concurrent cache-directory creation or real mount invocations.
+- Concurrent cache-directory creation or real mount invocations. Cache-directory preparation may
+  overlap dry-run detection for a different candidate.
 - New detectors or support for looser manifests that the shipped spacectl does not recognize.
 - UI changes or computer-use verification.
 
@@ -213,13 +271,21 @@ detection or mounting.
    - every direct, relative, directory, and suffix marker rule;
    - non-markers such as bare `package.json`, depth 5, ignored trees, and symlinks;
    - exact deduplication while retaining marked parent and child roots;
-   - sorted breadth-first selection, the 10,000-directory limit, and 32 children plus root;
+   - sorted depth-first `WalkDir` selection, the 10,000-directory limit, and 32 children plus root;
    - deterministic truncation and unreadable-subtree isolation;
+   - `max_depth(7)` finding `.config/mise/config.toml` for a depth-4 candidate without accepting a
+     depth-5 candidate;
+   - ignored directory subtrees, symlinked nested directories, and a symlink traversal root are not
+     followed;
    - stable cross-separator child IDs, preserved root cache paths, and unique safe cache paths;
    - a fake runner that observes more than one and no more than eight simultaneous detects across
      multiple repositories;
-   - per-root failure and timeout isolation, `kill_on_drop`, deterministic report ordering, serial
-     mount execution, and the global mount last;
+   - detection starts before the final scan completes, cache-directory preparations never overlap,
+     and a preparation can overlap an active dry-run detection;
+   - producer backpressure keeps at most eight detection futures in flight and selection is
+     identical across deliberately permuted completion orders;
+   - per-root failure and timeout isolation, `kill_on_drop`, deterministic keyed report ordering,
+     serial mount execution, and the global mount last;
    - repeated ordered repository keys and unique cache-directory plan invariants.
 2. `cargo nextest run -p warp cache_setup` passes to confirm Namespace gating, source mapping,
    degradation reporting, and environment export behavior remain compatible.
