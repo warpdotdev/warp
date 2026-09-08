@@ -6,6 +6,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
@@ -40,6 +41,7 @@ use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
 use warp_server_client::iap::{IapManager, IapManagerEvent};
+use warpui::r#async::FutureExt as _;
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
 
@@ -227,6 +229,25 @@ fn dispatch_command(
     }
 }
 
+fn task_id_before_auth(command: &CliCommand) -> Option<&str> {
+    match command {
+        CliCommand::Agent(AgentCommand::Run(args)) => args.task_id.as_deref(),
+        _ => None,
+    }
+}
+
+fn set_task_context_before_auth(ctx: &AppContext, command: &CliCommand) -> anyhow::Result<bool> {
+    let Some(raw_task_id) = task_id_before_auth(command) else {
+        return Ok(false);
+    };
+    let task_id = common::parse_ambient_task_id(raw_task_id, "Invalid task ID")?;
+    ServerApiProvider::handle(ctx)
+        .as_ref(ctx)
+        .get()
+        .set_ambient_agent_task_id(Some(task_id));
+    Ok(true)
+}
+
 fn format_skill_resolution_error(err: ResolveSkillError) -> String {
     match err {
         ResolveSkillError::NotFound { skill } => {
@@ -289,6 +310,9 @@ fn run_agent(
             }
 
             let server_api = ServerApiProvider::handle(ctx).as_ref(ctx).get_ai_client();
+            let terminal_reporter = ServerApiProvider::handle(ctx)
+                .as_ref(ctx)
+                .get_harness_support_client();
 
             // Start the agent driver runner, which will handle the rest of the setup steps
             // (managing both sync and async steps) as well as triggering the driver.
@@ -300,6 +324,7 @@ fn run_agent(
                         spawner,
                         args,
                         server_api,
+                        terminal_reporter,
                         global_options.output_format,
                     ),
                     |_, result, _ctx| {
@@ -655,6 +680,9 @@ impl AgentDriverRunner {
         foreground: ModelSpawner<Self>,
         args: RunAgentArgs,
         server_api: Arc<dyn AIClient>,
+        terminal_reporter: Arc<
+            dyn crate::server::server_api::harness_support::HarnessSupportClient,
+        >,
         output_format: OutputFormat,
     ) -> Result<(), AgentDriverError> {
         // Extract the task ID as early as possible for best-effort setup observability.
@@ -842,7 +870,7 @@ impl AgentDriverRunner {
         if let Err(ref err) = result
             && let Some(task_id) = task_id
         {
-            driver::report_driver_error(task_id, err, &server_api).await;
+            driver::report_driver_error(task_id, err, &server_api, &terminal_reporter).await;
         }
         result
     }
@@ -1608,6 +1636,32 @@ enum CommandAuthentication {
     RefreshUser,
 }
 
+const TERMINAL_ERROR_REPORT_TIMEOUT: Duration = Duration::from_secs(3);
+const AUTHENTICATION_REQUIRED_CATEGORY: &str = "authentication_required";
+const AGENT_PROCESS_FAILED_CATEGORY: &str = "agent_process_failed";
+
+#[derive(Clone)]
+struct TerminalErrorReport {
+    category: &'static str,
+    message: String,
+}
+
+impl TerminalErrorReport {
+    fn authentication(message: impl Into<String>) -> Self {
+        Self {
+            category: AUTHENTICATION_REQUIRED_CATEGORY,
+            message: message.into(),
+        }
+    }
+
+    fn process_start(message: impl Into<String>) -> Self {
+        Self {
+            category: AGENT_PROCESS_FAILED_CATEGORY,
+            message: message.into(),
+        }
+    }
+}
+
 fn command_authentication(
     pending_api_key: Option<String>,
     is_logged_in: bool,
@@ -1683,6 +1737,7 @@ fn launch_command(
     global_options: GlobalOptions,
 ) -> anyhow::Result<()> {
     let parent_span = tracing::Span::current();
+    let task_scoped_run = set_task_context_before_auth(ctx, &command)?;
     let requires_auth = command_requires_auth(&command);
 
     if !requires_auth {
@@ -1695,16 +1750,34 @@ fn launch_command(
     let Some(authentication) =
         command_authentication(global_options.api_key.clone(), auth_state.is_logged_in())
     else {
-        return Err(anyhow::anyhow!(
+        let error = anyhow::anyhow!(
             "You are not logged in - please log in with `{cli_name} login` to continue."
-        ));
+        );
+        if task_scoped_run {
+            report_fatal_error_with_terminal_report(
+                error,
+                TerminalErrorReport::authentication(
+                    "Authentication failed before the agent could start. Provide a valid API key or sign in again.",
+                ),
+                ctx,
+            );
+            return Ok(());
+        }
+        return Err(error);
     };
 
     // On staging the warp-server is fronted by IAP, so establish an IAP token
     // before *any* warp-server request.
     let iap = IapManager::handle(ctx);
     if !iap.as_ref(ctx).is_enabled() || iap.as_ref(ctx).has_valid_token() {
-        authenticate_and_dispatch(ctx, command, global_options, authentication, parent_span);
+        authenticate_and_dispatch(
+            ctx,
+            command,
+            global_options,
+            authentication,
+            parent_span,
+            task_scoped_run,
+        );
         return Ok(());
     }
 
@@ -1726,14 +1799,23 @@ fn launch_command(
                     global_options.clone(),
                     authentication.clone(),
                     parent_span.clone(),
+                    task_scoped_run,
                 );
             }
             IapManagerEvent::AccessUnavailable => {
                 handled = true;
-                report_fatal_error(
-                    anyhow::anyhow!("Timed out establishing IAP access to warp-server."),
-                    ctx,
-                );
+                let error = anyhow::anyhow!("Timed out establishing IAP access to warp-server.");
+                if task_scoped_run {
+                    report_fatal_error_with_terminal_report(
+                        error,
+                        TerminalErrorReport::authentication(
+                            "Authentication with the Warp service timed out before the agent could start.",
+                        ),
+                        ctx,
+                    );
+                } else {
+                    report_fatal_error(error, ctx);
+                }
             }
             _ => {}
         }
@@ -1752,6 +1834,7 @@ fn authenticate_and_dispatch(
     global_options: GlobalOptions,
     authentication: CommandAuthentication,
     parent_span: tracing::Span,
+    task_scoped_run: bool,
 ) {
     let cli_name = warp_cli::binary_name().unwrap_or_else(|| "warp".to_string());
 
@@ -1766,7 +1849,17 @@ fn authenticate_and_dispatch(
             AuthManagerEvent::AuthComplete => {
                 dispatched = true;
                 if let Err(err) = dispatch_command(ctx, command.clone(), global_options.clone()) {
-                    report_fatal_error(err, ctx);
+                    if task_scoped_run {
+                        report_fatal_error_with_terminal_report(
+                            err,
+                            TerminalErrorReport::process_start(
+                                "The agent failed before it could start.",
+                            ),
+                            ctx,
+                        );
+                    } else {
+                        report_fatal_error(err, ctx);
+                    }
                 }
             }
             AuthManagerEvent::NeedsReauth => {
@@ -1777,11 +1870,33 @@ fn authenticate_and_dispatch(
                 } else {
                     format!("Your credentials are invalid. Please log in again with `{cli_name} login`.")
                 };
-                report_fatal_error(anyhow::anyhow!(message), ctx);
+                let error = anyhow::anyhow!(message);
+                if task_scoped_run {
+                    report_fatal_error_with_terminal_report(
+                        error,
+                        TerminalErrorReport::authentication(
+                            "Authentication failed before the agent could start. Provide a valid API key or sign in again.",
+                        ),
+                        ctx,
+                    );
+                } else {
+                    report_fatal_error(error, ctx);
+                }
             }
             AuthManagerEvent::AuthFailed(err) => {
                 dispatched = true;
-                report_fatal_error(anyhow::anyhow!("Authentication failed: {err:#}"), ctx);
+                let error = anyhow::anyhow!("Authentication failed: {err:#}");
+                if task_scoped_run {
+                    report_fatal_error_with_terminal_report(
+                        error,
+                        TerminalErrorReport::authentication(
+                            "Authentication failed before the agent could start. Verify the API key or sign in again.",
+                        ),
+                        ctx,
+                    );
+                } else {
+                    report_fatal_error(error, ctx);
+                }
             }
             _ => {}
         }
@@ -1806,6 +1921,48 @@ pub fn is_running_in_warp() -> bool {
 
 /// Report a fatal error and terminate the app.
 fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
+    let error = prepare_fatal_error(err);
+    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+}
+
+fn report_fatal_error_with_terminal_report(
+    err: anyhow::Error,
+    report: TerminalErrorReport,
+    ctx: &mut AppContext,
+) {
+    let error = prepare_fatal_error(err);
+    let client = ServerApiProvider::as_ref(ctx).get_harness_support_client();
+    let runner = ctx.add_singleton_model(|_| AgentDriverRunner);
+    runner.update(ctx, move |_, ctx| {
+        ctx.spawn(
+            async move {
+                client
+                    .report_terminal_error(report.category.to_string(), report.message)
+                    .with_timeout(TERMINAL_ERROR_REPORT_TIMEOUT)
+                    .await
+            },
+            move |_, result, ctx| {
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(report_error)) => {
+                        tracing::warn!(
+                            "Failed to report task-scoped terminal error before exit: {report_error:#}"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "Timed out reporting task-scoped terminal error before exit after {:?}",
+                            TERMINAL_ERROR_REPORT_TIMEOUT
+                        );
+                    }
+                }
+                ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+            },
+        );
+    });
+}
+
+fn prepare_fatal_error(err: anyhow::Error) -> anyhow::Error {
     let mut message = err.to_string();
     for cause in err.chain().skip(1) {
         let _ = write!(&mut message, "\n=> {cause}");
@@ -1824,8 +1981,7 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
         }
     }
 
-    let error = anyhow::anyhow!(message);
-    ctx.terminate_app(TerminationMode::ForceTerminate, Some(Err(error)));
+    anyhow::anyhow!(message)
 }
 
 fn resolve_orchestration_harness_label() -> &'static str {

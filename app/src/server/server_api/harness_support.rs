@@ -335,6 +335,19 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
         error_message: String,
     ) -> Result<()>;
 
+    /// Record a terminal error using only the current run's ambient workload token.
+    ///
+    /// This deliberately bypasses user/API-key token refresh so authentication
+    /// failures can still reach the task status.
+    async fn report_terminal_error(
+        &self,
+        error_category: String,
+        error_message: String,
+    ) -> Result<()> {
+        let _ = (error_category, error_message);
+        anyhow::bail!("terminal error reporting is not implemented by this client")
+    }
+
     /// Get presigned upload targets for a workspace state snapshot.
     ///
     /// The returned list is aligned by index with `request.files`. See
@@ -437,6 +450,33 @@ impl ServerApi {
         if response.status().is_success() {
             Ok(response)
         } else {
+            Err(Self::error_from_response(response).await)
+        }
+    }
+
+    async fn post_workload_authenticated_public_api_unit<B>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<()>
+    where
+        B: serde::Serialize,
+    {
+        let url = format!("{}/api/v1/{}", crate::ChannelState::server_root_url(), path);
+        let mut request = self.base_client.http_client().post(&url).json(body);
+
+        for (name, value) in self.ambient_agent_headers().await? {
+            request = request.header(name, value);
+        }
+
+        let response = request.send().await.with_context(|| {
+            format!("Failed to send workload-authenticated API request to {url}")
+        })?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            self.observe_iap_challenge(&response);
             Err(Self::error_from_response(response).await)
         }
     }
@@ -572,6 +612,18 @@ impl HarnessSupportClient for ServerApi {
     ) -> Result<()> {
         self.post_public_api_unit(
             "harness-support/report-shutdown",
+            &ReportShutdownRequest::abnormal(error_category, error_message),
+        )
+        .await
+    }
+
+    async fn report_terminal_error(
+        &self,
+        error_category: String,
+        error_message: String,
+    ) -> Result<()> {
+        self.post_workload_authenticated_public_api_unit(
+            "harness-support/report-terminal-error",
             &ReportShutdownRequest::abnormal(error_category, error_message),
         )
         .await

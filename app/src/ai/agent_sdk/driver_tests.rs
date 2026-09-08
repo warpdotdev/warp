@@ -32,7 +32,8 @@ use super::{
     OZ_MESSAGE_LISTENER_MANAGED_EXTERNALLY_ENV, OZ_MESSAGE_LISTENER_STATE_ROOT_ENV,
     PlatformErrorCode, SDKConversationOutputStatus, WARP_MESSAGE_LISTENER_STATE_ROOT_ENV,
     build_secret_env_vars, debug_turn_task_state, idle_window_for_cli_session_status,
-    idle_window_for_terminal_status, setup_failure_status_update, terminal_status_log_outcome,
+    idle_window_for_terminal_status, setup_failure_status_update, terminal_error_category,
+    terminal_status_log_outcome,
 };
 use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
 use crate::ai::agent::task::TaskId;
@@ -63,6 +64,36 @@ fn idle_timeout_sender_send_now_delivers_value() {
     let idle_timeout = IdleTimeoutSender::new(tx);
     idle_timeout.end_run_now(42);
     assert_eq!(rx.try_recv().unwrap(), Some(42));
+}
+
+#[test]
+fn terminal_error_fallback_preserves_specific_platform_categories() {
+    assert_eq!(
+        terminal_error_category(
+            AgentTaskState::Failed,
+            Some(PlatformErrorCode::EnvironmentSetupFailed),
+        ),
+        Some("environment_setup_failed")
+    );
+    assert_eq!(
+        terminal_error_category(
+            AgentTaskState::Error,
+            Some(PlatformErrorCode::AuthenticationRequired),
+        ),
+        Some("authentication_required")
+    );
+    assert_eq!(
+        terminal_error_category(
+            AgentTaskState::Failed,
+            Some(PlatformErrorCode::ResourceNotFound),
+        ),
+        Some("resource_not_found")
+    );
+    assert_eq!(terminal_error_category(AgentTaskState::Blocked, None), None);
+    assert_eq!(
+        terminal_error_category(AgentTaskState::Cancelled, None),
+        None
+    );
 }
 
 #[test]
