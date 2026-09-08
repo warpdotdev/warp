@@ -1,99 +1,77 @@
 # Child-run deep links in the web session viewer
 
 ## Summary
-The work ships in phases. Phase 0 immediately stops child-pill navigation from replacing the web session viewer's entry URL. It does not preserve the selected child on refresh or in a copied link. Later phases replace that temporary rule with the approved final behavior: the viewer keeps the root orchestrator route and encodes the selected child as `#child=<run-id>`.
+The web session viewer uses the top-level orchestrator as the stable route and encodes the selected child as `#child=<run-id>`. Existing direct child links canonicalize to that root when the viewer can resolve the complete ancestor chain.
 
 ## Problem
-Today a child-pill click can replace the root orchestrator URL with the child's own `/conversation/<id>` or `/session/<id>` URL. A refresh or copied link then opens the child without its orchestration context.
+Today a child-pill click can replace the root URL with the child’s `/conversation/<id>` or `/session/<id>` URL. Refreshing or copying that URL then opens the child without its orchestration context.
+
+## Figma
+Figma: none provided. This work does not redesign the existing pill bar.
 
 ## Delivery phases
 
-### Phase 0 — Preserve the viewer entry URL
-Phase 0 is implemented in the same PR as this specification.
+### Phase 0 — Preserve the entry URL
+Phase 0 ships in this PR:
 
-1. While the current URL is `/conversation/<id>` or `/session/<id>`, a non-forced pane focus or pane-link update keeps that current URL.
-2. Clicking a child pill no longer replaces the orchestrator URL with the child's URL.
-3. Refreshing or copying the URL reopens the orchestrator with no child selected.
-4. Phase 0 does not create an anchored child link. It is a narrow bug fix while the remaining phases are implemented.
+1. Non-forced pane focus and pane-link updates keep the current `/conversation/<id>` or `/session/<id>` URL.
+2. Child-pill navigation no longer replaces the orchestrator URL with the child URL.
+3. Refresh and copy reopen the orchestrator without preserving the selected child.
 
-Phase 0 is deliberately temporary. Its blanket URL-preservation rule suppresses the explicit fragment write required by the final design. Phase 2 must remove or invert that rule before it adds anchor navigation. If the anchor writer is layered beneath the Phase 0 guard, clicking a pill will silently fail to add `#child=<run-id>`.
+Phase 0 is temporary. Its blanket URL guard suppresses the fragment write required by the final design. Phase 2 must remove or invert that guard before adding anchor navigation, or pill clicks will silently fail to add `#child=<run-id>`.
 
 ### Phase 1 — Canonicalize direct child links
-Phase 1 adds permission-aware server route resolution. It redirects an accessible direct child link to the accessible top-level root plus the child's anchor. It also adds the `?view=standalone` escape hatch and the no-disclosure access fallback.
+The signed-in viewer resolves a direct child’s top-level root by walking `parent_run_id` through the existing run endpoint. It replaces the child URL with the root URL plus the child anchor. `?view=standalone` skips this canonicalization.
 
-### Phase 2 — Restore and navigate anchored selections
-Phase 2 adds anchored pill navigation, refresh restoration, stale-anchor cleanup, and Back/Forward history behavior in the WASM viewer. It replaces Phase 0's blanket preservation rule with selection-aware URL handling.
+### Phase 2 — Restore anchored selections
+The root viewer restores `#child=<run-id>`, writes anchors for pill navigation, and applies browser Back and Forward.
 
 ## Behavior
-The requirements below describe the final state after Phases 1 and 2.
 
-### URL shape and pill navigation
-1. The stable viewer URL is the root orchestrator's route:
-   - `/conversation/<root-conversation-id>`
-   - `/session/<root-session-uuid>`
-2. When a child run is selected, the viewer appends the child's run ID as a URL fragment:
-   - `/conversation/<root-conversation-id>#child=<child-run-id>`
-   - `/session/<root-session-uuid>#child=<child-run-id>`
-3. The URL fragment represents only the selected run. It does not identify the transcript format or the current child session.
-4. Clicking a child pill keeps the root route and its supported query parameters unchanged. It changes only the `child` fragment.
-5. Clicking a different child pill replaces the fragment value with that child's run ID.
-6. Clicking the root orchestrator pill removes the `child` fragment.
-7. Clicking the selected pill is a no-op. It does not create a duplicate browser-history entry.
-8. A child pill without a durable run ID remains selectable, but the viewer leaves the URL unanchored. A copied or refreshed URL then reopens the root orchestrator.
+### Canonical URL and selection
+1. The stable route is the top-level root’s `/conversation/<id>` or `/session/<id>` URL.
+2. A selected child adds `#child=<child-run-id>`. Selecting the root removes the fragment.
+3. Pill navigation changes only the fragment. It preserves the root path and supported query parameters.
+4. A child without a durable run ID remains selectable but leaves the URL unanchored.
+5. Automatic routing between the root’s live session and stored conversation preserves the child fragment.
 
-### Opening and refreshing links
-9. Loading a root URL with `#child=<run-id>` first loads the root orchestration viewer. After the viewer has indexed the root's children, it selects the child whose run ID matches the fragment.
-10. The viewer keeps the normal root loading state while it discovers and materializes the selected child. It does not render the child as a standalone viewer.
-11. Refreshing a valid anchored root URL restores the same root and selected child.
-12. Copying a valid anchored root URL and opening it in another authorized browser restores the same root and selected child.
-13. If the run ID is stale, malformed, outside the root's orchestration tree, or unavailable after initial orchestration hydration settles, the viewer shows the root orchestrator with no child selected. It removes the invalid fragment with a history replacement.
-14. The viewer does not use a timeout to decide that an anchor is stale. It waits for an explicit completion signal from initial orchestration hydration.
-15. Automatic routing between a live session and a stored conversation preserves the child fragment. For example, `/session/<root-session>#child=<run>` may become `/conversation/<root-conversation>#child=<run>` after the session ends.
+### Opening anchored root links
+6. A root URL with `#child=<run-id>` loads the root viewer, waits for initial orchestration hydration, then selects the matching child.
+7. Refreshing or copying a valid anchored URL restores the same root and child for an authorized viewer.
+8. The viewer does not use a timeout to classify an anchor as stale.
+9. After initial hydration settles, a malformed, stale, inaccessible, or out-of-tree anchor selects the root and removes the fragment with history replacement.
 
-### Existing direct child links
-16. Existing `/conversation/<child-conversation-id>` and `/session/<child-session-uuid>` links continue to work.
-17. By default, opening an orchestration child's direct URL resolves the child's ancestry and replaces the URL with the top-level root orchestrator route plus `#child=<child-run-id>`.
-18. An arbitrarily deep child redirects to the top-level root, not its immediate parent. The resulting root viewer selects the originally requested child.
-19. A cold redirect selects the root's live `/session` route when a reachable, authorized root session exists. Otherwise it selects the authorized root `/conversation` route when a stored transcript exists.
-20. If the server cannot resolve a complete, valid ancestor chain to a routable root, the direct child viewer opens normally. The server does not redirect to an intermediate ancestor.
-21. A non-orchestration conversation or session opens normally and does not gain a child fragment.
-
-### Access control and failures
-22. The server returns a root redirect only when the same viewer can access both the requested child and the selected root route.
-23. If the viewer can access the child but cannot access the root, the child opens as a standalone viewer at its original URL. The response does not disclose a root run ID, conversation ID, session UUID, or route.
-24. Missing, cyclic, over-depth, or partially deleted ancestor chains use the same standalone-child fallback. These conditions do not expose a partial ancestry result.
-25. Transient route-resolution failures do not block an otherwise accessible child. The child opens standalone and the client may log the failure without showing internal details.
-26. Normal access checks still apply after a redirect. If access changes between resolution and navigation, the destination uses the existing viewer access-error behavior.
+### Opening direct child links
+10. Existing direct child `/conversation` and `/session` links remain valid.
+11. By default, a signed-in viewer walks from the child to the top-level root and replaces the URL with the root route plus the original child’s run ID.
+12. The walk stops successfully only at a run with no parent. It never canonicalizes to an intermediate ancestor.
+13. The walk fails on an unauthorized or missing ancestor, a malformed or repeated run ID, more than 64 parent edges, or a request failure. The child then stays at its original URL as a standalone viewer.
+14. The root’s active, reachable session route is preferred. Its stored conversation route is the fallback. If neither route is available, the child stays standalone.
+15. A non-orchestration run opens normally without a child fragment.
+16. A logged-out public viewer cannot use the authenticated run endpoint. A public child link therefore remains standalone.
 
 ### Standalone escape hatch
-27. The first implementation supports `?view=standalone` on direct child URLs:
-   - `/conversation/<child-conversation-id>?view=standalone`
-   - `/session/<child-session-uuid>?view=standalone`
-28. `view=standalone` suppresses only child-to-root canonicalization. It does not suppress the existing automatic redirect between the same run's live `/session` route and stored `/conversation` route.
-29. Automatic `/conversation` to `/session` and `/session` to `/conversation` redirects preserve `view=standalone`.
-30. `view=standalone` is case-sensitive. Unknown `view` values use the default root-canonicalization behavior.
-31. If a standalone child viewer exposes descendants, selecting a descendant keeps the standalone child's route and query string as the viewer base, then adds the selected descendant's `#child=<run-id>` fragment.
+17. The first implementation supports the exact, case-sensitive `?view=standalone` value on direct child URLs.
+18. `view=standalone` skips only child-to-root canonicalization. Same-run `/session` and `/conversation` redirects preserve it.
+19. Unknown `view` values use the default canonicalization behavior.
+20. When a standalone child exposes descendants, selecting one keeps the standalone child as the base route and adds the descendant’s child fragment.
 
 ### Browser history
-32. A cold direct-child-to-root redirect replaces the current history entry. Browser Back returns to the page before the child link instead of reopening the child and redirecting again.
-33. A user-initiated pill selection pushes one browser-history entry.
-34. Browser Back and Forward traverse prior pill selections, including the unanchored root state. Applying a history entry changes the selected pill without adding another entry.
-35. The in-view back action returns from a child to the root and records the unanchored root state consistently with a root-pill selection.
-36. Focus changes, session-join events, transcript loading, and other non-navigation state updates do not create browser-history entries.
+21. A cold child-to-root canonicalization replaces the current history entry.
+22. A changed, user-initiated pill selection pushes one history entry. Repeated selection is a no-op.
+23. Browser Back and Forward apply the prior root or child selection without writing another entry.
+24. Focus changes, session events, transcript loading, initial anchor restoration, and other non-navigation updates do not write history.
 
 ## Decisions
-- The fragment is `#child=<run-id>`. A run ID survives live-session and stored-conversation route changes.
-- Direct child links canonicalize to the top-level root. This keeps one stable viewer for the complete orchestration tree.
-- `?view=standalone` ships in the first implementation. It preserves a direct-child debugging and sharing path.
-- Cold redirects replace history. Pill selections push history.
-- Parent resolution fails closed. The product keeps an authorized child usable instead of redirecting to an inaccessible parent.
-
-## Assumptions
-- Existing viewer access-error screens remain the fallback for an authorization race after route resolution.
+- Canonicalize to the top-level root, not the immediate parent.
+- Use `#child=<run-id>` because the run ID survives session-to-conversation route changes.
+- Ship `?view=standalone` in v1.
+- Replace cold canonicalizations and push user pill selections.
+- Keep an accessible child standalone when the complete root chain or root route cannot be loaded.
 
 ## Out of scope
-- Redesigning the orchestration pill bar, transcript viewer, pane swap, or orchestration hierarchy.
-- Adding new controls for execution, messaging, pinning, or pane management.
-- Changing native desktop URL behavior.
-- Redirecting to the nearest valid ancestor when the root cannot be resolved.
-- Supporting arbitrary fragment keys beyond the exact `child` key.
+- Pill-bar or transcript-viewer redesign.
+- Native desktop URL behavior.
+- Nearest-ancestor fallback.
+- Anonymous access to run topology.
+- New orchestration, messaging, execution, or pane-management controls.
