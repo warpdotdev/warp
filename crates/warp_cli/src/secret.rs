@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::scope::{ObjectScope, TeamSelection};
+use crate::scope::ObjectScope;
 
 /// Secret-related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -218,7 +218,7 @@ pub struct UpdateSecretArgs {
 #[derive(Debug, Clone, Args)]
 pub struct ListSecretsArgs {
     #[clap(flatten)]
-    pub team_selection: TeamSelection,
+    pub scope: ObjectScope,
 }
 
 #[derive(Debug, Clone, Args)]

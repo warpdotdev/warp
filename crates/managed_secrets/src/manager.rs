@@ -164,11 +164,11 @@ where
     /// List all managed secrets accessible to the current user.
     pub fn list_secrets(
         &self,
-        request_scope: RequestScope,
+        request_scope: Option<RequestScope>,
     ) -> impl Future<Output = anyhow::Result<Vec<ManagedSecret>>> + use<RequestScope> {
         let client = self.client.clone();
         async move {
-            let secrets = client.list_secrets(&request_scope).await?;
+            let secrets = client.list_secrets(request_scope.as_ref()).await?;
             Ok(secrets)
         }
     }

@@ -429,7 +429,7 @@ fn update_secret(ctx: &mut AppContext, args: UpdateSecretArgs) -> Result<()> {
 
             if let Some(secret_value) = secret_value {
                 // Look up the existing secret's type so we use the correct ManagedSecretValue variant.
-                let list_future = manager.list_secrets(request_scope);
+                let list_future = manager.list_secrets(Some(request_scope));
                 ctx.spawn(list_future, move |manager, list_result, ctx| {
                     let secrets = match list_result {
                         Ok(secrets) => secrets,
@@ -513,36 +513,49 @@ fn list_secrets(
                 super::report_fatal_error(err, ctx);
                 return;
             }
-            let request_scope =
-                match super::common::request_team_scope_for_cli(&args.team_selection, ctx) {
-                    Ok(request_scope) => request_scope,
+            let include_user_secrets = !args.scope.is_team();
+            let include_team_secrets = !args.scope.personal;
+            let request_scope = if args.scope.is_team() {
+                match super::common::request_team_scope_for_cli(&args.scope.team_selection, ctx) {
+                    Ok(request_scope) => Some(request_scope),
                     Err(err) => {
                         super::report_fatal_error(err, ctx);
                         return;
                     }
-                };
+                }
+            } else {
+                None
+            };
             ctx.spawn(
                 manager.list_secrets(request_scope),
                 move |_, result, ctx| match result {
                     Ok(secrets) => {
-                        let secret_infos = secrets.into_iter().map(|secret| {
-                            let owner = match secret.owner.type_ {
-                                SpaceType::User => Owner::User {
-                                    user_uid: UserUid::new(secret.owner.uid.inner()),
-                                },
-                                SpaceType::Team => Owner::Team {
-                                    team_uid: ServerId::from_string_lossy(secret.owner.uid.inner()),
-                                },
-                            };
+                        let secret_infos = secrets
+                            .into_iter()
+                            .filter(|secret| match secret.owner.type_ {
+                                SpaceType::User => include_user_secrets,
+                                SpaceType::Team => include_team_secrets,
+                            })
+                            .map(|secret| {
+                                let owner = match secret.owner.type_ {
+                                    SpaceType::User => Owner::User {
+                                        user_uid: UserUid::new(secret.owner.uid.inner()),
+                                    },
+                                    SpaceType::Team => Owner::Team {
+                                        team_uid: ServerId::from_string_lossy(
+                                            secret.owner.uid.inner(),
+                                        ),
+                                    },
+                                };
 
-                            SecretInfo {
-                                name: secret.name,
-                                scope: super::common::format_owner(&owner).to_string(),
-                                secret_type: secret.type_,
-                                created_at: secret.created_at.utc(),
-                                updated_at: secret.updated_at.utc(),
-                            }
-                        });
+                                SecretInfo {
+                                    name: secret.name,
+                                    scope: super::common::format_owner(&owner).to_string(),
+                                    secret_type: secret.type_,
+                                    created_at: secret.created_at.utc(),
+                                    updated_at: secret.updated_at.utc(),
+                                }
+                            });
 
                         output::print_list(secret_infos, output_format);
 

@@ -23,22 +23,27 @@ fn parse_list(argv: &[&str]) -> ListSecretsArgs {
 #[test]
 fn list_accepts_explicit_team_uid() {
     let args = parse_list(&["list", "--team=team-uid"]);
-
-    assert_eq!(args.team_selection.requested_team_uid(), Some("team-uid"));
+    assert_eq!(args.scope.requested_team_uid(), Some("team-uid"));
 }
 
 #[test]
 fn list_accepts_bare_team_selection() {
     let args = parse_list(&["list", "--team"]);
-
-    assert!(args.team_selection.is_team());
-    assert_eq!(args.team_selection.requested_team_uid(), None);
+    assert!(args.scope.is_team());
+    assert_eq!(args.scope.requested_team_uid(), None);
 }
 
 #[test]
 fn list_accepts_no_team_flag() {
     let args = parse_list(&["list"]);
+    assert!(!args.scope.is_team());
+    assert!(!args.scope.personal);
+}
 
-    assert!(!args.team_selection.is_team());
-    assert_eq!(args.team_selection.requested_team_uid(), None);
+#[test]
+fn list_accepts_personal_scope() {
+    let args = parse_list(&["list", "--personal"]);
+
+    assert!(args.scope.personal);
+    assert!(!args.scope.is_team());
 }

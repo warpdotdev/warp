@@ -258,16 +258,23 @@ impl ManagedSecretsClient for ServerApi {
         }
     }
 
-    async fn list_secrets(&self, request_scope: &Self::RequestScope) -> Result<Vec<ManagedSecret>> {
+    async fn list_secrets(
+        &self,
+        request_scope: Option<&Self::RequestScope>,
+    ) -> Result<Vec<ManagedSecret>> {
         let variables = ListManagedSecretsVariables {
             // Pagination over managed secrets is not yet supported.
             input: ManagedSecretsInput { cursor: None },
             request_context: get_request_context(),
         };
         let operation = ListManagedSecrets::build(variables);
-        let response = self
-            .send_graphql_request_for_team(operation, *request_scope)
-            .await?;
+        let response = match request_scope {
+            Some(request_scope) => {
+                self.send_graphql_request_for_team(operation, *request_scope)
+                    .await?
+            }
+            None => self.send_graphql_request(operation, None).await?,
+        };
 
         match response.managed_secrets {
             ManagedSecretsResult::ManagedSecretsOutput(output) => Ok(output.managed_secrets),
