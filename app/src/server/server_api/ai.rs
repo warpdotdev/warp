@@ -2400,7 +2400,9 @@ impl AIClient for ServerApi {
         request: SpawnAgentRequest,
         team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
-        debug_assert_eq!(request.team, Some(team_scope.team_uid().is_some()));
+        if let Some(team) = request.team {
+            debug_assert_eq!(team, team_scope.team_uid().is_some());
+        }
         let response: SpawnAgentResponse = self
             .post_public_api_for_team("agent/run", &request, team_scope)
             .await?;

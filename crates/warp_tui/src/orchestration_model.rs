@@ -574,7 +574,7 @@ impl TuiOrchestrationModel {
         team_scope: RequestTeamScope,
         ctx: &mut ModelContext<Self>,
     ) {
-        let prepared = match prepare_remote_child_launch(&request, config, team_scope, ctx) {
+        let prepared = match prepare_remote_child_launch(&request, config, ctx) {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.fail_child_request(&request, error.user_message(), ctx);
