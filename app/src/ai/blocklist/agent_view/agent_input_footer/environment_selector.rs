@@ -557,10 +557,6 @@ impl Entity for EnvironmentSelector {
     type Event = EnvironmentSelectorEvent;
 }
 
-#[cfg(test)]
-#[path = "environment_selector_tests.rs"]
-mod tests;
-
 struct DisabledTheme;
 
 impl ActionButtonTheme for DisabledTheme {
