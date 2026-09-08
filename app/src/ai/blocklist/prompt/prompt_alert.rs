@@ -50,11 +50,10 @@ fn enterprise_limit_cta(
     team: Option<&Team>,
     user_email: Option<&str>,
 ) -> Option<Vec<FormattedTextFragment>> {
-    let workspace = workspace.filter(|workspace| {
-        workspace.billing_metadata.is_enterprise_plan() || workspace.is_native_workspaces_enabled()
-    })?;
+    let workspace =
+        workspace.filter(|workspace| workspace.billing_metadata.is_enterprise_plan())?;
     let user_email = user_email.unwrap_or_default();
-    let admin_panel_link = if workspace.is_workspace_admin(user_email) {
+    let admin_panel_link = if workspace.is_native_workspaces_admin(user_email) {
         Some(AdminActions::admin_panel_link_for_workspace())
     } else {
         team.filter(|team| team.has_admin_permissions(user_email))
