@@ -1,9 +1,10 @@
 use anyhow::{Context as _, Result};
+use cloud_objects::ids::ServerId;
 use serde::de::DeserializeOwned;
 use warp_core::channel::ChannelState;
 use warp_errors::{ErrorExt, register_error};
 
-use crate::base_client::{AmbientHeaderPolicy, BaseClient};
+use crate::base_client::{AmbientHeaderPolicy, BaseClient, TEAM_UID_HEADER};
 
 /// Typed error for HTTP operations so retry classifiers can inspect status failures.
 #[derive(Debug, thiserror::Error)]
@@ -32,13 +33,13 @@ impl BaseClient {
     /// Unlike [`get_public_api`], this does not attempt JSON deserialization on the
     /// response body, allowing the caller to decode it however they need.
     pub async fn get_public_api_response(&self, path: &str) -> Result<http_client::Response> {
-        self.get_public_api_response_with_headers(path, &[]).await
+        self.get_public_api_response_for_team(path, None).await
     }
 
-    async fn get_public_api_response_with_headers(
+    pub async fn get_public_api_response_for_team(
         &self,
         path: &str,
-        additional_headers: &[(String, String)],
+        team_uid: Option<ServerId>,
     ) -> Result<http_client::Response> {
         let auth_token = self
             .get_or_refresh_access_token()
@@ -55,8 +56,8 @@ impl BaseClient {
         {
             request = request.header(name, value);
         }
-        for (name, value) in additional_headers {
-            request = request.header(name.clone(), value.clone());
+        if let Some(team_uid) = team_uid {
+            request = request.header(TEAM_UID_HEADER, team_uid.uid());
         }
 
         let response = request
@@ -92,19 +93,19 @@ impl BaseClient {
     where
         R: DeserializeOwned,
     {
-        self.get_public_api_with_headers(path, &[]).await
+        self.get_public_api_for_team(path, None).await
     }
 
-    pub async fn get_public_api_with_headers<R>(
+    pub async fn get_public_api_for_team<R>(
         &self,
         path: &str,
-        additional_headers: &[(String, String)],
+        team_uid: Option<ServerId>,
     ) -> Result<R>
     where
         R: DeserializeOwned,
     {
         let response = self
-            .get_public_api_response_with_headers(path, additional_headers)
+            .get_public_api_response_for_team(path, team_uid)
             .await?;
         let response_url = response.url().clone();
         response

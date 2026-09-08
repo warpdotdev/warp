@@ -25,6 +25,7 @@ use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::AIClient;
+use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::team_workspace_settings::{
     NotATeamMemberError, TeamScopeForCli, TeamScopeForCliError,
@@ -156,6 +157,13 @@ pub(super) fn resolve_team_scope(
         .team_scope_for_cli(team_selection)
         .map_err(|err| describe_team_resolution_error(err, ctx))
 }
+pub(super) fn request_team_scope_for_cli(
+    team_selection: &TeamSelection,
+    ctx: &AppContext,
+) -> anyhow::Result<RequestTeamScope> {
+    let team_scope = resolve_team_scope(team_selection, ctx)?;
+    Ok(RequestTeamScope::from_scope(&team_scope))
+}
 
 pub(super) fn resolve_object_scope(
     object_scope: &ObjectScope,
@@ -234,6 +242,17 @@ pub(super) fn resolve_owner_for_team_scope(
     }
 }
 
+pub(super) fn environment_matches_scope(
+    environment: &CloudAmbientAgentEnvironment,
+    team_scope: &(impl TeamScope + ?Sized),
+    include_user_owned_for_team_scope: bool,
+) -> bool {
+    let selected_team_uid = team_scope.team_uid();
+    match environment.permissions().owner {
+        Owner::User { .. } => selected_team_uid.is_none() || include_user_owned_for_team_scope,
+        Owner::Team { team_uid } => selected_team_uid == Some(team_uid),
+    }
+}
 /// Refresh workspace metadata before executing an operation.
 ///
 /// This ensures that team state is up-to-date before creating cloud objects or performing
@@ -336,10 +355,11 @@ pub enum EnvironmentChoice {
 }
 
 impl EnvironmentChoice {
-    /// Resolve the environment to use when creating an agent integration.
+    /// Resolve the environment to use when creating an agent operation.
     /// Warp Drive *must* have been synced first.
     pub fn resolve_for_create(
         args: EnvironmentCreateArgs,
+        team_scope: &(impl TeamScope + ?Sized),
         ctx: &AppContext,
     ) -> Result<Self, ResolveConfigurationError> {
         if args.no_environment {
@@ -351,6 +371,7 @@ impl EnvironmentChoice {
             let mut synced_environments: Vec<(ServerId, &CloudAmbientAgentEnvironment)> =
                 all_environments
                     .iter()
+                    .filter(|env| environment_matches_scope(env, team_scope, true))
                     .filter_map(|env| {
                         if let SyncId::ServerId(server_id) = env.sync_id() {
                             Some((server_id, env))

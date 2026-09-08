@@ -46,7 +46,7 @@ where
     })
 }
 
-async fn send_graphql_request_with_options<QF, O>(
+pub(crate) async fn send_graphql_request_with_options<QF, O>(
     base_client: &BaseClient,
     operation: O,
     options: RequestOptions,

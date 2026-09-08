@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use comfy_table::Cell;
 use cynic::QueryBuilder;
+use futures::future;
 use inquire::error::InquireError;
 use inquire::{Confirm, Select};
 use serde::Serialize;
@@ -63,8 +64,8 @@ pub fn run(
 ) -> anyhow::Result<()> {
     let runner = ctx.add_singleton_model(|_ctx| EnvironmentCommandRunner);
     match command {
-        EnvironmentCommand::List => {
-            runner.update(ctx, |runner, ctx| runner.list(global_options, ctx));
+        EnvironmentCommand::List { scope } => {
+            runner.update(ctx, |runner, ctx| runner.list(global_options, scope, ctx));
             Ok(())
         }
         EnvironmentCommand::Create {
@@ -184,24 +185,42 @@ impl EnvironmentCommandRunner {
         });
     }
 
-    fn list(&self, global_options: GlobalOptions, ctx: &mut ModelContext<Self>) {
-        let initial_sync = UpdateManager::as_ref(ctx)
-            .initial_load_complete()
-            .with_timeout(WARP_DRIVE_SYNC_TIMEOUT);
+    fn list(
+        &self,
+        global_options: GlobalOptions,
+        scope: ObjectScope,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let refresh_future = super::common::refresh_workspace_metadata(ctx);
+        let warp_drive_sync_future = super::common::refresh_warp_drive(ctx);
+        let setup_future = future::try_join(refresh_future, warp_drive_sync_future);
 
-        ctx.spawn(initial_sync, move |_, result, ctx| {
-            if result.is_err() {
-                super::report_fatal_error(
-                    anyhow::anyhow!("Timed out waiting for Warp Drive to sync"),
-                    ctx,
-                );
+        ctx.spawn(setup_future, move |_, result, ctx| {
+            if let Err(err) = result {
+                super::report_fatal_error(err, ctx);
                 return;
             }
+            let team_scope = if scope.is_team() || scope.personal {
+                match super::common::resolve_object_scope(&scope, ctx) {
+                    Ok(team_scope) => Some(team_scope),
+                    Err(err) => {
+                        super::report_fatal_error(err, ctx);
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
 
             let environments = CloudAmbientAgentEnvironment::get_all(ctx);
 
             let environment_infos: Vec<_> = environments
                 .iter()
+                .filter(|environment| {
+                    team_scope.as_ref().is_none_or(|team_scope| {
+                        super::common::environment_matches_scope(environment, team_scope, false)
+                    })
+                })
                 .map(|environment| {
                     let name = environment.model().string_model.name.clone();
                     let description = environment.model().string_model.description.clone();

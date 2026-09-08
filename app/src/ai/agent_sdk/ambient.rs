@@ -437,8 +437,11 @@ impl AmbientAgentRunner {
                     environment_args.environment = Some(environment_id);
                 }
 
-            let environment_id = match EnvironmentChoice::resolve_for_create(environment_args, ctx)
-            {
+            let environment_id = match EnvironmentChoice::resolve_for_create(
+                environment_args,
+                &team_scope,
+                ctx,
+            ) {
                 Ok(EnvironmentChoice::None) => {
                     eprintln!("Agent will run without an environment.");
                     None
