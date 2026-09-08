@@ -651,8 +651,15 @@ fn recorded_identity_for_host(host: &str) -> Option<(String, String)> {
     Some((matched.name.clone(), matched.email.clone()))
 }
 
-/// Write `user.name`/`user.email` into one repository's local git config,
+/// Write `user.name`/`user.email` into one repository's LOCAL git config,
 /// selecting the identity of the forge that hosts it.
+///
+/// Repo-local config always wins over `--global` config, so callers should
+/// only reach for this when a sandbox genuinely spans more than one forge and
+/// therefore can't rely on a single process-wide `--global` identity (set by
+/// [`configure_git_identity`]) to represent every repo correctly. Calling this
+/// unconditionally on a single-forge sandbox would permanently defeat a later
+/// `--global` override, such as a customer's own setup command.
 pub(crate) fn configure_repository_git_identity(repository_dir: &std::path::Path, host: &str) {
     let Some((name, email)) = recorded_identity_for_host(host) else {
         return;

@@ -323,6 +323,20 @@ pub(crate) fn merge_repos_deduped(
     Ok(merged)
 }
 
+/// Reports whether `source_repos` span more than one distinct, clonable code-forge
+/// host (e.g. both `github.com` and `gitlab.com`).
+///
+/// A repo with no resolvable host (`CodeForge::host()` empty, e.g. `None`/`Unknown`)
+/// doesn't count toward the total, since it has no forge-specific identity of its own.
+fn repos_span_multiple_hosts(source_repos: &[SourceRepo]) -> bool {
+    let hosts: HashSet<&str> = source_repos
+        .iter()
+        .filter_map(|repo| repo.code_forge.map(CodeForge::host))
+        .filter(|host| !host.is_empty())
+        .collect();
+    hosts.len() > 1
+}
+
 /// Environment variable carrying the authenticated remote URL of a Factory's
 /// definition repository. Dispatch attaches it only to runs that execute as a
 /// Factory agent whose Factory definition lives in a Warp-managed repository.
@@ -414,11 +428,25 @@ async fn prepare_environment_impl(
     environment_snapshot_reporter.report(environment_snapshot);
 
     if !source_repos.is_empty() {
+        // Only stamp a per-repo LOCAL git identity when the repos span more than
+        // one forge. Git's repo-local config always wins over `--global` config
+        // regardless of write order, so pinning an identity on every repo
+        // unconditionally would permanently defeat a customer's own
+        // `git config --global user.name/email` setup command for the common
+        // single-forge case: the bootstrap-time `configure_git_identity` call
+        // already sets a process-wide `--global` identity, and a later setup
+        // command legitimately overriding that value should stick. A genuinely
+        // mixed-forge sandbox still needs a per-repo override, since a single
+        // `--global` identity can't represent two forges' distinct identities
+        // at once (see specs/REMOTE-2942).
+        let needs_per_repo_identity = repos_span_multiple_hosts(source_repos);
         for repo in source_repos {
-            git_credentials::configure_repository_git_identity(
-                &working_dir.join(&repo.repo),
-                repo.code_forge.map(CodeForge::host).unwrap_or(""),
-            );
+            if needs_per_repo_identity {
+                git_credentials::configure_repository_git_identity(
+                    &working_dir.join(&repo.repo),
+                    repo.code_forge.map(CodeForge::host).unwrap_or(""),
+                );
+            }
             register_cloned_repo(repo, working_dir, is_sandbox, spawner).await?;
             if !is_sandbox && should_index_codebase {
                 let receiver = index_repo_codebase(
