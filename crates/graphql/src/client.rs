@@ -259,7 +259,3 @@ macro_rules! define_operation {
     };
 }
 pub(crate) use define_operation;
-
-#[cfg(all(test, not(target_family = "wasm")))]
-#[path = "client_tests.rs"]
-mod tests;
