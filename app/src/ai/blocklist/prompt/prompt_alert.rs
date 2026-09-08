@@ -45,8 +45,6 @@ const NON_ADMIN_ASK_ADMIN_TO_ENABLE_OVERAGES_TEXT: &str = ", ask a team admin to
 const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
     ", ask a team admin to increase overages";
 
-/// Enterprise plans manage credit limits from the admin panel rather than upgrading, so
-/// admins (workspace or team level) get a link there and everyone else is told to ask one.
 fn enterprise_limit_cta(
     workspace: Option<&Workspace>,
     team: Option<&Team>,
