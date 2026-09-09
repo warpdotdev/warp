@@ -22,6 +22,7 @@ Prepare this checkout for Warp development by running the platform-specific boot
 
 Options:
   -h, --help               Show this help message.
+  -y, --yes                Don't prompt before each privileged (sudo) step.
   --install-common-skills  Install or update common agent skills from skills-lock.json (default).
   --install-common-skills-in-repo
                             Install or update common agent skills in this checkout's .agents/skills.
@@ -31,6 +32,9 @@ Options:
   --skip-gcloud-auth       Skip the gcloud authentication check.
 
 Environment:
+  WARP_SKIP_SUDO_PROMPT=1
+      Don't prompt before each privileged (sudo) step, same as --yes. The prompt is also
+      skipped automatically when stdin is not an interactive terminal.
   WARP_SKIP_COMMON_SKILLS_INSTALL=1
       Skip installing common agent skills, even when --install-common-skills is provided.
   WARP_SKIP_GCLOUD_AUTH=1
