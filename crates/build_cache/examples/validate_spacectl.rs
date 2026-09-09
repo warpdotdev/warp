@@ -10,7 +10,6 @@ use build_cache::{
     setup_cache,
 };
 use command::r#async::Command;
-use futures_lite::future;
 use serde_json::Value;
 
 struct Fixture {
@@ -143,7 +142,10 @@ fn run() -> Result<bool, String> {
     }
 
     let responses = Arc::new(Mutex::new(Vec::new()));
-    let report = future::block_on(setup_cache(
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let report = runtime.block_on(setup_cache(
         cache_root,
         repositories,
         additional_global_modes,

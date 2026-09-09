@@ -221,7 +221,8 @@ total scheduled detects and the configured detection limit on the cache-setup sp
 Add the stable child ID to detection spans. Do not put raw absolute checkout paths in safe logs or
 Sentry extras. Emit one warning per truncated repository and one aggregate warning per repository
 for unreadable subtrees. Expected limit truncation is non-fatal and must not cancel detection or
-mounting.
+mounting. Capture the active cache-setup span before `spawn_blocking` and enter it in the blocking
+closure so every repository discovery span and warning remains in the setup trace.
 
 ## Decisions
 
@@ -238,7 +239,8 @@ mounting.
   provides backpressure. A custom futures semaphore would duplicate this behavior.
 - **Use the app's Tokio runtime for blocking discovery.** `build_cache` is a native-only dependency
   of the app, whose native runtime is Tokio. `spawn_blocking` removes the boxed iterator and
-  resumable discovery structs without adding a runtime to wasm builds.
+  resumable discovery structs without adding a runtime to wasm builds. Standalone native callers,
+  including `validate_spacectl`, must enter a Tokio runtime before calling `setup_cache`.
 - **Use sorted depth-first `WalkDir` traversal.** `WalkDir` supplies bounded descriptors, depth
   limits, symlink controls, subtree filtering, and recoverable errors. Retaining breadth-first
   selection would require a custom queue. Sorted depth-first selection is deterministic and makes
@@ -305,7 +307,8 @@ mounting.
    degradation reporting, and environment export behavior remain compatible.
 3. Extend `crates/build_cache/examples/validate_spacectl.rs` with one repository containing root,
    `frontend`, and `backend` fixtures. With the worker's spacectl version available,
-   `cargo run -p build_cache --example validate_spacectl -- --reset` must show:
+   `cargo run -p build_cache --example validate_spacectl -- --reset` must run within the validator's
+   Tokio runtime without a missing-reactor panic and show:
    - one detect per selected root;
    - the expected nested modes;
    - distinct nested cache roots;

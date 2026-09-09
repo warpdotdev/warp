@@ -206,7 +206,11 @@ pub(super) fn candidate_receiver(
     repositories: Vec<RepositoryCacheSource>,
 ) -> mpsc::Receiver<CacheCandidate> {
     let (sender, receiver) = mpsc::channel(DETECTION_CONCURRENCY);
-    tokio::task::spawn_blocking(move || produce_candidates(repositories, sender));
+    let parent_span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || {
+        let _guard = parent_span.enter();
+        produce_candidates(repositories, sender);
+    });
     receiver
 }
 
