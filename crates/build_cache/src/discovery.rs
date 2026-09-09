@@ -294,7 +294,8 @@ fn normalize_relative_path(root: &Path, path: &Path) -> Option<PathBuf> {
     Some(normalized)
 }
 
-/// Check if `entry` is a marker file indicating a codebase. If so, return the expected codebase root.
+/// Check if `entry` is a marker file indicating a codebase.
+/// If so, return the expected codebase root.
 fn find_candidate_for_entry(entry: &DirEntry, root: &Path) -> Option<PathBuf> {
     if entry.file_type().is_dir()
         && (entry.file_name() == "Tuist"
