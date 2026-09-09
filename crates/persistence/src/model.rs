@@ -1626,19 +1626,28 @@ impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
 }
 
 /// A flat breakdown of charged usage — input/output/cache-read/cache-write
-/// inference cost (in US cents) plus platform cost, and the matching token
-/// counts — summed across every usage category and model. Mirrors the Go
-/// `SumChargedUsage` helper (`warp-server` `logic/ai/multi_agent/usage`);
-/// computed client-side from the wire's category/model-keyed
-/// `RequestCharges` map so downstream displays don't need to walk the map
-/// themselves.
+/// inference cost plus platform cost, and the matching token counts — summed
+/// across every usage category and model. Mirrors the Go `SumChargedUsage`
+/// helper (`warp-server` `logic/ai/multi_agent/usage`); computed client-side
+/// from the wire's category/model-keyed `RequestCharges` map so downstream
+/// displays don't need to walk the map themselves.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
 pub struct ChargedUsageTotals {
     pub input_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cost_in_credits: f32,
     pub output_cost_in_cents: f32,
+    #[serde(default)]
+    pub output_cost_in_credits: f32,
     pub input_cache_read_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_read_cost_in_credits: f32,
     pub input_cache_write_cost_in_cents: f32,
+    #[serde(default)]
+    pub input_cache_write_cost_in_credits: f32,
     pub platform_cost_in_cents: f32,
+    #[serde(default)]
+    pub platform_cost_in_credits: f32,
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub input_cache_read_tokens: u32,
@@ -1653,6 +1662,8 @@ pub struct ChargedUsageTotals {
     /// charged dollar total (see `warp-proto-apis` PR #363).
     #[serde(default)]
     pub web_search_cost_in_cents: f32,
+    #[serde(default)]
+    pub web_search_cost_in_credits: f32,
 }
 
 impl ChargedUsageTotals {
@@ -1664,6 +1675,15 @@ impl ChargedUsageTotals {
             + self.input_cache_write_cost_in_cents
             + self.platform_cost_in_cents
             + self.web_search_cost_in_cents
+    }
+
+    pub fn total_cost_in_credits(&self) -> f32 {
+        self.input_cost_in_credits
+            + self.output_cost_in_credits
+            + self.input_cache_read_cost_in_credits
+            + self.input_cache_write_cost_in_credits
+            + self.platform_cost_in_credits
+            + self.web_search_cost_in_credits
     }
 
     /// Total tokens across every category (input + output + cache-read + cache-write).
@@ -1683,28 +1703,39 @@ impl ChargedUsageTotals {
         }
         if let Some(token_cost) = usage.token_cost.as_ref() {
             self.input_cost_in_cents += token_cost.input_cost_in_cents;
+            self.input_cost_in_credits += token_cost.input_cost_in_credits;
             self.output_cost_in_cents += token_cost.output_cost_in_cents;
+            self.output_cost_in_credits += token_cost.output_cost_in_credits;
             self.input_cache_read_cost_in_cents += token_cost.input_cache_read_cost_in_cents;
+            self.input_cache_read_cost_in_credits += token_cost.input_cache_read_cost_in_credits;
             self.input_cache_write_cost_in_cents += token_cost.input_cache_write_cost_in_cents;
+            self.input_cache_write_cost_in_credits += token_cost.input_cache_write_cost_in_credits;
         }
         self.web_search_count += usage.web_search_count;
         self.web_search_cost_in_cents += usage.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += usage.web_search_cost_in_credits;
     }
 }
 
 impl std::ops::AddAssign for ChargedUsageTotals {
     fn add_assign(&mut self, rhs: Self) {
         self.input_cost_in_cents += rhs.input_cost_in_cents;
+        self.input_cost_in_credits += rhs.input_cost_in_credits;
         self.output_cost_in_cents += rhs.output_cost_in_cents;
+        self.output_cost_in_credits += rhs.output_cost_in_credits;
         self.input_cache_read_cost_in_cents += rhs.input_cache_read_cost_in_cents;
+        self.input_cache_read_cost_in_credits += rhs.input_cache_read_cost_in_credits;
         self.input_cache_write_cost_in_cents += rhs.input_cache_write_cost_in_cents;
+        self.input_cache_write_cost_in_credits += rhs.input_cache_write_cost_in_credits;
         self.platform_cost_in_cents += rhs.platform_cost_in_cents;
+        self.platform_cost_in_credits += rhs.platform_cost_in_credits;
         self.input_tokens += rhs.input_tokens;
         self.output_tokens += rhs.output_tokens;
         self.input_cache_read_tokens += rhs.input_cache_read_tokens;
         self.input_cache_write_tokens += rhs.input_cache_write_tokens;
         self.web_search_count += rhs.web_search_count;
         self.web_search_cost_in_cents += rhs.web_search_cost_in_cents;
+        self.web_search_cost_in_credits += rhs.web_search_cost_in_credits;
     }
 }
 
@@ -1726,6 +1757,7 @@ impl From<&api::RequestCharges> for ChargedUsageTotals {
                 totals.add_inference_usage(inference_usage);
             }
             totals.platform_cost_in_cents += usage.platform_usage_in_cents;
+            totals.platform_cost_in_credits += usage.platform_usage_in_credits;
         }
         totals
     }
