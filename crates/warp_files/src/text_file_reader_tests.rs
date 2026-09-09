@@ -1,7 +1,8 @@
 #![allow(clippy::single_range_in_vec_init)]
 
-use sha2::{Digest, Sha256};
 use std::io::Write as _;
+
+use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::FileModel;
