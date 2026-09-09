@@ -7455,15 +7455,17 @@ impl TypedActionView for CodeReviewView {
                             ctx,
                         );
                     }
-                } else {
-                    let file_path = self.discard_dialog_state.discard_file_paths[0].clone();
-                    if let Some(standardized_path) = self.to_standardized_path(&file_path) {
-                        self.discard_file(
-                            standardized_path,
-                            self.discard_dialog_state.stash_changes_enabled,
-                            ctx,
-                        );
-                    }
+                } else if let Some(standardized_path) = self
+                    .discard_dialog_state
+                    .discard_file_paths
+                    .first()
+                    .and_then(|file_path| self.to_standardized_path(file_path))
+                {
+                    self.discard_file(
+                        standardized_path,
+                        self.discard_dialog_state.stash_changes_enabled,
+                        ctx,
+                    );
                 }
                 self.discard_dialog_state.show_discard_confirm_dialog = false;
                 self.discard_dialog_state.discard_file_paths.clear();
