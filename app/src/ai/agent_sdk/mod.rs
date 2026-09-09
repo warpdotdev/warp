@@ -48,6 +48,7 @@ use crate::ai::agent::api::convert_conversation::{
     RestorationMode, convert_conversation_data_to_ai_conversation,
 };
 use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent_sdk::common::TaskScopedModelCatalog;
 use crate::ai::agent_sdk::driver::harness::{HarnessKind, harness_kind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
 use crate::ai::agent_sdk::mcp_config::build_mcp_servers_from_specs;
@@ -364,13 +365,14 @@ fn build_merged_config_and_task(
     resolved_skill: &Option<ResolvedSkill>,
     prompt: &Option<Prompt>,
     local_run_team_scope: Option<&TeamScopeForCli>,
+    task_model_catalog: Option<&TaskScopedModelCatalog>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
     // Server-side prompt resolution (task_id is set): the task config already lives on the
     // server and individual CLI flags (--model, --mcp, etc.) are the only local overrides.
     // No config file is involved — the worker never passes --file alongside --task-id.
     if args.task_id.is_some() {
-        return build_server_side_task(args, resolved_skill, ctx);
+        return build_server_side_task(args, resolved_skill, task_model_catalog, ctx);
     }
 
     let loaded_file = match args.config_file.file.as_deref() {
@@ -487,6 +489,7 @@ fn build_merged_config_and_task(
 fn build_server_side_task(
     args: &RunAgentArgs,
     resolved_skill: &Option<ResolvedSkill>,
+    task_model_catalog: Option<&TaskScopedModelCatalog>,
     ctx: &mut AppContext,
 ) -> anyhow::Result<(AgentConfigSnapshot, Task)> {
     let cli_mcp_servers = build_mcp_servers_from_specs(&args.all_mcp_specs())?;
@@ -505,7 +508,13 @@ fn build_server_side_task(
         args.model
             .model
             .as_deref()
-            .map(|model_id| common::validate_agent_mode_base_model_id(model_id, ctx))
+            .map(|model_id| {
+                common::validate_agent_mode_base_model_id_for_task(
+                    model_id,
+                    task_model_catalog,
+                    ctx,
+                )
+            })
             .transpose()?
     } else {
         None
@@ -1130,6 +1139,34 @@ impl AgentDriverRunner {
 
         // Extract variables we want to use later before moving args into the closure
         let task_id_str = args.task_id.clone();
+        let task_model_catalog = if let Some(task_id_str) = task_id_str.as_deref() {
+            match task_id_str.parse() {
+                Ok(task_id) => match server_api.get_task_agent_models(&task_id).await {
+                    Ok(response) => Some(TaskScopedModelCatalog::from_model_ids(
+                        response.models.iter().map(|model| model.id.clone().into()),
+                        response
+                            .models
+                            .iter()
+                            .filter(|model| model.disable_reason.is_some())
+                            .map(|model| model.id.clone().into()),
+                    )),
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to fetch task-scoped agent model catalog; ordinary models will use the workspace catalog: {error:#}"
+                        );
+                        Some(TaskScopedModelCatalog::unavailable())
+                    }
+                },
+                Err(error) => {
+                    log::warn!(
+                        "Skipping task-scoped agent model catalog for invalid task ID '{task_id_str}': {error}"
+                    );
+                    Some(TaskScopedModelCatalog::unavailable())
+                }
+            }
+        } else {
+            None
+        };
         let prompt = args.prompt_arg.to_prompt();
         let skill = args.skill.clone();
 
@@ -1142,6 +1179,7 @@ impl AgentDriverRunner {
                     &resolved_skill,
                     &prompt_clone,
                     agent_driver_team_scope.as_ref(),
+                    task_model_catalog.as_ref(),
                     ctx,
                 )?;
 

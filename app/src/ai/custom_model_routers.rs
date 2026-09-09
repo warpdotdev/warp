@@ -32,6 +32,8 @@ pub const LOCAL_CUSTOM_ROUTER_PREFIX: &str = "custom-router:local:";
 
 /// The `config_key` prefix for cloud/team (server-synced) custom model routers.
 pub const CLOUD_CUSTOM_ROUTER_PREFIX: &str = "custom-router:cloud:";
+/// The `config_key` prefix for Factory-scoped (server-snapshotted) custom model routers.
+pub const FACTORY_CUSTOM_ROUTER_PREFIX: &str = "custom-router:factory:";
 
 /// The routing strategy for a custom model router.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -303,6 +305,10 @@ pub fn is_local_custom_router_id(id: &str) -> bool {
 /// feature flag as local routers so the whole feature is controlled by one flag.
 pub fn is_cloud_custom_router_id(id: &str) -> bool {
     id.starts_with(CLOUD_CUSTOM_ROUTER_PREFIX)
+}
+/// Returns whether an id is a Factory-scoped custom model router key.
+pub fn is_factory_custom_router_id(id: &str) -> bool {
+    id.starts_with(FACTORY_CUSTOM_ROUTER_PREFIX)
 }
 
 // ── Serialization back to YAML ───────────────────────────────────────────────

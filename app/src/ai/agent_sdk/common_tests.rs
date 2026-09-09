@@ -5,8 +5,9 @@ use warp_cli::environment::EnvironmentCreateArgs;
 use warpui::App;
 
 use super::{
-    EnvironmentChoice, classify_agent_mode_base_model_id, parse_ambient_task_id,
-    validate_agent_mode_base_model_id, validate_agent_mode_base_model_id_for_scope,
+    EnvironmentChoice, TaskScopedModelCatalog, classify_agent_mode_base_model_id,
+    parse_ambient_task_id, validate_agent_mode_base_model_id,
+    validate_agent_mode_base_model_id_for_scope, validate_agent_mode_base_model_id_for_task,
 };
 use crate::LaunchMode;
 use crate::ai::cloud_environments::{
@@ -57,6 +58,52 @@ fn environment_with_owner(
         CloudObjectMetadata::mock(),
         permissions,
     )
+}
+
+#[test]
+fn task_scoped_catalog_accepts_only_enabled_factory_models() {
+    App::test((), |app| async move {
+        let selected = "custom-router:factory:factory-uid:balanced";
+        let foreign = "custom-router:factory:other-factory:balanced";
+        let catalog = TaskScopedModelCatalog::from_model_ids(
+            [selected.into(), foreign.into()],
+            [foreign.into()],
+        );
+
+        assert!(app.read(|ctx| {
+            validate_agent_mode_base_model_id_for_task(selected, Some(&catalog), ctx).is_ok()
+        }));
+        assert!(app.read(|ctx| {
+            validate_agent_mode_base_model_id_for_task(foreign, Some(&catalog), ctx).is_err()
+        }));
+        assert!(app.read(|ctx| {
+            validate_agent_mode_base_model_id_for_task(
+                "custom-router:factory:factory-uid:missing",
+                Some(&catalog),
+                ctx,
+            )
+            .is_err()
+        }));
+    });
+}
+
+#[test]
+fn factory_model_requires_an_available_task_catalog() {
+    App::test((), |app| async move {
+        let model_id = "custom-router:factory:factory-uid:balanced";
+        let catalog = TaskScopedModelCatalog::unavailable();
+        let err = app.read(|ctx| {
+            validate_agent_mode_base_model_id_for_task(model_id, Some(&catalog), ctx)
+                .expect_err("unavailable catalog must reject Factory models")
+        });
+        assert!(err.to_string().contains("task-scoped agent model list"));
+        assert!(
+            app.read(
+                |ctx| validate_agent_mode_base_model_id_for_task(model_id, None, ctx).is_err()
+            ),
+            "missing catalog must not fall back to the workspace model list"
+        );
+    });
 }
 
 #[test]

@@ -1,5 +1,6 @@
 //! Common utilities for agent SDK commands.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::ai::agent::conversation::ServerAIConversationMetadata;
 use crate::ai::agent_sdk::driver::{AgentDriverError, WARP_DRIVE_SYNC_TIMEOUT};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::cloud_environments::{CloudAmbientAgentEnvironment, environment_matches_scope};
+use crate::ai::custom_model_routers;
 use crate::ai::llms::{LLMId, LLMPreferences, is_model_allowed_for_scope};
 use crate::auth::UserUid;
 use crate::auth::auth_state::AuthStateProvider;
@@ -34,6 +36,72 @@ use crate::workspaces::user_workspaces::{SoleTeamError, TeamScope, UserWorkspace
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+/// The model IDs advertised by a task-scoped `/agent/models` response.
+///
+/// This overlay is intentionally ephemeral: Factory entries are valid only for the task that
+/// authenticated the request and must never enter the general workspace model cache.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TaskScopedModelCatalog {
+    model_ids: HashSet<LLMId>,
+    disabled_model_ids: HashSet<LLMId>,
+    available: bool,
+}
+
+impl TaskScopedModelCatalog {
+    pub(crate) fn unavailable() -> Self {
+        Self {
+            available: false,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn from_model_ids(
+        model_ids: impl IntoIterator<Item = LLMId>,
+        disabled_model_ids: impl IntoIterator<Item = LLMId>,
+    ) -> Self {
+        Self {
+            model_ids: model_ids.into_iter().collect(),
+            disabled_model_ids: disabled_model_ids.into_iter().collect(),
+            available: true,
+        }
+    }
+
+    fn validate_factory_model_id(&self, model_id: &str) -> anyhow::Result<LLMId> {
+        if !self.available {
+            return Err(anyhow::anyhow!(
+                "Could not retrieve the task-scoped agent model list; Factory model '{model_id}' cannot be validated"
+            ));
+        }
+        let llm_id: LLMId = model_id.into();
+        if self.disabled_model_ids.contains(&llm_id) {
+            return Err(anyhow::anyhow!(
+                "Factory model '{model_id}' is currently unavailable"
+            ));
+        }
+        if self.model_ids.contains(&llm_id) {
+            Ok(llm_id)
+        } else {
+            Err(anyhow::anyhow!(
+                "Factory model '{model_id}' is not available for this task"
+            ))
+        }
+    }
+}
+
+pub(crate) fn validate_agent_mode_base_model_id_for_task(
+    model_id: &str,
+    task_catalog: Option<&TaskScopedModelCatalog>,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    if custom_model_routers::is_factory_custom_router_id(model_id) {
+        return task_catalog
+            .ok_or_else(|| {
+                anyhow::anyhow!("Factory model '{model_id}' requires a task-scoped model catalog")
+            })?
+            .validate_factory_model_id(model_id);
+    }
+    validate_agent_mode_base_model_id(model_id, ctx)
+}
 
 pub fn validate_agent_mode_base_model_id(
     model_id: &str,
