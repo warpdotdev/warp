@@ -71,7 +71,6 @@ lazy_static! {
 fn winit_backdrop(backdrop: WindowBackdrop) -> BackdropType {
     match backdrop {
         WindowBackdrop::None => BackdropType::None,
-        WindowBackdrop::Auto => BackdropType::Auto,
         WindowBackdrop::Mica => BackdropType::MainWindow,
         WindowBackdrop::Acrylic => BackdropType::TransientWindow,
         WindowBackdrop::MicaAlt => BackdropType::TabbedWindow,

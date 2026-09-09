@@ -60,20 +60,13 @@ lazy_static! {
 pub enum WindowBackdrop {
     #[default]
     None,
-    Auto,
     Mica,
     Acrylic,
     MicaAlt,
 }
 
 impl WindowBackdrop {
-    pub const ALL: [Self; 5] = [
-        Self::None,
-        Self::Auto,
-        Self::Mica,
-        Self::Acrylic,
-        Self::MicaAlt,
-    ];
+    pub const ALL: [Self; 4] = [Self::None, Self::Mica, Self::Acrylic, Self::MicaAlt];
 }
 
 #[cfg(feature = "settings_value")]

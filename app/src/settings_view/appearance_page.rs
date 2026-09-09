@@ -2659,7 +2659,6 @@ impl AppearanceSettingsPageView {
     fn window_backdrop_dropdown_item_label(backdrop: WindowBackdrop) -> &'static str {
         match backdrop {
             WindowBackdrop::None => "No material",
-            WindowBackdrop::Auto => "Automatic",
             WindowBackdrop::Mica => "Mica",
             WindowBackdrop::Acrylic => "Acrylic",
             WindowBackdrop::MicaAlt => "Mica Alt",
@@ -3530,7 +3529,7 @@ impl SettingsWidget for WindowBackdropWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "window backdrop material blur acrylic mica automatic"
+        "window backdrop material blur acrylic mica"
     }
 
     fn render(

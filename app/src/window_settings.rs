@@ -23,7 +23,6 @@ define_settings_group!(WindowSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::GUI,
         private: false,
-        storage_key: "WindowBackdrop",
         toml_path: "appearance.window.backdrop",
         description: "The system backdrop material applied to the window background.",
     },
