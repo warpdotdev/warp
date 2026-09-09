@@ -1,7 +1,8 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+use tokio::sync::mpsc;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{RepoCacheKey, RepositoryCacheSource};
@@ -79,37 +80,111 @@ pub(super) struct CacheCandidate {
     pub stable_child_id: Option<String>,
 }
 
-pub(super) struct CandidateProducer {
-    repositories: VecDeque<(RepoCacheKey, RepositoryCacheSource)>,
-    current: Option<RepositoryDiscovery>,
-}
+fn produce_repository_candidates(
+    key: RepoCacheKey,
+    source: RepositoryCacheSource,
+    sender: &mpsc::Sender<CacheCandidate>,
+) -> bool {
+    let span = tracing::info_span!(
+        target: "build_cache",
+        "discover_cache_roots",
+        tags.cloud_agent = true,
+        repo_key = %key,
+        visited_directory_count = tracing::field::Empty,
+        selected_child_count = tracing::field::Empty,
+        unreadable_entry_count = tracing::field::Empty,
+        truncation_reason = tracing::field::Empty,
+    );
+    let _guard = span.enter();
+    let mut selected_paths = BTreeSet::new();
+    let mut visited_directories = 1;
+    let mut unreadable_entries = 0;
+    let mut truncation = None;
+    let mut receiver_open = sender
+        .blocking_send(root_candidate(key.clone(), source.clone()))
+        .is_ok();
 
-impl CandidateProducer {
-    pub(super) fn new(repositories: Vec<RepositoryCacheSource>) -> Self {
-        let mut repositories = repositories
+    if receiver_open {
+        let walker = WalkDir::new(&source.cwd)
+            .min_depth(1)
+            .max_depth(MAX_WALK_DEPTH)
+            .follow_links(false)
+            .follow_root_links(false)
+            .sort_by_file_name()
             .into_iter()
-            .map(|source| (RepoCacheKey::derive(&source.identity), source))
-            .collect::<Vec<_>>();
-        repositories.sort();
-        Self {
-            repositories: repositories.into(),
-            current: None,
-        }
-    }
+            .filter_entry(|entry| {
+                !(entry.file_type().is_symlink()
+                    || entry.file_type().is_dir()
+                        && IGNORED_DIRECTORIES
+                            .iter()
+                            .any(|ignored| entry.file_name() == *ignored))
+            });
 
-    pub(super) fn next_candidate(&mut self) -> Option<CacheCandidate> {
-        loop {
-            if let Some(discovery) = &mut self.current {
-                if let Some(candidate) = discovery.next_candidate() {
-                    return Some(candidate);
-                }
-                self.current = None;
+        'walk: for entry in walker {
+            if sender.is_closed() {
+                receiver_open = false;
+                break;
             }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    unreadable_entries += 1;
+                    continue;
+                }
+            };
+            if entry.file_type().is_dir() {
+                if visited_directories == MAX_VISITED_DIRECTORIES {
+                    truncation = Some(TruncationReason::DirectoryLimit);
+                    break;
+                }
+                visited_directories += 1;
+            }
+            for path in marker_candidate_paths(&entry, &source.cwd) {
+                let Some(normalized_relative_path) = normalize_relative_path(&source.cwd, &path)
+                else {
+                    continue;
+                };
+                let depth = normalized_relative_path.components().count();
+                if !(1..=MAX_CANDIDATE_DEPTH).contains(&depth)
+                    || selected_paths.contains(&normalized_relative_path)
+                {
+                    continue;
+                }
+                if selected_paths.len() == MAX_CHILD_CANDIDATES {
+                    truncation = Some(TruncationReason::CandidateLimit);
+                    break 'walk;
+                }
 
-            let (key, source) = self.repositories.pop_front()?;
-            self.current = Some(RepositoryDiscovery::new(key, source));
+                selected_paths.insert(normalized_relative_path.clone());
+                let candidate =
+                    child_candidate(key.clone(), source.clone(), path, normalized_relative_path);
+                if sender.blocking_send(candidate).is_err() {
+                    receiver_open = false;
+                    break 'walk;
+                }
+            }
         }
     }
+
+    span.record("visited_directory_count", visited_directories as u64);
+    span.record("selected_child_count", selected_paths.len() as u64);
+    span.record("unreadable_entry_count", unreadable_entries as u64);
+    if let Some(reason) = truncation {
+        span.record("truncation_reason", reason.as_str());
+        tracing::warn!(
+            target: "build_cache",
+            truncation_reason = reason.as_str(),
+            "build cache root discovery was truncated"
+        );
+    }
+    if unreadable_entries > 0 {
+        tracing::warn!(
+            target: "build_cache",
+            unreadable_entry_count = unreadable_entries,
+            "build cache root discovery skipped unreadable entries"
+        );
+    }
+    receiver_open
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,163 +202,27 @@ impl TruncationReason {
     }
 }
 
-struct RepositoryDiscovery {
-    source: RepositoryCacheSource,
-    key: RepoCacheKey,
-    walker: Box<dyn Iterator<Item = Result<DirEntry, walkdir::Error>> + Send>,
-    selected_paths: BTreeSet<PathBuf>,
-    pending_paths: VecDeque<PathBuf>,
-    root_pending: bool,
-    visited_directories: usize,
-    unreadable_entries: usize,
-    truncation: Option<TruncationReason>,
-    finished: bool,
-    span: tracing::Span,
+pub(super) fn candidate_receiver(
+    repositories: Vec<RepositoryCacheSource>,
+) -> mpsc::Receiver<CacheCandidate> {
+    let (sender, receiver) = mpsc::channel(DETECTION_CONCURRENCY);
+    tokio::task::spawn_blocking(move || produce_candidates(repositories, sender));
+    receiver
 }
 
-impl RepositoryDiscovery {
-    fn new(key: RepoCacheKey, source: RepositoryCacheSource) -> Self {
-        let walker = WalkDir::new(&source.cwd)
-            .min_depth(1)
-            .max_depth(MAX_WALK_DEPTH)
-            .follow_links(false)
-            .follow_root_links(false)
-            .sort_by_file_name()
-            .into_iter()
-            .filter_entry(move |entry| {
-                if entry.file_type().is_symlink() {
-                    return false;
-                }
-                if entry.file_type().is_dir()
-                    && IGNORED_DIRECTORIES
-                        .iter()
-                        .any(|ignored| entry.file_name() == *ignored)
-                {
-                    return false;
-                }
-                true
-            });
-        let span = tracing::info_span!(
-            target: "build_cache",
-            "discover_cache_roots",
-            tags.cloud_agent = true,
-            repo_key = %key,
-            visited_directory_count = tracing::field::Empty,
-            selected_child_count = tracing::field::Empty,
-            unreadable_entry_count = tracing::field::Empty,
-            truncation_reason = tracing::field::Empty,
-        );
-        Self {
-            source,
-            key,
-            walker: Box::new(walker),
-            selected_paths: BTreeSet::new(),
-            pending_paths: VecDeque::new(),
-            root_pending: true,
-            visited_directories: 1,
-            unreadable_entries: 0,
-            truncation: None,
-            finished: false,
-            span,
-        }
-    }
-
-    fn next_candidate(&mut self) -> Option<CacheCandidate> {
-        let span = self.span.clone();
-        let _guard = span.enter();
-        if self.root_pending {
-            self.root_pending = false;
-            return Some(root_candidate(self.key.clone(), self.source.clone()));
-        }
-
-        loop {
-            if let Some(path) = self.pending_paths.pop_front() {
-                if let Some(candidate) = self.select_child(path) {
-                    return Some(candidate);
-                }
-                if self.truncation.is_some() {
-                    self.finish();
-                    return None;
-                }
-            }
-
-            let Some(entry) = self.walker.next() else {
-                self.finish();
-                return None;
-            };
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(_) => {
-                    self.unreadable_entries += 1;
-                    continue;
-                }
-            };
-            if entry.file_type().is_dir() {
-                if self.visited_directories == MAX_VISITED_DIRECTORIES {
-                    self.truncation = Some(TruncationReason::DirectoryLimit);
-                    self.finish();
-                    return None;
-                }
-                self.visited_directories += 1;
-            }
-            self.pending_paths
-                .extend(marker_candidate_paths(&entry, &self.source.cwd));
-        }
-    }
-
-    fn select_child(&mut self, path: PathBuf) -> Option<CacheCandidate> {
-        let normalized_relative_path = normalize_relative_path(&self.source.cwd, &path)?;
-        let depth = normalized_relative_path.components().count();
-        if !(1..=MAX_CANDIDATE_DEPTH).contains(&depth)
-            || self.selected_paths.contains(&normalized_relative_path)
-        {
-            return None;
-        }
-        if self.selected_paths.len() == MAX_CHILD_CANDIDATES {
-            self.truncation = Some(TruncationReason::CandidateLimit);
-            return None;
-        }
-
-        self.selected_paths.insert(normalized_relative_path.clone());
-        Some(child_candidate(
-            self.key.clone(),
-            self.source.clone(),
-            path,
-            normalized_relative_path,
-        ))
-    }
-
-    fn finish(&mut self) {
-        if self.finished {
+pub(super) fn produce_candidates(
+    repositories: Vec<RepositoryCacheSource>,
+    sender: mpsc::Sender<CacheCandidate>,
+) {
+    let mut repositories = repositories
+        .into_iter()
+        .map(|source| (RepoCacheKey::derive(&source.identity), source))
+        .collect::<Vec<_>>();
+    repositories.sort();
+    for (key, source) in repositories {
+        if !produce_repository_candidates(key, source, &sender) {
             return;
         }
-        self.finished = true;
-        let span = self.span.clone();
-        let _guard = span.enter();
-        span.record("visited_directory_count", self.visited_directories as u64);
-        span.record("selected_child_count", self.selected_paths.len() as u64);
-        span.record("unreadable_entry_count", self.unreadable_entries as u64);
-        if let Some(reason) = self.truncation {
-            span.record("truncation_reason", reason.as_str());
-            tracing::warn!(
-                target: "build_cache",
-                truncation_reason = reason.as_str(),
-                "build cache root discovery was truncated"
-            );
-        }
-        if self.unreadable_entries > 0 {
-            tracing::warn!(
-                target: "build_cache",
-                unreadable_entry_count = self.unreadable_entries,
-                "build cache root discovery skipped unreadable entries"
-            );
-        }
-    }
-}
-
-impl Drop for RepositoryDiscovery {
-    fn drop(&mut self) {
-        self.finish();
     }
 }
 

@@ -40,7 +40,9 @@ use warp_errors::{ErrorExt, register_error};
 mod discovery;
 pub mod spacectl;
 
-use discovery::{CacheCandidate, CandidateKey, CandidateProducer, DETECTION_CONCURRENCY};
+#[cfg(test)]
+use discovery::produce_candidates;
+use discovery::{CacheCandidate, CandidateKey, DETECTION_CONCURRENCY, candidate_receiver};
 use spacectl::{MountContext, MountResponse, run_spacectl_mount};
 
 const SPACECTL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -517,7 +519,8 @@ fn bounded_stderr(stderr: &[u8]) -> String {
 ///
 /// This should only be called once per sandbox, as it modifies shared filesystem locations.
 /// The calling process need not run with superuser privileges, but the implementation may
-/// escalate privileges with `sudo` or similar.
+/// escalate privileges with `sudo` or similar. It must be called from a Tokio runtime because
+/// repository discovery uses Tokio's blocking pool.
 #[tracing::instrument(
     name = "setup_caches",
     skip_all,
@@ -540,19 +543,18 @@ where
     let mut report = CacheSetupReport::default();
     let run_command = Arc::new(run_command);
 
-    // Preparing within the producer keeps directory creation serial while dry runs overlap.
     let prepare_run_command = Arc::clone(&run_command);
     let prepare_cache_root = cache_root.clone();
-    let candidates = stream::unfold(CandidateProducer::new(repositories), move |mut producer| {
+    let candidates = stream::unfold(candidate_receiver(repositories), move |mut receiver| {
         let run_command = Arc::clone(&prepare_run_command);
         let cache_root = prepare_cache_root.clone();
         async move {
-            let candidate = producer.next_candidate()?;
+            let candidate = receiver.recv().await?;
             let configuration_root = cache_root.join(&candidate.relative_cache_dir);
             let preparation_error = create_cache_dir_all(&configuration_root, run_command.as_ref())
                 .await
                 .err();
-            Some(((candidate, configuration_root, preparation_error), producer))
+            Some(((candidate, configuration_root, preparation_error), receiver))
         }
     });
     let detect_run_command = Arc::clone(&run_command);

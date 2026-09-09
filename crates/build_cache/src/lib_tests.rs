@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -8,15 +9,14 @@ use std::time::Duration;
 
 use async_io::Timer;
 use command::r#async::Command;
-use futures::executor::block_on;
 #[cfg(unix)]
 use instant::Instant;
 use warp_errors::ErrorExt as _;
 
 use super::{
     CacheConfiguration, CacheScope, CacheSetupError, CacheSetupPlan, CandidateKey,
-    CandidateProducer, DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource,
-    aggregate_mode_stats, construct_plan, create_retained_scratch_directory, is_valid_env_name,
+    DetectedCacheModes, RepoCacheKey, RepoIdentity, RepositoryCacheSource, aggregate_mode_stats,
+    construct_plan, create_retained_scratch_directory, is_valid_env_name, produce_candidates,
     run_command_with_timeout, setup_cache,
 };
 #[cfg(unix)]
@@ -74,6 +74,14 @@ fn response(modes: &[&str], envs: &[(&str, &str)], mounts: &[(&str, bool)]) -> V
 
 fn command_args(command: &Command) -> Vec<OsString> {
     command.get_args().map(ToOwned::to_owned).collect()
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(future)
 }
 #[cfg(unix)]
 #[test]
@@ -440,11 +448,10 @@ fn nested_roots_share_one_bounded_detection_pool_and_mount_serially() {
             fs::write(child.join("Cargo.toml"), "").unwrap();
         }
     }
-    let mut expected_candidates = std::iter::from_fn({
-        let mut producer = CandidateProducer::new(repositories.clone());
-        move || producer.next_candidate()
-    })
-    .collect::<Vec<_>>();
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(64);
+    produce_candidates(repositories.clone(), sender);
+    let mut expected_candidates =
+        std::iter::from_fn(|| receiver.blocking_recv()).collect::<Vec<_>>();
     expected_candidates.sort_by(|left, right| left.key.cmp(&right.key));
     let expected_detection_order = expected_candidates
         .iter()

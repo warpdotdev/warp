@@ -12,9 +12,10 @@ on `master`.
 ## Summary
 
 Build-cache setup detects tools only at each repository root. Nested projects are missed.
-Implement one ordered discovery producer that scans repositories for detector-aligned markers and
-pipelines the bounded candidate set into one shared concurrent detector. Keep cache-directory
-creation single-file and keep all real mounts serial. Keep the synthetic global mount last.
+Implement one ordered blocking discovery producer that scans repositories for detector-aligned
+markers and sends the bounded candidate set through a bounded channel into one shared concurrent
+detector. Keep cache-directory creation single-file and keep all real mounts serial. Keep the
+synthetic global mount last.
 
 ## Context
 
@@ -39,9 +40,10 @@ creation single-file and keep all real mounts serial. Keep the synthetic global 
 
 ### 1. Produce candidate roots with `walkdir`
 
-Add `walkdir.workspace = true` to `crates/build_cache/Cargo.toml`. Build one producer over
-`RepositoryCacheSource` values sorted by `RepoCacheKey`. The producer yields each repository root
-first, then advances one `walkdir::WalkDir` iterator for that repository.
+Add `walkdir.workspace = true` to `crates/build_cache/Cargo.toml`. In one
+`tokio::task::spawn_blocking` task, sort `RepositoryCacheSource` values by `RepoCacheKey`, send each
+repository root first, then drive one `walkdir::WalkDir` iterator for that repository. All traversal
+state stays local to the blocking task.
 
 Configure each iterator with:
 
@@ -124,12 +126,12 @@ with this table. If detector semantics differ, update this spec and the table in
 
 ### 3. Prepare stable isolated cache roots
 
-Before the producer yields a candidate's detection future, create that candidate's configuration
-root and await any permission fallback. The producer prepares only one directory at a time. A
-preparation may overlap already-running dry-run detections, but it must not overlap another
-preparation or any real mount. This overlap is safe because each candidate has a distinct cache
-root, and dry-run detection does not apply mounts. A creation failure yields a keyed non-fatal
-degradation result for that candidate and does not yield a detection future.
+After receiving a candidate and before yielding its detection future, create that candidate's
+configuration root and await any permission fallback. The receiving stream prepares only one
+directory at a time. A preparation may overlap already-running dry-run detections, but it must not
+overlap another preparation or any real mount. This overlap is safe because each candidate has a
+distinct cache root, and dry-run detection does not apply mounts. A creation failure yields a keyed
+non-fatal degradation result for that candidate and does not schedule spacectl.
 
 - Preserve the current root cache path: `repos/<repo-key>`.
 - Use `repos/<repo-key>/nested/<stable-id>` for a child root.
@@ -145,20 +147,22 @@ This scheme preserves existing root cache hits and isolates equal relative mount
 
 ### 4. Pipeline candidates through one shared detector limit
 
-Add `futures.workspace = true` to the normal dependencies in `crates/build_cache/Cargo.toml`; remove
-the duplicate dev-only declaration. Use the existing workspace `futures` dependency and
-`futures::stream::StreamExt::buffer_unordered(8)` as the bounded-concurrency primitive. Do not add a
-custom semaphore.
+Add `futures.workspace = true` and Tokio with its `rt` and `sync` features to the normal dependencies
+in `crates/build_cache/Cargo.toml`. Use `tokio::task::spawn_blocking` for the synchronous filesystem
+walk and a `tokio::sync::mpsc` channel with capacity 8 between discovery and the async receiving
+stream. Use `futures::stream::StreamExt::buffer_unordered(8)` as the detection-concurrency primitive.
+Do not add a custom semaphore.
 
-Implement the producer as one ordered stream, such as `futures::stream::unfold`, whose state owns
-the sorted repositories, the current `WalkDir` iterator, per-repository counters, deduplication
-state, and accumulated scan diagnostics. The producer advances synchronously until it finds the
-next distinct candidate, prepares that candidate's cache directory, and yields its detection
-future. Apply `buffer_unordered(8)` once to this stream and collect the results.
+The blocking producer owns the sorted repositories and keeps the current `WalkDir`, counters,
+deduplication state, and scan diagnostics as local variables. It uses `blocking_send`, so a full
+channel blocks traversal instead of accumulating an unbounded candidate queue. The async receiver
+prepares each candidate's cache directory serially and yields its detection future. Apply
+`buffer_unordered(8)` once to this stream and collect the results.
 
 - The buffer's limit of 8 is the only detection limit and is shared across all repositories.
-- At most eight yielded detection futures are in flight. The buffer pulls another candidate only
-  when it has capacity. No unbounded candidate queue or channel is permitted.
+- At most eight yielded detection futures are in flight. The receiver pulls and prepares another
+  candidate only when the detector buffer has capacity. At most eight additional unprepared
+  candidates wait in the bounded channel; no unbounded candidate queue or channel is permitted.
 - Selection remains deterministic even though production is demand-driven. The producer alone
   advances each sorted `WalkDir` iterator and applies that repository's 10,000-directory and
   32-child limits. Detection completion order can change when production resumes, but it cannot
@@ -171,6 +175,11 @@ future. Apply `buffer_unordered(8)` once to this stream and collect the results.
 - Run `spacectl cache mount --detect='*' --dry_run=true` with each candidate as cwd and its isolated
   cache root.
 - Preserve the 60-second timeout and `kill_on_drop(true)` for every invocation.
+- Dropping cache setup drops the channel receiver. A producer blocked in `blocking_send` wakes with
+  an error and exits; between sends it checks `Sender::is_closed()` on each `WalkDir` entry and
+  exits. Tokio cannot forcibly abort a running `spawn_blocking` closure, so an in-progress
+  filesystem operation must return before the closure observes receiver closure. No producer task
+  or queued candidate keeps cache setup resources alive after that point.
 - An invocation failure, timeout, malformed response, or empty mode set affects only that root.
 - Do not cancel siblings after a failure.
 - Attach the canonical key `(RepoCacheKey, root-first flag, normalized child path)` to each
@@ -220,12 +229,16 @@ mounting.
   and matches cwd-based detector semantics. Calling spacectl for every directory was rejected
   because repository breadth and 60-second per-process timeouts make latency unbounded.
 - **Pipeline discovery into detection.** Completing every scan before detection is simpler, but it
-  adds scan latency to the critical path and retains the full candidate set. A single ordered,
-  backpressured producer is safe because selection limits belong only to producer state, each cache
-  root is prepared before its future is yielded, and keyed results are sorted after completion.
+  adds scan latency to the critical path and retains the full candidate set. One blocking producer
+  and a bounded channel keep traversal state local while providing backpressure. Selection limits
+  belong only to producer state, each cache root is prepared before its future is yielded, and
+  keyed results are sorted after completion.
 - **Use `buffer_unordered` instead of a custom limiter.** The workspace already depends on
   `futures`. `StreamExt::buffer_unordered(8)` directly bounds a stream of detection futures and
   provides backpressure. A custom futures semaphore would duplicate this behavior.
+- **Use the app's Tokio runtime for blocking discovery.** `build_cache` is a native-only dependency
+  of the app, whose native runtime is Tokio. `spawn_blocking` removes the boxed iterator and
+  resumable discovery structs without adding a runtime to wasm builds.
 - **Use sorted depth-first `WalkDir` traversal.** `WalkDir` supplies bounded descriptors, depth
   limits, symlink controls, subtree filtering, and recoverable errors. Retaining breadth-first
   selection would require a custom queue. Sorted depth-first selection is deterministic and makes
@@ -282,8 +295,9 @@ mounting.
      multiple repositories;
    - detection starts before the final scan completes, cache-directory preparations never overlap,
      and a preparation can overlap an active dry-run detection;
-   - producer backpressure keeps at most eight detection futures in flight and selection is
-     identical across deliberately permuted completion orders;
+   - producer backpressure keeps at most eight queued candidates and at most eight detection
+     futures in flight, receiver drop stops the blocking producer, and selection is identical
+     across deliberately permuted completion orders;
    - per-root failure and timeout isolation, `kill_on_drop`, deterministic keyed report ordering,
      serial mount execution, and the global mount last;
    - repeated ordered repository keys and unique cache-directory plan invariants.

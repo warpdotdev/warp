@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use super::{CandidateProducer, MAX_CHILD_CANDIDATES, MAX_VISITED_DIRECTORIES, stable_child_id};
+use super::{MAX_CHILD_CANDIDATES, MAX_VISITED_DIRECTORIES, produce_candidates, stable_child_id};
 use crate::{RepoIdentity, RepositoryCacheSource};
 
 fn source(root: &Path) -> RepositoryCacheSource {
@@ -12,11 +13,18 @@ fn source(root: &Path) -> RepositoryCacheSource {
     }
 }
 
+fn candidates(sources: Vec<RepositoryCacheSource>) -> Vec<super::CacheCandidate> {
+    let capacity = sources.len().max(1) * (MAX_CHILD_CANDIDATES + 1);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(capacity);
+    produce_candidates(sources, sender);
+    std::iter::from_fn(|| receiver.blocking_recv()).collect()
+}
+
 fn child_paths(root: &Path) -> Vec<PathBuf> {
-    let mut producer = CandidateProducer::new(vec![source(root)]);
-    let root = producer.next_candidate().unwrap();
+    let mut candidates = candidates(vec![source(root)]).into_iter();
+    let root = candidates.next().unwrap();
     assert_eq!(root.key.normalized_relative_path, None);
-    std::iter::from_fn(|| producer.next_candidate())
+    candidates
         .map(|candidate| candidate.key.normalized_relative_path.unwrap())
         .collect()
 }
@@ -148,8 +156,7 @@ fn child_limit_retains_root_plus_first_32_children() {
     for index in 0..MAX_CHILD_CANDIDATES + 1 {
         touch(temp.path(), &format!("{index:02}/Cargo.toml"));
     }
-    let mut producer = CandidateProducer::new(vec![source(temp.path())]);
-    let candidates = std::iter::from_fn(|| producer.next_candidate()).collect::<Vec<_>>();
+    let candidates = candidates(vec![source(temp.path())]);
 
     assert_eq!(candidates.len(), MAX_CHILD_CANDIDATES + 1);
     assert_eq!(candidates[0].key.normalized_relative_path, None);
@@ -205,8 +212,7 @@ fn repositories_and_roots_are_produced_in_canonical_order() {
             cwd: second,
         },
     ];
-    let mut producer = CandidateProducer::new(sources);
-    let candidates = std::iter::from_fn(|| producer.next_candidate()).collect::<Vec<_>>();
+    let candidates = candidates(sources);
     let keys = candidates
         .iter()
         .map(|candidate| {
@@ -224,9 +230,9 @@ fn repositories_and_roots_are_produced_in_canonical_order() {
 fn nested_cache_path_uses_stable_id_and_root_path_is_unchanged() {
     let temp = tempfile::tempdir().unwrap();
     touch(temp.path(), "frontend/Cargo.toml");
-    let mut producer = CandidateProducer::new(vec![source(temp.path())]);
-    let root = producer.next_candidate().unwrap();
-    let child = producer.next_candidate().unwrap();
+    let mut candidates = candidates(vec![source(temp.path())]).into_iter();
+    let root = candidates.next().unwrap();
+    let child = candidates.next().unwrap();
 
     assert_eq!(
         root.relative_cache_dir,
@@ -239,4 +245,29 @@ fn nested_cache_path_uses_stable_id_and_root_path_is_unchanged() {
             .join("nested")
             .join(child.stable_child_id.unwrap())
     );
+}
+
+#[test]
+fn dropping_bounded_receiver_stops_blocking_producer() {
+    let temp = tempfile::tempdir().unwrap();
+    for index in 0..MAX_CHILD_CANDIDATES {
+        touch(temp.path(), &format!("{index:02}/Cargo.toml"));
+    }
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let sources = vec![source(temp.path())];
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+
+    runtime.block_on(async move {
+        let producer = tokio::task::spawn_blocking(move || produce_candidates(sources, sender));
+        assert!(receiver.recv().await.is_some());
+        drop(receiver);
+
+        tokio::time::timeout(Duration::from_secs(1), producer)
+            .await
+            .unwrap()
+            .unwrap();
+    });
 }
