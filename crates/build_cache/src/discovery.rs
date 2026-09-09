@@ -2,9 +2,6 @@
 //!
 //! Repositories are scanned in cache-key order. Each repository root is emitted before marked
 //! descendants selected by a sorted depth-first walk, so scan limits always retain the same roots.
-//! The blocking filesystem walk feeds a bounded async channel: a full channel backpressures the
-//! walk, and dropping the receiver stops it at the next cancellation check. [`CandidateKey`]
-//! encodes root-first canonical order independently of delivery timing.
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
@@ -214,8 +211,6 @@ impl TruncationReason {
     }
 }
 
-/// Starts discovery on Tokio's blocking pool and returns its bounded candidate receiver.
-///
 /// The current span is entered on the blocking thread so per-repository diagnostics remain part of
 /// the cache-setup trace. Dropping the receiver unblocks a pending send and cancels further scans.
 pub(super) fn candidate_receiver(
@@ -230,7 +225,6 @@ pub(super) fn candidate_receiver(
     receiver
 }
 
-/// Emits candidates in canonical repository order until discovery completes or the receiver closes.
 pub(super) fn produce_candidates(
     repositories: Vec<RepositoryCacheSource>,
     sender: mpsc::Sender<CacheCandidate>,
