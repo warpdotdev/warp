@@ -1865,6 +1865,21 @@ impl GridHandler {
         self.grid.cursor.point.row.0 + self.history_size()
     }
 
+    /// Moves rows that have scrolled out of the live screen from grid-storage
+    /// history into flat storage.
+    ///
+    /// Live `len()` / paint only count flat-storage history plus the visible
+    /// screen. Piped log output accumulates in grid-storage scrollback instead,
+    /// so without this pass the live block stays one screen tall.
+    pub fn compact_scrollback_into_flat_storage(&mut self) {
+        if self.grid.history_size() == 0 {
+            return;
+        }
+        let visible_rows = self.visible_rows();
+        let columns = self.columns();
+        self.resize_storage(visible_rows, columns);
+    }
+
     /// Truncate all rows after the cursor's row from the Grid
     ///
     /// This is primarily used when a block is finished, to drop the excess rows that are not part

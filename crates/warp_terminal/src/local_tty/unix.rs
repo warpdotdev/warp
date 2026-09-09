@@ -5,21 +5,27 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{DirBuilder, File};
+use std::future::Future;
 use std::mem::MaybeUninit;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+use std::sync::Arc;
 use std::{io, ptr};
 
 use anyhow::{Context as _, Error, Result};
 use command::r#async::Command as AsyncCommand;
 use command::blocking::Command;
+use futures::AsyncReadExt as _;
+use futures::future::try_join3;
 use itertools::Itertools;
 use libc::{self, TIOCSCTTY, c_int, winsize};
 use mio::Interest;
 use mio::unix::SourceFd;
 use nix::pty::openpty;
 use nix::sys::termios::{self, InputFlags, SetArg};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use signal_hook_mio::v1_0::Signals;
@@ -1300,6 +1306,85 @@ fn build_dev_container_command(
     builder
 }
 
+/// Registers the active staging child so Close/Retry can terminate it.
+pub trait ProcessGroupCancel: Send + Sync {
+    fn register_process_group(&self, kill_group: StagingProcessGroupKillOnDrop) -> bool;
+    fn is_cancelled(&self) -> bool;
+}
+
+/// Holds the process-group id until the first terminate, so Drop cannot
+/// SIGKILL a pid that has already been reused.
+#[derive(Clone)]
+pub struct StagingProcessGroupKillOnDrop {
+    process_group_id: Arc<Mutex<Option<u32>>>,
+}
+
+impl StagingProcessGroupKillOnDrop {
+    pub(crate) fn new(process_group_id: u32) -> Self {
+        Self {
+            process_group_id: Arc::new(Mutex::new(Some(process_group_id))),
+        }
+    }
+
+    pub fn terminate_now(&self) {
+        if let Some(process_group_id) = self.process_group_id.lock().take() {
+            terminate_staging_process_group(process_group_id);
+        }
+    }
+}
+
+impl Drop for StagingProcessGroupKillOnDrop {
+    fn drop(&mut self) {
+        self.terminate_now();
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static STAGING_PROCESS_GROUP_TERMINATIONS: std::cell::Cell<u32> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn take_staging_process_group_terminations() -> u32 {
+    STAGING_PROCESS_GROUP_TERMINATIONS.with(std::cell::Cell::take)
+}
+
+fn terminate_staging_process_group(process_group_id: u32) {
+    #[cfg(test)]
+    STAGING_PROCESS_GROUP_TERMINATIONS.with(|count| count.set(count.get() + 1));
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+    if process_group_id < 2 {
+        log::warn!("Refusing to signal process group {process_group_id}: pid is below 2");
+        return;
+    }
+    match kill(Pid::from_raw(-(process_group_id as i32)), Signal::SIGKILL) {
+        Ok(()) => log::info!("Sent SIGKILL to process group {process_group_id}"),
+        Err(error @ nix::errno::Errno::ESRCH) => {
+            log::info!("Process group {process_group_id} had already exited: {error}");
+        }
+        Err(error) => {
+            log::warn!("Failed to kill process group {process_group_id}: {error}");
+        }
+    }
+}
+
+fn cancelled_staging_error() -> Error {
+    Error::msg("cancelled")
+}
+
+async fn join_staging_pipes_and_status(
+    _kill_group: StagingProcessGroupKillOnDrop,
+    stdout_fut: impl Future<Output = io::Result<Vec<u8>>>,
+    stderr_fut: impl Future<Output = io::Result<Vec<u8>>>,
+    status_fut: impl Future<Output = io::Result<std::process::ExitStatus>>,
+) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus)> {
+    try_join3(stdout_fut, stderr_fut, status_fut)
+        .await
+        .map_err(Error::from)
+}
+
 /// Runs `docker <args>` (or podman, etc. — whatever `docker_path` resolves
 /// to) to completion, treating a non-zero exit as an error. The error
 /// message includes the tail of stderr so failures are actionable when
@@ -1309,11 +1394,13 @@ fn build_dev_container_command(
 /// preflight, before any pane (or its own PTY thread) exists to absorb the
 /// latency — a blocking `Command` here would stall the view's executor for
 /// the round-trip time of a real `docker` invocation.
-async fn run_dev_container_docker_command(docker_path: &Path, args: Vec<OsString>) -> Result<()> {
+async fn run_dev_container_docker_command(
+    docker_path: &Path,
+    args: Vec<OsString>,
+    cancel: Option<&dyn ProcessGroupCancel>,
+) -> Result<()> {
     let args_display = args.iter().map(|a| a.to_string_lossy()).join(" ");
-    let output = AsyncCommand::new(docker_path)
-        .args(&args)
-        .output()
+    let output = run_dev_container_docker_output(docker_path, &args, cancel)
         .await
         .with_context(|| format!("run `docker {args_display}`"))?;
     if !output.status.success() {
@@ -1331,6 +1418,73 @@ async fn run_dev_container_docker_command(docker_path: &Path, args: Vec<OsString
     Ok(())
 }
 
+async fn run_dev_container_docker_output(
+    docker_path: &Path,
+    args: &[OsString],
+    cancel: Option<&dyn ProcessGroupCancel>,
+) -> Result<Output> {
+    if cancel.is_some_and(ProcessGroupCancel::is_cancelled) {
+        return Err(cancelled_staging_error());
+    }
+    let Some(cancel) = cancel else {
+        return AsyncCommand::new(docker_path)
+            .args(args)
+            .output()
+            .await
+            .map_err(Error::from);
+    };
+
+    let mut command = AsyncCommand::new_with_process_group(docker_path);
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command.spawn().map_err(Error::from)?;
+    let process_group_id = child.id();
+    let kill_group = StagingProcessGroupKillOnDrop::new(process_group_id);
+    if !cancel.register_process_group(kill_group.clone()) {
+        kill_group.terminate_now();
+        let _ = child.status().await;
+        return Err(cancelled_staging_error());
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| Error::msg("stdout was not piped"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| Error::msg("stderr was not piped"))?;
+    let stdout_fut = async {
+        let mut bytes = Vec::new();
+        let mut reader = stdout;
+        reader.read_to_end(&mut bytes).await?;
+        io::Result::Ok(bytes)
+    };
+    let stderr_fut = async {
+        let mut bytes = Vec::new();
+        let mut reader = stderr;
+        reader.read_to_end(&mut bytes).await?;
+        io::Result::Ok(bytes)
+    };
+    let status_fut = {
+        let kill_group = kill_group.clone();
+        async move {
+            let status = child.status().await?;
+            kill_group.terminate_now();
+            io::Result::Ok(status)
+        }
+    };
+    let (stdout, stderr, status) =
+        join_staging_pipes_and_status(kill_group, stdout_fut, stderr_fut, status_fut).await?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
 /// Whether `container_path` already exists in `container_id`. Used to skip
 /// re-staging the content-hashed bootstrap script: since the same hash always
 /// means the same bytes, two sessions racing this check both land on the same
@@ -1345,15 +1499,15 @@ async fn dev_container_bootstrap_already_staged(
     docker_path: &Path,
     container_id: &str,
     container_path: &str,
+    cancel: Option<&dyn ProcessGroupCancel>,
 ) -> bool {
-    AsyncCommand::new(docker_path)
-        .args(dev_container_bootstrap_exists_args(
-            container_id,
-            container_path,
-        ))
-        .output()
-        .await
-        .is_ok_and(|output| output.status.success())
+    run_dev_container_docker_output(
+        docker_path,
+        &dev_container_bootstrap_exists_args(container_id, container_path),
+        cancel,
+    )
+    .await
+    .is_ok_and(|output| output.status.success())
 }
 
 /// Stages `contents` on the host at `host_path`, `docker cp`s it into the
@@ -1373,6 +1527,7 @@ async fn stage_and_secure_dev_container_file(
     contents: &[u8],
     container_path: &str,
     target_user: &str,
+    cancel: Option<&dyn ProcessGroupCancel>,
 ) -> Result<()> {
     let host_dir = host_path
         .parent()
@@ -1400,6 +1555,7 @@ async fn stage_and_secure_dev_container_file(
     run_dev_container_docker_command(
         docker_path,
         dev_container_cp_args(container_id, host_path, container_path),
+        cancel,
     )
     .await
     .with_context(|| format!("copy {container_path} into the container"))?;
@@ -1412,12 +1568,14 @@ async fn stage_and_secure_dev_container_file(
         run_dev_container_docker_command(
             docker_path,
             dev_container_chown_args(container_id, target_user, container_path),
+            cancel,
         )
         .await
         .with_context(|| format!("chown {container_path}"))?;
         run_dev_container_docker_command(
             docker_path,
             dev_container_chmod_args(container_id, container_path),
+            cancel,
         )
         .await
         .with_context(|| format!("chmod {container_path}"))
@@ -1429,6 +1587,7 @@ async fn stage_and_secure_dev_container_file(
         let _ = run_dev_container_docker_command(
             docker_path,
             dev_container_rm_args(container_id, container_path),
+            cancel,
         )
         .await;
         return Err(e);
@@ -1468,13 +1627,14 @@ pub async fn prepare_dev_container(
     remote_user: Option<String>,
     sandbox_id: String,
     session_id: SessionId,
+    cancel: Option<&dyn ProcessGroupCancel>,
 ) -> Result<()> {
     // If `devcontainer up` didn't report a `remoteUser`, resolve whichever
     // user the real attach's unqualified `docker exec` (no `-u`) would
     // actually run as; both staged files are owned by the same user.
     let target_user = match remote_user {
         Some(remote_user) => remote_user,
-        None => resolve_default_container_user(&docker_path, &container_id).await?,
+        None => resolve_default_container_user(&docker_path, &container_id, cancel).await?,
     };
 
     // The bootstrap script (unlike the init script) takes no session-specific input, so its
@@ -1495,6 +1655,7 @@ pub async fn prepare_dev_container(
         init_script.as_bytes(),
         &container_init_script_path_for_sandbox_id(&sandbox_id),
         &target_user,
+        cancel,
     )
     .await?;
 
@@ -1502,6 +1663,7 @@ pub async fn prepare_dev_container(
         &docker_path,
         &container_id,
         &container_bootstrap_path,
+        cancel,
     )
     .await
     {
@@ -1512,6 +1674,7 @@ pub async fn prepare_dev_container(
             &bootstrap_script,
             &container_bootstrap_path,
             &target_user,
+            cancel,
         )
         .await?;
     }
@@ -1553,12 +1716,18 @@ fn dev_container_init_script(session_id: SessionId, container_bootstrap_path: &s
 /// (no `-u`) would run as in this container — i.e. the account
 /// [`dev_container_exec_args`] actually attaches as when `devcontainer up`
 /// didn't report a `remoteUser`.
-async fn resolve_default_container_user(docker_path: &Path, container_id: &str) -> Result<String> {
-    let output = AsyncCommand::new(docker_path)
-        .args(dev_container_default_user_args(container_id))
-        .output()
-        .await
-        .context("resolve default Dev Container exec user")?;
+async fn resolve_default_container_user(
+    docker_path: &Path,
+    container_id: &str,
+    cancel: Option<&dyn ProcessGroupCancel>,
+) -> Result<String> {
+    let output = run_dev_container_docker_output(
+        docker_path,
+        &dev_container_default_user_args(container_id),
+        cancel,
+    )
+    .await
+    .context("resolve default Dev Container exec user")?;
     if !output.status.success() {
         return Err(Error::msg(
             "could not resolve the Dev Container's default exec user",

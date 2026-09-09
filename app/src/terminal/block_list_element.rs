@@ -4728,6 +4728,18 @@ impl Element for BlockListElement {
     fn origin(&self) -> Option<Point> {
         self.origin
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        let text = self
+            .model
+            .lock()
+            .block_list()
+            .active_block()
+            .output_grid()
+            .contents_to_string(false, None);
+        if text.is_empty() { None } else { Some(text) }
+    }
 }
 
 #[derive(Debug)]

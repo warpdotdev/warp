@@ -275,6 +275,14 @@ impl ScrollableState {
         }
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        match self {
+            Self::BothAxes { config, .. } => config.debug_text_content(),
+            Self::SingleAxis { config, .. } => config.debug_text_content(),
+        }
+    }
+
     fn scroll_offset(&self) -> Vector2F {
         match self {
             Self::BothAxes { config, .. } => config.scroll_offset(),
@@ -1462,6 +1470,11 @@ impl Element for NewScrollable {
 
     fn origin(&self) -> Option<Point> {
         self.origin
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        self.state.debug_text_content()
     }
 
     fn dispatch_event(

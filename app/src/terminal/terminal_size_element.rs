@@ -101,6 +101,11 @@ impl Element for TerminalSizeElement {
         }
         handled_by_child
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn debug_text_content(&self) -> Option<String> {
+        self.child.debug_text_content()
+    }
 }
 
 impl TerminalSizeElement {

@@ -217,6 +217,14 @@ pub enum DualAxisConfig {
 }
 
 impl DualAxisConfig {
+    #[cfg(any(test, feature = "test-util"))]
+    pub(super) fn debug_text_content(&self) -> Option<String> {
+        match self {
+            Self::Manual { child, .. } => child.debug_text_content(),
+            Self::Clipped { child, .. } => child.debug_text_content(),
+        }
+    }
+
     /// At run-time, validate if the passed-in axis config is valid.
     pub(super) fn validate(&self) {
         #[cfg(debug_assertions)]

@@ -176,6 +176,8 @@ use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 mod ambient_pane_restoration;
 mod child_agent;
+#[cfg(feature = "local_tty")]
+mod dev_container;
 pub(crate) use child_agent::materialization::{
     ChildPaneMaterialization, decide_child_pane_materialization,
 };
@@ -1191,6 +1193,11 @@ impl PaneGroup {
         })
     }
 
+    #[cfg(feature = "local_tty")]
+    pub(crate) fn has_pane(&self, pane_id: PaneId) -> bool {
+        self.pane_contents.contains_key(&pane_id)
+    }
+
     /// Returns true if this pane group contains any terminal panes.
     pub fn has_terminal_panes(&self) -> bool {
         self.pane_contents
@@ -2015,6 +2022,9 @@ impl PaneGroup {
                 // Editor panes are not restored from persistence.
                 Err(anyhow::anyhow!("Can't restore editor panes"))
             }
+            LeafContents::DevContainerBuild => Err(anyhow::anyhow!(
+                "Dev Container build pane should not have been persisted, as it cannot be restored"
+            )),
             LeafContents::NetworkLog => {
                 // Network log panes are intentionally not restored. Two
                 // reasons:
@@ -4502,6 +4512,13 @@ impl PaneGroup {
             self.close_pane(pane_id, ctx);
             return;
         }
+        if self
+            .terminal_view_from_pane_id(pane_id, ctx)
+            .is_some_and(|view| view.as_ref(ctx).is_dev_container_build_surface())
+        {
+            self.close_pane(pane_id, ctx);
+            return;
+        }
 
         if let Some(terminal_manager) = self
             .terminal_session_by_id(pane_id)
@@ -6426,9 +6443,7 @@ impl PaneGroup {
         (terminal_view, terminal_manager)
     }
 
-    /// Creates a loading terminal view with MockTerminalManager in loading state.
-    /// This is used by both `new_for_conversation_transcript_viewer_loading` and `create_loading_terminal_pane`.
-    fn create_loading_terminal_manager_and_view(
+    fn create_mock_terminal_manager_and_view(
         resources: TerminalViewResources,
         view_bounds_size: Vector2F,
         window_id: WindowId,
@@ -6450,10 +6465,27 @@ impl PaneGroup {
             window_id,
             ctx,
         );
-        let terminal_manager = terminal_init.manager;
-        let terminal_view = terminal_init.view;
+        (terminal_init.view, terminal_init.manager)
+    }
 
-        // Set the conversation transcript viewer status to Loading
+    /// Creates a loading terminal view with MockTerminalManager in loading state.
+    /// This is used by both `new_for_conversation_transcript_viewer_loading` and `create_loading_terminal_pane`.
+    fn create_loading_terminal_manager_and_view(
+        resources: TerminalViewResources,
+        view_bounds_size: Vector2F,
+        window_id: WindowId,
+        ctx: &mut ViewContext<Self>,
+    ) -> (
+        ViewHandle<TerminalView>,
+        ModelHandle<Box<dyn TerminalManager>>,
+    ) {
+        let (terminal_view, terminal_manager) = Self::create_mock_terminal_manager_and_view(
+            resources,
+            view_bounds_size,
+            window_id,
+            ctx,
+        );
+
         terminal_manager.update(ctx, |terminal_manager, _ctx| {
             terminal_manager
                 .model()
