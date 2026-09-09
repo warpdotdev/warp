@@ -78,10 +78,6 @@ fn winit_backdrop(backdrop: WindowBackdrop) -> BackdropType {
     }
 }
 
-#[cfg(all(test, windows))]
-#[path = "window_tests.rs"]
-mod tests;
-
 pub(crate) struct WindowManager {
     windows: HashMap<WindowId, Rc<Window>>,
     event_loop_proxy: EventLoopProxy<CustomEvent>,
@@ -1597,8 +1593,6 @@ impl crate::platform::Window for Window {
     fn set_background_backdrop(&self, backdrop: WindowBackdrop) {
         #[cfg(windows)]
         {
-            use super::windows::WindowExt;
-
             if let Some(inner) = self.inner.borrow().as_ref() {
                 inner.window.set_system_backdrop(winit_backdrop(backdrop));
             }

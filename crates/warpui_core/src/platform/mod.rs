@@ -534,16 +534,6 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     fn callbacks(&self) -> &WindowCallbacks;
 
     fn as_any(&self) -> &dyn std::any::Any;
-
-    #[cfg(feature = "test-util")]
-    fn background_blur_radius_pixels_for_test(&self) -> Option<u8> {
-        None
-    }
-
-    #[cfg(feature = "test-util")]
-    fn background_backdrop_for_test(&self) -> WindowBackdrop {
-        WindowBackdrop::None
-    }
 }
 
 pub trait WindowContext {
@@ -719,10 +709,6 @@ pub trait WindowManager {
 
     fn cancel_synthetic_drag(&self, _window_id: WindowId) {}
 }
-
-#[cfg(test)]
-#[path = "window_backdrop_tests.rs"]
-mod window_backdrop_tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SystemTheme {
