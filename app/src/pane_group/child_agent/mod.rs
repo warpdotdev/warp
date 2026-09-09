@@ -21,7 +21,7 @@ use crate::ai::blocklist::{
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::terminal::TerminalView;
 use crate::terminal::shared_session::IsSharedSessionCreator;
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 
 pub(crate) struct HiddenChildAgentConversation {
     pub terminal_view: ViewHandle<TerminalView>,
@@ -41,7 +41,6 @@ pub(crate) struct HiddenChildAgentConversationRequest {
     pub orchestration_harness: Option<Harness>,
     pub env_vars: HashMap<OsString, OsString>,
     pub task_context: Option<HiddenChildAgentTaskContext>,
-    pub settings_inheritance_scope: ResolvedTeamScope,
     /// When `Yes`, the child pane's terminal is asked to share its session
     /// using the embedded `SessionSourceType` once the shell bootstraps.
     /// The dispatch helpers in `terminal_pane.rs` compute this from the host
@@ -100,6 +99,7 @@ fn start_new_child_conversation(
 pub(crate) fn create_hidden_child_agent_conversation(
     group: &mut PaneGroup,
     request: HiddenChildAgentConversationRequest,
+    settings_inheritance_scope: &impl TeamScope,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<HiddenChildAgentConversation> {
     let HiddenChildAgentConversationRequest {
@@ -109,7 +109,6 @@ pub(crate) fn create_hidden_child_agent_conversation(
         orchestration_harness,
         env_vars,
         task_context,
-        settings_inheritance_scope,
         is_shared_session_creator,
     } = request;
     let new_pane_id = group.insert_terminal_pane_hidden_for_child_agent(
@@ -128,7 +127,7 @@ pub(crate) fn create_hidden_child_agent_conversation(
     match group.terminal_view_from_pane_id(parent_pane_id, ctx) {
         Some(parent_terminal_view) => {
             inherit_child_agent_settings(
-                &settings_inheritance_scope,
+                settings_inheritance_scope,
                 parent_terminal_view.id(),
                 terminal_view_id,
                 ctx,
@@ -171,6 +170,7 @@ fn create_error_child_agent_conversation_context(
     orchestration_harness: Option<Harness>,
     ctx: &mut ViewContext<PaneGroup>,
 ) -> Option<(Option<ViewHandle<TerminalView>>, EntityId, AIConversationId)> {
+    let settings_inheritance_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
     if let Some(HiddenChildAgentConversation {
         terminal_view,
         terminal_view_id,
@@ -185,11 +185,9 @@ fn create_error_child_agent_conversation_context(
             orchestration_harness,
             env_vars: HashMap::new(),
             task_context: None,
-            settings_inheritance_scope: ResolvedTeamScope::from_scope(
-                &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-            ),
             is_shared_session_creator: IsSharedSessionCreator::No,
         },
+        &settings_inheritance_scope,
         ctx,
     ) {
         return Some((Some(terminal_view), terminal_view_id, conversation_id));

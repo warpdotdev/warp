@@ -5,9 +5,9 @@ use mockito::Matcher;
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ResolvedTeamScope,
-    ServerApiProvider, StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent,
-    StartAgentOutcome, StartAgentRequest, UserWorkspaces,
+    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ServerApiProvider,
+    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
+    StartAgentRequest, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, UserWorkspaces,
     register_tui_session_view_test_singletons, set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
@@ -43,7 +43,7 @@ impl Entity for CapturedRemoteDispatch {
 }
 
 #[test]
-fn local_dispatch_uses_request_scope_after_window_team_change() {
+fn local_dispatch_fails_after_window_team_change() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture_with_session_materialization(&mut app, false);
         app.read(|ctx| {
@@ -86,22 +86,15 @@ fn local_dispatch_uses_request_scope_after_window_team_change() {
                 .with_body(
                     r#"{"data":{"createAgentTask":{"__typename":"CreateAgentTaskOutput","responseContext":{"serverVersion":null},"taskId":"550e8400-e29b-41d4-a716-446655440000"}}}"#,
                 )
-                .expect(1)
+                .expect(0)
                 .create()
         };
         let (dispatch_tx, dispatch_rx) = async_channel::bounded(1);
         let orchestration = app.read(TuiOrchestrationModel::handle);
         app.update(|ctx| {
             ctx.subscribe_to_model(&orchestration, move |_, event, _| {
-                if let super::TuiOrchestrationEvent::CreateLocalChildSession {
-                    model_id,
-                    team_scope,
-                    ..
-                } = event
-                {
-                    dispatch_tx
-                        .try_send((RequestTeamScope::from_scope(team_scope), model_id.clone()))
-                        .unwrap();
+                if let super::TuiOrchestrationEvent::CreateLocalChildSession { .. } = event {
+                    dispatch_tx.try_send(()).unwrap();
                 }
             });
             UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
@@ -129,15 +122,24 @@ fn local_dispatch_uses_request_scope_after_window_team_change() {
             });
         });
 
-        let dispatch = future::race(async { dispatch_rx.recv().await.ok() }, async {
-            Timer::after(Duration::from_secs(5)).await;
-            None
-        })
-        .await
-        .expect("local child session was not created");
-        assert_eq!(dispatch.0, request_team_scope);
-        assert_eq!(dispatch.1.as_deref(), Some("team-a-only"));
+        assert!(dispatch_rx.try_recv().is_err());
         request_mock.assert();
+        app.read(|ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let [child_conversation_id] =
+                history.child_conversation_ids_of(&parent_conversation_id)
+            else {
+                panic!("expected one failed child conversation");
+            };
+            let child = history
+                .conversation(child_conversation_id)
+                .expect("failed child conversation should exist");
+            assert_eq!(child.status(), &ConversationStatus::Error);
+            assert_eq!(
+                child.status_error_message().as_deref(),
+                Some(TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR)
+            );
+        });
     });
 }
 fn remote_request(parent_conversation_id: AIConversationId) -> StartAgentRequest {
@@ -503,9 +505,7 @@ fn local_oz_child_session_indexes_run_id_immediately() {
             ),
         };
         app.update(|ctx| {
-            let team_scope = ResolvedTeamScope::from_scope(
-                &UserWorkspaces::teamless_context_for_operation_for_test(),
-            );
+            let team_scope = UserWorkspaces::teamless_context_for_operation_for_test();
             TuiOrchestrationModel::handle(ctx).update(ctx, |orchestration, ctx| {
                 orchestration.register_local_oz_child_session(
                     MaterializedLocalOzChildSession {

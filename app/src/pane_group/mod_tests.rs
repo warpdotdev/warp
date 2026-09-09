@@ -38,7 +38,8 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::StartAgentExecutionMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    ServerAIConversationMetadata,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
@@ -52,7 +53,10 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel, StartAgentRequest};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedQueryModel, StartAgentRequest,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
+};
 use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -113,7 +117,7 @@ use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
-use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
+use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::Workspace;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, experiments,
@@ -299,7 +303,7 @@ fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
 }
 #[test]
-fn local_child_dispatch_uses_request_scope_after_window_team_change() {
+fn local_child_dispatch_fails_after_window_team_change() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
         app.read(|ctx| {
@@ -363,7 +367,7 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
             let terminal_view = panes
                 .terminal_view_from_pane_id(parent_pane_id, ctx)
                 .unwrap();
-            let team_a_scope = ResolvedTeamScope::from_request_scope(request_team_scope);
+            let team_a_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
             LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
                 assert!(preferences.update_active_profile_base_model(
                     &LLMId::from(team_a_profile_model_id),
@@ -397,7 +401,7 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
                 .with_body(
                     r#"{"data":{"createAgentTask":{"__typename":"CreateAgentTaskOutput","responseContext":{"serverVersion":null},"taskId":"550e8400-e29b-41d4-a716-446655440000"}}}"#,
                 )
-                .expect(1)
+                .expect(0)
                 .create()
         };
         app.update(|ctx| {
@@ -425,37 +429,23 @@ fn local_child_dispatch_uses_request_scope_after_window_team_change() {
                 ));
             });
         });
-        assert_eventually!(
-            200 => request_mock.matched(),
-            "the terminal event did not dispatch task creation"
-        );
-
-        assert_eventually!(
-            200 => pane_group.read(&app, |panes, _| panes.child_agent_panes.len()) == 1,
-            "the local dispatch did not materialize a hidden child pane"
-        );
-        let child_terminal_view_id = pane_group.read(&app, |panes, ctx| {
-            let child_pane_id = panes
-                .child_agent_panes
-                .values()
-                .next()
-                .expect("the local dispatch should register its hidden child pane");
-            panes
-                .terminal_view_from_pane_id(*child_pane_id, ctx)
-                .expect("the hidden child pane should have a terminal view")
-                .id()
+        request_mock.assert();
+        pane_group.read(&app, |_, ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let [child_conversation_id] =
+                history.child_conversation_ids_of(&parent_conversation_id)
+            else {
+                panic!("expected one failed child conversation");
+            };
+            let child = history
+                .conversation(child_conversation_id)
+                .expect("failed child conversation should exist");
+            assert_eq!(child.status(), &ConversationStatus::Error);
+            assert_eq!(
+                child.status_error_message().as_deref(),
+                Some(TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR)
+            );
         });
-        let inherited_model_id = app.read(|ctx| {
-            LLMPreferences::as_ref(ctx)
-                .get_active_base_model(
-                    &ResolvedTeamScope::from_request_scope(request_team_scope),
-                    ctx,
-                    Some(child_terminal_view_id),
-                )
-                .id
-                .clone()
-        });
-        assert_eq!(inherited_model_id.as_str(), team_a_default_model_id);
     });
 }
 
@@ -992,6 +982,7 @@ fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
             panes.focus_pane(parent_pane_id, true, ctx);
 
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
             let child = create_hidden_child_agent_conversation(
                 panes,
                 HiddenChildAgentConversationRequest {
@@ -1001,11 +992,9 @@ fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
                     orchestration_harness: None,
                     env_vars: HashMap::new(),
                     task_context: None,
-                    settings_inheritance_scope: ResolvedTeamScope::from_scope(
-                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                    ),
                     is_shared_session_creator: IsSharedSessionCreator::No,
                 },
+                &team_context,
                 ctx,
             )
             .expect("fresh hidden child conversation should be created");
@@ -1063,6 +1052,7 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
             let parent_pane_id = get_newly_created_pane_id(panes, &[]);
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
             let task_id = new_ambient_agent_task_id();
+            let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
 
             let child = create_hidden_child_agent_conversation(
                 panes,
@@ -1076,11 +1066,9 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
                         task_id,
                         working_dir: None,
                     }),
-                    settings_inheritance_scope: ResolvedTeamScope::from_scope(
-                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
-                    ),
                     is_shared_session_creator: IsSharedSessionCreator::No,
                 },
+                &team_context,
                 ctx,
             )
             .expect("fresh hidden child conversation should be created");

@@ -20,6 +20,9 @@ impl RequestTeamScope {
     pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
         Self(scope.team_uid())
     }
+    pub fn matches_scope(self, scope: &(impl TeamScope + ?Sized)) -> bool {
+        self.0 == scope.team_uid()
+    }
 
     /// The wire uid. `None` sends no team header, leaving the server to its own default.
     pub(crate) fn team_uid(self) -> Option<ServerId> {

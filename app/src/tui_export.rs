@@ -116,8 +116,8 @@ pub use crate::ai::blocklist::{
     QueuedQueryModel, RequestFileEditsExecutor, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
     StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest, StartAgentRequestId,
-    block_context_from_terminal_model, inherit_child_agent_settings,
-    maybe_build_ai_query_upsert_event,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, block_context_from_terminal_model,
+    inherit_child_agent_settings, maybe_build_ai_query_upsert_event,
 };
 #[cfg(not(target_family = "wasm"))]
 pub use crate::ai::blocklist::{

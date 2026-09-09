@@ -30,7 +30,6 @@ use crate::ai::llms::LLMInfo;
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider, ModelsByFeature};
 use crate::auth::AuthStateProvider;
 use crate::server::ids::ServerId;
-use crate::server::team_scope::RequestTeamScope;
 use crate::settings::{AISettings, AgentModeCommandExecutionPredicate};
 use crate::workspaces::gql_convert::ToAgentModeCommandExecutionPredicates;
 use crate::workspaces::team::Team;
@@ -45,10 +44,10 @@ mod sealed {
 
 /// Reads a [`TeamContextForOperation`] or [`TeamContext`]'s team.
 ///
-/// Application code obtains a [`TeamContext`] or [`TeamContextForOperation`] by exchanging a
-/// view context or handle. Neither type can be copied or cloned. `TeamContext` is borrow-bound to
-/// an immediate read, while `TeamContextForOperation` is owned so one operation can move it across
-/// an asynchronous boundary without re-resolving against a different window team.
+/// Application code obtains a [`TeamContext`] or [`TeamContextForOperation`] from a view-bound
+/// context, handle, or window. Neither type can be copied or cloned. `TeamContext` is borrow-bound
+/// to an immediate read, while `TeamContextForOperation` is owned so one operation can move it
+/// across an asynchronous boundary without re-resolving against a different window team.
 ///
 /// Sealed: only this module implements [`sealed::Sealed`], so a scope can never be minted
 /// outside [`UserWorkspaces`].
@@ -121,10 +120,6 @@ impl ResolvedTeamScope {
     pub fn from_scope(scope: &(impl TeamScope + ?Sized)) -> Self {
         Self(scope.team_uid())
     }
-    /// Rehydrates a captured request scope for local policy and model reads.
-    pub fn from_request_scope(scope: RequestTeamScope) -> Self {
-        Self(scope.team_uid())
-    }
 
     #[cfg(feature = "agent_mode_evals")]
     pub(crate) fn teamless() -> Self {
@@ -191,15 +186,21 @@ pub(crate) enum GeminiEnterpriseBackgroundHost<'a> {
 
 impl UserWorkspaces {
     /// Captures the team selected in `ctx`'s window as an operation's
-    /// [`TeamContextForOperation`]. This is the only way application code mints one. Always
-    /// succeeds -- a window with no team selected still yields a scope, just one whose
-    /// `team_uid()` is `None`; see [`TeamScope`]'s contract for what that means to a getter.
+    /// [`TeamContextForOperation`]. Always succeeds -- a window with no team selected still yields
+    /// a scope whose `team_uid()` is `None`.
     pub fn team_context_for_operation<T: Entity>(
         &self,
         ctx: &ViewContext<T>,
     ) -> TeamContextForOperation {
+        self.team_context_for_window_operation(ctx.window_id())
+    }
+    /// Captures the team selected in a headless frontend's window.
+    pub fn team_context_for_window_operation(
+        &self,
+        window_id: WindowId,
+    ) -> TeamContextForOperation {
         TeamContextForOperation {
-            team_uid: self.team_uid_for_window(ctx.window_id()),
+            team_uid: self.team_uid_for_window(window_id),
         }
     }
 

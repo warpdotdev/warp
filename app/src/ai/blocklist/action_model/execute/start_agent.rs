@@ -8,6 +8,8 @@ use crate::ai::agent::{LifecycleEventType, StartAgentExecutionMode};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::server::team_scope::RequestTeamScope;
+pub const TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR: &str =
+    "The window's team changed before the child agent could start. Run the orchestration again.";
 
 /// Per-request outcome of a StartAgent dispatch.
 #[derive(Debug, Clone)]
