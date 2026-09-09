@@ -73,7 +73,7 @@ impl FileReadResult {
             FileReadResult::NotFound => FileRevision::Missing,
             FileReadResult::ReadError(_) | FileReadResult::Changed => return self,
         };
-        if current_revision == expected_revision {
+        if expected_revision.matches(current_revision) {
             self
         } else {
             FileReadResult::Changed

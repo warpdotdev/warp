@@ -15745,7 +15745,8 @@ impl TerminalView {
                     // subscriptions.
                     let _save_future = view.update(ctx, |diff_view, ctx| {
                         diff_view.send_malformed_line_telemetry(ctx);
-                        DiffStorageHelper::accept_and_save(diff_view, ctx)
+                        let expected_revisions = diff_view.expected_revisions_from_diff_bases(ctx);
+                        DiffStorageHelper::accept_and_save(diff_view, expected_revisions, ctx)
                     });
                     ctx.notify();
                 }

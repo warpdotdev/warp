@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::Arc;
 use std::time::SystemTime;
 
@@ -7,7 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::ai::agent::conversation::AIConversationId;
 
-const MAX_REVISION_READ_BYTES: u32 = 10_000_000;
+pub(super) const MAX_REVISION_READ_BYTES: u32 = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FileRevision {
@@ -16,6 +17,7 @@ pub(super) enum FileRevision {
         content_digest: [u8; 32],
     },
     Missing,
+    Uneditable,
 }
 
 impl FileRevision {
@@ -23,6 +25,41 @@ impl FileRevision {
         Self::Present {
             last_modified,
             content_digest: Sha256::digest(content).into(),
+        }
+    }
+
+    pub(super) fn persistence_revision(self) -> warp_files::ExpectedFileRevision {
+        match self {
+            Self::Present {
+                last_modified,
+                content_digest,
+            } => warp_files::ExpectedFileRevision::Present {
+                content_digest,
+                last_modified,
+            },
+            Self::Missing => warp_files::ExpectedFileRevision::Missing,
+            Self::Uneditable => warp_files::ExpectedFileRevision::Uneditable,
+        }
+    }
+
+    pub(super) fn matches(self, current: Self) -> bool {
+        match (self, current) {
+            (
+                Self::Present {
+                    content_digest: expected_digest,
+                    last_modified: expected_modified,
+                },
+                Self::Present {
+                    content_digest: current_digest,
+                    last_modified: current_modified,
+                },
+            ) => {
+                expected_digest == current_digest
+                    && expected_modified.is_none_or(|expected| Some(expected) == current_modified)
+            }
+            (Self::Missing, Self::Missing) => true,
+            (Self::Uneditable, _) | (_, Self::Uneditable) => false,
+            _ => false,
         }
     }
 }
@@ -65,26 +102,34 @@ impl FileRevisionTracker {
             .or_default()
             .extend(revisions_to_record);
     }
-
-    pub fn record_missing_files(
-        &self,
-        conversation_id: AIConversationId,
-        paths: impl IntoIterator<Item = String>,
-    ) {
-        self.record_revisions(
-            conversation_id,
-            paths.into_iter().map(|path| (path, FileRevision::Missing)),
-        );
-    }
 }
 
 pub(super) fn read_local_revision(path: &str) -> std::io::Result<FileRevision> {
-    match std::fs::read(path) {
-        Ok(content) => {
-            let last_modified = std::fs::metadata(path)
-                .and_then(|metadata| metadata.modified())
-                .ok();
-            Ok(FileRevision::present(content, last_modified))
+    match std::fs::File::open(path) {
+        Ok(mut file) => {
+            let metadata = file.metadata()?;
+            if metadata.len() > u64::from(MAX_REVISION_READ_BYTES) {
+                return Ok(FileRevision::Uneditable);
+            }
+            let last_modified = metadata.modified().ok();
+            let mut hasher = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            let mut bytes_read = 0_u64;
+            loop {
+                let count = file.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                bytes_read += count as u64;
+                if bytes_read > u64::from(MAX_REVISION_READ_BYTES) {
+                    return Ok(FileRevision::Uneditable);
+                }
+                hasher.update(&buffer[..count]);
+            }
+            Ok(FileRevision::Present {
+                last_modified,
+                content_digest: hasher.finalize().into(),
+            })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileRevision::Missing),
         Err(error) => Err(error),
@@ -147,7 +192,7 @@ pub(super) fn revision_from_remote_context(
     context: remote_server::proto::FileContextProto,
 ) -> Option<FileRevision> {
     if context.line_range_start.is_some() || context.line_range_end.is_some() {
-        return None;
+        return Some(FileRevision::Uneditable);
     }
 
     let last_modified = context
@@ -165,7 +210,7 @@ pub(super) fn revision_from_remote_context(
     Some(revision)
 }
 
-fn is_missing_error(message: &str) -> bool {
+pub(super) fn is_missing_error(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("not found") || message.contains("does not exist")
 }

@@ -25,6 +25,7 @@ use futures::FutureExt;
 use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
 use warp_editor::multiline::AnyMultilineString;
+use warp_files::ExpectedFileRevision;
 use warp_util::file::FileSaveError;
 use warpui::AppContext;
 
@@ -62,7 +63,19 @@ pub trait DiffStorage {
     /// [`DiffStorageHelper::accept_and_save`] — never called directly by
     /// callers. The GUI saves through its editor buffers; surfaces without
     /// editor buffers dispatch writes to `FileModel`.
-    fn start_saving(&mut self, app: &mut AppContext) -> Vec<SaveFuture>;
+    fn start_saving(
+        &mut self,
+        expected_revisions: &HashMap<String, ExpectedFileRevision>,
+        app: &mut AppContext,
+    ) -> Vec<SaveFuture>;
+}
+
+/// Persistence outcome and the exact accept-time file states handed to storage.
+pub struct PersistedFileEdits {
+    /// Result reported to the model.
+    pub result: RequestFileEditsResult,
+    /// Exact candidate states persisted when `result` succeeded.
+    pub files: Vec<FileSnapshot>,
 }
 
 /// The shared save-completion flow over an impl of [`DiffStorage`].
@@ -76,17 +89,19 @@ pub trait DiffStorageHelper {
     /// once every save completes.
     fn accept_and_save(
         &mut self,
+        expected_revisions: HashMap<String, ExpectedFileRevision>,
         app: &mut AppContext,
-    ) -> BoxFuture<'static, RequestFileEditsResult>;
+    ) -> BoxFuture<'static, PersistedFileEdits>;
 }
 
 impl<T: DiffStorage> DiffStorageHelper for T {
     fn accept_and_save(
         &mut self,
+        expected_revisions: HashMap<String, ExpectedFileRevision>,
         app: &mut AppContext,
-    ) -> BoxFuture<'static, RequestFileEditsResult> {
+    ) -> BoxFuture<'static, PersistedFileEdits> {
         let files = self.snapshot_pending_files(app);
-        let saves = self.start_saving(app);
+        let saves = self.start_saving(&expected_revisions, app);
         async move {
             let save_errors = join_all(saves)
                 .await
@@ -94,7 +109,10 @@ impl<T: DiffStorage> DiffStorageHelper for T {
                 .filter_map(Result::err)
                 .collect_vec();
             if !save_errors.is_empty() {
-                return save_failure_result(&save_errors);
+                return PersistedFileEdits {
+                    result: save_failure_result(&save_errors),
+                    files: Vec::new(),
+                };
             }
 
             let mut combined = DiffResult::default();
@@ -108,7 +126,10 @@ impl<T: DiffStorage> DiffStorageHelper for T {
                 )
                 .await;
             }
-            assemble_result(combined, files)
+            PersistedFileEdits {
+                result: assemble_result(combined, files.clone()),
+                files,
+            }
         }
         .boxed()
     }
@@ -131,7 +152,11 @@ pub trait RegisteredDiffStorage {
     );
 
     /// Persists all diffs, resolving with the result reported to the LLM.
-    fn accept_and_save(&self, app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult>;
+    fn accept_and_save(
+        &self,
+        expected_revisions: HashMap<String, ExpectedFileRevision>,
+        app: &mut AppContext,
+    ) -> BoxFuture<'static, PersistedFileEdits>;
 }
 
 /// One file's contribution to the assembled result, snapshotted at accept

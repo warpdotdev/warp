@@ -26,6 +26,8 @@ use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neut
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::report_error;
+use warp_files::ExpectedFileRevision;
+use warp_util::file::FileSaveError;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -59,8 +61,8 @@ use crate::ai::blocklist::action_model::{
     MalformedFinalLineProxyEvent, RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent,
 };
 use crate::ai::blocklist::diff_storage::{
-    DiffStorage, DiffStorageHelper, FileSnapshot, RegisteredDiffStorage, SaveFuture,
-    UpdatedFileState,
+    DiffStorage, DiffStorageHelper, FileSnapshot, PersistedFileEdits, RegisteredDiffStorage,
+    SaveFuture, UpdatedFileState,
 };
 use crate::ai::blocklist::diff_types::{DiffSessionType, FileDiff, changed_lines_from_op};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -357,17 +359,24 @@ impl RegisteredDiffStorage for WeakViewHandle<CodeDiffView> {
         });
     }
 
-    fn accept_and_save(&self, app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult> {
+    fn accept_and_save(
+        &self,
+        expected_revisions: HashMap<String, ExpectedFileRevision>,
+        app: &mut AppContext,
+    ) -> BoxFuture<'static, PersistedFileEdits> {
         let Some(view) = self.upgrade(app) else {
             log::warn!("RequestFileEdits review view vanished before execute");
-            return futures::future::ready(RequestFileEditsResult::DiffApplicationFailed {
-                error: "The review surface holding these edits no longer exists".to_string(),
+            return futures::future::ready(PersistedFileEdits {
+                result: RequestFileEditsResult::DiffApplicationFailed {
+                    error: "The review surface holding these edits no longer exists".to_string(),
+                },
+                files: Vec::new(),
             })
             .boxed();
         };
         view.update(app, |view, ctx| {
             view.mark_accepted_for_save(ctx);
-            DiffStorageHelper::accept_and_save(view, ctx)
+            DiffStorageHelper::accept_and_save(view, expected_revisions, ctx)
         })
     }
 }
@@ -416,6 +425,24 @@ pub struct CodeDiffView {
 }
 
 impl CodeDiffView {
+    pub(crate) fn expected_revisions_from_diff_bases(
+        &self,
+        app: &AppContext,
+    ) -> HashMap<String, ExpectedFileRevision> {
+        self.pending_diffs
+            .iter()
+            .filter_map(|pending| {
+                let diff = pending.diff_view.as_ref(app);
+                let path = diff.file_path()?.to_string();
+                let revision = if matches!(diff.diff(), Some(DiffType::Create { .. })) {
+                    ExpectedFileRevision::Missing
+                } else {
+                    ExpectedFileRevision::from_content(diff.base_content(app).unwrap_or_default())
+                };
+                Some((path, revision))
+            })
+            .collect()
+    }
     fn open_accept_split_button_menu(&mut self, ctx: &mut ViewContext<Self>) {
         // Don't allow menu toggling in view-only mode.
         if matches!(self.state, CodeDiffState::ViewOnly { .. }) {
@@ -2979,13 +3006,27 @@ impl DiffStorage for CodeDiffView {
 
     /// Saves every file through its editor buffer, tracking the number of
     /// dispatched saves for the revert guard.
-    fn start_saving(&mut self, app: &mut AppContext) -> Vec<SaveFuture> {
+    fn start_saving(
+        &mut self,
+        expected_revisions: &HashMap<String, ExpectedFileRevision>,
+        app: &mut AppContext,
+    ) -> Vec<SaveFuture> {
         let saves: Vec<SaveFuture> = self
             .pending_diffs
             .iter()
             .filter_map(|diff| {
-                diff.diff_view
-                    .update(app, |view, ctx| view.accept_and_save_diff(ctx))
+                let path = diff.diff_view.as_ref(app).file_path()?.to_string();
+                let Some(expected_revision) = expected_revisions.get(&path).copied() else {
+                    return Some(
+                        futures::future::ready(Err(Arc::new(FileSaveError::Other(format!(
+                            "{path} has not been read. Call read_files on {path} before retrying the edit."
+                        )))))
+                        .boxed(),
+                    );
+                };
+                diff.diff_view.update(app, |view, ctx| {
+                    view.accept_and_save_diff(expected_revision, ctx)
+                })
             })
             .collect();
         self.pending_saves = saves.len();

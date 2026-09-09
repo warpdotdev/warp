@@ -254,7 +254,7 @@ pub fn write_file_via_remote_server(
             // but send is async.
             std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-                let result = rt.block_on(handle.write_file(path.clone(), content));
+                let result = rt.block_on(handle.write_file(path.clone(), content, None));
                 if let Err(e) = result {
                     report_error!(
                         anyhow::Error::new(e).context("write_file_via_remote_server failed"),

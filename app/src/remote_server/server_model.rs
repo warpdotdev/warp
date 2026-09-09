@@ -16,7 +16,7 @@ use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
 use warp_core::{SessionId, safe_error};
-use warp_files::{FileModel, FileModelEvent};
+use warp_files::{ExpectedFileRevision, FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -145,6 +145,30 @@ fn remote_agent_context_snapshot(
         home_dir,
         skills,
         global_rules,
+    }
+}
+
+fn expected_file_revision_from_proto(
+    revision: super::proto::ExpectedFileRevision,
+) -> ExpectedFileRevision {
+    let last_modified = revision
+        .last_modified_epoch_millis
+        .map(|millis| std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis));
+    match revision.state {
+        Some(super::proto::expected_file_revision::State::ContentSha256(digest)) => digest
+            .try_into()
+            .map(|content_digest| ExpectedFileRevision::Present {
+                content_digest,
+                last_modified,
+            })
+            .unwrap_or(ExpectedFileRevision::Uneditable),
+        Some(super::proto::expected_file_revision::State::Missing(_)) => {
+            ExpectedFileRevision::Missing
+        }
+        Some(super::proto::expected_file_revision::State::Uneditable(_)) => {
+            ExpectedFileRevision::Uneditable
+        }
+        None => ExpectedFileRevision::Uneditable,
     }
 }
 
@@ -2290,9 +2314,15 @@ impl ServerModel {
                 .insert(path, request_id.clone(), conn_id, FileOpKind::Write, ctx);
 
         let file_model = FileModel::handle(ctx);
-        if let Err(err) =
-            file_model.update(ctx, |m, ctx| m.save(file_id, msg.content, version, ctx))
-        {
+        let content = msg.content;
+        let expected_revision = msg.expected_revision.map(expected_file_revision_from_proto);
+        if let Err(err) = file_model.update(ctx, |m, ctx| {
+            if let Some(expected_revision) = expected_revision {
+                m.save_with_expected_revision(file_id, content, version, expected_revision, ctx)
+            } else {
+                m.save(file_id, content, version, ctx)
+            }
+        }) {
             self.pending_file_ops.remove(file_id, ctx);
             return HandlerOutcome::Sync(server_message::Message::WriteFileResponse(
                 WriteFileResponse {
@@ -2335,7 +2365,14 @@ impl ServerModel {
         );
 
         let file_model = FileModel::handle(ctx);
-        if let Err(err) = file_model.update(ctx, |m, ctx| m.delete(file_id, version, ctx)) {
+        let expected_revision = msg.expected_revision.map(expected_file_revision_from_proto);
+        if let Err(err) = file_model.update(ctx, |m, ctx| {
+            if let Some(expected_revision) = expected_revision {
+                m.delete_with_expected_revision(file_id, version, expected_revision, ctx)
+            } else {
+                m.delete(file_id, version, ctx)
+            }
+        }) {
             self.pending_file_ops.remove(file_id, ctx);
             return HandlerOutcome::Sync(server_message::Message::DeleteFileResponse(
                 DeleteFileResponse {

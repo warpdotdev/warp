@@ -14,13 +14,12 @@ use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::super::file_revisions::{
-    FileRevisionTracker, read_local_revisions, read_remote_revisions,
-};
+use super::super::file_revisions::FileRevisionTracker;
 use super::diff_application::{DiffApplicationError, FileReadResult, apply_edits};
 use crate::ai::agent::conversation::AIConversationId;
-use crate::ai::agent::{AIIdentifiers, FileEdit, RequestFileEditsResult};
+use crate::ai::agent::{AIIdentifiers, FileEdit};
 use crate::ai::blocklist::SessionContext;
+use crate::ai::blocklist::diff_storage::FileSnapshot;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::active_session::ActiveSession;
 
@@ -30,6 +29,31 @@ use crate::terminal::model::session::active_session::ActiveSession;
 pub(crate) struct ApplyDiffModel {
     active_session: ModelHandle<ActiveSession>,
     file_revision_tracker: FileRevisionTracker,
+}
+
+fn revisions_from_persisted_files(
+    files: &[FileSnapshot],
+) -> Vec<(String, super::super::file_revisions::FileRevision)> {
+    files
+        .iter()
+        .flat_map(|file| {
+            let updated = file.updated.as_ref().map(|updated| {
+                (
+                    updated.path.clone(),
+                    super::super::file_revisions::FileRevision::present(
+                        &updated.final_content,
+                        None,
+                    ),
+                )
+            });
+            updated.into_iter().chain(
+                file.deleted_paths
+                    .iter()
+                    .cloned()
+                    .map(|path| (path, super::super::file_revisions::FileRevision::Missing)),
+            )
+        })
+        .collect()
 }
 
 fn absolute_edit_paths(edits: &[FileEdit], session_context: &SessionContext) -> Vec<String> {
@@ -74,48 +98,21 @@ impl ApplyDiffModel {
         }
     }
 
-    pub fn validate_revisions(
+    pub fn persistence_revisions(
         &self,
         edits: &[FileEdit],
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
-    ) -> BoxFuture<'static, Result<(), DiffApplicationError>> {
+    ) -> std::collections::HashMap<String, warp_files::ExpectedFileRevision> {
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
-        let expected_revisions = self.file_revision_tracker.expected_revisions(
-            conversation_id,
-            absolute_edit_paths(edits, &session_context),
-        );
-        let host_request_handle = session_context.host_id().map(|host_id| {
-            remote_server::manager::RemoteServerManager::as_ref(ctx).host_request_handle(host_id)
-        });
-        let is_remote = session_context.is_remote();
-
-        async move {
-            for (path, expected_revision) in expected_revisions {
-                let current = if is_remote {
-                    let Some(handle) = &host_request_handle else {
-                        return Err(DiffApplicationError::RemoteFileOperationsUnsupported);
-                    };
-                    read_remote_file(handle, &path).await
-                } else {
-                    read_local_file(path.clone())
-                };
-                match current.with_expected_revision(Some(expected_revision)) {
-                    FileReadResult::Changed => {
-                        return Err(DiffApplicationError::FileChanged { file: path });
-                    }
-                    FileReadResult::ReadError(message) => {
-                        return Err(DiffApplicationError::ReadFailed {
-                            file: path,
-                            message,
-                        });
-                    }
-                    FileReadResult::Found { .. } | FileReadResult::NotFound => {}
-                }
-            }
-            Ok(())
-        }
-        .boxed()
+        self.file_revision_tracker
+            .expected_revisions(
+                conversation_id,
+                absolute_edit_paths(edits, &session_context),
+            )
+            .into_iter()
+            .map(|(path, revision)| (path, revision.persistence_revision()))
+            .collect()
     }
 
     /// Resolves session context and remote client from the model context, then
@@ -196,64 +193,13 @@ impl ApplyDiffModel {
         }
     }
 
-    pub fn track_applied_revisions(
+    pub fn track_persisted_revisions(
         &self,
-        result_future: BoxFuture<'static, RequestFileEditsResult>,
+        files: &[FileSnapshot],
         conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) -> BoxFuture<'static, RequestFileEditsResult> {
-        let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
-        let host_request_handle = session_context.host_id().map(|host_id| {
-            remote_server::manager::RemoteServerManager::as_ref(ctx).host_request_handle(host_id)
-        });
-        let is_remote = session_context.is_remote();
-        let file_revision_tracker = self.file_revision_tracker.clone();
-
-        async move {
-            let result = result_future.await;
-            let RequestFileEditsResult::Success {
-                updated_files,
-                deleted_files,
-                ..
-            } = &result
-            else {
-                return result;
-            };
-
-            let updated_paths = updated_files
-                .iter()
-                .map(|updated| {
-                    crate::ai::paths::host_native_absolute_path(
-                        &updated.file_context.file_name,
-                        session_context.shell(),
-                        session_context.current_working_directory(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let deleted_paths = deleted_files
-                .iter()
-                .map(|path| {
-                    crate::ai::paths::host_native_absolute_path(
-                        path,
-                        session_context.shell(),
-                        session_context.current_working_directory(),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let revisions = if is_remote {
-                match host_request_handle {
-                    Some(handle) => read_remote_revisions(&handle, &updated_paths).await,
-                    None => Vec::new(),
-                }
-            } else {
-                read_local_revisions(updated_paths)
-            };
-            file_revision_tracker.record_revisions(conversation_id, revisions);
-            file_revision_tracker.record_missing_files(conversation_id, deleted_paths);
-            result
-        }
-        .boxed()
+    ) {
+        self.file_revision_tracker
+            .record_revisions(conversation_id, revisions_from_persisted_files(files));
     }
 }
 

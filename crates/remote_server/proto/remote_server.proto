@@ -21,6 +21,17 @@ message ClientMessage {
   }
 }
 
+// File state observed by an agent before it proposed an edit. Persistence
+// rejects the operation when the current state no longer matches.
+message ExpectedFileRevision {
+  oneof state {
+    bytes content_sha256 = 1;
+    bool missing = 2;
+    bool uneditable = 3;
+  }
+  optional uint64 last_modified_epoch_millis = 4;
+}
+
 // Request that targets the host, not a specific connection.
 // The daemon may deliver the response on any open connection
 // if the originating connection disconnects before the response
@@ -375,6 +386,7 @@ message FileOperationError {
 message WriteFile {
   string path = 1;
   string content = 2;
+  optional ExpectedFileRevision expected_revision = 3;
 }
 
 // Server → client: result of a WriteFile request.
@@ -390,6 +402,7 @@ message WriteFileSuccess {}
 // Client → server: delete a file.
 message DeleteFile {
   string path = 1;
+  optional ExpectedFileRevision expected_revision = 2;
 }
 
 // Server → client: result of a DeleteFile request.

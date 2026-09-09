@@ -21,6 +21,19 @@ fn local_revision_detects_same_mtime_content_change() {
 }
 
 #[test]
+fn oversized_local_revision_fails_closed_without_hashing_the_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let path = temp_dir.path().join("oversized.txt");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(u64::from(MAX_REVISION_READ_BYTES) + 1)
+        .unwrap();
+
+    let revision = read_local_revision(path.to_str().unwrap()).unwrap();
+
+    assert_eq!(revision, FileRevision::Uneditable);
+}
+
+#[test]
 fn remote_revision_detects_same_epoch_millis_content_change() {
     let context = |content: &str| remote_server::proto::FileContextProto {
         file_name: "/remote/file.txt".to_string(),

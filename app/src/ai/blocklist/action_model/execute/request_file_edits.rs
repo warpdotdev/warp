@@ -176,41 +176,22 @@ impl RequestFileEditsExecutor {
             return ActionExecution::NotReady;
         }
 
-        let validation_future = self.apply_diff_model.update(ctx, |model, ctx| {
-            model.validate_revisions(file_edits, conversation_id, ctx)
+        let expected_revisions = self.apply_diff_model.update(ctx, |model, ctx| {
+            model.persistence_revisions(file_edits, conversation_id, ctx)
         });
         let (result_tx, result_rx) = oneshot::channel();
-        let action_id = id.clone();
-        ctx.spawn(
-            validation_future,
-            move |me, validation, ctx| match validation {
-                Err(error) => {
-                    result_tx
-                        .send(RequestFileEditsResult::DiffApplicationFailed {
-                            error: DiffApplicationError::error_for_conversation(&vec1![error]),
-                        })
-                        .ok();
-                }
-                Ok(()) => {
-                    let Some(storage) = me.diff_storages.get(&action_id) else {
-                        result_tx
-                            .send(RequestFileEditsResult::DiffApplicationFailed {
-                                error: "The review surface holding these edits no longer exists"
-                                    .to_string(),
-                            })
-                            .ok();
-                        return;
-                    };
-                    let result_future = storage.accept_and_save(ctx);
-                    let result_future = me.apply_diff_model.update(ctx, |model, ctx| {
-                        model.track_applied_revisions(result_future, conversation_id, ctx)
-                    });
-                    ctx.spawn(result_future, move |_me, result, _ctx| {
-                        result_tx.send(result).ok();
-                    });
-                }
-            },
-        );
+        let Some(storage) = self.diff_storages.get(id) else {
+            return ActionExecution::NotReady;
+        };
+        let result_future = storage.accept_and_save(expected_revisions, ctx);
+        ctx.spawn(result_future, move |me, persisted, ctx| {
+            if matches!(persisted.result, RequestFileEditsResult::Success { .. }) {
+                me.apply_diff_model.update(ctx, |model, _ctx| {
+                    model.track_persisted_revisions(&persisted.files, conversation_id);
+                });
+            }
+            result_tx.send(persisted.result).ok();
+        });
         let result_future = async move {
             result_rx
                 .await

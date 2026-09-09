@@ -10,6 +10,7 @@ use super::super::file_revisions::read_local_revisions;
 use super::*;
 use crate::ai::agent::FileEdit;
 use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::diff_storage::PersistedFileEdits;
 use crate::auth::AuthStateProvider;
 use crate::terminal::model::session::Sessions;
 use crate::terminal::model_events::ModelEventDispatcher;
@@ -17,11 +18,12 @@ use crate::terminal::model_events::ModelEventDispatcher;
 /// Shared observable state for a [`TestStorage`].
 struct TestStorageState {
     diffs: RefCell<Option<(Vec<FileDiff>, DiffSessionType)>>,
+    expected_revisions: RefCell<HashMap<String, warp_files::ExpectedFileRevision>>,
     accepted: Cell<bool>,
 }
 
 #[test]
-fn execute_revalidates_after_preprocessing_before_storage_write() {
+fn execute_passes_preprocessing_revisions_to_storage() {
     App::test((), |mut app| async move {
         app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
         let temp_dir = tempfile::tempdir().unwrap();
@@ -69,13 +71,25 @@ fn execute_revalidates_after_preprocessing_before_storage_write() {
         let result = execute_future.await;
         let result = app.update(|ctx| on_complete(result, ctx));
 
-        assert!(!storage.accepted.get());
+        assert!(storage.accepted.get());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), external_content);
         assert!(matches!(
             result,
-            AIAgentActionResultType::RequestFileEdits(
-                RequestFileEditsResult::DiffApplicationFailed { error }
-            ) if error.contains("Call read_files")
+            AIAgentActionResultType::RequestFileEdits(RequestFileEditsResult::Success { .. })
+        ));
+        assert!(matches!(
+            storage.expected_revisions.borrow().get(&path),
+            Some(warp_files::ExpectedFileRevision::Present { content_digest, .. })
+                if *content_digest
+                    == match warp_files::ExpectedFileRevision::from_content(
+                        "let value = old;\n"
+                    ) {
+                        warp_files::ExpectedFileRevision::Present {
+                            content_digest,
+                            ..
+                        } => content_digest,
+                        _ => unreachable!(),
+                    }
         ));
     });
 }
@@ -84,6 +98,7 @@ impl TestStorageState {
     fn new() -> Rc<Self> {
         Rc::new(Self {
             diffs: RefCell::new(None),
+            expected_revisions: RefCell::new(HashMap::new()),
             accepted: Cell::new(false),
         })
     }
@@ -102,14 +117,22 @@ impl RegisteredDiffStorage for TestStorage {
         *self.0.diffs.borrow_mut() = Some((diffs, session_type));
     }
 
-    fn accept_and_save(&self, _app: &mut AppContext) -> BoxFuture<'static, RequestFileEditsResult> {
+    fn accept_and_save(
+        &self,
+        expected_revisions: HashMap<String, warp_files::ExpectedFileRevision>,
+        _app: &mut AppContext,
+    ) -> BoxFuture<'static, PersistedFileEdits> {
         self.0.accepted.set(true);
-        futures::future::ready(RequestFileEditsResult::Success {
-            diff: String::new(),
-            updated_files: Vec::new(),
-            deleted_files: Vec::new(),
-            lines_added: 0,
-            lines_removed: 0,
+        *self.0.expected_revisions.borrow_mut() = expected_revisions;
+        futures::future::ready(PersistedFileEdits {
+            result: RequestFileEditsResult::Success {
+                diff: String::new(),
+                updated_files: Vec::new(),
+                deleted_files: Vec::new(),
+                lines_added: 0,
+                lines_removed: 0,
+            },
+            files: Vec::new(),
         })
         .boxed()
     }

@@ -21,6 +21,44 @@ enum TestFileModelEvent {
     FailedToSave,
 }
 
+#[test]
+fn guarded_save_rejects_mutation_before_write_dispatch() {
+    App::test((), |mut app| async move {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("guarded-save.txt");
+        std::fs::write(&path, "observed\n").unwrap();
+        let expected_revision = ExpectedFileRevision::from_content("observed\n");
+
+        std::fs::write(&path, "external mutation\n").unwrap();
+        let files = app.add_singleton_model(FileModel::new);
+        let file_id = files.update(&mut app, |model, ctx| {
+            model.register_file_path(&path, false, ctx)
+        });
+        let save = files.update(&mut app, |model, ctx| {
+            model
+                .save_with_expected_revision(
+                    file_id,
+                    "agent write\n".to_string(),
+                    ContentVersion::new(),
+                    expected_revision,
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let result = save.await;
+
+        assert!(matches!(
+            result,
+            Err(error) if matches!(error.as_ref(), FileSaveError::Other(message) if message.contains("Call read_files"))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "external mutation\n"
+        );
+    });
+}
+
 impl From<&FileModelEvent> for TestFileModelEvent {
     fn from(event: &FileModelEvent) -> Self {
         match event {

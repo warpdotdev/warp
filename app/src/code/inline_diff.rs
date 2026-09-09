@@ -4,6 +4,7 @@ use std::sync::Arc;
 use ai::diff_validation::DiffType;
 #[cfg(not(target_family = "wasm"))]
 use futures::FutureExt;
+use warp_files::ExpectedFileRevision;
 #[cfg(not(target_family = "wasm"))]
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::file::FileId;
@@ -217,13 +218,23 @@ impl InlineDiffView {
     /// save's completion future. `FileSaved` / `FailedToSave` events still
     /// fire alongside. `None` when no file is registered.
     #[cfg(not(target_family = "wasm"))]
-    fn save_content(&self, ctx: &mut ViewContext<Self>) -> Option<SaveFuture> {
+    fn save_content(
+        &self,
+        expected_revision: ExpectedFileRevision,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<SaveFuture> {
         let file_id = self.backing_file_id?;
         let content = self.editor.as_ref(ctx).text(ctx).into_string();
         let version = self.editor.as_ref(ctx).version(ctx);
 
         match FileModel::handle(ctx).update(ctx, |file_model, ctx| {
-            file_model.save(file_id, content, version, ctx)
+            file_model.save_with_expected_revision(
+                file_id,
+                content,
+                version,
+                expected_revision,
+                ctx,
+            )
         }) {
             Ok(save_future) => Some(save_future),
             Err(err) => {
@@ -240,14 +251,18 @@ impl InlineDiffView {
     /// returning the save's completion future. `None` when no file is
     /// registered (WASM / restored conversations), in which case nothing is
     /// dispatched.
-    pub fn accept_and_save_diff(&self, ctx: &mut ViewContext<Self>) -> Option<SaveFuture> {
+    pub fn accept_and_save_diff(
+        &self,
+        expected_revision: ExpectedFileRevision,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<SaveFuture> {
         #[cfg(not(target_family = "wasm"))]
         {
-            self.save_content(ctx)
+            self.save_content(expected_revision, ctx)
         }
         #[cfg(target_family = "wasm")]
         {
-            let _ = ctx;
+            let _ = (expected_revision, ctx);
             None
         }
     }
