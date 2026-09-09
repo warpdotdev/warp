@@ -1,5 +1,7 @@
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::anyhow;
 use grep::printer::JSONBuilder;
@@ -10,6 +12,10 @@ use string_offset::ByteOffset;
 
 const SEARCHER_LINE_HEAP_LIMIT: usize = 64 * 1024;
 const SEARCHER_MULTILINE_HEAP_LIMIT: usize = 8 * 1024 * 1024;
+const JSON_RECORD_LIMIT_ERROR: &str = "ripgrep JSON record exceeded its limit";
+/// JSON escaping expands one input byte to at most six bytes; the remaining
+/// headroom covers record metadata and filesystem paths.
+const MAX_JSON_RECORD_BYTES: usize = SEARCHER_MULTILINE_HEAP_LIMIT * 8;
 
 /// A single submatch span within a matched line.
 #[derive(Clone, Debug)]
@@ -38,6 +44,74 @@ pub enum SearchEvent {
     LimitReached,
 }
 
+struct JsonRecordWriter<'a, W> {
+    output: &'a Mutex<W>,
+    output_failed: &'a AtomicBool,
+    record: Vec<u8>,
+}
+
+impl<'a, W: Write> JsonRecordWriter<'a, W> {
+    fn new(output: &'a Mutex<W>, output_failed: &'a AtomicBool) -> Self {
+        Self {
+            output,
+            output_failed,
+            record: Vec::new(),
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if self.record.len().saturating_add(bytes.len()) > MAX_JSON_RECORD_BYTES {
+            return Err(io::Error::other(JSON_RECORD_LIMIT_ERROR));
+        }
+        self.record.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    fn emit_record(&mut self) -> io::Result<()> {
+        let mut output = self.output.lock().map_err(|_| {
+            self.output_failed.store(true, Ordering::Relaxed);
+            io::Error::other("ripgrep output mutex was poisoned")
+        })?;
+        if let Err(err) = output.write_all(&self.record) {
+            self.output_failed.store(true, Ordering::Relaxed);
+            return Err(err);
+        }
+        self.record.clear();
+        Ok(())
+    }
+}
+
+impl<W: Write> Write for JsonRecordWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut record_start = 0;
+        for (index, byte) in buf.iter().enumerate() {
+            if *byte != b'\n' {
+                continue;
+            }
+            self.append(&buf[record_start..=index])?;
+            self.emit_record()?;
+            record_start = index + 1;
+        }
+        self.append(&buf[record_start..])?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !self.record.is_empty() {
+            return Err(io::Error::other(
+                "ripgrep attempted to flush an incomplete JSON record",
+            ));
+        }
+        let mut output = self.output.lock().map_err(|_| {
+            self.output_failed.store(true, Ordering::Relaxed);
+            io::Error::other("ripgrep output mutex was poisoned")
+        })?;
+        output.flush().inspect_err(|_| {
+            self.output_failed.store(true, Ordering::Relaxed);
+        })
+    }
+}
+
 /// Entry point for the ripgrep subprocess.
 ///
 /// Runs a ripgrep search in-process and writes JSON results to stdout.
@@ -63,6 +137,22 @@ fn search_to_writer<W: Write + Send>(
     multiline: bool,
     output: W,
 ) -> anyhow::Result<W> {
+    search_to_writer_inner(patterns, paths, ignore_case, multiline, output, None, || {})
+}
+
+fn search_to_writer_inner<W, F>(
+    patterns: &[String],
+    paths: Vec<PathBuf>,
+    ignore_case: bool,
+    multiline: bool,
+    output: W,
+    worker_threads: Option<usize>,
+    on_search_start: F,
+) -> anyhow::Result<W>
+where
+    W: Write + Send,
+    F: Fn() + Sync,
+{
     if patterns.is_empty() {
         return Err(anyhow!("No patterns specified"));
     }
@@ -77,17 +167,23 @@ fn search_to_writer<W: Write + Send>(
     }
     let matcher = matcher_builder.build_many(patterns)?;
 
-    let output = std::sync::Mutex::new(output);
+    let output = Mutex::new(output);
+    let output_failed = AtomicBool::new(false);
 
     let mut walker_builder = WalkBuilder::new(&paths[0]);
     for path in paths.iter().skip(1) {
         walker_builder.add(path);
+    }
+    if let Some(worker_threads) = worker_threads {
+        walker_builder.threads(worker_threads);
     }
     let walker = walker_builder.build_parallel();
 
     walker.run(|| {
         let matcher = matcher.clone();
         let output = &output;
+        let output_failed = &output_failed;
+        let on_search_start = &on_search_start;
 
         let heap_limit = if multiline {
             SEARCHER_MULTILINE_HEAP_LIMIT
@@ -102,6 +198,9 @@ fn search_to_writer<W: Write + Send>(
             .build();
 
         Box::new(move |entry| {
+            if output_failed.load(Ordering::Relaxed) {
+                return WalkState::Quit;
+            }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(err) => {
@@ -114,20 +213,28 @@ fn search_to_writer<W: Write + Send>(
                 return WalkState::Continue;
             }
 
-            let Ok(mut out) = output.lock() else {
-                return WalkState::Quit;
-            };
+            on_search_start();
             let search_result = {
-                let mut printer = JSONBuilder::new().build(&mut *out);
+                let writer = JsonRecordWriter::new(output, output_failed);
+                let mut printer = JSONBuilder::new().build(writer);
                 searcher.search_path(
                     &matcher,
                     entry.path(),
                     printer.sink_with_path(&matcher, entry.path()),
                 )
             };
+            if output_failed.load(Ordering::Relaxed) {
+                return WalkState::Quit;
+            }
             if let Err(err) = search_result {
-                if err.to_string().contains("configured allocation limit") {
-                    if out.write_all(b"{\"type\":\"limit_reached\"}\n").is_err() {
+                let error = err.to_string();
+                if error.contains("configured allocation limit")
+                    || error.contains(JSON_RECORD_LIMIT_ERROR)
+                {
+                    let mut writer = JsonRecordWriter::new(output, output_failed);
+                    if writer.write_all(b"{\"type\":\"limit_reached\"}\n").is_err()
+                        || writer.flush().is_err()
+                    {
                         return WalkState::Quit;
                     }
                 } else {
@@ -137,9 +244,6 @@ fn search_to_writer<W: Write + Send>(
                         err
                     );
                 }
-            }
-            if out.flush().is_err() {
-                return WalkState::Quit;
             }
 
             WalkState::Continue
