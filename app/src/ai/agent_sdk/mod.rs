@@ -1012,9 +1012,9 @@ impl AgentDriverRunner {
                 return Ok(());
             }
             Err(err) if git_credentials_configured_with_gh => {
-                // gh already configured github.com above, so a failed server
-                // fetch degrades to GitHub-only credentials instead of
-                // failing a run that previously worked without the fetch.
+                // gh already configured github.com above, so a failed server fetch degrades to
+                // GitHub-only credentials instead of failing a run that previously worked without
+                // the fetch.
                 log::warn!(
                     "Failed to fetch git credentials; continuing with gh-configured GitHub credentials only: {err:#}"
                 );
