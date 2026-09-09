@@ -4169,12 +4169,10 @@ fn test_fork_conversation_title_override_replaces_prefix() {
 /// LoadTranscript -> merge integration coverage for the orchestration
 /// remote-child restore path.
 ///
-/// Simulates the smaller seam that
-/// `pane_group::hydrate_remote_child_transcript_in_place` reaches after a
-/// successful `load_conversation_by_server_token` fetch: it hands the
-/// fetched cloud transcript to
-/// `hydrate_remote_child_placeholder_with_cloud_transcript` on the local
-/// placeholder. Asserts the merged record:
+/// Simulates the smaller seam that `PaneGroup::hydrate_child_transcript` reaches after a
+/// successful `load_conversation_by_server_token` fetch: it hands the fetched cloud transcript
+/// to `hydrate_remote_child_placeholder_with_cloud_transcript` on the local placeholder. Asserts
+/// the merged record:
 ///   1. retains the placeholder's local `AIConversationId` (so it remains the
 ///      canonical `child_agent_panes` key on the pane-group side),
 ///   2. carries the placeholder's orchestration linkage forward
@@ -4182,9 +4180,8 @@ fn test_fork_conversation_title_override_replaces_prefix() {
 ///   3. surfaces the cloud transcript content (non-empty title + at least
 ///      one exchange).
 ///
-/// Also asserts the precondition guard: calling the merge against an
-/// unknown placeholder returns `Err` so the caller's tombstone fallback
-/// runs instead of silently constructing a detached conversation.
+/// Also asserts the precondition guard: calling the merge against an unknown placeholder returns
+/// `Err` so the caller stops instead of silently constructing a detached conversation.
 #[test]
 fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_identity() {
     use crate::ai::agent::conversation::AIConversation;
@@ -4339,9 +4336,8 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
             assert!(live.is_remote_child());
         });
 
-        // Precondition guard: merging against an unknown placeholder must
-        // return Err so the caller falls back instead of silently building a
-        // detached conversation.
+        // Precondition guard: merging against an unknown placeholder must return Err so the
+        // caller stops instead of silently building a detached conversation.
         let unknown_placeholder = AIConversationId::new();
         let mut cloud_root_again = create_api_task(
             "cloud-root-task-2",
