@@ -48,8 +48,8 @@ state stays local to the blocking task.
 Configure each iterator with:
 
 - `min_depth(1)`, because the producer handles the always-included root separately;
-- `max_depth(7)`, because a candidate root may be at depth 4 and its deepest relative marker,
-  `.config/mise/config.toml`, is three entries below it;
+- `max_depth(7)`, which bounds traversal while still reaching `.config/mise/config.toml` for a
+  candidate root at depth 4;
 - `follow_links(false)` and `follow_root_links(false)`;
 - `sort_by_file_name()`; and
 - `into_iter().filter_entry(...)` to reject ignored directory entries and symlink entries before
@@ -64,8 +64,8 @@ This is intentional and is covered by fixtures.
 Apply these limits and error rules:
 
 - Always include the repository root. It has depth 0 and does not count against the child limit.
-- Accept a candidate root only at depths 1 through 4. Entries through depth 7 are inspected only to
-  support relative markers for those roots.
+- Accept every candidate whose marker is reached by the bounded walk. Do not apply another
+  candidate-depth restriction after traversal.
 - Visit at most 10,000 non-ignored, non-symlink directories per repository, including the root.
   Files do not count against this limit.
 - Retain at most 32 child candidates per repository. When a 33rd distinct child candidate is found,
@@ -80,19 +80,18 @@ Apply these limits and error rules:
 - Reject symlink entries in `filter_entry`. `follow_links(false)` prevents descent through nested
   links. `follow_root_links(false)` prevents the special default behavior that otherwise follows a
   symlink passed as the traversal root. A symlink is not a marker.
-- Handle every `walkdir::Error` in place and continue iteration. Use `Error::depth()` and
-  `Error::path()` only to aggregate the affected repository's unreadable-entry count. `WalkDir`
-  does not descend when it cannot open a directory. Do not log raw error paths in safe telemetry.
-  A missing or unreadable repository root still proceeds to root detection, which preserves the
-  existing per-invocation error path.
+- Handle every `walkdir::Error` in place, emit a warning with `Error::depth()` and the underlying
+  `io::ErrorKind` when present, then continue iteration. `WalkDir` does not descend when it cannot
+  open a directory. Do not log raw error paths. A missing or unreadable repository root still
+  proceeds to root detection, which preserves the existing per-invocation error path.
 - Do not set `max_open`; use the crate's bounded default. This setting changes the file-descriptor
   versus memory trade-off, not yielded results.
 
 Normalize a child root into a `PathBuf` by stripping the repository root and accepting only
 non-empty normal UTF-8 components. Preserve case and Unicode bytes. Skip a child path that is
 non-UTF-8 or contains a root, prefix, `.` or `..` component. Do not canonicalize child paths or
-resolve symlinks. Serialize the components with `/` only when deriving the platform-independent
-stable ID.
+resolve symlinks. Hash the normalized path's `OsStr` encoded byte slice directly. Accepted UTF-8
+paths have the same encoding on Namespace Linux and macOS.
 
 Deduplicate exact normalized roots. A directory with multiple markers is one candidate. Retain both
 a parent project root and a nested project root when each has a marker.
@@ -114,7 +113,9 @@ workers. For spacectl 0.12.2, use these rules:
 - Suffix entries: directories ending in `.xcodeproj` or `.xcworkspace`.
 
 For exact, directory, and suffix entries, the candidate is the directory that contains the matched
-entry. A marker entry is never itself the candidate.
+entry. A marker entry is never itself the candidate. When one file matches multiple marker rules,
+select only the longest relative marker so `.config/mise.toml` and
+`.config/mise/config.toml` identify the directory containing `.config`.
 
 Do not add looser markers that 0.12.2 does not use, including bare `package.json`,
 `pyproject.toml`, `settings.gradle`, or `build.gradle.kts`. Tool-binary checks remain spacectl's
@@ -135,8 +136,8 @@ non-fatal degradation result for that candidate and does not schedule spacectl.
 
 - Preserve the current root cache path: `repos/<repo-key>`.
 - Use `repos/<repo-key>/nested/<stable-id>` for a child root.
-- Compute `<stable-id>` as lowercase hexadecimal SHA-256 of the normalized `/`-separated relative
-  path. Do not hash an absolute checkout path.
+- Compute `<stable-id>` as lowercase hexadecimal SHA-256 of the normalized relative path's encoded
+  bytes. Do not hash an absolute checkout path.
 - Validate that all configuration cache paths are safe relative paths and unique.
 - If two distinct roots produce the same configuration path, reject the plan before real mounts,
   record one non-fatal plan-invariant degradation, and continue environment preparation. Never share
@@ -214,15 +215,17 @@ unit tests platform-neutral so the crate continues to compile on other supported
 
 ### 6. Logging and telemetry
 
-Create one discovery span per repository. Record visited directory count, selected child count,
-unreadable subtree count, and truncation reason (`directory_limit` or `candidate_limit`). Record
-total scheduled detects and the configured detection limit on the cache-setup span.
+Create one child span for the whole discovery process and one child span per repository. Record
+visited directory count, selected child count, and truncation reason (`directory_limit` or
+`candidate_limit`) on each repository span. Record total scheduled detects and the configured
+detection limit on the cache-setup span.
 
 Add the stable child ID to detection spans. Do not put raw absolute checkout paths in safe logs or
-Sentry extras. Emit one warning per truncated repository and one aggregate warning per repository
-for unreadable subtrees. Expected limit truncation is non-fatal and must not cancel detection or
-mounting. Capture the active cache-setup span before `spawn_blocking` and enter it in the blocking
-closure so every repository discovery span and warning remains in the setup trace.
+Sentry extras. Emit one warning per truncated repository and one privacy-safe warning with error
+depth and `io::ErrorKind` per unreadable entry. Expected limit truncation is non-fatal and must not
+cancel detection or mounting. Create the whole-discovery span under the active cache-setup span and
+enter it in the blocking closure so every repository discovery span and warning remains in the
+setup trace.
 
 ## Decisions
 
@@ -253,8 +256,8 @@ closure so every repository discovery span and warning remains in the setup trac
 - **Preserve the root cache path.** Moving all roots under a new namespace was rejected because it
   would discard existing root cache hits.
 - **Hash normalized child paths.** Raw relative paths are easier to inspect but can be long and
-  platform-sensitive. A full SHA-256 produces a stable safe component. Telemetry retains the stable
-  ID for correlation.
+  platform-sensitive. SHA-256 of the path's encoded bytes produces a stable safe component across
+  Namespace Linux and macOS. Telemetry retains the stable ID for correlation.
 
 ## Assumptions
 
@@ -284,15 +287,15 @@ closure so every repository discovery span and warning remains in the setup trac
 
 1. `cargo nextest run -p build_cache` passes and includes unit coverage for:
    - representative direct markers and every relative, directory, and suffix marker rule;
-   - non-markers such as bare `package.json`, depth 5, ignored trees, and symlinks;
+   - non-markers such as bare `package.json`, ignored trees, and symlinks;
    - exact deduplication while retaining marked parent and child roots;
    - sorted depth-first `WalkDir` selection, the 10,000-directory limit, and 32 children plus root;
-   - deterministic truncation and unreadable-subtree isolation;
-   - `max_depth(7)` finding `.config/mise/config.toml` for a depth-4 candidate without accepting a
-     depth-5 candidate;
+   - deterministic truncation and unreadable-entry isolation;
+   - `max_depth(7)` finding `.config/mise/config.toml` for a depth-4 candidate and accepting deeper
+     candidates whose markers the walk reaches;
    - ignored directory subtrees, symlinked nested directories, and a symlink traversal root are not
      followed;
-   - stable cross-separator child IDs, preserved root cache paths, and unique safe cache paths;
+   - stable Linux/macOS child IDs, preserved root cache paths, and unique safe cache paths;
    - a fake runner that observes more than one and no more than eight simultaneous detects across
      multiple repositories;
    - detection starts before the final scan completes, cache-directory preparations never overlap,

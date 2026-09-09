@@ -65,25 +65,27 @@ fn relative_and_directory_markers_select_the_expected_ancestors() {
     fs::create_dir_all(temp.path().join("g/App.xcworkspace")).unwrap();
 
     let paths = child_paths(temp.path());
-
-    assert!(paths.contains(&PathBuf::from("a")));
-    assert!(paths.contains(&PathBuf::from("b")));
-    assert!(paths.contains(&PathBuf::from("c")));
-    assert!(paths.contains(&PathBuf::from("c/.config")));
-    assert!(paths.contains(&PathBuf::from("d")));
-    assert!(paths.contains(&PathBuf::from("e")));
-    assert!(paths.contains(&PathBuf::from("f")));
-    assert!(paths.contains(&PathBuf::from("g")));
+    assert_eq!(
+        paths,
+        [
+            PathBuf::from("a"),
+            PathBuf::from("b"),
+            PathBuf::from("c"),
+            PathBuf::from("d"),
+            PathBuf::from("e"),
+            PathBuf::from("f"),
+            PathBuf::from("g"),
+        ]
+    );
 }
 
 #[test]
-fn non_markers_deep_candidates_and_ignored_subtrees_are_skipped() {
+fn non_markers_and_ignored_subtrees_are_skipped() {
     let temp = tempfile::tempdir().unwrap();
     touch(temp.path(), "frontend/package.json");
     touch(temp.path(), "backend/pyproject.toml");
     touch(temp.path(), "gradle/settings.gradle");
     touch(temp.path(), "kotlin/build.gradle.kts");
-    touch(temp.path(), "a/b/c/d/e/Cargo.toml");
     touch(temp.path(), "node_modules/nested/Cargo.toml");
     touch(temp.path(), "target/nested/go.mod");
     touch(temp.path(), "valid/Cargo.toml");
@@ -139,19 +141,22 @@ fn symlinked_roots_and_entries_are_not_followed() {
 }
 
 #[test]
-fn deepest_supported_relative_marker_is_found_without_accepting_deeper_candidate() {
+fn walk_bound_includes_every_reached_candidate() {
     let temp = tempfile::tempdir().unwrap();
     touch(temp.path(), "one/two/three/four/.config/mise/config.toml");
     touch(temp.path(), "one/two/three/four/five/Cargo.toml");
 
     assert_eq!(
         child_paths(temp.path()),
-        [PathBuf::from("one/two/three/four")]
+        [
+            PathBuf::from("one/two/three/four"),
+            PathBuf::from("one/two/three/four/five"),
+        ]
     );
 }
 
 #[test]
-fn child_limit_retains_root_plus_first_32_children() {
+fn child_limit_retains_root_and_earliest_children() {
     let temp = tempfile::tempdir().unwrap();
     for index in 0..MAX_CHILD_CANDIDATES + 1 {
         touch(temp.path(), &format!("{index:02}/Cargo.toml"));
