@@ -232,7 +232,9 @@ def collect_tree(root: Path) -> tuple[list[dict[str, str]], list[Problem]]:
     for absolute in _resource_files(root):
         relative = absolute.relative_to(root).as_posix()
         kind, _ = classify(relative)
-        if kind in ("unrelated", "skill", "invalid"):
+        if kind in ("unrelated", "skill") or (
+            kind == "invalid" and not relative.startswith("benchmarks/")
+        ):
             continue
         if _leaves_factory_root(absolute, root):
             problems.append(Problem(relative, SYMLINK_REFUSED))
