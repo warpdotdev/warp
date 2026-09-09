@@ -1,8 +1,5 @@
 use std::collections::{BTreeSet, VecDeque};
-use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use sha2::{Digest, Sha256};
 use walkdir::{DirEntry, WalkDir};
@@ -29,7 +26,7 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     "DerivedData",
 ];
 
-const EXACT_MARKERS: &[&str] = &[
+const CODEBASE_MARKER_FILENAMES: &[&str] = &[
     "Brewfile",
     "bun.lock",
     "Podfile",
@@ -61,7 +58,7 @@ const EXACT_MARKERS: &[&str] = &[
     "yarn.lock",
 ];
 
-const RELATIVE_MARKERS: &[&[&str]] = &[
+const CODEBASE_MARKER_PATHS: &[&[&str]] = &[
     &["mise", "config.toml"],
     &[".mise", "config.toml"],
     &[".config", "mise.toml"],
@@ -71,7 +68,7 @@ const RELATIVE_MARKERS: &[&[&str]] = &[
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct CandidateKey {
     pub repo_key: RepoCacheKey,
-    pub normalized_relative_path: Option<String>,
+    pub normalized_relative_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -79,7 +76,6 @@ pub(super) struct CacheCandidate {
     pub key: CandidateKey,
     pub source: RepositoryCacheSource,
     pub relative_cache_dir: PathBuf,
-    pub depth: usize,
     pub stable_child_id: Option<String>,
 }
 
@@ -135,8 +131,7 @@ struct RepositoryDiscovery {
     source: RepositoryCacheSource,
     key: RepoCacheKey,
     walker: Box<dyn Iterator<Item = Result<DirEntry, walkdir::Error>> + Send>,
-    ignored_subtrees: Arc<AtomicUsize>,
-    selected_paths: BTreeSet<String>,
+    selected_paths: BTreeSet<PathBuf>,
     pending_paths: VecDeque<PathBuf>,
     root_pending: bool,
     visited_directories: usize,
@@ -148,8 +143,6 @@ struct RepositoryDiscovery {
 
 impl RepositoryDiscovery {
     fn new(key: RepoCacheKey, source: RepositoryCacheSource) -> Self {
-        let ignored_subtrees = Arc::new(AtomicUsize::new(0));
-        let filter_ignored_subtrees = Arc::clone(&ignored_subtrees);
         let walker = WalkDir::new(&source.cwd)
             .min_depth(1)
             .max_depth(MAX_WALK_DEPTH)
@@ -161,8 +154,11 @@ impl RepositoryDiscovery {
                 if entry.file_type().is_symlink() {
                     return false;
                 }
-                if entry.file_type().is_dir() && is_ignored_directory(entry.file_name()) {
-                    filter_ignored_subtrees.fetch_add(1, Ordering::Relaxed);
+                if entry.file_type().is_dir()
+                    && IGNORED_DIRECTORIES
+                        .iter()
+                        .any(|ignored| entry.file_name() == *ignored)
+                {
                     return false;
                 }
                 true
@@ -174,7 +170,6 @@ impl RepositoryDiscovery {
             repo_key = %key,
             visited_directory_count = tracing::field::Empty,
             selected_child_count = tracing::field::Empty,
-            ignored_subtree_count = tracing::field::Empty,
             unreadable_entry_count = tracing::field::Empty,
             truncation_reason = tracing::field::Empty,
         );
@@ -182,7 +177,6 @@ impl RepositoryDiscovery {
             source,
             key,
             walker: Box::new(walker),
-            ignored_subtrees,
             selected_paths: BTreeSet::new(),
             pending_paths: VecDeque::new(),
             root_pending: true,
@@ -239,7 +233,7 @@ impl RepositoryDiscovery {
 
     fn select_child(&mut self, path: PathBuf) -> Option<CacheCandidate> {
         let normalized_relative_path = normalize_relative_path(&self.source.cwd, &path)?;
-        let depth = normalized_relative_path.split('/').count();
+        let depth = normalized_relative_path.components().count();
         if !(1..=MAX_CANDIDATE_DEPTH).contains(&depth)
             || self.selected_paths.contains(&normalized_relative_path)
         {
@@ -256,7 +250,6 @@ impl RepositoryDiscovery {
             self.source.clone(),
             path,
             normalized_relative_path,
-            depth,
         ))
     }
 
@@ -269,10 +262,6 @@ impl RepositoryDiscovery {
         let _guard = span.enter();
         span.record("visited_directory_count", self.visited_directories as u64);
         span.record("selected_child_count", self.selected_paths.len() as u64);
-        span.record(
-            "ignored_subtree_count",
-            self.ignored_subtrees.load(Ordering::Relaxed) as u64,
-        );
         span.record("unreadable_entry_count", self.unreadable_entries as u64);
         if let Some(reason) = self.truncation {
             span.record("truncation_reason", reason.as_str());
@@ -306,7 +295,6 @@ fn root_candidate(key: RepoCacheKey, source: RepositoryCacheSource) -> CacheCand
             normalized_relative_path: None,
         },
         source,
-        depth: 0,
         stable_child_id: None,
     }
 }
@@ -315,8 +303,7 @@ fn child_candidate(
     key: RepoCacheKey,
     mut source: RepositoryCacheSource,
     cwd: PathBuf,
-    normalized_relative_path: String,
-    depth: usize,
+    normalized_relative_path: PathBuf,
 ) -> CacheCandidate {
     let stable_child_id = stable_child_id(&normalized_relative_path);
     source.cwd = cwd;
@@ -330,36 +317,51 @@ fn child_candidate(
             normalized_relative_path: Some(normalized_relative_path),
         },
         source,
-        depth,
         stable_child_id: Some(stable_child_id),
     }
 }
 
-fn stable_child_id(normalized_relative_path: &str) -> String {
+fn stable_child_id(normalized_relative_path: &Path) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(normalized_relative_path.as_bytes());
+    for (index, component) in normalized_relative_path.components().enumerate() {
+        let Component::Normal(component) = component else {
+            continue;
+        };
+        if index > 0 {
+            hasher.update(b"/");
+        }
+        hasher.update(
+            component
+                .to_str()
+                .expect("normalized paths contain only UTF-8 components")
+                .as_bytes(),
+        );
+    }
     hex::encode(hasher.finalize())
 }
 
-fn normalize_relative_path(root: &Path, path: &Path) -> Option<String> {
+fn normalize_relative_path(root: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root).ok()?;
-    let mut normalized = Vec::new();
+    let mut normalized = PathBuf::new();
     for component in relative.components() {
         let Component::Normal(component) = component else {
             return None;
         };
-        normalized.push(component.to_str()?);
+        component.to_str()?;
+        normalized.push(component);
     }
-    if normalized.is_empty() {
+    if normalized.as_os_str().is_empty() {
         return None;
     }
-    Some(normalized.join("/"))
+    Some(normalized)
 }
 
 fn marker_candidate_paths(entry: &DirEntry, root: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if entry.file_type().is_file()
-        && is_exact_marker(entry.file_name())
+        && CODEBASE_MARKER_FILENAMES
+            .iter()
+            .any(|marker| entry.file_name() == *marker)
         && let Some(parent) = entry.path().parent()
     {
         candidates.push(parent.to_path_buf());
@@ -387,7 +389,7 @@ fn marker_candidate_paths(entry: &DirEntry, root: &Path) -> Vec<PathBuf> {
                 | Component::ParentDir => None,
             })
             .collect::<Vec<_>>();
-        for marker in RELATIVE_MARKERS {
+        for marker in CODEBASE_MARKER_PATHS {
             if components.len() >= marker.len()
                 && components[components.len() - marker.len()..]
                     .iter()
@@ -403,14 +405,6 @@ fn marker_candidate_paths(entry: &DirEntry, root: &Path) -> Vec<PathBuf> {
         }
     }
     candidates
-}
-
-fn is_exact_marker(name: &OsStr) -> bool {
-    EXACT_MARKERS.iter().any(|marker| name == *marker)
-}
-
-fn is_ignored_directory(name: &OsStr) -> bool {
-    IGNORED_DIRECTORIES.iter().any(|ignored| name == *ignored)
 }
 
 #[cfg(test)]

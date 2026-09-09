@@ -63,7 +63,6 @@ pub(super) struct MountContext {
     pub relative_cache_dir: PathBuf,
     pub cache_root: PathBuf,
     pub cwd: PathBuf,
-    pub root_depth: usize,
     pub stable_child_id: String,
 }
 
@@ -110,7 +109,6 @@ fn mount_command(cache_root: &Path, cwd: &Path, modes: &[String]) -> Command {
         modes = tracing::field::Empty,
         dry_run,
         relative_cache_dir = %context.relative_cache_dir.display(),
-        root_depth = context.root_depth,
         stable_child_id = context.stable_child_id.as_str(),
         duration_ms = tracing::field::Empty,
         disk_usage_total = tracing::field::Empty,

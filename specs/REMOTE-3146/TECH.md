@@ -86,10 +86,11 @@ Apply these limits and error rules:
 - Do not set `max_open`; use the crate's bounded default. This setting changes the file-descriptor
   versus memory trade-off, not yielded results.
 
-Normalize a child root by stripping the repository root and accepting only non-empty normal UTF-8
-components. Join components with `/`. Preserve case and Unicode bytes. Skip a child path that is
+Normalize a child root into a `PathBuf` by stripping the repository root and accepting only
+non-empty normal UTF-8 components. Preserve case and Unicode bytes. Skip a child path that is
 non-UTF-8 or contains a root, prefix, `.` or `..` component. Do not canonicalize child paths or
-resolve symlinks.
+resolve symlinks. Serialize the components with `/` only when deriving the platform-independent
+stable ID.
 
 Deduplicate exact normalized roots. A directory with multiple markers is one candidate. Retain both
 a parent project root and a nested project root when each has a marker.
@@ -205,14 +206,13 @@ unit tests platform-neutral so the crate continues to compile on other supported
 ### 6. Logging and telemetry
 
 Create one discovery span per repository. Record visited directory count, selected child count,
-ignored subtree count, unreadable subtree count, and truncation reason (`directory_limit` or
-`candidate_limit`). Record total scheduled detects and the configured detection limit on the
-cache-setup span.
+unreadable subtree count, and truncation reason (`directory_limit` or `candidate_limit`). Record
+total scheduled detects and the configured detection limit on the cache-setup span.
 
-Add the root depth and stable child ID to detection spans. Do not put raw absolute checkout paths in
-safe logs or Sentry extras. Emit one warning per truncated repository and one aggregate warning per
-repository for unreadable subtrees. Expected limit truncation is non-fatal and must not cancel
-detection or mounting.
+Add the stable child ID to detection spans. Do not put raw absolute checkout paths in safe logs or
+Sentry extras. Emit one warning per truncated repository and one aggregate warning per repository
+for unreadable subtrees. Expected limit truncation is non-fatal and must not cancel detection or
+mounting.
 
 ## Decisions
 
@@ -238,8 +238,8 @@ detection or mounting.
 - **Preserve the root cache path.** Moving all roots under a new namespace was rejected because it
   would discard existing root cache hits.
 - **Hash normalized child paths.** Raw relative paths are easier to inspect but can be long and
-  platform-sensitive. A full SHA-256 produces a stable safe component. Telemetry retains the depth
-  and stable ID for correlation.
+  platform-sensitive. A full SHA-256 produces a stable safe component. Telemetry retains the stable
+  ID for correlation.
 
 ## Assumptions
 
@@ -268,7 +268,7 @@ detection or mounting.
 ## Validation criteria
 
 1. `cargo nextest run -p build_cache` passes and includes unit coverage for:
-   - every direct, relative, directory, and suffix marker rule;
+   - representative direct markers and every relative, directory, and suffix marker rule;
    - non-markers such as bare `package.json`, depth 5, ignored trees, and symlinks;
    - exact deduplication while retaining marked parent and child roots;
    - sorted depth-first `WalkDir` selection, the 10,000-directory limit, and 32 children plus root;

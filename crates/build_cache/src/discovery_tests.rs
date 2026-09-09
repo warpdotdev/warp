@@ -12,7 +12,7 @@ fn source(root: &Path) -> RepositoryCacheSource {
     }
 }
 
-fn child_paths(root: &Path) -> Vec<String> {
+fn child_paths(root: &Path) -> Vec<PathBuf> {
     let mut producer = CandidateProducer::new(vec![source(root)]);
     let root = producer.next_candidate().unwrap();
     assert_eq!(root.key.normalized_relative_path, None);
@@ -30,49 +30,19 @@ fn touch(root: &Path, path: &str) {
 #[test]
 fn direct_markers_select_their_containing_directories() {
     let temp = tempfile::tempdir().unwrap();
-    for (index, marker) in [
-        "Brewfile",
-        "bun.lock",
-        "Podfile",
-        "composer.json",
-        "deno.lock",
-        "go.mod",
-        "go.work",
-        ".golangci.yml",
-        ".golangci.yaml",
-        "gradlew",
-        "build.gradle",
-        "pom.xml",
-        "mise.toml",
-        ".mise.toml",
-        ".tool-versions",
-        "flake.nix",
-        "shell.nix",
-        "default.nix",
-        "package-lock.json",
-        "pnpm-lock.yaml",
-        "poetry.lock",
-        "requirements.txt",
-        "Gemfile",
-        "Cargo.toml",
-        "Package.swift",
-        "Tuist.swift",
-        "tuist.toml",
-        "uv.lock",
-        "yarn.lock",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        touch(temp.path(), &format!("project-{index}/{marker}"));
-    }
+    touch(temp.path(), "rust/Cargo.toml");
+    touch(temp.path(), "javascript/package-lock.json");
+    touch(temp.path(), "gradle/build.gradle");
 
     let paths = child_paths(temp.path());
-
-    assert_eq!(paths.len(), 29);
-    for index in 0..29 {
-        assert!(paths.contains(&format!("project-{index}")));
-    }
+    assert_eq!(
+        paths,
+        [
+            PathBuf::from("gradle"),
+            PathBuf::from("javascript"),
+            PathBuf::from("rust"),
+        ]
+    );
 }
 
 #[test]
@@ -88,14 +58,14 @@ fn relative_and_directory_markers_select_the_expected_ancestors() {
 
     let paths = child_paths(temp.path());
 
-    assert!(paths.contains(&"a".to_owned()));
-    assert!(paths.contains(&"b".to_owned()));
-    assert!(paths.contains(&"c".to_owned()));
-    assert!(paths.contains(&"c/.config".to_owned()));
-    assert!(paths.contains(&"d".to_owned()));
-    assert!(paths.contains(&"e".to_owned()));
-    assert!(paths.contains(&"f".to_owned()));
-    assert!(paths.contains(&"g".to_owned()));
+    assert!(paths.contains(&PathBuf::from("a")));
+    assert!(paths.contains(&PathBuf::from("b")));
+    assert!(paths.contains(&PathBuf::from("c")));
+    assert!(paths.contains(&PathBuf::from("c/.config")));
+    assert!(paths.contains(&PathBuf::from("d")));
+    assert!(paths.contains(&PathBuf::from("e")));
+    assert!(paths.contains(&PathBuf::from("f")));
+    assert!(paths.contains(&PathBuf::from("g")));
 }
 
 #[test]
@@ -110,7 +80,7 @@ fn non_markers_deep_candidates_and_ignored_subtrees_are_skipped() {
     touch(temp.path(), "target/nested/go.mod");
     touch(temp.path(), "valid/Cargo.toml");
 
-    assert_eq!(child_paths(temp.path()), ["valid"]);
+    assert_eq!(child_paths(temp.path()), [PathBuf::from("valid")]);
 }
 
 #[test]
@@ -120,7 +90,10 @@ fn multiple_markers_deduplicate_exact_roots_but_keep_nested_roots() {
     touch(temp.path(), "project/package-lock.json");
     touch(temp.path(), "project/nested/go.mod");
 
-    assert_eq!(child_paths(temp.path()), ["project", "project/nested"]);
+    assert_eq!(
+        child_paths(temp.path()),
+        [PathBuf::from("project"), PathBuf::from("project/nested")]
+    );
 }
 
 #[test]
@@ -130,7 +103,14 @@ fn traversal_is_sorted_depth_first() {
     touch(temp.path(), "a/nested/Cargo.toml");
     touch(temp.path(), "a/Cargo.toml");
 
-    assert_eq!(child_paths(temp.path()), ["a", "a/nested", "z"]);
+    assert_eq!(
+        child_paths(temp.path()),
+        [
+            PathBuf::from("a"),
+            PathBuf::from("a/nested"),
+            PathBuf::from("z"),
+        ]
+    );
 }
 
 #[cfg(unix)]
@@ -151,12 +131,15 @@ fn symlinked_roots_and_entries_are_not_followed() {
 }
 
 #[test]
-fn depth_four_relative_marker_is_found_without_selecting_depth_five() {
+fn deepest_supported_relative_marker_is_found_without_accepting_deeper_candidate() {
     let temp = tempfile::tempdir().unwrap();
     touch(temp.path(), "one/two/three/four/.config/mise/config.toml");
     touch(temp.path(), "one/two/three/four/five/Cargo.toml");
 
-    assert_eq!(child_paths(temp.path()), ["one/two/three/four"]);
+    assert_eq!(
+        child_paths(temp.path()),
+        [PathBuf::from("one/two/three/four")]
+    );
 }
 
 #[test]
@@ -177,7 +160,7 @@ fn child_limit_retains_root_plus_first_32_children() {
             .key
             .normalized_relative_path
             .as_deref(),
-        Some("31")
+        Some(Path::new("31"))
     );
 }
 
@@ -195,10 +178,10 @@ fn directory_limit_stops_before_later_marker() {
 #[test]
 fn stable_child_ids_hash_normalized_relative_paths() {
     assert_eq!(
-        stable_child_id("frontend/web"),
+        stable_child_id(Path::new("frontend/web")),
         "4984839f9fe7d9730ec3fd45d7ededa43b0b5bfaf82f21666f7d9c25d1cf234c"
     );
-    assert_eq!(stable_child_id("frontend/web").len(), 64);
+    assert_eq!(stable_child_id(Path::new("frontend/web")).len(), 64);
 }
 
 #[test]

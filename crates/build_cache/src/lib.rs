@@ -539,6 +539,8 @@ where
 {
     let mut report = CacheSetupReport::default();
     let run_command = Arc::new(run_command);
+
+    // Preparing within the producer keeps directory creation serial while dry runs overlap.
     let prepare_run_command = Arc::clone(&run_command);
     let prepare_cache_root = cache_root.clone();
     let candidates = stream::unfold(CandidateProducer::new(repositories), move |mut producer| {
@@ -586,6 +588,7 @@ where
         report.invocations.push(result.invocation);
     }
 
+    // Canonical ordering keeps detection timing from changing the resulting mount plan.
     let plan = match construct_plan(cache_root, detected_modes, additional_global_modes) {
         Ok(Some(plan)) => plan,
         Ok(None) => return report,
@@ -602,6 +605,7 @@ where
         }
     };
 
+    // Real mounts remain serial because cache destinations may overlap across scopes.
     let mut repository_env = BTreeMap::new();
     let mut global_env = None;
     for configuration in &plan.configurations {
@@ -630,7 +634,6 @@ where
                     relative_cache_dir: configuration.relative_cache_dir.clone(),
                     cache_root: configuration_root,
                     cwd: configuration.cwd.clone(),
-                    root_depth: 0,
                     stable_child_id: String::new(),
                 },
                 run_command.as_ref(),
@@ -659,6 +662,7 @@ where
         report.invocations.push(invocation);
     }
 
+    // The global response covers all detected modes; repository values are only a fallback.
     report.add_envs = global_env.unwrap_or(repository_env);
     report.add_envs.retain(|name, _| {
         if is_valid_env_name(name) {
@@ -712,7 +716,6 @@ where
             relative_cache_dir: candidate.relative_cache_dir.clone(),
             cache_root: configuration_root,
             cwd: candidate.source.cwd.clone(),
-            root_depth: candidate.depth,
             stable_child_id: candidate.stable_child_id.clone().unwrap_or_default(),
         },
         run_command,
