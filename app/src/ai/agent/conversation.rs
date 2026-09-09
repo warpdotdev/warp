@@ -263,6 +263,30 @@ fn usage_metadata_indicates_usage(metadata: &ConversationUsageMetadata) -> bool 
         || metadata.was_summarized
 }
 
+/// Upper bound on the number of historical shell command blocks materialized per
+/// terminal surface when restoring AI conversation(s) into a terminal block list.
+///
+/// Each restored command becomes a full terminal `Block` with its own grid buffers, so
+/// a terminal surface with an unbounded command history would otherwise materialize
+/// unbounded memory at restoration time. Keeping only the most recent commands bounds
+/// that; the full AI transcript is unaffected and always restored in full.
+pub(crate) const MAX_RESTORED_COMMAND_BLOCKS: usize = 500;
+
+/// Decides whether a shell-command occurrence identified by `command_id` counts as a
+/// *new* block, given `seen_command_ids` (IDs already claimed by an earlier occurrence
+/// in this scan), claiming it (inserting into `seen_command_ids`) as a side effect when
+/// it does. An empty `command_id` can never be deduplicated against (matching legacy
+/// data recorded before command IDs existed), so it always counts and is never
+/// inserted.
+///
+/// Shared by [`AIConversation::extract_command_blocks_from_messages`] (which builds a
+/// full [`CommandBlockInfo`] for each new occurrence) and
+/// [`AIConversation::count_command_blocks_up_to`] (which only needs the count), so the
+/// two can never diverge on which occurrences are new versus duplicates.
+fn is_new_command_occurrence(seen_command_ids: &mut HashSet<String>, command_id: &str) -> bool {
+    command_id.is_empty() || seen_command_ids.insert(command_id.to_owned())
+}
+
 // basic info for creating a dummy command block based on an exchange's inputs
 pub(crate) struct CommandBlockInfo {
     pub(crate) command: String,
@@ -3930,6 +3954,14 @@ impl AIConversation {
     ///
     /// Returns CommandBlockInfo with command, output, exit_code, and optional ai_metadata.
     fn extract_command_blocks(&self) -> Vec<CommandBlockInfo> {
+        self.extract_command_blocks_up_to(None)
+    }
+
+    /// Like [`Self::extract_command_blocks`], but stops scanning once more than `limit`
+    /// blocks have been found (`None` scans everything). Lets a caller that only needs to
+    /// know whether the count exceeds some threshold avoid unbounded work for a
+    /// conversation with a very large historical command count.
+    fn extract_command_blocks_up_to(&self, limit: Option<usize>) -> Vec<CommandBlockInfo> {
         let mut command_blocks = Vec::new();
 
         // Get the root task's API messages.
@@ -3960,6 +3992,7 @@ impl AIConversation {
             &message_id_to_exchange,
             &mut command_blocks,
             &mut seen_command_ids,
+            limit,
         );
 
         command_blocks
@@ -3969,12 +4002,16 @@ impl AIConversation {
     ///
     /// This recurses when it encounters a summarization subagent call, producing the list
     /// of command blocks as it would have been had no summarization ever occurred.
+    /// Stops once `command_blocks` has grown past `limit` (see
+    /// [`Self::extract_command_blocks_up_to`]).
+    #[allow(clippy::too_many_arguments)]
     fn extract_command_blocks_from_messages(
         &self,
         messages: &[api::Message],
         message_id_to_exchange: &HashMap<&str, &AIAgentExchange>,
         command_blocks: &mut Vec<CommandBlockInfo>,
         seen_command_ids: &mut HashSet<String>,
+        limit: Option<usize>,
     ) {
         // Build a map from tool_call_id to (RunShellCommandResult, result_message_id, result_proto_timestamp)
         // for efficient lookup within this message set.
@@ -4003,6 +4040,10 @@ impl AIConversation {
             .collect();
 
         for message in messages {
+            if limit.is_some_and(|limit| command_blocks.len() > limit) {
+                return;
+            }
+
             let message_id = message.id.clone();
 
             if let Some(tool_call) = message.tool_call() {
@@ -4021,6 +4062,7 @@ impl AIConversation {
                             message_id_to_exchange,
                             command_blocks,
                             seen_command_ids,
+                            limit,
                         );
                     }
                     // Don't process this message further - it's just a subagent call.
@@ -4047,12 +4089,11 @@ impl AIConversation {
                             },
                         )) = &cmd_result.result
                     {
-                        // Track the command_id so attachment/context blocks for the
-                        // same command are skipped (RunShellCommand blocks have
-                        // better timestamps).
-                        if !finished_command_id.is_empty() {
-                            seen_command_ids.insert(finished_command_id.clone());
-                        }
+                        // Claim the command_id so attachment/context blocks for the
+                        // same command are skipped later (RunShellCommand blocks have
+                        // better timestamps). A RunShellCommand occurrence is never
+                        // itself skipped as a duplicate, so the return value is unused.
+                        is_new_command_occurrence(seen_command_ids, finished_command_id);
 
                         // start_ts: prefer the block timestamp stored on ShellCommandFinished,
                         // falling back to the tool call message's proto timestamp.
@@ -4140,9 +4181,7 @@ impl AIConversation {
                 if let Some(api::attachment::Value::ExecutedShellCommand(cmd)) = &attachment.value {
                     // Skip if we've already seen this command_id (e.g. from a
                     // RunShellCommand tool call or a duplicate attachment).
-                    if !cmd.command_id.is_empty()
-                        && !seen_command_ids.insert(cmd.command_id.clone())
-                    {
+                    if !is_new_command_occurrence(seen_command_ids, &cmd.command_id) {
                         continue;
                     }
                     let start_ts = cmd
@@ -4181,9 +4220,10 @@ impl AIConversation {
                 for executed_shell_command in &context.executed_shell_commands {
                     if !executed_shell_command.command.is_empty() {
                         // Skip if we've already seen this command_id.
-                        if !executed_shell_command.command_id.is_empty()
-                            && !seen_command_ids.insert(executed_shell_command.command_id.clone())
-                        {
+                        if !is_new_command_occurrence(
+                            seen_command_ids,
+                            &executed_shell_command.command_id,
+                        ) {
                             continue;
                         }
                         let start_ts = executed_shell_command
@@ -4211,13 +4251,16 @@ impl AIConversation {
         }
     }
 
-    /// Converts the conversation into a vector of serialized command blocks.
-    /// When we open a new tab to restore a conversation in, we need to precompute this serialized list of blocks
-    /// to pass into the TerminalModel constructor since command blocks must be created
-    /// before the warp input block to not break bootstrapping.
-    /// Only the command blocks are actually created in the terminal model. During restoration in the TerminalView,
-    /// AI blocks are inserted relative to the command blocks based on timestamp.
-    pub fn to_serialized_blocklist_items(&self) -> Vec<SerializedBlockListItem> {
+    /// Extracts every historical shell command block from this conversation and
+    /// serializes it into a `SerializedBlockListItem`, with **no cap** on the number
+    /// returned.
+    ///
+    /// Most callers should use [`Self::to_serialized_blocklist_items`] instead, which
+    /// additionally bounds the result via [`Self::cap_restored_command_blocks`]. Use this
+    /// uncapped form only when merging command blocks from multiple conversations into a
+    /// single terminal surface's block list before applying one aggregate cap across all
+    /// of them (see [`MAX_RESTORED_COMMAND_BLOCKS`]).
+    pub fn extract_serialized_command_blocks(&self) -> Vec<SerializedBlockListItem> {
         let mut serialized_blocks = Vec::new();
 
         // Extract all command blocks from the task messages
@@ -4288,6 +4331,251 @@ impl AIConversation {
         }
 
         serialized_blocks
+    }
+
+    /// Converts the conversation into a vector of serialized command blocks, bounded at
+    /// [`MAX_RESTORED_COMMAND_BLOCKS`] and scoped to this conversation's agent view.
+    /// When we open a new tab to restore a conversation in, we need to precompute this serialized list of blocks
+    /// to pass into the TerminalModel constructor since command blocks must be created
+    /// before the warp input block to not break bootstrapping.
+    /// Only the command blocks are actually created in the terminal model. During restoration in the TerminalView,
+    /// AI blocks are inserted relative to the command blocks based on timestamp.
+    ///
+    /// Only use this for a block list that restores a single conversation. A block list
+    /// that flattens multiple conversations (e.g. every conversation recorded for one
+    /// terminal surface at startup) must instead call [`Self::extract_serialized_command_blocks`]
+    /// per conversation, merge the results, and cap the combined total once via
+    /// [`Self::cap_restored_command_blocks`] -- otherwise each conversation's independent
+    /// cap still lets the merged total grow unboundedly with the conversation count.
+    pub fn to_serialized_blocklist_items(&self) -> Vec<SerializedBlockListItem> {
+        Self::cap_restored_command_blocks(self.extract_serialized_command_blocks(), Some(self.id()))
+    }
+
+    /// Equivalent to `to_serialized_blocklist_items().len()`, without building or
+    /// serializing any command block, as long as that count is at most `cap`. Returns
+    /// `cap + 1` when the true count exceeds `cap`, without scanning further to find out
+    /// by how much.
+    ///
+    /// Unlike [`Self::extract_command_blocks_up_to`], this never builds an index over the
+    /// whole conversation -- an exchange-timestamp map, or a per-message-set tool-call/
+    /// result map -- before applying `cap`. It counts in a single forward pass and
+    /// returns as soon as the running count exceeds `cap`, so sizing a conversation with
+    /// a very large historical message count for a small remaining budget costs work
+    /// proportional to `cap`, not to the conversation's full history.
+    pub(crate) fn restored_block_count_up_to(&self, cap: usize) -> usize {
+        let scan_cap = cap.min(MAX_RESTORED_COMMAND_BLOCKS);
+        let Some(root_task) = self.get_root_task() else {
+            return 0;
+        };
+        let Some(api_task) = root_task.source() else {
+            return 0;
+        };
+
+        let mut seen_command_ids = HashSet::new();
+        let mut count = 0;
+        self.count_command_blocks_up_to(
+            &api_task.messages,
+            scan_cap,
+            &mut seen_command_ids,
+            &mut count,
+        );
+        if count <= scan_cap {
+            count
+        } else if scan_cap == MAX_RESTORED_COMMAND_BLOCKS {
+            MAX_RESTORED_COMMAND_BLOCKS + 1
+        } else {
+            cap + 1
+        }
+    }
+
+    /// Test-only helper exposing the raw, unbounded scan for parity checks against
+    /// [`Self::extract_command_blocks`]. Production callers always go through
+    /// [`Self::restored_block_count_up_to`], which clamps to
+    /// [`MAX_RESTORED_COMMAND_BLOCKS`].
+    #[cfg(test)]
+    pub(crate) fn count_command_blocks_for_test(&self) -> usize {
+        let Some(root_task) = self.get_root_task() else {
+            return 0;
+        };
+        let Some(api_task) = root_task.source() else {
+            return 0;
+        };
+
+        let mut seen_command_ids = HashSet::new();
+        let mut count = 0;
+        self.count_command_blocks_up_to(
+            &api_task.messages,
+            usize::MAX,
+            &mut seen_command_ids,
+            &mut count,
+        );
+        count
+    }
+
+    /// Counts command blocks the way [`Self::extract_command_blocks_from_messages`] does
+    /// -- including its `seen_command_ids` deduplication policy, via the shared
+    /// [`is_new_command_occurrence`] -- stopping as soon as `*count` exceeds `limit`, and
+    /// without building a `CommandBlockInfo`, an exchange-timestamp index, or a full
+    /// per-message-set tool-call/result index. Recurses into summarization subagent
+    /// subtasks the same way `extract_command_blocks_from_messages` does, so a
+    /// summarized-away command is still counted.
+    ///
+    /// Assumes a `RunShellCommand` tool call's result appears later in `messages` than the
+    /// call itself, which holds for how these transcripts are produced; a call whose
+    /// result hasn't appeared yet (or never will, e.g. it was cancelled) is simply not
+    /// counted, matching `extract_command_blocks_from_messages`.
+    fn count_command_blocks_up_to(
+        &self,
+        messages: &[api::Message],
+        limit: usize,
+        seen_command_ids: &mut HashSet<String>,
+        count: &mut usize,
+    ) {
+        let mut pending_run_shell_command_ids: HashSet<&str> = HashSet::new();
+
+        for message in messages {
+            if *count > limit {
+                return;
+            }
+
+            if let Some(tool_call) = message.tool_call() {
+                if let Some(subagent) = tool_call.subagent()
+                    && subagent.is_summarization()
+                {
+                    let subtask_id = TaskId::new(subagent.task_id.clone());
+                    if let Some(subtask) = self.task_store.get(&subtask_id)
+                        && let Some(subtask_source) = subtask.source()
+                    {
+                        self.count_command_blocks_up_to(
+                            &subtask_source.messages,
+                            limit,
+                            seen_command_ids,
+                            count,
+                        );
+                    }
+                    continue;
+                }
+
+                if matches!(
+                    tool_call.tool,
+                    Some(api::message::tool_call::Tool::RunShellCommand(_))
+                ) {
+                    pending_run_shell_command_ids.insert(tool_call.tool_call_id.as_str());
+                }
+            }
+
+            if let Some(result) = message.tool_call_result()
+                && let Some(api::message::tool_call_result::Result::RunShellCommand(cmd_result)) =
+                    &result.result
+                && let Some(api::run_shell_command_result::Result::CommandFinished(
+                    api::ShellCommandFinished {
+                        command_id: finished_command_id,
+                        ..
+                    },
+                )) = &cmd_result.result
+                && pending_run_shell_command_ids.remove(result.tool_call_id.as_str())
+            {
+                // A RunShellCommand occurrence is never itself skipped as a duplicate;
+                // it only claims the id for later attachment/context occurrences.
+                is_new_command_occurrence(seen_command_ids, finished_command_id);
+                *count += 1;
+            }
+
+            if let Some(api::message::Message::UserQuery(user_query)) = message.message.as_ref() {
+                for attachment in user_query.referenced_attachments.values() {
+                    if let Some(api::attachment::Value::ExecutedShellCommand(cmd)) =
+                        &attachment.value
+                        && is_new_command_occurrence(seen_command_ids, &cmd.command_id)
+                    {
+                        *count += 1;
+                    }
+                }
+            }
+
+            let context = match message.message.as_ref() {
+                Some(api::message::Message::UserQuery(user_query)) => user_query.context.as_ref(),
+                Some(api::message::Message::SystemQuery(system_query)) => {
+                    system_query.context.as_ref()
+                }
+                _ => None,
+            };
+            if let Some(context) = context {
+                #[allow(deprecated)]
+                let executed_shell_commands = &context.executed_shell_commands;
+                for cmd in executed_shell_commands {
+                    if !cmd.command.is_empty()
+                        && is_new_command_occurrence(seen_command_ids, &cmd.command_id)
+                    {
+                        *count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Caps `items` at [`MAX_RESTORED_COMMAND_BLOCKS`], keeping the most recent, and
+    /// prepends a synthetic notice block when any were dropped so the truncation is
+    /// discoverable rather than silent. `items` must be in chronological order.
+    ///
+    /// Each restored command becomes a full terminal `Block` with several full-size grid
+    /// buffers, so an agent conversation (or set of conversations sharing one terminal
+    /// surface) with an unbounded command history would otherwise allocate unbounded
+    /// memory at restoration time. Keeping the most recent commands serves the ones a
+    /// user restoring the conversation is most likely to want to see; the full AI
+    /// transcript (chat messages, tool calls, agent output) is unaffected and always
+    /// restored in full.
+    ///
+    /// `notice_conversation_id` scopes the notice block's agent-view visibility to a
+    /// single conversation. Pass `None` when `items` were merged from multiple
+    /// conversations, so the notice is scoped to the terminal transcript generally
+    /// instead of any one conversation.
+    pub fn cap_restored_command_blocks(
+        mut items: Vec<SerializedBlockListItem>,
+        notice_conversation_id: Option<AIConversationId>,
+    ) -> Vec<SerializedBlockListItem> {
+        let total = items.len();
+        let truncated_count = total.saturating_sub(MAX_RESTORED_COMMAND_BLOCKS);
+        if truncated_count == 0 {
+            return items;
+        }
+
+        let mut items = items.split_off(truncated_count);
+        log::warn!(
+            "{total} historical command blocks were restored for one terminal surface; only \
+             restoring the most recent {MAX_RESTORED_COMMAND_BLOCKS} to bound memory usage"
+        );
+
+        // Surface the truncation to the user rather than silently dropping history: insert
+        // a synthetic shell-comment block right before the oldest command we kept.
+        let (pwd, first_retained_ts) = match items.first() {
+            Some(SerializedBlockListItem::Command { block }) => (block.pwd.clone(), block.start_ts),
+            None => (None, None),
+        };
+        let notice_ts = first_retained_ts
+            .map(|ts| ts - chrono::Duration::seconds(1))
+            .unwrap_or_else(Local::now);
+
+        let notice_block = SerializedBlock {
+            id: BlockId::new(),
+            stylized_command: Self::to_stylized_bytes(&format!(
+                "# {truncated_count} earlier command(s) were not restored to limit memory usage"
+            )),
+            pwd,
+            exit_code: ExitCode::from(0),
+            did_execute: true,
+            start_ts: Some(notice_ts),
+            completed_ts: Some(notice_ts),
+            agent_view_visibility: notice_conversation_id
+                .map(|id| AgentViewVisibility::new_from_conversation(id).into()),
+            ..Default::default()
+        };
+        items.insert(
+            0,
+            SerializedBlockListItem::Command {
+                block: Box::new(notice_block),
+            },
+        );
+        items
     }
 
     pub fn mark_action_as_reverted(

@@ -11,6 +11,7 @@ use super::{
     artifact_from_fork_proto, footer_model_token_usage,
 };
 use crate::ai::artifacts::Artifact;
+use crate::ai::blocklist::SerializedBlockListItem;
 use crate::ai::llms::LLMPreferences;
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -222,6 +223,41 @@ fn stop_recording_error_result(message: &str) -> api::message::tool_call_result:
         )),
     })
 }
+
+fn run_shell_command_tool_call(command: &str) -> api::message::tool_call::Tool {
+    api::message::tool_call::Tool::RunShellCommand(api::message::tool_call::RunShellCommand {
+        command: command.to_string(),
+        is_read_only: false,
+        uses_pager: false,
+        citations: vec![],
+        is_risky: false,
+        wait_until_complete_value: None,
+        risk_category: 0,
+    })
+}
+
+#[allow(deprecated)]
+fn run_shell_command_finished_result(
+    command: &str,
+    output: &str,
+    command_id: &str,
+) -> api::message::tool_call_result::Result {
+    api::message::tool_call_result::Result::RunShellCommand(api::RunShellCommandResult {
+        command: command.to_string(),
+        output: output.to_string(),
+        exit_code: 0,
+        result: Some(api::run_shell_command_result::Result::CommandFinished(
+            api::ShellCommandFinished {
+                command_id: command_id.to_string(),
+                output: output.to_string(),
+                exit_code: 0,
+                start_ts: None,
+                finish_ts: None,
+            },
+        )),
+    })
+}
+
 fn restored_conversation_with_messages(messages: Vec<api::Message>) -> AIConversation {
     AIConversation::new_restored(
         AIConversationId::new(),
@@ -1539,4 +1575,345 @@ fn fetched_memories_dedupes_keeping_first_position_and_latest_data() {
             fetched_memory("m1", "same memory id different store", "store-2", None),
         ]
     );
+}
+
+/// Builds a restored conversation with `n` sequential `RunShellCommand` tool
+/// calls/results (`echo 0`, `echo 1`, ... `echo {n-1}`), in chronological order.
+fn restored_conversation_with_n_run_shell_commands(n: usize) -> AIConversation {
+    let mut messages = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let tool_call_id = format!("call-{i}");
+        let command = format!("echo {i}");
+        messages.push(tool_call_message(
+            &format!("tool-call-{i}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_tool_call(&command),
+        ));
+        messages.push(tool_call_result_message(
+            &format!("tool-result-{i}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_finished_result(&command, &i.to_string(), &format!("command-{i}")),
+        ));
+    }
+    restored_conversation_with_messages(messages)
+}
+
+/// Regression test for APP-5428: a conversation with far more historical shell
+/// commands than `MAX_RESTORED_COMMAND_BLOCKS` must not restore one terminal block
+/// per command (each of which allocates several full-size grids). Only the most
+/// recent commands are kept, and a synthetic notice block communicates the
+/// truncation instead of silently dropping history.
+#[test]
+fn to_serialized_blocklist_items_caps_command_blocks_and_notes_truncation() {
+    let extra_commands = 10;
+    let total_commands = super::MAX_RESTORED_COMMAND_BLOCKS + extra_commands;
+    let conversation = restored_conversation_with_n_run_shell_commands(total_commands);
+    let items = conversation.to_serialized_blocklist_items();
+
+    // +1 for the synthetic truncation-notice block.
+    assert_eq!(items.len(), super::MAX_RESTORED_COMMAND_BLOCKS + 1);
+
+    let SerializedBlockListItem::Command { block: notice } = &items[0];
+    let notice_command = String::from_utf8_lossy(&notice.stylized_command).into_owned();
+    assert!(
+        notice_command.contains(&format!("{extra_commands} earlier command")),
+        "expected a truncation notice mentioning the dropped command count, got: {notice_command:?}"
+    );
+
+    // The oldest *kept* command is the 10th (0-indexed): the first 10 were dropped
+    // to stay within the cap.
+    let SerializedBlockListItem::Command { block: first_kept } = &items[1];
+    let first_kept_command = String::from_utf8_lossy(&first_kept.stylized_command).into_owned();
+    assert!(
+        first_kept_command.contains(&format!("echo {extra_commands}")),
+        "expected the oldest restored command to be the {extra_commands}th, got: {first_kept_command:?}"
+    );
+
+    let SerializedBlockListItem::Command { block: last_kept } = items.last().unwrap();
+    let last_kept_command = String::from_utf8_lossy(&last_kept.stylized_command).into_owned();
+    assert!(
+        last_kept_command.contains(&format!("echo {}", total_commands - 1)),
+        "expected the most recent command to be restored, got: {last_kept_command:?}"
+    );
+}
+
+/// Regression test for APP-5428 review finding: pins the `>` (not `>=`) boundary
+/// condition. At exactly `MAX_RESTORED_COMMAND_BLOCKS` commands, nothing is
+/// truncated: all commands are returned and no synthetic notice block is inserted.
+#[test]
+fn to_serialized_blocklist_items_does_not_truncate_at_exact_cap() {
+    let conversation =
+        restored_conversation_with_n_run_shell_commands(super::MAX_RESTORED_COMMAND_BLOCKS);
+    let items = conversation.to_serialized_blocklist_items();
+
+    assert_eq!(items.len(), super::MAX_RESTORED_COMMAND_BLOCKS);
+
+    let SerializedBlockListItem::Command { block: first } = &items[0];
+    let first_command = String::from_utf8_lossy(&first.stylized_command).into_owned();
+    assert!(
+        first_command.contains("echo 0"),
+        "at exactly the cap, the oldest command must still be the very first one \
+         restored (no notice block prepended), got: {first_command:?}"
+    );
+
+    let SerializedBlockListItem::Command { block: last } = items.last().unwrap();
+    let last_command = String::from_utf8_lossy(&last.stylized_command).into_owned();
+    assert!(
+        last_command.contains(&format!("echo {}", super::MAX_RESTORED_COMMAND_BLOCKS - 1)),
+        "got: {last_command:?}"
+    );
+}
+
+/// Regression test for APP-5428 review finding: pins `restored_block_count_up_to`'s
+/// exact contract at and below the `cap` boundary -- it must return the real count
+/// whenever that count is `<= cap` (including the equality case), not a sentinel.
+#[test]
+fn restored_block_count_up_to_returns_exact_count_within_and_at_cap() {
+    let conversation = restored_conversation_with_n_run_shell_commands(10);
+
+    assert_eq!(conversation.restored_block_count_up_to(20), 10);
+    // Equality at the boundary must return the real count, not a sentinel.
+    assert_eq!(conversation.restored_block_count_up_to(10), 10);
+}
+
+/// Regression test for APP-5428 review finding: once the true count exceeds `cap`,
+/// `restored_block_count_up_to` must return exactly `cap + 1` -- never the real count
+/// (which would defeat the point of bounding the scan) and never some other
+/// over-`cap` value that would corrupt the aggregate-budget arithmetic callers do
+/// with it (e.g. `restored_block_count + 2` in `restore_missing_child_agent_panes_for_parent`).
+#[test]
+fn restored_block_count_up_to_returns_cap_plus_one_sentinel_when_exceeding_cap() {
+    let conversation = restored_conversation_with_n_run_shell_commands(50);
+
+    assert_eq!(conversation.restored_block_count_up_to(10), 11);
+}
+
+/// Regression test for APP-5428 review finding: even when `cap` itself is larger
+/// than `MAX_RESTORED_COMMAND_BLOCKS`, the scan must never go past
+/// `MAX_RESTORED_COMMAND_BLOCKS` -- the sentinel is `MAX_RESTORED_COMMAND_BLOCKS + 1`,
+/// not `cap + 1`, matching what `to_serialized_blocklist_items` would actually restore.
+#[test]
+fn restored_block_count_up_to_clamps_scanning_to_max_restored_command_blocks() {
+    let total = super::MAX_RESTORED_COMMAND_BLOCKS + 50;
+    let conversation = restored_conversation_with_n_run_shell_commands(total);
+
+    assert_eq!(
+        conversation.restored_block_count_up_to(total),
+        super::MAX_RESTORED_COMMAND_BLOCKS + 1
+    );
+}
+
+/// Builds a restored conversation whose root task only contains a summarization
+/// subagent call, with the `n` `RunShellCommand` pairs living in the referenced
+/// subtask instead -- mirroring what a real conversation looks like once its early
+/// history has been moved into a summarization subtask.
+fn restored_conversation_with_summarized_run_shell_commands(n: usize) -> AIConversation {
+    let root_id = "root-task";
+    let subtask_id = "summarized-subtask";
+
+    let mut sub_messages = Vec::with_capacity(n * 2);
+    for i in 0..n {
+        let tool_call_id = format!("call-{i}");
+        let command = format!("echo {i}");
+        sub_messages.push(tool_call_message(
+            &format!("tool-call-{i}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_tool_call(&command),
+        ));
+        sub_messages.push(tool_call_result_message(
+            &format!("tool-result-{i}"),
+            "req",
+            &tool_call_id,
+            run_shell_command_finished_result(&command, &i.to_string(), &format!("command-{i}")),
+        ));
+    }
+
+    let summarization_call = crate::test_util::ai_agent_tasks::create_subagent_tool_call_message(
+        "summary_call",
+        root_id,
+        subtask_id,
+        Some(api::message::tool_call::subagent::Metadata::Summarization(
+            (),
+        )),
+    );
+
+    AIConversation::new_restored(
+        AIConversationId::new(),
+        vec![
+            api::Task {
+                id: root_id.to_string(),
+                messages: vec![summarization_call],
+                dependencies: None,
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+            api::Task {
+                id: subtask_id.to_string(),
+                messages: sub_messages,
+                dependencies: Some(api::task::Dependencies {
+                    parent_task_id: root_id.to_string(),
+                }),
+                description: String::new(),
+                summary: String::new(),
+                server_data: String::new(),
+            },
+        ],
+        None,
+    )
+    .unwrap()
+}
+
+/// Regression test for APP-5428 review finding: `restored_block_count_up_to` must
+/// recurse into summarization subtasks the same way `extract_command_blocks` does,
+/// so commands moved out of the root task by summarization are still counted
+/// instead of silently vanishing from the budget calculation.
+#[test]
+fn restored_block_count_up_to_recurses_into_summarization_subtasks() {
+    let conversation = restored_conversation_with_summarized_run_shell_commands(10);
+
+    assert_eq!(conversation.restored_block_count_up_to(20), 10);
+    assert_eq!(conversation.restored_block_count_up_to(5), 6);
+}
+
+fn executed_shell_command_attachment(command_id: &str) -> api::Attachment {
+    api::Attachment {
+        value: Some(api::attachment::Value::ExecutedShellCommand(
+            api::ExecutedShellCommand {
+                command: format!("echo {command_id}"),
+                output: String::new(),
+                exit_code: 0,
+                command_id: command_id.to_string(),
+                started_ts: None,
+                finished_ts: None,
+                is_auto_attached: false,
+            },
+        )),
+    }
+}
+
+fn user_query_message_with_attachment(
+    id: &str,
+    request_id: &str,
+    command_id: &str,
+) -> api::Message {
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: String::new(),
+            context: None,
+            referenced_attachments: HashMap::from([(
+                "attachment-1".to_string(),
+                executed_shell_command_attachment(command_id),
+            )]),
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+fn user_query_message_with_context_command(
+    id: &str,
+    request_id: &str,
+    command_id: &str,
+) -> api::Message {
+    #[allow(deprecated)]
+    let context = api::InputContext {
+        executed_shell_commands: vec![api::ExecutedShellCommand {
+            command: format!("echo {command_id}"),
+            output: String::new(),
+            exit_code: 0,
+            command_id: command_id.to_string(),
+            started_ts: None,
+            finished_ts: None,
+            is_auto_attached: false,
+        }],
+        ..Default::default()
+    };
+    api::Message {
+        fetched_memories: vec![],
+        id: id.to_string(),
+        task_id: "root-task".to_string(),
+        server_message_data: String::new(),
+        citations: vec![],
+        message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+            query: String::new(),
+            context: Some(context),
+            referenced_attachments: HashMap::new(),
+            mode: None,
+            intended_agent: Default::default(),
+        })),
+        request_id: request_id.to_string(),
+        timestamp: None,
+    }
+}
+
+/// Regression test for APP-5428 review finding: `count_command_blocks_up_to` must
+/// apply the same `seen_command_ids` deduplication policy as
+/// `extract_command_blocks_from_messages`, or the two diverge on conversations with
+/// duplicate nonempty `command_id`s. Covers the three cases named in review: two
+/// attachments sharing a `command_id`, two context blocks sharing a `command_id`, and a
+/// `RunShellCommand` followed by an attachment for its completed command.
+#[test]
+fn count_command_blocks_matches_extract_command_blocks_len_for_duplicate_attachments() {
+    let conversation = restored_conversation_with_messages(vec![
+        user_query_message_with_attachment("user-0", "request-0", "shared-command"),
+        user_query_message_with_attachment("user-1", "request-1", "shared-command"),
+    ]);
+
+    assert_eq!(
+        conversation.count_command_blocks_for_test(),
+        conversation.extract_command_blocks().len()
+    );
+    // Both duplicate attachments share one command_id, so only one block is real.
+    assert_eq!(conversation.count_command_blocks_for_test(), 1);
+}
+
+#[test]
+fn count_command_blocks_matches_extract_command_blocks_len_for_duplicate_context_commands() {
+    let conversation = restored_conversation_with_messages(vec![
+        user_query_message_with_context_command("user-0", "request-0", "shared-command"),
+        user_query_message_with_context_command("user-1", "request-1", "shared-command"),
+    ]);
+
+    assert_eq!(
+        conversation.count_command_blocks_for_test(),
+        conversation.extract_command_blocks().len()
+    );
+    assert_eq!(conversation.count_command_blocks_for_test(), 1);
+}
+
+#[test]
+fn count_command_blocks_matches_extract_command_blocks_len_for_run_shell_command_then_attachment() {
+    let conversation = restored_conversation_with_messages(vec![
+        tool_call_message(
+            "tool-call-0",
+            "request-0",
+            "call-0",
+            run_shell_command_tool_call("echo shared"),
+        ),
+        tool_call_result_message(
+            "tool-result-0",
+            "request-0",
+            "call-0",
+            run_shell_command_finished_result("echo shared", "out", "shared-command"),
+        ),
+        user_query_message_with_attachment("user-1", "request-1", "shared-command"),
+    ]);
+
+    assert_eq!(
+        conversation.count_command_blocks_for_test(),
+        conversation.extract_command_blocks().len()
+    );
+    // The RunShellCommand result claims the id, so the later attachment is a duplicate.
+    assert_eq!(conversation.count_command_blocks_for_test(), 1);
 }

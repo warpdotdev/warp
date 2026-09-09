@@ -1885,6 +1885,36 @@ fn unfiltered_transcript_scope_shows_restored_conversation_command_blocks() {
     assert!(restored_block.is_visible(block_list.transcript_scope()));
 }
 
+/// Regression test for APP-5428: restoring N historical command blocks via the batched
+/// `insert_restored_blocks` API must create exactly one trailing "fresh active" block for
+/// the whole batch, not one per restored command. The old per-item `insert_restored_block`
+/// loop doubled the number of full `Block`s (and their several full-size grid buffers)
+/// materialized for large restorations.
+#[test]
+fn insert_restored_blocks_creates_a_single_trailing_active_block() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let blocks_before = block_list.blocks().len();
+
+    let restored: Vec<SerializedBlock> = (0..5)
+        .map(|i| {
+            SerializedBlock::new_for_test(
+                format!("echo {i}").into_bytes(),
+                format!("{i}\r\n").into_bytes(),
+            )
+        })
+        .collect();
+    let restored_refs: Vec<&SerializedBlock> = restored.iter().collect();
+
+    block_list.insert_restored_blocks(&restored_refs);
+
+    // 5 restored command blocks + exactly 1 trailing active block, not 2 per command.
+    assert_eq!(
+        block_list.blocks().len(),
+        blocks_before + restored_refs.len() + 1
+    );
+}
+
 #[test]
 fn test_finish_startup_commands_at_block_attaches_and_unhides_command_blocks_since_target_block() {
     let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
