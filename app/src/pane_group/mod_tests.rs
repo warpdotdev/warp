@@ -933,11 +933,17 @@ fn test_restored_remote_hidden_child_pane_enters_existing_ambient_session() {
                 model.insert_task_for_test(attachable_ambient_agent_task(task_id));
             });
 
-            let mut child_conversation = AIConversation::new(false, false);
-            child_conversation.set_parent_conversation_id(parent_conversation_id);
-            child_conversation.set_task_id(task_id);
-            child_conversation.mark_as_remote_child();
-            let child_conversation_id = child_conversation.id();
+            let child_conversation_id = restore_remote_child_conversation(
+                panes,
+                parent_pane_id,
+                parent_conversation_id,
+                task_id,
+                ctx,
+            );
+            let child_conversation = BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&child_conversation_id)
+                .cloned()
+                .expect("restored remote child conversation should be loaded");
 
             panes.create_hidden_child_agent_pane(child_conversation, parent_pane_id, ctx);
 
@@ -1055,7 +1061,7 @@ fn test_restored_remote_hidden_child_pane_pending_when_task_data_unavailable() {
 
 /// A terminal owner remote child (`Succeeded` run with a server
 /// `conversation_id`, no live session) resolves to `LoadTranscript`: the
-/// unified dispatch still materializes the hidden ambient pane keyed by the
+/// unified dispatch materializes a hidden loading pane keyed by the
 /// placeholder's local id, into which the cloud transcript merges
 /// asynchronously.
 #[test]
@@ -1090,12 +1096,23 @@ fn test_restored_remote_hidden_child_pane_terminal_owner_loads_transcript() {
                 .child_agent_panes
                 .get(&child_conversation_id)
                 .copied()
-                .expect("terminal owner remote child must materialize an ambient transcript pane");
-            // The transcript branch builds a cloud-mode ambient pane (so the
-            // pill can reveal it) keyed by the placeholder's local id.
-            let (_task_id, _running, active_conversation_id) =
-                ambient_child_session_state(panes, child_pane_id, ctx);
-            assert_eq!(active_conversation_id, Some(child_conversation_id));
+                .expect("terminal owner remote child must materialize a transcript loading pane");
+            let terminal_view = panes
+                .terminal_view_from_pane_id(child_pane_id, ctx)
+                .expect("terminal owner remote child pane should have a terminal view");
+            let view = terminal_view.as_ref(ctx);
+            assert_eq!(
+                view.active_conversation_id(ctx),
+                Some(child_conversation_id)
+            );
+            assert!(view.ambient_agent_view_model().is_none());
+            let model = view.model.lock();
+            assert!(model.is_conversation_transcript_viewer());
+            assert!(model.is_read_only());
+            assert_eq!(
+                model.conversation_transcript_viewer_status(),
+                Some(&ConversationTranscriptViewerStatus::Loading),
+            );
         });
     });
 }
