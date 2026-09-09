@@ -123,9 +123,14 @@ impl PaneGroup {
                 .or_else(|| {
                     RestoredAgentConversations::handle(ctx)
                         .update(ctx, |store, _| store.take_conversation(&child_id))
+                })
+                .or_else(|| {
+                    BlocklistAIHistoryModel::as_ref(ctx).load_conversation_from_db(&child_id)
                 });
             let Some(child_conversation) = child_conversation else {
-                log::warn!("Child conversation {child_id:?} not found in memory or restored store");
+                log::warn!(
+                    "Child conversation {child_id:?} not found in memory, restored store, or local DB"
+                );
                 continue;
             };
 

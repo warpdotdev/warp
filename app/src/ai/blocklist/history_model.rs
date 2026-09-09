@@ -246,6 +246,18 @@ pub(crate) struct PromptHistoryEntry {
     pub(crate) start_ts: DateTime<Local>,
 }
 
+/// Overlay for an orchestration child whose task body has not been loaded.
+///
+/// Startup indexes children from `agent_conversations` without decoding
+/// `agent_tasks`. Pill-bar labels and transcript name resolution read these
+/// fields until the child's pane materializes the full conversation.
+#[derive(Debug, Clone)]
+struct OrchestrationChildIdentity {
+    agent_name: Option<String>,
+    pinned: bool,
+    is_remote_child: bool,
+}
+
 /// Responsible for managing the history of user and AI exchanges.
 #[derive(Default)]
 pub struct BlocklistAIHistoryModel {
@@ -321,6 +333,10 @@ pub struct BlocklistAIHistoryModel {
     /// Populated at startup from the local DB and kept in sync at runtime
     /// via `set_parent_for_conversation` and `restore_conversations`.
     children_by_parent: HashMap<AIConversationId, Vec<AIConversationId>>,
+
+    /// Display overlay for orchestration children indexed at startup before
+    /// their task bodies are loaded into `conversations_by_id`.
+    orchestration_child_identities: HashMap<AIConversationId, OrchestrationChildIdentity>,
 
     /// Conversations that have had at least one AIBlock receive imported review comments.
     conversations_with_imported_comments: HashSet<AIConversationId>,
@@ -538,6 +554,58 @@ impl BlocklistAIHistoryModel {
         if !children.contains(&child_id) {
             children.push(child_id);
         }
+    }
+
+    fn index_orchestration_child_identity(
+        &mut self,
+        child_id: AIConversationId,
+        conversation_data: &AgentConversationData,
+    ) {
+        self.orchestration_child_identities.insert(
+            child_id,
+            OrchestrationChildIdentity {
+                agent_name: conversation_data.agent_name.clone(),
+                pinned: conversation_data.pinned,
+                is_remote_child: conversation_data.is_remote_child,
+            },
+        );
+    }
+
+    /// Display name for a conversation, including orchestration children that
+    /// have been indexed but whose task body has not been loaded yet.
+    pub fn agent_name_for_conversation(&self, conversation_id: &AIConversationId) -> Option<&str> {
+        self.conversations_by_id
+            .get(conversation_id)
+            .and_then(AIConversation::agent_name)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .and_then(|identity| identity.agent_name.as_deref())
+            })
+    }
+
+    pub(crate) fn is_remote_child_conversation(&self, conversation_id: &AIConversationId) -> bool {
+        self.conversations_by_id
+            .get(conversation_id)
+            .map(AIConversation::is_remote_child)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .map(|identity| identity.is_remote_child)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn is_pinned_conversation(&self, conversation_id: &AIConversationId) -> bool {
+        self.conversations_by_id
+            .get(conversation_id)
+            .map(AIConversation::is_pinned)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .map(|identity| identity.pinned)
+            })
+            .unwrap_or(false)
     }
 
     /// Creates a new child agent conversation.
@@ -2965,6 +3033,7 @@ impl BlocklistAIHistoryModel {
         self.agent_id_to_conversation_id.clear();
         self.server_token_to_conversation_id.clear();
         self.children_by_parent.clear();
+        self.orchestration_child_identities.clear();
     }
 }
 

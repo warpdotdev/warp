@@ -1333,22 +1333,22 @@ fn failed_viewer_child_session_stays_unavailable_without_retrying_same_session()
 }
 
 /// Phase 1 integration coverage: validates that after `BlocklistAIHistoryModel`
-/// restoration (the same code path the disk-load Fix C unblocks), the
-/// orchestration topology is fully wired BEFORE the parent's fullscreen
-/// agent view is entered, AND that entering fullscreen lazily materializes
-/// the hidden child pane keyed by the placeholder local AIConversationId.
+/// restoration, the orchestration topology is fully wired BEFORE the parent's
+/// fullscreen agent view is entered, AND that entering fullscreen lazily
+/// materializes the hidden child pane keyed by the placeholder local
+/// AIConversationId.
 ///
 /// This is the integration boundary the user-visible bug lives at:
 ///   * pill bar / transcript name resolution must succeed before the
-///     parent fullscreen entry (Fix C eagerly hydrates `conversations_by_id`
-///     so this works on disk-load; this test exercises the equivalent
+///     parent fullscreen entry (disk-load indexes child overlay metadata
+///     without decoding task bodies; this test exercises the equivalent
 ///     restore-into-history-model + lazy pane materialization flow).
 ///   * the hidden child pane must materialize in `child_agent_panes` keyed
 ///     by the placeholder conversation id after parent fullscreen.
 ///
 /// The disk-load construction path (`BlocklistAIHistoryModel::new(_, _, &conversations)`
 /// invoking `initialize_historical_conversations`) is covered by
-/// `test_initialize_historical_conversations_eagerly_hydrates_orchestration_children`
+/// `test_initialize_historical_conversations_indexes_child_names_without_bodies`
 /// in `app/src/ai/blocklist/history_model_tests.rs`. `agent_display_name_from_id`
 /// resolution for restored children is covered by
 /// `participant_for_restored_child_run_id_resolves_to_agent_name` in
@@ -1387,9 +1387,8 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
 
             // Restore a child conversation into the parent's terminal view. This
             // is the same code path `RestoredAgentConversations::take_conversations`
-            // feeds into during pane restoration. Fix C ensures the equivalent
-            // wiring happens earlier (at history-model construction) so the data
-            // is also available before any terminal view materializes the parent.
+            // feeds into during pane restoration. Disk-load indexes overlay
+            // metadata earlier so names resolve before this full restore.
             let mut child_conversation = AIConversation::new(false, false);
             child_conversation.set_parent_conversation_id(parent_conversation_id);
             child_conversation.set_agent_name(child_agent_name.clone());
@@ -1451,11 +1450,8 @@ fn test_pane_group_restore_loop_keeps_orchestration_topology_and_materializes_ch
                 "pill bar pre-order walker must reach the restored child before any pane materializes",
             );
 
-            // (b) The child must be hydrated into `conversations_by_id`
-            // with its agent name preserved — this is the data Fix C
-            // eagerly populates on disk-load so the transcript name
-            // resolver finds the display name instead of falling back to
-            // "Unknown agent".
+            // (b) After `restore_conversations`, the child is in
+            // `conversations_by_id` with its agent name preserved.
             let child_conversation = history
                 .conversation(&child_conversation_id)
                 .expect("restored child must be in conversations_by_id before parent fullscreen");
