@@ -257,7 +257,7 @@ jobs:
           echo "Pull request created: ${{ steps.create_pr.outputs.pull-request-url }}"
         
       - name: Send Slack notification
-        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         if: ${{ steps.create_pr.outputs.pull-request-operation == 'created' }}
         with:
           method: chat.postMessage

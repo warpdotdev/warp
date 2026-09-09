@@ -2886,7 +2886,7 @@ jobs:
     if: ${{ always() && needs.prepare_release.outputs.should_publish == 'true' }}
     steps:
       - name: Send Slack notification if unsuccessful
-        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         if: ${{ needs.collect_results.outputs.failed != '' }}
         with:
           # Fail the step when Slack rejects the message.
@@ -3045,7 +3045,7 @@ jobs:
 
       - name: Post to a Slack channel
         id: slack
-        uses: slackapi/slack-github-action@0d95c9a7becc1e6e297d76df9bc735c44f4cbcbc # v3.0.5
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
         if: ${{ steps.build_slack_payload.outputs.has_content == 'true' }}
         # Continue on with the rest of the workflow, even if we fail to send the
         # changelog info to Slack.  (We still want to stick the changelog JSON
