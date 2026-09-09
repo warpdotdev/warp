@@ -26,6 +26,7 @@ use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
 const START_BATCH_AFTER_COUNT: usize = 50;
 const MAX_BATCH_SIZE: usize = 512;
 const MAX_BATCH_AGE_MS: u64 = 4000;
+pub(super) const MAX_STORED_LINE_TEXT_BYTES: usize = 4096;
 
 /// Client-requested cap on remote matches per host. The daemon clamps this
 /// to its own server-side cap; both bound the single-frame response size.
@@ -542,7 +543,7 @@ impl GlobalSearch {
             leading_trimmed_bytes += ch.len_utf8();
         }
 
-        let trimmed_line = original_line[leading_trimmed_bytes.as_usize()..].to_string();
+        let trimmed_line = &original_line[leading_trimmed_bytes.as_usize()..];
 
         let submatches = if let Some(sub) = submatch {
             vec![Submatch {
@@ -552,14 +553,72 @@ impl GlobalSearch {
         } else {
             Vec::new()
         };
+        let (line_text, submatches) =
+            Self::truncate_line_text_for_storage(trimmed_line, &submatches);
 
         GlobalSearchMatch {
             location,
             line_number,
             column_num,
-            line_text: trimmed_line,
+            line_text,
             submatches,
         }
+    }
+
+    pub(super) fn truncate_line_text_for_storage(
+        line_text: &str,
+        submatches: &[Submatch],
+    ) -> (String, Vec<Submatch>) {
+        if line_text.len() <= MAX_STORED_LINE_TEXT_BYTES {
+            return (line_text.to_owned(), submatches.to_vec());
+        }
+
+        let anchor = submatches
+            .first()
+            .map(|submatch| submatch.byte_start.as_usize())
+            .unwrap_or(0)
+            .min(line_text.len());
+        let ellipsis_bytes = '…'.len_utf8();
+        let window_bytes = MAX_STORED_LINE_TEXT_BYTES - 2 * ellipsis_bytes;
+        let half_window = window_bytes / 2;
+        let raw_start = anchor.saturating_sub(half_window);
+        let raw_end = (raw_start + window_bytes).min(line_text.len());
+        let window_start = (raw_start..=line_text.len())
+            .find(|&index| line_text.is_char_boundary(index))
+            .unwrap_or(line_text.len());
+        let window_end = (0..=raw_end)
+            .rev()
+            .find(|&index| line_text.is_char_boundary(index))
+            .unwrap_or(0);
+
+        let prefix_ellipsis = window_start > 0;
+        let suffix_ellipsis = window_end < line_text.len();
+        let capacity = window_end - window_start
+            + usize::from(prefix_ellipsis) * ellipsis_bytes
+            + usize::from(suffix_ellipsis) * ellipsis_bytes;
+        let mut truncated = String::with_capacity(capacity);
+        if prefix_ellipsis {
+            truncated.push('…');
+        }
+        truncated.push_str(&line_text[window_start..window_end]);
+        if suffix_ellipsis {
+            truncated.push('…');
+        }
+
+        let prefix_offset_bytes = if prefix_ellipsis { ellipsis_bytes } else { 0 };
+        let truncated_submatches = submatches
+            .iter()
+            .filter_map(|submatch| {
+                let start = submatch.byte_start.as_usize().max(window_start);
+                let end = submatch.byte_end.as_usize().min(window_end);
+                (start < end).then(|| Submatch {
+                    byte_start: ByteOffset::from(start - window_start + prefix_offset_bytes),
+                    byte_end: ByteOffset::from(end - window_start + prefix_offset_bytes),
+                })
+            })
+            .collect();
+
+        (truncated, truncated_submatches)
     }
 }
 

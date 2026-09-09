@@ -1,8 +1,13 @@
+use std::path::PathBuf;
+
 use remote_server::HostId;
 use remote_server::proto::{RipgrepSearchMatch, RipgrepSearchSubmatch, RipgrepSearchSuccess};
+use string_offset::ByteOffset;
+use warp_ripgrep::search::Submatch;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use super::GlobalSearch;
+use super::{GlobalSearch, MAX_STORED_LINE_TEXT_BYTES};
+use crate::workspace::view::global_search::GlobalSearchMatch;
 
 fn host() -> HostId {
     HostId::new("test-host".to_string())
@@ -118,4 +123,34 @@ fn remote_match_column_counts_characters_not_bytes() {
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].column_num, Some(2));
+}
+
+#[test]
+fn expanded_matches_are_bounded_before_batching() {
+    let prefix = "x".repeat(MAX_STORED_LINE_TEXT_BYTES * 4);
+    let line_text = format!("{prefix}TARGET");
+    let match_start = prefix.len();
+    let match_end = line_text.len();
+    let raw_match = GlobalSearchMatch {
+        location: LocalOrRemotePath::Local(PathBuf::from("/repo/a.rs")),
+        line_number: 7,
+        column_num: None,
+        line_text,
+        submatches: vec![Submatch {
+            byte_start: ByteOffset::from(match_start),
+            byte_end: ByteOffset::from(match_end),
+        }],
+    };
+
+    let results = GlobalSearch::expand_submatches(raw_match);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].line_number, 7);
+    assert_eq!(results[0].column_num, Some(match_start + 1));
+    assert!(results[0].line_text.len() <= MAX_STORED_LINE_TEXT_BYTES);
+    let submatch = &results[0].submatches[0];
+    assert_eq!(
+        &results[0].line_text[submatch.byte_start.as_usize()..submatch.byte_end.as_usize()],
+        "TARGET"
+    );
 }

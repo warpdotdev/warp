@@ -1,4 +1,4 @@
-use std::ops::Not;
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::anyhow;
@@ -8,12 +8,8 @@ use grep::searcher::{BinaryDetection, SearcherBuilder};
 use ignore::{WalkBuilder, WalkState};
 use string_offset::ByteOffset;
 
-/// Maximum line length (in bytes) the ripgrep searcher will tolerate.
-/// Files containing lines longer than this are skipped, preventing
-/// unbounded memory growth from minified or generated files.
-/// Only applied in single-line mode; multiline search needs the full file
-/// in memory so the limit would be per-file rather than per-line.
 const SEARCHER_LINE_HEAP_LIMIT: usize = 64 * 1024;
+const SEARCHER_MULTILINE_HEAP_LIMIT: usize = 8 * 1024 * 1024;
 
 /// A single submatch span within a matched line.
 #[derive(Clone, Debug)]
@@ -47,7 +43,17 @@ pub fn run_search_subprocess(
 ) -> anyhow::Result<()> {
     #[cfg(unix)]
     crate::monitor_parent_and_exit_on_change(parent_pid);
+    search_to_writer(patterns, paths, ignore_case, multiline, std::io::stdout())?;
+    Ok(())
+}
 
+fn search_to_writer<W: Write + Send>(
+    patterns: &[String],
+    paths: Vec<PathBuf>,
+    ignore_case: bool,
+    multiline: bool,
+    output: W,
+) -> anyhow::Result<W> {
     if patterns.is_empty() {
         return Err(anyhow!("No patterns specified"));
     }
@@ -62,7 +68,7 @@ pub fn run_search_subprocess(
     }
     let matcher = matcher_builder.build_many(patterns)?;
 
-    let stdout = std::sync::Mutex::new(std::io::stdout());
+    let output = std::sync::Mutex::new(output);
 
     let mut walker_builder = WalkBuilder::new(&paths[0]);
     for path in paths.iter().skip(1) {
@@ -72,15 +78,20 @@ pub fn run_search_subprocess(
 
     walker.run(|| {
         let matcher = matcher.clone();
-        let stdout = &stdout;
+        let output = &output;
 
         // Allocate once per thread and reuse across entries.
         let mut buf = Vec::new();
+        let heap_limit = if multiline {
+            SEARCHER_MULTILINE_HEAP_LIMIT
+        } else {
+            SEARCHER_LINE_HEAP_LIMIT
+        };
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_number(true)
             .multi_line(multiline)
-            .heap_limit(multiline.not().then_some(SEARCHER_LINE_HEAP_LIMIT))
+            .heap_limit(Some(heap_limit))
             .build();
 
         Box::new(move |entry| {
@@ -115,11 +126,10 @@ pub fn run_search_subprocess(
             }
 
             if !buf.is_empty() {
-                let Ok(mut out) = stdout.lock() else {
+                let Ok(mut out) = output.lock() else {
                     // Mutex poisoned — another search thread panicked.
                     return WalkState::Quit;
                 };
-                use std::io::Write;
                 if out.write_all(&buf).is_err() {
                     // Stdout pipe is broken (parent likely cancelled the
                     // search), so stop walking.
@@ -131,7 +141,9 @@ pub fn run_search_subprocess(
         })
     });
 
-    Ok(())
+    output
+        .into_inner()
+        .map_err(|_| anyhow!("ripgrep output mutex was poisoned"))
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -263,3 +275,7 @@ mod process_impl {
 
 #[cfg(not(target_family = "wasm"))]
 pub use process_impl::{search, search_streaming};
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod tests;
