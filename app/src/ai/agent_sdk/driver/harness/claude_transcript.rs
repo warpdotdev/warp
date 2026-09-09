@@ -7,10 +7,11 @@
 //! - [`ClaudeResumeInfo`] — everything the harness runner needs to resume an existing
 //!   Claude conversation: the Warp server conversation id to reuse, the Claude session uuid
 //!   to pass to `claude --resume`, and the decoded envelope to rehydrate onto disk.
-//! - [`write_session_index_entry`] — best-effort update of `~/.claude/sessions-index.json`
-//!   so Claude's `--resume <uuid>` lookup can find the freshly-rehydrated jsonl. Upstream
-//!   versions vary in how they use this index (claude-code#33912, #39667, #5768); we write
-//!   a conservative entry and log on failure.
+//! - [`write_session_index_entry`] — update of `~/.claude/sessions-index.json` so Claude's
+//!   `--resume <uuid>` lookup can find the freshly-rehydrated jsonl. Upstream versions vary in
+//!   how they use this index (claude-code#33912, #39667, #5768); we write a conservative entry.
+//!   Callers treat write failures as hard errors rather than warnings, since this index is required
+//!   by some Claude Code versions.
 //!
 //! Split out from `claude_code.rs` so the `AIClient` transcript-fetch impl can deserialize
 //! envelopes without pulling in the rest of the harness runner.
@@ -26,7 +27,7 @@ use uuid::Uuid;
 use warp_core::safe_warn;
 
 use super::json_utils::entries_to_jsonl;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 
 /// JSON envelope sent to the server representing a complete Claude Code session.
 ///
@@ -59,12 +60,13 @@ pub(crate) struct ClaudeResumeInfo {
     /// The Warp server-side conversation id. The runner stores this instead of calling
     /// `create_external_conversation` so subsequent transcript/block-snapshot uploads overwrite
     /// the same GCS objects.
-    pub(crate) conversation_id: AIConversationId,
+    pub(crate) conversation_id: ServerConversationToken,
     /// The Claude session uuid to pass to `claude --resume`. Matches `envelope.uuid`.
     pub(crate) session_id: Uuid,
-    /// Envelope from the server. Its `cwd` field is rewritten to the current run's working
-    /// directory before being written to disk, so `claude --resume <uuid>` finds the jsonl under
-    /// `~/.claude/projects/<encoded(new_cwd)>/`.
+    /// Envelope from the server. Its `cwd` field must match the current run's working directory
+    /// — [`rehydrate_claude_transcript`] rejects the resume rather than silently rewriting `cwd`,
+    /// since jsonl entries embed their own `cwd` fields that can't be retroactively fixed up, and
+    /// a rewritten top-level `cwd` alone would still leave those stale.
     pub(crate) envelope: ClaudeTranscriptEnvelope,
 }
 
@@ -114,18 +116,25 @@ pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
 /// - `<config_root>/projects/<encoded_cwd>/<session_uuid>/subagents/*.jsonl` - subagents
 /// - `<config_root>/todos/<session_uuid>-agent-*.json` - per-agent todo lists
 ///
-/// If the main JSONL does not exist yet (e.g. during an early periodic save)
-/// the envelope is returned with an empty `entries` list rather than an error.
+/// If the main JSONL does not exist, `require_main_transcript` controls whether
+/// this returns an error or an envelope with an empty `entries` list.
 pub(crate) fn read_envelope(
     session_uuid: Uuid,
     cwd: &Path,
     config_root: &Path,
+    require_main_transcript: bool,
 ) -> Result<ClaudeTranscriptEnvelope> {
     let encoded = encode_cwd(cwd);
     let projects_dir = config_root.join("projects").join(&encoded);
 
     // Main session transcript.
     let session_file = projects_dir.join(format!("{session_uuid}.jsonl"));
+    if require_main_transcript && !session_file.exists() {
+        anyhow::bail!(
+            "Claude Code transcript does not exist after harness termination: {}",
+            session_file.display()
+        );
+    }
     let entries = read_jsonl(&session_file)?;
 
     // Subagents are stored in a directory named after the session UUID.
@@ -240,17 +249,33 @@ pub(crate) fn write_envelope(
     Ok(())
 }
 
+/// Rehydrate a Claude transcript fetched for a `--conversation` cloud resume.
+///
+/// Requires `envelope.cwd` (the working directory the session was originally saved under) to
+/// match `local_cwd` (this run's working directory) exactly. Claude's `--resume <uuid>` lookup
+/// is scoped to the project directory derived from the literal cwd string, and each jsonl entry
+/// also embeds its own `cwd` field that isn't rewritten here — so resuming under a different
+/// directory would either leave Claude unable to find the session at all, or hand it a
+/// transcript with a `cwd` that no longer matches where it's actually running. Both are worse
+/// than failing loudly up front.
 pub(crate) fn rehydrate_claude_transcript(
     envelope: &mut ClaudeTranscriptEnvelope,
     local_cwd: &Path,
 ) -> Result<ClaudeLocalContinuation> {
-    envelope.cwd = local_cwd.to_path_buf();
+    if envelope.cwd != local_cwd {
+        anyhow::bail!(
+            "Unable to resume Claude session {}: it was saved with working directory {}, but \
+             this run's working directory is {}.",
+            envelope.uuid,
+            envelope.cwd.display(),
+            local_cwd.display()
+        );
+    }
     let session_id = envelope.uuid;
     let config_root = claude_config_dir().context("Failed to resolve Claude config dir")?;
     write_envelope(envelope, &config_root).context("Failed to rehydrate Claude transcript")?;
-    if let Err(e) = write_session_index_entry(session_id, local_cwd, &config_root) {
-        log::warn!("Failed to update Claude sessions-index.json: {e:#}");
-    }
+    write_session_index_entry(session_id, local_cwd, &config_root)
+        .context("Failed to update Claude sessions-index.json")?;
 
     Ok(ClaudeLocalContinuation {
         command: format!("claude --resume {session_id}"),
@@ -330,9 +355,8 @@ pub(crate) fn rehydrate_claude_transcript_from_reader(
         .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
     write_envelope_for_local_continuation(&envelope, &home_dir, &config_root)
         .context("Failed to rehydrate Claude transcript for local continuation")?;
-    if let Err(e) = write_session_index_entry(session_id, &home_dir, &config_root) {
-        log::warn!("Failed to update Claude sessions-index.json: {e:#}");
-    }
+    write_session_index_entry(session_id, &home_dir, &config_root)
+        .context("Failed to update Claude sessions-index.json")?;
     Ok(ClaudeLocalContinuation {
         command: format!("claude --resume {session_id}"),
     })
@@ -349,9 +373,8 @@ const SESSIONS_INDEX_FILENAME: &str = "sessions-index.json";
 /// mirrors the fragments documented in claude-code#33912 / #39667 / #5768. Unknown fields are
 /// preserved on existing entries, and we never remove other entries.
 ///
-/// Best-effort: callers should log a warning on failure rather than aborting the run — if the
-/// index is missing or wrong, `--resume` simply falls back to "No conversation found" and the
-/// resumed run surfaces the expected resume-failure error.
+/// A missing or malformed index file is treated as an empty index and overwritten rather than
+/// failing (see the read branch below).
 pub(crate) fn write_session_index_entry(
     session_uuid: Uuid,
     cwd: &Path,

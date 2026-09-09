@@ -191,22 +191,25 @@ fn serialize_claude_mcp_config_cli_server_omits_cwd_when_none() {
 }
 
 #[test]
-fn serialize_claude_mcp_config_sse_server() {
+fn serialize_claude_mcp_config_preserves_factory_mcp_auth() {
     let servers = HashMap::from([(
-        "remote".to_string(),
+        "warp-factory".to_string(),
         JSONMCPServer {
             transport_type: JSONTransportType::SSEServer {
-                url: "https://mcp.example.com".to_string(),
-                headers: HashMap::from([("Authorization".to_string(), "Bearer tok".to_string())]),
+                url: "https://app.warp.dev/api/v1/mcp/factory".to_string(),
+                headers: HashMap::from([(
+                    "Authorization".to_string(),
+                    "Bearer wk-test-key".to_string(),
+                )]),
             },
         },
     )]);
     let json = serialize_claude_mcp_config(&servers).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-    let server = &parsed["mcpServers"]["remote"];
+    let server = &parsed["mcpServers"]["warp-factory"];
     assert_eq!(server["type"], "http");
-    assert_eq!(server["url"], "https://mcp.example.com");
-    assert_eq!(server["headers"]["Authorization"], "Bearer tok");
+    assert_eq!(server["url"], "https://app.warp.dev/api/v1/mcp/factory");
+    assert_eq!(server["headers"]["Authorization"], "Bearer wk-test-key");
 }
 
 #[test]
@@ -687,7 +690,7 @@ fn prepare_claude_environment_config_without_config_dir_uses_home_global_config(
     unsafe { std::env::remove_var("CLAUDE_CONFIG_DIR") };
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new()).unwrap();
 
     assert!(home_dir.path().join(CLAUDE_JSON_FILE_NAME).exists());
     assert!(
@@ -732,7 +735,7 @@ fn prepare_claude_environment_config_with_config_dir_uses_dir_global_config() {
     unsafe { std::env::set_var("CLAUDE_CONFIG_DIR", claude_config_dir.path()) };
 
     let working_dir = home_dir.path().join("workspace/project");
-    prepare_claude_environment_config(&working_dir, &HashMap::new()).unwrap();
+    prepare_claude_environment_config(&working_dir, &working_dir, &HashMap::new()).unwrap();
 
     assert!(
         claude_config_dir
@@ -860,7 +863,7 @@ fn prepare_local_wake_command_rehydrates_transcript_with_self_managed_listener()
     assert!(!parent_bridge_hook_output_file(&state_dir).exists());
 
     let restored_envelope =
-        read_envelope(session_id, &working_dir, claude_config_dir.path()).unwrap();
+        read_envelope(session_id, &working_dir, claude_config_dir.path(), false).unwrap();
     assert_eq!(restored_envelope.cwd, working_dir);
     assert_eq!(
         restored_envelope.entries,

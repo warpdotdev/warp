@@ -153,6 +153,14 @@ impl WindowManager {
         self.platform.active_window_id()
     }
 
+    /// Test-only helper: returns the window most recently passed to
+    /// `show_window_and_focus_app`. Only the `test` platform tracks this; other platforms
+    /// report focus via `active_window` instead.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn last_window_shown_and_focused_for_test(&self) -> Option<WindowId> {
+        self.platform.last_window_shown_and_focused_for_test()
+    }
+
     // Get the rect of the current active screen. We need the bound instead of just
     // the size of the screen because Mac has a global coordination system containing
     // all user's screens. So the active screen may not have a origin of (0, 0).

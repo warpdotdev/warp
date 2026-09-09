@@ -55,7 +55,9 @@ use warpui_extras::user_preferences;
 use super::*;
 use crate::ai::blocklist::is_agent_mode_autonomy_allowed;
 use crate::ai::execution_profiles::ActionPermission;
-use crate::ai::llms::{LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY};
+use crate::ai::llms::{
+    AvailableLLMs, LLMInfo, LLMModelHost, LLMProvider, MODELS_BY_FEATURE_CACHE_KEY, ModelsByFeature,
+};
 use crate::auth::AuthManager;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObject, CloudObjectGuest};
@@ -74,7 +76,9 @@ use crate::settings::{
 use crate::system::SystemStats;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{CloudWorkflow, CloudWorkflowModel};
-use crate::workspaces::gql_convert::PLACEHOLDER_WORKSPACE_UID;
+use crate::workspaces::gql_convert::{
+    PLACEHOLDER_WORKSPACE_UID, workspaces_metadata_response_from_gql,
+};
 use crate::workspaces::team::{Team, TeamMember, TeamVisibility};
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
@@ -936,6 +940,256 @@ fn workspace_for_test(team: &Team) -> Workspace {
     }
 }
 
+fn workspace_for_teams(teams: Vec<Team>) -> Workspace {
+    let mut workspace = workspace_for_test(&team_for_test());
+    workspace.teams = teams;
+    workspace
+}
+
+fn team_selection(team: Option<Option<String>>) -> warp_cli::scope::TeamSelection {
+    warp_cli::scope::TeamSelection { team }
+}
+
+fn object_scope(team: Option<Option<String>>, personal: bool) -> warp_cli::scope::ObjectScope {
+    warp_cli::scope::ObjectScope {
+        team_selection: team_selection(team),
+        personal,
+    }
+}
+
+#[test]
+fn cli_scope_without_selection_is_teamless_without_teams() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(None))
+                .expect("no selection should be teamless when the user has no teams");
+            assert!(matches!(scope, TeamScopeForCli::Personal));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_without_selection_uses_the_sole_team() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![team])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(None))
+                .expect("no selection should use the sole team");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_without_selection_rejects_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let result = UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(None));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::MoreThanOneTeam { .. }
+                ))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_object_scope_personal_is_teamless_with_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli_object(&object_scope(None, true))
+                .expect("explicit personal scope should not require a team");
+            assert!(matches!(scope, TeamScopeForCli::Personal));
+        });
+    })
+}
+#[test]
+fn cli_scope_bare_team_requires_a_sole_team() {
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![])]);
+
+        app.read(|ctx| {
+            let result =
+                UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(Some(None)));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::NoTeam
+                ))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_bare_team_uses_the_sole_team() {
+    let team = team_for_test();
+    let team_uid = team.uid;
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace_for_teams(vec![team])]);
+
+        app.read(|ctx| {
+            let scope = UserWorkspaces::as_ref(ctx)
+                .team_scope_for_cli(&team_selection(Some(None)))
+                .expect("bare --team should use the sole team");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == team_uid));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_bare_team_rejects_multiple_teams() {
+    let (first_team, second_team) = two_teams();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let result =
+                UserWorkspaces::as_ref(ctx).team_scope_for_cli(&team_selection(Some(None)));
+            assert!(matches!(
+                result,
+                Err(team_workspace_settings::TeamScopeForCliError::NoSoleTeam(
+                    SoleTeamError::MoreThanOneTeam { .. }
+                ))
+            ));
+        });
+    })
+}
+#[test]
+fn cli_scope_explicit_team_validates_the_uid_and_membership() {
+    let (first_team, second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    let missing_team_uid: ServerId = 789.into();
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = user_workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("an explicit member team should resolve");
+            assert!(matches!(scope, TeamScopeForCli::Team(uid) if uid == second_team_uid));
+
+            let invalid =
+                user_workspaces.team_scope_for_cli(&team_selection(Some(Some("invalid".into()))));
+            assert!(matches!(
+                invalid,
+                Err(team_workspace_settings::TeamScopeForCliError::InvalidTeamUid { .. })
+            ));
+
+            let not_a_member = user_workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(missing_team_uid.to_string()))));
+            assert!(matches!(
+                not_a_member,
+                Err(team_workspace_settings::TeamScopeForCliError::NotAMember(_))
+            ));
+        });
+    })
+}
+
+#[test]
+fn cli_scope_reads_the_selected_teams_model_choices() {
+    let (mut first_team, mut second_team) = two_teams();
+    let second_team_uid = second_team.uid;
+    first_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "first-team-model".into(),
+            vec![LLMInfo::new_for_test("first-team-model")],
+            None,
+        )
+        .expect("first team model choices should be valid"),
+        ..Default::default()
+    };
+    second_team.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "second-team-model".into(),
+            vec![LLMInfo::new_for_test("second-team-model")],
+            None,
+        )
+        .expect("second team model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(
+            &mut app,
+            vec![workspace_for_teams(vec![first_team, second_team])],
+        );
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(Some(Some(second_team_uid.to_string()))))
+                .expect("the selected team should resolve");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(
+                models.info_for_id(&"second-team-model".into()).is_some(),
+                "the selected team's model should be available"
+            );
+            assert!(
+                models.info_for_id(&"first-team-model".into()).is_none(),
+                "another team's model should not be available"
+            );
+        });
+    })
+}
+
+#[test]
+fn teamless_cli_scope_reads_personal_workspace_model_choices() {
+    let mut workspace = workspace_for_teams(vec![]);
+    workspace.feature_model_choice = ModelsByFeature {
+        agent_mode: AvailableLLMs::new(
+            "personal-model".into(),
+            vec![LLMInfo::new_for_test("personal-model")],
+            None,
+        )
+        .expect("personal model choices should be valid"),
+        ..Default::default()
+    };
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+
+        app.read(|ctx| {
+            let workspaces = UserWorkspaces::as_ref(ctx);
+            let scope = workspaces
+                .team_scope_for_cli(&team_selection(None))
+                .expect("a teamless user should retain personal scope");
+            let models = &workspaces.feature_model_choice_for_scope(&scope).agent_mode;
+
+            assert!(models.info_for_id(&"personal-model".into()).is_some());
+        });
+    })
+}
 #[test]
 fn test_current_workspace_billing_metadata_uses_selected_teamless_workspace() {
     let first_team = team_for_test();
@@ -3949,7 +4203,10 @@ fn test_team_switcher_drops_teams_the_admin_is_not_a_member_of() {
             gql_team("other-team", "Other Team", &["someone-else"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -3975,7 +4232,10 @@ fn test_team_switcher_keeps_every_team_the_user_is_a_member_of() {
             gql_team("second-team", "Second Team", &["test-user"]),
         ];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4003,7 +4263,10 @@ fn test_teamless_user_falls_back_to_workspace_settings() {
         workspace.settings.llm_settings.enabled = true;
         workspace.teams = vec![gql_team("other-team", "Other Team", &["someone-else"])];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4031,7 +4294,10 @@ fn test_member_team_settings_win_over_workspace_settings() {
         team.settings.llm_settings.enabled = false;
         workspace.teams = vec![team];
 
-        apply_workspaces_metadata(&mut app, gql_user(None, vec![workspace]).into());
+        apply_workspaces_metadata(
+            &mut app,
+            workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false),
+        );
 
         app.read(|ctx| {
             let user_workspaces = UserWorkspaces::as_ref(ctx);
@@ -4088,11 +4354,13 @@ fn test_user_level_policy_survives_placeholder_filtering_for_teamless_users() {
         // The real conversion path: a teamless user's ONLY workspace is the
         // placeholder, which must stay filtered out of `workspaces`, while
         // the user-level purchase policy is captured separately.
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![gql_workspace(PLACEHOLDER_WORKSPACE_UID, None)],
+            ),
+            false,
+        );
         assert!(
             response.workspaces.is_empty(),
             "the placeholder workspace must stay filtered out"
@@ -4146,14 +4414,16 @@ fn test_workspace_policy_wins_over_user_level_policy() {
             premium_enabled: false,
             price_premium_bps: 0,
         };
-        let response: WorkspacesMetadataResponse = gql_user(
-            Some(gql_premium_purchase_policy()),
-            vec![
-                gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
-                gql_workspace("workspace_uid123456789", Some(standard_policy)),
-            ],
-        )
-        .into();
+        let response: WorkspacesMetadataResponse = workspaces_metadata_response_from_gql(
+            gql_user(
+                Some(gql_premium_purchase_policy()),
+                vec![
+                    gql_workspace(PLACEHOLDER_WORKSPACE_UID, None),
+                    gql_workspace("workspace_uid123456789", Some(standard_policy)),
+                ],
+            ),
+            false,
+        );
         assert_eq!(response.workspaces.len(), 1);
 
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
@@ -4237,7 +4507,8 @@ fn team_feature_model_choices_conversion_keeps_each_teams_choice_distinct() {
     let mut workspace = gql_workspace("workspace_uid123456789", None);
     workspace.teams = vec![team_a, team_b];
 
-    let response: WorkspacesMetadataResponse = gql_user(None, vec![workspace]).into();
+    let response: WorkspacesMetadataResponse =
+        workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
 
     assert_eq!(response.workspaces.len(), 1);
     let teams = &response.workspaces[0].teams;

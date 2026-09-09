@@ -10,7 +10,7 @@ use tempfile::{Builder as TempDirBuilder, TempDir};
 use tokio::runtime::Runtime;
 
 use super::*;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::retry::MAX_ATTEMPTS;
 use crate::ai::agent_sdk::test_support::build_test_http_client;
 use crate::ai::artifacts::Artifact;
@@ -118,13 +118,13 @@ impl TestClient {
 
 #[async_trait]
 impl HarnessSupportClient for TestClient {
-    async fn create_external_conversation(&self, _format: &str) -> Result<AIConversationId> {
+    async fn create_external_conversation(&self, _format: &str) -> Result<ServerConversationToken> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
 
     async fn get_transcript_upload_target(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }
@@ -135,7 +135,7 @@ impl HarnessSupportClient for TestClient {
 
     async fn get_block_snapshot_upload_target(
         &self,
-        _conversation_id: &AIConversationId,
+        _conversation_id: &ServerConversationToken,
     ) -> Result<UploadTarget> {
         unimplemented!("not used by upload_snapshot_from_declarations_file")
     }

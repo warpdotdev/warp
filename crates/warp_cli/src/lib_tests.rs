@@ -9,6 +9,7 @@ use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
 use crate::integration::IntegrationCommand;
 use crate::memory_store::{MemoryCommand, MemoryStoreCommand};
+use crate::runner::RunnerCommand;
 use crate::schedule::ScheduleSubcommand;
 use crate::secret::{CodexMethod, CreateProvider, SecretCommand};
 use crate::task::{MessageCommand, TaskCommand};
@@ -21,6 +22,48 @@ fn identifies_worker_subcommands() {
     #[cfg(feature = "plugin_host")]
     assert!(is_worker_invocation("--plugin-host"));
     assert!(!is_worker_invocation("--prompt"));
+}
+
+#[test]
+fn runner_list_accepts_team_uid() {
+    let args =
+        Args::try_parse_from(["warp", "runner", "list", "--team=team_uid00000000000123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp runner list` command");
+    };
+    let CliCommand::Runner(RunnerCommand::List(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp runner list` command");
+    };
+
+    assert_eq!(
+        args.team_selection.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
+}
+
+#[test]
+fn runner_name_update_accepts_bare_team_selection() {
+    let args = Args::try_parse_from([
+        "warp",
+        "runner",
+        "update",
+        "--name",
+        "runner-name",
+        "--team",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp runner update` command");
+    };
+    let CliCommand::Runner(RunnerCommand::Update(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp runner update` command");
+    };
+
+    assert!(args.id.is_none());
+    assert!(args.team_selection.is_team());
+    assert!(args.team_selection.requested_team_uid().is_none());
 }
 
 /// Pins that each pair of constants names the same variable under both prefixes. A typo in
@@ -271,6 +314,31 @@ fn agent_run_accepts_model() {
 }
 
 #[test]
+fn agent_run_accepts_team_selection() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--prompt",
+        "hello",
+        "--team=team-uid",
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    assert_eq!(
+        run_args.team_selection.requested_team_uid(),
+        Some("team-uid")
+    );
+}
+
+#[test]
 fn agent_run_accepts_hidden_bedrock_inference_role_flag() {
     let args = Args::try_parse_from([
         "warp",
@@ -483,8 +551,26 @@ fn model_list_parses() {
     let CliCommand::Model(model_cmd) = boxed_cmd.as_ref() else {
         panic!("Expected `warp model` command");
     };
+    let crate::model::ModelCommand::List(list_args) = model_cmd;
+    assert_eq!(list_args.team_selection.team, None);
+}
 
-    assert!(matches!(model_cmd, crate::model::ModelCommand::List));
+#[test]
+fn model_list_accepts_team_selection() {
+    let args =
+        Args::try_parse_from(["warp", "model", "list", "--team=team_uid00000000000123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp model list` command");
+    };
+    let CliCommand::Model(crate::model::ModelCommand::List(list_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp model list` command");
+    };
+
+    assert_eq!(
+        list_args.team_selection.requested_team_uid(),
+        Some("team_uid00000000000123")
+    );
 }
 
 #[test]
@@ -494,11 +580,24 @@ fn memory_store_list_parses() {
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
         panic!("Expected `warp memory-store list` command");
     };
-    let CliCommand::MemoryStore(memory_store_cmd) = boxed_cmd.as_ref() else {
+    let CliCommand::MemoryStore(MemoryStoreCommand::List(args)) = boxed_cmd.as_ref() else {
         panic!("Expected `warp memory-store` command");
     };
+    assert!(args.team_selection.team.is_none());
+}
 
-    assert!(matches!(memory_store_cmd, MemoryStoreCommand::List));
+#[test]
+fn memory_store_list_accepts_team_selection() {
+    let args = Args::try_parse_from(["warp", "memory-store", "list", "--team=team-123"]).unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp memory-store list` command");
+    };
+    let CliCommand::MemoryStore(MemoryStoreCommand::List(args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp memory-store list` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
 }
 
 #[test]
@@ -508,11 +607,9 @@ fn memory_stores_alias_parses() {
     let Some(Command::CommandLine(boxed_cmd)) = args.command else {
         panic!("Expected `warp memory-stores list` command");
     };
-    let CliCommand::MemoryStore(memory_store_cmd) = boxed_cmd.as_ref() else {
+    let CliCommand::MemoryStore(MemoryStoreCommand::List(_)) = boxed_cmd.as_ref() else {
         panic!("Expected `warp memory-stores` alias to parse as memory-store command");
     };
-
-    assert!(matches!(memory_store_cmd, MemoryStoreCommand::List));
 }
 
 #[test]
@@ -1337,6 +1434,53 @@ fn agent_create_accepts_prompt() {
 
     assert_eq!(args.name, "agent");
     assert_eq!(args.prompt.as_deref(), Some("base prompt"));
+}
+
+#[test]
+fn agent_list_accepts_team_selection() {
+    let parsed = Args::try_parse_from(["warp", "agent", "list", "--team=team-123"]).unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::List(args)) = boxed.as_ref() else {
+        panic!("Expected `agent list` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
+}
+
+#[test]
+fn agent_create_accepts_team_selection() {
+    let parsed = Args::try_parse_from([
+        "warp",
+        "agent",
+        "create",
+        "--name",
+        "agent",
+        "--team=team-123",
+    ])
+    .unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Create(args)) = boxed.as_ref() else {
+        panic!("Expected `agent create` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
+}
+
+#[test]
+fn agent_skills_accepts_team_selection() {
+    let parsed = Args::try_parse_from(["warp", "agent", "skills", "--team=team-123"]).unwrap();
+    let Some(Command::CommandLine(boxed)) = parsed.command else {
+        panic!("Expected a CLI command");
+    };
+    let CliCommand::Agent(AgentCommand::Skills(args)) = boxed.as_ref() else {
+        panic!("Expected `agent skills` command");
+    };
+
+    assert_eq!(args.team_selection.requested_team_uid(), Some("team-123"));
 }
 
 #[test]
@@ -2261,6 +2405,47 @@ fn environment_image_list_parses() {
     };
 
     assert!(matches!(image_cmd, ImageCommand::List));
+}
+fn parse_environment_list(args: &[&str]) -> crate::scope::ObjectScope {
+    let full_args = std::iter::once("warp")
+        .chain(["environment", "list"])
+        .chain(args.iter().copied());
+    let args = Args::try_parse_from(full_args).expect("environment list args should parse");
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp environment list` command");
+    };
+    let CliCommand::Environment(EnvironmentCommand::List { scope }) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp environment list` command");
+    };
+    scope.clone()
+}
+
+#[test]
+fn environment_list_parses_scope_filters() {
+    let all = parse_environment_list(&[]);
+    let sole_team = parse_environment_list(&["--team"]);
+    let explicit_team = parse_environment_list(&["--team=123"]);
+    let personal = parse_environment_list(&["--personal"]);
+
+    assert_eq!(all.team_selection.team, None);
+    assert!(!all.personal);
+    assert_eq!(sole_team.team_selection.team, Some(None));
+    assert!(!sole_team.personal);
+    assert_eq!(
+        explicit_team.team_selection.team,
+        Some(Some("123".to_string()))
+    );
+    assert!(!explicit_team.personal);
+    assert_eq!(personal.team_selection.team, None);
+    assert!(personal.personal);
+}
+
+#[test]
+fn environment_list_rejects_team_and_personal_selection() {
+    assert!(
+        Args::try_parse_from(["warp", "environment", "list", "--team=123", "--personal",]).is_err()
+    );
 }
 
 #[test]

@@ -30,9 +30,11 @@ use futures_util::stream::AbortHandle;
 use http::header::{AUTHORIZATION, HeaderValue};
 use instant::Instant;
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
-use warp_managed_secrets::client::{IdentityTokenOptions, ManagedSecretsClient, TaskIdentityToken};
+use warp_managed_secrets::client::{IdentityTokenOptions, TaskIdentityToken};
 use warpui::r#async::{FutureExt as _, Timer};
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
+
+use crate::server::server_api::managed_secrets::AppManagedSecretsClient;
 
 /// The environment variables form the immutable dispatch-time authentication bootstrap.
 const CLOUD_AGENT_OTLP_TOKEN: &str = "WARP_CLOUD_AGENT_OTLP_TOKEN";
@@ -353,7 +355,7 @@ impl HttpClient for AuthenticatedHttpClient {
 /// mints once so the short-lived dispatch credential is replaced as soon as possible.
 pub(super) fn start_refresh_coordinator(
     auth_context: AuthContext,
-    client: Arc<dyn ManagedSecretsClient>,
+    client: Arc<AppManagedSecretsClient>,
     ctx: &mut AppContext,
 ) {
     let Some(refresh_hint_receiver) = auth_context.take_refresh_hint_receiver() else {
@@ -377,7 +379,7 @@ pub(super) fn start_refresh_coordinator(
 struct AuthRefreshCoordinator {
     token_store: TokenStore,
     expected_run_id: Option<Arc<str>>,
-    client: Arc<dyn ManagedSecretsClient>,
+    client: Arc<AppManagedSecretsClient>,
     refresh_in_flight: bool,
     consecutive_failures: u32,
     scheduled_refresh: Option<AbortHandle>,
@@ -390,7 +392,7 @@ impl AuthRefreshCoordinator {
         token_store: TokenStore,
         expected_run_id: Option<Arc<str>>,
         refresh_hint_receiver: Receiver<()>,
-        client: Arc<dyn ManagedSecretsClient>,
+        client: Arc<AppManagedSecretsClient>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let mut coordinator = Self {

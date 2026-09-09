@@ -257,8 +257,10 @@ impl TemplatableMCPServerManager {
             } => {
                 me.purge_file_based_server_credentials(installation_hashes, ctx);
             }
-            // Notification for cloud-environment readiness; handled by the AgentDriver.
+            // Notification for cloud-environment / initial-global-scan readiness; handled by
+            // the AgentDriver.
             FileBasedMCPManagerEvent::CloudEnvMcpScanComplete { .. }
+            | FileBasedMCPManagerEvent::InitialGlobalMcpScanComplete { .. }
             | FileBasedMCPManagerEvent::ServersChanged
             | FileBasedMCPManagerEvent::ConfigDiagnosticChanged => {}
         });

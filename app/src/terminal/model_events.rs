@@ -5,7 +5,7 @@ use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity};
 
 use super::event::{BootstrappedEvent, SshLoginStatus};
 use super::model::ansi;
-use super::model::ansi::FinishUpdateValue;
+use super::model::ansi::{ExternalShellWidgetSelectionValue, FinishUpdateValue};
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::lifecycle::LifecycleTelemetryEvent;
@@ -263,6 +263,9 @@ impl ModelEventDispatcher {
             Event::HonorPS1OutOfSync => ModelEvent::HonorPS1OutOfSync,
             Event::Typeahead => ModelEvent::Typeahead,
             Event::FinishUpdate(data) => ModelEvent::FinishUpdate(data),
+            Event::ExternalShellWidgetSelection(data) => {
+                ModelEvent::ExternalShellWidgetSelection(data)
+            }
             Event::TextSelectionChanged => ModelEvent::SelectedTextChanged,
             Event::ShellSpawned(shell_type) => ModelEvent::ShellSpawned(shell_type),
             Event::ImageReceived {
@@ -447,6 +450,7 @@ pub enum ModelEvent {
     /// inaccessible to views/models.
     Handler(AnsiHandlerEvent),
     FinishUpdate(FinishUpdateValue),
+    ExternalShellWidgetSelection(ExternalShellWidgetSelectionValue),
     SelectedTextChanged,
     ShellSpawned(ShellType),
     CompletionsFinished(Vec<ShellCompletion>, Option<warp_completer::meta::Span>),

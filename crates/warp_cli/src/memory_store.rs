@@ -1,10 +1,12 @@
 use clap::{Args, Subcommand};
 
+use crate::scope::TeamSelection;
+
 /// Memory store related subcommands.
 #[derive(Debug, Clone, Subcommand)]
 pub enum MemoryStoreCommand {
     /// List memory stores.
-    List,
+    List(ListMemoryStoresArgs),
     /// Get details of a single memory store.
     #[command(name = "get", alias = "get-store")]
     Get(GetStoreArgs),
@@ -14,6 +16,12 @@ pub enum MemoryStoreCommand {
     /// List agents attached to a memory store.
     #[command(name = "list-store-agents", visible_alias = "store-agents")]
     ListStoreAgents(ListStoreAgentsArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ListMemoryStoresArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 }
 /// Memory related subcommands.
 #[derive(Debug, Clone, Subcommand)]
@@ -124,7 +132,7 @@ pub struct ListVersionsArgs {
 impl MemoryStoreCommand {
     pub(crate) fn as_str_for_tracing(&self) -> &'static str {
         match self {
-            MemoryStoreCommand::List => "memory-store list",
+            MemoryStoreCommand::List(_) => "memory-store list",
             MemoryStoreCommand::Get(_) => "memory-store get",
             MemoryStoreCommand::Update(_) => "memory-store update",
             MemoryStoreCommand::ListStoreAgents(_) => "memory-store list-store-agents",

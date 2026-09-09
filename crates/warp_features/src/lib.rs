@@ -970,7 +970,8 @@ pub enum FeatureFlag {
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
-    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    /// `--no-snapshot` is set. Enabled for dogfood and preview builds while the
+    /// coordinator bakes ahead of a stable rollout.
     PeriodicHandoffCheckpoints,
 
     /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
@@ -982,10 +983,24 @@ pub enum FeatureFlag {
     /// signaled or torn down.
     CtrlCCancelsThirdPartyHarness,
 
+    /// Uses fzf or atuin for history search instead of Warp's command search.
+    ShellWidgetHandoff,
+
     /// Attaches process-tree liveness signals to long-running command
     /// snapshots, giving the agent evidence that a silent command is still
     /// doing work before it decides to cancel.
     LrcActivitySignal,
+
+    /// Gates Ctrl+R / Command Search history ranking on match quality and usage priors (recency,
+    /// session, exit status) plus whitespace space-AND tokenization, instead of Skim's raw
+    /// fuzzy-match score against the whole query as a single pattern. Disabling this is a full
+    /// return to the pre-APP-5650 history search behavior, not an approximation of it.
+    HistorySearchRankingV2,
+
+    /// Advertises client support for server-issued task-message updates that
+    /// replace inline computer-use screenshot bytes with references to
+    /// Warp-managed object storage.
+    StoredScreenshots,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1050,7 +1065,6 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GPTConfigurableContextWindow,
-    FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
@@ -1059,15 +1073,20 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
     FeatureFlag::PricingTransparency,
-    FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::CtrlCCancelsThirdPartyHarness,
     FeatureFlag::WarpingModelName,
     FeatureFlag::LrcActivitySignal,
+    FeatureFlag::StoredScreenshots,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::NativeShellCompletions];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
+    FeatureFlag::NativeShellCompletions,
+    FeatureFlag::ShellWidgetHandoff,
+    FeatureFlag::HistorySearchRankingV2,
+    FeatureFlag::PeriodicHandoffCheckpoints,
+];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely

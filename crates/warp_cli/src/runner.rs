@@ -1,7 +1,7 @@
 use clap::{ArgAction, ArgGroup, Args, Subcommand, ValueEnum};
 
 use crate::json_filter::JsonOutput;
-use crate::scope::ObjectScope;
+use crate::scope::{ObjectScope, TeamSelection};
 
 /// Maximum length for runner descriptions.
 const MAX_DESCRIPTION_LENGTH: usize = 240;
@@ -87,6 +87,8 @@ impl RunnerCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct ListRunnersArgs {
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
     /// Sort field.
     #[arg(long = "sort-by", value_enum, value_name = "FIELD")]
     pub sort_by: Option<RunnerSortByArg>,
@@ -184,6 +186,9 @@ pub struct UpdateRunnerArgs {
     /// Memory in GB for the instance shape. Can be set independently of --vcpus (the other value is preserved).
     #[arg(long = "memory-gb")]
     pub memory_gb: Option<i32>,
+
+    #[command(flatten)]
+    pub team_selection: TeamSelection,
 }
 
 #[derive(Debug, Clone, Args)]

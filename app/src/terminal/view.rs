@@ -420,7 +420,7 @@ use crate::terminal::input::inline_menu::InlineMenuPositioner;
 use crate::terminal::input::slash_commands::fork_button_action;
 use crate::terminal::input::{
     CommandExecutionSource, InputAction, InputEmptyStateChangeReason, InputState, MenuPositioning,
-    MenuPositioningProvider,
+    MenuPositioningProvider, ShellWidgetApplyMode,
 };
 use crate::terminal::keys::TerminalKeybindings;
 use crate::terminal::ligature_settings::{LigatureSettings, should_use_ligature_rendering};
@@ -718,6 +718,28 @@ pub const DEFAULT_ASK_AI_AUTOSUGGESTION_TEXT: &str = "What happened here?";
 
 const WARP_MD_PATH: &str = "WARP.md";
 
+/// `shell_plugins` tag reported by bootstrap when the shell's `^R` binding has been rebound away
+/// from its default reverse-history-search widget (e.g. by fzf or atuin). Must match the tag
+/// name used in `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG: &str = "external_ctrl_r_history";
+
+/// `shell_plugins` tag reported by bootstrap when the shell's `^T` binding has been rebound away
+/// from its default line-editor binding to an external file-search widget (e.g. fzf). Independent
+/// of [`EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG`] -- a shell can have either, both, or neither, since
+/// each binding is detected and reported on its own. Must match the tag name used in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_T_FILE_PLUGIN_TAG: &str = "external_ctrl_t_file";
+
+/// Name of the bootstrap-installed shell function invoked to hand ctrl-r off to the shell's
+/// own external history widget. Must match the function name defined in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_R_HELPER_COMMAND: &str = "warp_run_external_ctrl_r_widget";
+
+/// Name of the bootstrap-installed shell function invoked to hand ctrl-t off to the shell's own
+/// external file-search widget. Must match the function name defined in
+/// `app/assets/bundled/bootstrap/zsh_body.sh`.
+const EXTERNAL_CTRL_T_HELPER_COMMAND: &str = "warp_run_external_ctrl_t_widget";
+
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY: &str = "LongRunningRequestedCommand";
 pub const LONG_RUNNING_AGENT_REQUESTED_COMMAND_USER_TOOK_OVER_CONTEXT_KEY: &str =
     "LongRunningRequestedUserTookOverCommand";
@@ -817,6 +839,7 @@ impl NotificationsTrigger {
             }
         }
     }
+
     /// Notifications have the following format
     /// - title: "'{start_of_command}...' {trigger_specific_details}"
     /// - body: "{additional_context} ...{end_of_output}"
@@ -2915,6 +2938,7 @@ pub struct TerminalView {
 
     /// First-time cloud agent setup view (full-screen overlay for creating initial environment).
     first_time_cloud_agent_setup_view: ViewHandle<ambient_agent::FirstTimeCloudAgentSetupView>,
+    cloud_agent_team_required_view: ViewHandle<ambient_agent::CloudAgentTeamRequiredView>,
 
     /// Environment setup mode selector modal for /create-environment command.
     environment_setup_mode_selector: ViewHandle<EnvironmentSetupModeSelector>,
@@ -3004,6 +3028,17 @@ enum BlockMetadataUpdateSource {
     /// the CWD actually changed, and never run block-completion callbacks
     /// (the block hasn't completed).
     Osc7,
+}
+
+pub(crate) fn file_attach_allowed_for_shared_session(
+    shared_session_status: &SharedSessionStatus,
+    ambient_agent_view_model: Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>>,
+    ctx: &AppContext,
+) -> bool {
+    let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
+        && ambient_agent_view_model.is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
+    AgentToolbarItemKind::FileAttach
+        .available_to_session_viewer(shared_session_status, is_cloud_mode)
 }
 
 impl TerminalView {
@@ -3705,6 +3740,7 @@ impl TerminalView {
         ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
             if matches!(event, UserWorkspacesEvent::TeamsChanged) {
                 me.update_focused_terminal_info(ctx);
+                ctx.notify();
             }
         });
 
@@ -4223,6 +4259,12 @@ impl TerminalView {
             me.handle_first_time_cloud_agent_setup_event(event, ctx);
         });
 
+        let cloud_agent_team_required_view =
+            ctx.add_typed_action_view(ambient_agent::CloudAgentTeamRequiredView::new);
+        ctx.subscribe_to_view(&cloud_agent_team_required_view, |me, _, event, ctx| {
+            me.handle_cloud_agent_team_required_view_event(event, ctx);
+        });
+
         let environment_setup_mode_selector =
             ctx.add_typed_action_view(EnvironmentSetupModeSelector::new);
 
@@ -4479,6 +4521,7 @@ impl TerminalView {
             is_pending_aws_login: false,
             manual_pty_shutdown_requested: false,
             first_time_cloud_agent_setup_view,
+            cloud_agent_team_required_view,
             environment_setup_mode_selector,
             is_environment_setup_mode_selector_open: false,
             pane_stack: None,
@@ -4975,6 +5018,18 @@ impl TerminalView {
             self.agent_view_controller.update(ctx, |controller, ctx| {
                 controller.exit_agent_view(ctx);
             });
+        }
+    }
+
+    fn handle_cloud_agent_team_required_view_event(
+        &mut self,
+        event: &ambient_agent::CloudAgentTeamRequiredViewEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ambient_agent::CloudAgentTeamRequiredViewEvent::OpenTeamsSettings => {
+                ctx.emit(Event::OpenSettings(SettingsSection::Teams));
+            }
         }
     }
 
@@ -8031,6 +8086,26 @@ impl TerminalView {
         self.ambient_agent_view_model.as_ref()
     }
 
+    fn is_in_agent_or_cli_attach_context(&self, app: &AppContext) -> bool {
+        let agent_view_state = self.agent_view_controller.as_ref(app).agent_view_state();
+        agent_view_state.is_fullscreen()
+            || agent_view_state.is_inline()
+            || CLIAgentSessionsModel::as_ref(app)
+                .session(self.view_id)
+                .is_some()
+    }
+
+    fn can_attach_file(&self, app: &AppContext) -> bool {
+        self.is_in_agent_or_cli_attach_context(app) && {
+            let status = self.model.lock().shared_session_status().clone();
+            file_attach_allowed_for_shared_session(
+                &status,
+                self.ambient_agent_view_model.as_ref(),
+                app,
+            )
+        }
+    }
+
     /// Ensures this pane has an [`ambient_agent::AmbientAgentViewModel`], creating and wiring
     /// it into the input if absent. Idempotent: returns the existing model when already
     /// present (the upfront cloud-mode construction path). Used by both the upfront and
@@ -9193,6 +9268,99 @@ impl TerminalView {
             && !model.is_read_only()
     }
 
+    /// If ctrl-r was pressed at an idle prompt on a session whose shell has rebound `^R` away
+    /// from its default reverse-history-search widget (reported via the
+    /// [`EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG`] shell plugin tag, e.g. by fzf or atuin), hands the
+    /// keypress off to that widget instead of opening Warp's own command search.
+    ///
+    /// Returns `true` if the handoff was triggered, in which case the caller should not open
+    /// Warp's command search.
+    pub fn maybe_trigger_external_ctrl_r_history_search(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !FeatureFlag::ShellWidgetHandoff.is_enabled() || self.is_long_running() {
+            return false;
+        }
+        let Some(session_id) = self.active_block_session_id() else {
+            return false;
+        };
+        let has_external_ctrl_r_widget =
+            self.sessions
+                .as_ref(ctx)
+                .get(session_id)
+                .is_some_and(|session| {
+                    session
+                        .shell()
+                        .plugins()
+                        .contains(EXTERNAL_CTRL_R_HISTORY_PLUGIN_TAG)
+                });
+        if !has_external_ctrl_r_widget || self.model.lock().is_alt_screen_active() {
+            return false;
+        }
+
+        self.input.update(ctx, |input, ctx| {
+            input.trigger_external_shell_widget_handoff(
+                EXTERNAL_CTRL_R_HELPER_COMMAND,
+                ShellWidgetApplyMode::Replace,
+                false, /* capture_cursor */
+                ctx,
+            )
+        })
+    }
+
+    /// If ctrl-t was pressed at an idle prompt on a session whose shell has rebound `^T` to an
+    /// external file-search widget (reported via the [`EXTERNAL_CTRL_T_FILE_PLUGIN_TAG`] shell
+    /// plugin tag, e.g. by fzf), hands the keypress off to that widget. Mirrors
+    /// [`Self::maybe_trigger_external_ctrl_r_history_search`], but lands the selection either by
+    /// inserting it into the input editor at the cursor position or by replacing the whole
+    /// buffer, depending on the session's shell; see [`Input::trigger_external_shell_widget_handoff`]
+    /// and [`ShellWidgetApplyMode`].
+    ///
+    /// Returns `true` if the handoff was triggered, in which case the caller should not pass
+    /// ctrl-t through to the pty or handle it any other way.
+    pub fn maybe_trigger_external_ctrl_t_file_search(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        if !FeatureFlag::ShellWidgetHandoff.is_enabled() || self.is_long_running() {
+            return false;
+        }
+        let Some(session_id) = self.active_block_session_id() else {
+            return false;
+        };
+        let Some(session) = self.sessions.as_ref(ctx).get(session_id) else {
+            return false;
+        };
+        if !session
+            .shell()
+            .plugins()
+            .contains(EXTERNAL_CTRL_T_FILE_PLUGIN_TAG)
+            || self.model.lock().is_alt_screen_active()
+        {
+            return false;
+        }
+        // fish invokes the user's real `fzf-file-widget` directly, which already performs its
+        // own token-aware replacement and so returns the whole new line; bash/zsh's helper
+        // instead searches independently of the draft and reports a plain path to splice in at
+        // the cursor. See `ShellWidgetApplyMode` and the fish/bash/zsh helper implementations.
+        let apply_mode = match session.shell().shell_type() {
+            ShellType::Fish => ShellWidgetApplyMode::Replace,
+            ShellType::Bash | ShellType::Zsh | ShellType::PowerShell => {
+                ShellWidgetApplyMode::Splice
+            }
+        };
+
+        self.input.update(ctx, |input, ctx| {
+            input.trigger_external_shell_widget_handoff(
+                EXTERNAL_CTRL_T_HELPER_COMMAND,
+                apply_mode,
+                true, /* capture_cursor */
+                ctx,
+            )
+        })
+    }
+
     /// Returns `true` when an interactive SSH command has been detected at
     /// preexec and the SSH block is still running (long-running). Used by
     /// the workspace to derive `PendingRemoteSession` without storing
@@ -9479,7 +9647,7 @@ impl TerminalView {
     /// Also calls logic to emit a sync event. Returns whether the bytes were
     /// actually forwarded to the PTY: `false` when the active block is under
     /// agent control, in which case nothing is written.
-    fn write_user_bytes_to_pty<B: Into<Cow<'static, [u8]>>>(
+    pub(crate) fn write_user_bytes_to_pty<B: Into<Cow<'static, [u8]>>>(
         &mut self,
         data: B,
         ctx: &mut ViewContext<Self>,
@@ -12165,13 +12333,14 @@ impl TerminalView {
                                         },
                                     );
 
-                                    // Codex doesn't use the sentinel-based plugin protocol,
-                                    // so create the listener proactively on command detection
-                                    // (rather than waiting for a SessionStart event).
-                                    if matches!(detection, Some((CLIAgent::Codex, _))) {
+                                    // Codex and Grok use OSC 9 (and optional rich OSC 777)
+                                    // without requiring a SessionStart sentinel first, so
+                                    // create the listener proactively on command detection.
+                                    if let Some((agent @ (CLIAgent::Codex | CLIAgent::Grok), _)) =
+                                        detection
+                                    {
                                         me.register_cli_agent_listener_without_session_start_event(
-                                            CLIAgent::Codex,
-                                            ctx,
+                                            agent, ctx,
                                         );
                                     }
 
@@ -12878,6 +13047,15 @@ impl TerminalView {
                     log::warn!("Got a FinishUpdate event with non-matching update id!");
                 }
             }
+            ModelEvent::ExternalShellWidgetSelection(data) => {
+                if FeatureFlag::ShellWidgetHandoff.is_enabled()
+                    && let Some(session_id) = data.session_id.map(SessionId::from)
+                {
+                    self.input.update(ctx, |input, _ctx| {
+                        input.set_external_shell_widget_selection(session_id, &data.buffer);
+                    });
+                }
+            }
             ModelEvent::SelectedTextChanged => {
                 ctx.emit(Event::SelectedTextChanged);
             }
@@ -13435,8 +13613,8 @@ impl TerminalView {
         &self,
         ctx: &AppContext,
     ) -> Option<AIConversationId> {
-        let task_id =
-            LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
+        let task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+            .cli_harness_task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
 
         let history_model = BlocklistAIHistoryModel::as_ref(ctx);
@@ -26941,6 +27119,7 @@ impl TypedActionView for TerminalView {
             | DeleteAttachment { .. }
             | OpenAttachmentLightbox { .. }
             | WriteCodebaseIndex
+            | AttachFile
             | ToggleAutoexecuteMode
             | ToggleQueueNextPrompt
             | ToggleTodoPopup
@@ -27656,6 +27835,14 @@ impl TypedActionView for TerminalView {
             }
             WriteCodebaseIndex => {
                 self.write_codebase_index(ctx);
+            }
+            AttachFile => {
+                if !self.can_attach_file(ctx) {
+                    return;
+                }
+                self.input.update(ctx, |input, ctx| {
+                    input.attach_file(ctx);
+                });
             }
             ToggleAutoexecuteMode => {
                 // Cloud (ambient) agent conversations run with fast-forward conceptually
@@ -28624,12 +28811,22 @@ impl View for TerminalView {
             stack.add_child(ChildView::new(sharer.inactivity_modal()).finish())
         }
 
-        // Render first-time cloud agent setup view when in Setup status
-        if self
+        let cloud_agents_require_team = UserWorkspaces::as_ref(app).cloud_agents_require_team();
+        let (is_in_setup, is_configuring) = self
             .ambient_agent_view_model
             .as_ref()
-            .is_some_and(|model| model.as_ref(app).is_in_setup())
-        {
+            .map(|model| {
+                let model = model.as_ref(app);
+                (model.is_in_setup(), model.is_configuring_ambient_agent())
+            })
+            .unwrap_or_default();
+        if ambient_agent::should_render_cloud_agent_team_required_view(
+            cloud_agents_require_team,
+            is_in_setup,
+            is_configuring,
+        ) {
+            stack.add_child(ChildView::new(&self.cloud_agent_team_required_view).finish());
+        } else if is_in_setup {
             stack.add_child(ChildView::new(&self.first_time_cloud_agent_setup_view).finish());
         }
 
@@ -28798,6 +28995,14 @@ impl View for TerminalView {
             } else if agent_view_state.is_inline() {
                 context.set.insert(flags::ACTIVE_INLINE_AGENT_VIEW);
             }
+        }
+
+        if file_attach_allowed_for_shared_session(
+            model_lock.shared_session_status(),
+            self.ambient_agent_view_model.as_ref(),
+            app,
+        ) {
+            context.set.insert(init::CAN_ATTACH_FILE_KEY);
         }
 
         if self.is_ambient_agent_session(app) && !self.is_nested_cloud_mode(app) {

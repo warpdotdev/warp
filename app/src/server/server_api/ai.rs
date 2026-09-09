@@ -10,7 +10,6 @@ use ai::index::full_source_code_embedding::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use base64::Engine;
-#[cfg(not(target_family = "wasm"))]
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use cloud_object_models::CodeForge;
@@ -24,6 +23,7 @@ use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::client::Operation;
+use warp_graphql::error::{UserFacingError, UserFacingErrorInterface};
 use warp_graphql::mutations::confirm_file_artifact_upload::{
     ConfirmFileArtifactUpload, ConfirmFileArtifactUploadInput, ConfirmFileArtifactUploadResult,
     ConfirmFileArtifactUploadVariables,
@@ -72,6 +72,7 @@ use warp_graphql::mutations::update_merkle_tree::{
     MerkleTreeNode, UpdateMerkleTree, UpdateMerkleTreeInput, UpdateMerkleTreeResult,
     UpdateMerkleTreeVariables,
 };
+use warp_graphql::platform_error::PlatformErrorInfo;
 use warp_graphql::queries::codebase_context_config::{
     CodebaseContextConfigQuery, CodebaseContextConfigResult, CodebaseContextConfigVariables,
 };
@@ -161,6 +162,7 @@ use crate::ai_assistant::{AIGeneratedCommand, GenerateCommandsFromNaturalLanguag
 use crate::drive::workflows::ai_assist::{GeneratedCommandMetadata, GeneratedCommandMetadataError};
 use crate::persistence::model::ConversationUsageMetadata;
 use crate::server::graphql::{get_request_context, get_user_facing_error_message};
+use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::model::block::SerializedBlock;
 #[cfg(not(feature = "agent_mode_evals"))]
 use crate::{
@@ -174,7 +176,56 @@ const AI_ASSISTANT_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub struct TaskStatusUpdate {
     pub message: String,
     pub error_code: Option<PlatformErrorCode>,
+    pub platform_error: Option<Box<PlatformErrorInfo>>,
 }
+
+/// Error fetching git credentials for a task, either a structured platform error
+/// (potentially retryable) or a request-layer failure (workload-token issuance,
+/// network transport).
+#[derive(Debug, thiserror::Error)]
+pub enum TaskGitCredentialsError {
+    #[error("{message}")]
+    Platform {
+        message: String,
+        detail: Option<String>,
+        info: PlatformErrorInfo,
+    },
+    #[error("{message}")]
+    Unstructured { message: String },
+    #[error("Failed to fetch task git credentials")]
+    Request(#[source] anyhow::Error),
+}
+
+impl TaskGitCredentialsError {
+    pub(crate) fn from_user_facing(error: UserFacingError) -> Self {
+        let UserFacingError {
+            error,
+            response_context,
+        } = error;
+        match error {
+            UserFacingErrorInterface::PlatformError(error) => Self::Platform {
+                message: error.message,
+                detail: error.detail,
+                info: error.info.into(),
+            },
+            error => Self::Unstructured {
+                message: get_user_facing_error_message(UserFacingError {
+                    error,
+                    response_context,
+                }),
+            },
+        }
+    }
+}
+
+fn agent_task_status_message_input(update: TaskStatusUpdate) -> AgentTaskStatusMessageInput {
+    AgentTaskStatusMessageInput {
+        message: update.message,
+        error_code: update.error_code,
+        error: update.platform_error.map(|info| (*info).into()),
+    }
+}
+
 fn public_api_user_query_mode(mode: UserQueryMode) -> &'static str {
     match mode {
         UserQueryMode::Normal => "normal",
@@ -199,6 +250,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: None,
+            platform_error: None,
         }
     }
 
@@ -207,6 +259,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: Some(error_code),
+            platform_error: None,
         }
     }
 }
@@ -1226,6 +1279,7 @@ pub trait AIClient: 'static + Send + Sync {
     async fn get_available_harnesses(&self) -> Result<Vec<HarnessAvailability>, anyhow::Error>;
     async fn list_connected_self_hosted_workers(
         &self,
+        team_scope: RequestTeamScope,
     ) -> Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error>;
 
     /// Fetches the free-tier available models without requiring authentication.
@@ -1262,6 +1316,7 @@ pub trait AIClient: 'static + Send + Sync {
         environment_uid: Option<String>,
         parent_run_id: Option<String>,
         config: Option<AgentConfigSnapshot>,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error>;
 
     /// Updates a run's server-side record. Every argument is independently optional; omitted
@@ -1284,6 +1339,7 @@ pub trait AIClient: 'static + Send + Sync {
     async fn spawn_agent(
         &self,
         request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error>;
 
     /// Allocate an initial snapshot token and presigned upload URLs for staging local-to-cloud
@@ -1311,6 +1367,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error>;
 
     /// List agent runs and return the raw server JSON response.
@@ -1318,6 +1375,7 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
     async fn get_ambient_agent_task(
@@ -1396,11 +1454,18 @@ pub trait AIClient: 'static + Send + Sync {
     async fn list_skills(
         &self,
         repo: Option<String>,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<Vec<AgentSkillItem>, anyhow::Error>;
 
-    async fn list_agents(&self) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error>;
+    async fn list_agents(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error>;
 
-    async fn list_agents_raw(&self) -> anyhow::Result<serde_json::Value, anyhow::Error>;
+    async fn list_agents_raw(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
     async fn get_agent(&self, uid: &str) -> anyhow::Result<AgentResponse, anyhow::Error>;
 
@@ -1409,11 +1474,13 @@ pub trait AIClient: 'static + Send + Sync {
     async fn create_agent(
         &self,
         request: CreateAgentRequest,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<AgentResponse, anyhow::Error>;
 
     async fn create_agent_raw(
         &self,
         request: CreateAgentRequest,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error>;
 
     async fn update_agent(
@@ -1430,7 +1497,10 @@ pub trait AIClient: 'static + Send + Sync {
 
     async fn delete_agent(&self, uid: &str) -> anyhow::Result<(), anyhow::Error>;
 
-    async fn list_memory_stores(&self) -> anyhow::Result<Vec<MemoryStoreItem>, anyhow::Error>;
+    async fn list_memory_stores(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<Vec<MemoryStoreItem>, anyhow::Error>;
 
     async fn list_memory_store_memories(
         &self,
@@ -1488,7 +1558,7 @@ pub trait AIClient: 'static + Send + Sync {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error>;
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError>;
 
     /// Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
     /// session, called by the sharer with its own workload token. Anything short of `Ok(true)`
@@ -1520,6 +1590,14 @@ pub trait AIClient: 'static + Send + Sync {
         &self,
         artifact_uid: &str,
     ) -> anyhow::Result<ArtifactDownloadResponse, anyhow::Error>;
+
+    /// Downloads the bytes of a computer-use screenshot stored in Warp-managed
+    /// object storage. Requires view access to the conversation.
+    async fn download_stored_screenshot(
+        &self,
+        conversation_id: &str,
+        screenshot_uid: &str,
+    ) -> anyhow::Result<Bytes, anyhow::Error>;
 
     async fn prepare_attachments_for_upload(
         &self,
@@ -1618,6 +1696,22 @@ fn into_file_artifact_record(
 }
 
 impl ServerApi {
+    async fn get_public_api_with_team_scope<R>(
+        &self,
+        path: &str,
+        request_team_scope: Option<RequestTeamScope>,
+    ) -> anyhow::Result<R>
+    where
+        R: serde::de::DeserializeOwned,
+    {
+        self.base_client
+            .get_public_api_for_team(
+                path,
+                request_team_scope.and_then(RequestTeamScope::team_uid),
+            )
+            .await
+    }
+
     pub(crate) async fn send_agent_message_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
@@ -1688,7 +1782,7 @@ impl ServerApi {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsVariables {
             input: TaskGitCredentialsInput {
                 task_id: cynic::Id::new(task_id),
@@ -1698,7 +1792,10 @@ impl ServerApi {
             request_context: get_request_context(),
         };
         let operation = TaskGitCredentials::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         match response.task_git_credentials {
             TaskGitCredentialsResult::TaskGitCredentialsOutput(output) => {
@@ -1712,11 +1809,11 @@ impl ServerApi {
                 })
             }
             TaskGitCredentialsResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(TaskGitCredentialsError::from_user_facing(error))
             }
-            TaskGitCredentialsResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
+            TaskGitCredentialsResult::Unknown => Err(TaskGitCredentialsError::Request(anyhow!(
+                "Unknown taskGitCredentials response"
+            ))),
         }
     }
 
@@ -1724,7 +1821,7 @@ impl ServerApi {
         &self,
         task_id: String,
         workload_token: String,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         let variables = TaskGitCredentialsLegacyVariables {
             input: TaskGitCredentialsLegacyInput {
                 task_id: cynic::Id::new(task_id),
@@ -1733,7 +1830,10 @@ impl ServerApi {
             request_context: get_request_context(),
         };
         let operation = TaskGitCredentialsLegacy::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request(operation, None)
+            .await
+            .map_err(TaskGitCredentialsError::Request)?;
 
         match response.task_git_credentials {
             TaskGitCredentialsLegacyResult::TaskGitCredentialsOutput(output) => {
@@ -1747,11 +1847,11 @@ impl ServerApi {
                 })
             }
             TaskGitCredentialsLegacyResult::UserFacingError(error) => {
-                Err(anyhow!(get_user_facing_error_message(error)))
+                Err(TaskGitCredentialsError::from_user_facing(error))
             }
-            TaskGitCredentialsLegacyResult::Unknown => {
-                Err(anyhow!("Failed to fetch task git credentials"))
-            }
+            TaskGitCredentialsLegacyResult::Unknown => Err(TaskGitCredentialsError::Request(
+                anyhow!("Unknown taskGitCredentials response"),
+            )),
         }
     }
 }
@@ -1767,7 +1867,10 @@ fn into_git_credential(
     }
 }
 
-fn is_unknown_git_credential_schema_error(error: &anyhow::Error) -> bool {
+fn is_unknown_git_credential_schema_error(error: &TaskGitCredentialsError) -> bool {
+    let TaskGitCredentialsError::Request(error) = error else {
+        return false;
+    };
     let message = error.to_string();
     let names_partial_refresh_field =
         message.contains("failedHosts") || message.contains("acceptsPartialRefresh");
@@ -2258,6 +2361,7 @@ impl AIClient for ServerApi {
         environment_uid: Option<String>,
         parent_run_id: Option<String>,
         config: Option<AgentConfigSnapshot>,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<AmbientAgentTaskId, anyhow::Error> {
         if let Some(config) = &config {
             if let Some(worker_host) = &config.worker_host {
@@ -2289,7 +2393,9 @@ impl AIClient for ServerApi {
         };
 
         let operation = CreateAgentTask::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
+        let response = self
+            .send_graphql_request_for_team(operation, team_scope)
+            .await?;
 
         match response.create_agent_task {
             CreateAgentTaskResult::CreateAgentTaskOutput(output) => output
@@ -2328,10 +2434,7 @@ impl AIClient for ServerApi {
                 task_state,
                 session_id: session_id.map(|id| id.to_string().into()),
                 conversation_id: conversation_id.map(|id| id.into()),
-                status_message: status_message.map(|update| AgentTaskStatusMessageInput {
-                    message: update.message,
-                    error_code: update.error_code,
-                }),
+                status_message: status_message.map(agent_task_status_message_input),
                 session_debug_until: session_debug_until.map(Into::into),
                 debug_agent_active,
             },
@@ -2353,15 +2456,20 @@ impl AIClient for ServerApi {
     async fn spawn_agent(
         &self,
         request: SpawnAgentRequest,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<SpawnAgentResponse, anyhow::Error> {
-        let response: SpawnAgentResponse = self.post_public_api("agent/run", &request).await?;
+        debug_assert_eq!(request.team, Some(team_scope.team_uid().is_some()));
+        let response: SpawnAgentResponse = self
+            .post_public_api_for_team("agent/run", &request, team_scope)
+            .await?;
         Ok(response)
     }
 
     async fn list_connected_self_hosted_workers(
         &self,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<ListConnectedSelfHostedWorkersResponse, anyhow::Error> {
-        self.get_public_api(CONNECTED_SELF_HOSTED_WORKERS_PATH)
+        self.get_public_api_for_team(CONNECTED_SELF_HOSTED_WORKERS_PATH, team_scope)
             .await
     }
 
@@ -2403,9 +2511,12 @@ impl AIClient for ServerApi {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<Vec<AmbientAgentTask>, anyhow::Error> {
         let url = build_list_agent_runs_url(limit, &filter);
-        let response: ListRunsResponse = self.get_public_api(&url).await?;
+        let response: ListRunsResponse = self
+            .get_public_api_with_team_scope(&url, request_team_scope)
+            .await?;
         Ok(response.runs)
     }
 
@@ -2413,9 +2524,12 @@ impl AIClient for ServerApi {
         &self,
         limit: i32,
         filter: TaskListFilter,
+        request_team_scope: Option<RequestTeamScope>,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
         let url = build_list_agent_runs_url(limit, &filter);
-        let response: serde_json::Value = self.get_public_api(&url).await?;
+        let response: serde_json::Value = self
+            .get_public_api_with_team_scope(&url, request_team_scope)
+            .await?;
         Ok(response)
     }
 
@@ -2645,16 +2759,22 @@ impl AIClient for ServerApi {
     async fn list_skills(
         &self,
         repo: Option<String>,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<Vec<AgentSkillItem>, anyhow::Error> {
         let path = match repo {
             Some(repo) => format!("agent?repo={}", urlencoding::encode(&repo)),
             None => "agent".to_string(),
         };
-        let response: ListSkillsResponse = self.get_public_api(&path).await?;
+        let response: ListSkillsResponse = self.get_public_api_for_team(&path, team_scope).await?;
         Ok(response.agents)
     }
-    async fn list_memory_stores(&self) -> anyhow::Result<Vec<MemoryStoreItem>, anyhow::Error> {
-        let response: ListMemoryStoresResponse = self.get_public_api("memory_stores").await?;
+    async fn list_memory_stores(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<Vec<MemoryStoreItem>, anyhow::Error> {
+        let response: ListMemoryStoresResponse = self
+            .get_public_api_for_team("memory_stores", team_scope)
+            .await?;
         Ok(response.memory_stores)
     }
 
@@ -2755,13 +2875,21 @@ impl AIClient for ServerApi {
         Ok(response.versions)
     }
 
-    async fn list_agents(&self) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error> {
-        let response: ListAgentsResponse = self.get_public_api("agent/identities").await?;
+    async fn list_agents(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<Vec<AgentResponse>, anyhow::Error> {
+        let response: ListAgentsResponse = self
+            .get_public_api_for_team("agent/identities", team_scope)
+            .await?;
         Ok(response.agents)
     }
-
-    async fn list_agents_raw(&self) -> anyhow::Result<serde_json::Value, anyhow::Error> {
-        self.get_public_api("agent/identities").await
+    async fn list_agents_raw(
+        &self,
+        team_scope: RequestTeamScope,
+    ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
+        self.get_public_api_for_team("agent/identities", team_scope)
+            .await
     }
 
     async fn get_agent(&self, uid: &str) -> anyhow::Result<AgentResponse, anyhow::Error> {
@@ -2775,15 +2903,19 @@ impl AIClient for ServerApi {
     async fn create_agent(
         &self,
         request: CreateAgentRequest,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<AgentResponse, anyhow::Error> {
-        self.post_public_api("agent/identities", &request).await
+        self.post_public_api_for_team("agent/identities", &request, team_scope)
+            .await
     }
 
     async fn create_agent_raw(
         &self,
         request: CreateAgentRequest,
+        team_scope: RequestTeamScope,
     ) -> anyhow::Result<serde_json::Value, anyhow::Error> {
-        self.post_public_api("agent/identities", &request).await
+        self.post_public_api_for_team("agent/identities", &request, team_scope)
+            .await
     }
 
     async fn update_agent(
@@ -2821,7 +2953,7 @@ impl AIClient for ServerApi {
         task_id: String,
         workload_token: String,
         accepts_partial_refresh: bool,
-    ) -> anyhow::Result<TaskGitCredentialsResponse, anyhow::Error> {
+    ) -> Result<TaskGitCredentialsResponse, TaskGitCredentialsError> {
         match self
             .get_task_git_credentials_current(
                 task_id.clone(),
@@ -3000,6 +3132,27 @@ impl AIClient for ServerApi {
             .get_public_api(&format!("agent/artifacts/{artifact_uid}"))
             .await?;
         Ok(response)
+    }
+
+    async fn download_stored_screenshot(
+        &self,
+        conversation_id: &str,
+        screenshot_uid: &str,
+    ) -> anyhow::Result<Bytes, anyhow::Error> {
+        // The endpoint redirects to a short-lived signed URL, which the HTTP
+        // client follows transparently. Strip that URL from body-read errors so
+        // it cannot leak into logs or Sentry breadcrumbs.
+        let response = self
+            .get_public_api_response(&format!(
+                "agent/conversations/{}/screenshots/{}/download",
+                urlencoding::encode(conversation_id),
+                urlencoding::encode(screenshot_uid)
+            ))
+            .await?;
+        response
+            .bytes()
+            .await
+            .map_err(|error| anyhow::Error::new(error.without_url()))
     }
 
     async fn prepare_attachments_for_upload(

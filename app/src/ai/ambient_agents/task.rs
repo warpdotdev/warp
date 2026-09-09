@@ -8,6 +8,7 @@ use iso8601_duration::Duration as Iso8601Duration;
 use serde::{Deserialize, Serialize};
 use session_sharing_protocol::common::SessionId;
 use url::Url;
+use warp_cli::agent::Harness;
 use warp_core::ui::theme::WarpTheme;
 use warp_errors::report_error;
 use warpui::color::ColorU;
@@ -369,6 +370,26 @@ impl AmbientAgentTask {
     /// exists yet. A later prompt reuses the persisted conversation instead.
     pub fn is_open_for_setup_failure_debug_bootstrap(&self) -> bool {
         self.is_setup_failure_debug_session_open() && self.conversation_id().is_none()
+    }
+
+    /// The third-party CLI harness this task is configured to run, if any. `None` means the
+    /// task runs on Warp's native Oz harness (the default when no harness is configured), whose
+    /// conversations are represented locally in `BlocklistAIHistoryModel`. A `Some` task has no
+    /// such local conversation, whether or not its CLI-harness session has started yet — callers
+    /// that route or gate on "is this task backed by a native conversation" must check this
+    /// independent of runtime CLI-session state.
+    pub fn third_party_harness_type(&self) -> Option<Harness> {
+        let harness_type = self
+            .agent_config_snapshot
+            .as_ref()
+            .and_then(|config| config.harness.as_ref())?
+            .harness_type;
+        (harness_type != Harness::Oz).then_some(harness_type)
+    }
+
+    /// Whether this task is configured for a third-party CLI harness rather than Oz.
+    pub fn is_third_party_harness(&self) -> bool {
+        self.third_party_harness_type().is_some()
     }
 
     /// Returns true when this task's source must not accept user-triggered cloud follow-ups.

@@ -15,6 +15,7 @@ use warp_cli::api_key::{
 use warp_cli::{GlobalOptions, SortOrderArg};
 use warp_graphql::mutations::expire_api_key::ExpireApiKeyResult;
 use warp_graphql::mutations::generate_api_key::GenerateApiKeyResult;
+use warp_graphql::object_permissions::OwnerType;
 use warp_graphql::queries::api_keys::ApiKeyProperties;
 use warp_graphql::scalars::Time;
 use warpui::platform::TerminationMode;
@@ -24,6 +25,7 @@ use super::output::{self, TableFormat};
 use crate::ServerApiProvider;
 use crate::server::ids::ApiKeyUid;
 use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::workspaces::user_workspaces::TeamScope;
 
 /// Run API key-related commands.
 pub fn run(
@@ -63,26 +65,53 @@ impl ApiKeyCommandRunner {
         args: ListApiKeysArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
-
-        ctx.spawn(
-            async move {
-                let mut keys: Vec<_> = auth_client
-                    .list_api_keys()
-                    .await?
-                    .into_iter()
-                    .map(ApiKeyInfo::from)
-                    .collect();
-                sort_api_keys(&mut keys, args.sort_by, args.sort_order);
-                if args.json_output.force_json_output() {
-                    output::print_raw_json(serde_json::to_value(&keys)?, &args.json_output)?;
-                } else {
-                    output::print_list(keys, output_format);
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |_, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            let team_scope = if args.scope.is_team() || args.scope.personal {
+                match super::common::resolve_object_scope(&args.scope, ctx) {
+                    Ok(team_scope) => Some(team_scope),
+                    Err(error) => {
+                        super::report_fatal_error(error, ctx);
+                        return;
+                    }
                 }
-                Ok(())
-            },
-            |_, result: Result<()>, ctx| finish_command(result, ctx),
-        );
+            } else {
+                None
+            };
+            let team_uid = team_scope.as_ref().and_then(TeamScope::team_uid);
+            let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+
+            ctx.spawn(
+                async move {
+                    let mut keys: Vec<_> = auth_client
+                        .list_api_keys(team_uid)
+                        .await?
+                        .into_iter()
+                        .filter(|key| {
+                            team_scope
+                                .as_ref()
+                                .is_none_or(|team_scope| match key.owner_type {
+                                    OwnerType::User => team_scope.team_uid().is_none(),
+                                    OwnerType::Team => team_scope.team_uid().is_some(),
+                                })
+                        })
+                        .map(ApiKeyInfo::from)
+                        .collect();
+                    sort_api_keys(&mut keys, args.sort_by, args.sort_order);
+                    if args.json_output.force_json_output() {
+                        output::print_raw_json(serde_json::to_value(&keys)?, &args.json_output)?;
+                    } else {
+                        output::print_list(keys, output_format);
+                    }
+                    Ok(())
+                },
+                |_, result: Result<()>, ctx| finish_command(result, ctx),
+            );
+        });
     }
 
     fn create(
@@ -91,35 +120,57 @@ impl ApiKeyCommandRunner {
         args: CreateApiKeyArgs,
         ctx: &mut ModelContext<Self>,
     ) {
-        let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
-
-        ctx.spawn(
-            async move {
-                let json_output = args.json_output;
-                let expires_at = expires_at_from_args(args.expiration)?;
-                let agent_uid = args.agent_uid.map(cynic::Id::new);
-                let result = auth_client
-                    .create_api_key(args.name, None, agent_uid, expires_at)
-                    .await?;
-                let result = match result {
-                    GenerateApiKeyResult::GenerateApiKeyOutput(output) => CreatedApiKeyInfo {
-                        raw_api_key: output.raw_api_key,
-                        api_key: ApiKeyInfo::from(output.api_key),
-                    },
-                    GenerateApiKeyResult::UserFacingError(e) => {
-                        return Err(anyhow!(
-                            warp_graphql::client::get_user_facing_error_message(e)
-                        ));
-                    }
-                    GenerateApiKeyResult::Unknown => {
-                        return Err(anyhow!("failed to create API key"));
+        let refresh = super::common::refresh_workspace_metadata(ctx);
+        ctx.spawn(refresh, move |_, result, ctx| {
+            if let Err(error) = result {
+                super::report_fatal_error(error, ctx);
+                return;
+            }
+            let team_id = if args.team_selection.is_team() {
+                let team_scope = match super::common::resolve_team_scope(&args.team_selection, ctx)
+                {
+                    Ok(team_scope) => team_scope,
+                    Err(error) => {
+                        super::report_fatal_error(error, ctx);
+                        return;
                     }
                 };
-                print_created_api_key(result, output_format, json_output)?;
-                Ok(())
-            },
-            |_, result: Result<()>, ctx| finish_command(result, ctx),
-        );
+                team_scope
+                    .team_uid()
+                    .map(|team_uid| cynic::Id::new(team_uid.uid()))
+            } else {
+                None
+            };
+            let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
+
+            ctx.spawn(
+                async move {
+                    let json_output = args.json_output;
+                    let expires_at = expires_at_from_args(args.expiration)?;
+                    let agent_uid = args.agent_uid.map(cynic::Id::new);
+                    let result = auth_client
+                        .create_api_key(args.name, team_id, agent_uid, expires_at)
+                        .await?;
+                    let result = match result {
+                        GenerateApiKeyResult::GenerateApiKeyOutput(output) => CreatedApiKeyInfo {
+                            raw_api_key: output.raw_api_key,
+                            api_key: ApiKeyInfo::from(output.api_key),
+                        },
+                        GenerateApiKeyResult::UserFacingError(e) => {
+                            return Err(anyhow!(
+                                warp_graphql::client::get_user_facing_error_message(e)
+                            ));
+                        }
+                        GenerateApiKeyResult::Unknown => {
+                            return Err(anyhow!("failed to create API key"));
+                        }
+                    };
+                    print_created_api_key(result, output_format, json_output)?;
+                    Ok(())
+                },
+                |_, result: Result<()>, ctx| finish_command(result, ctx),
+            );
+        });
     }
 
     fn expire(
@@ -136,7 +187,7 @@ impl ApiKeyCommandRunner {
         ctx.spawn(
             async move {
                 let keys = auth_client
-                    .list_api_keys()
+                    .list_api_keys(None)
                     .await?
                     .into_iter()
                     .map(ApiKeyInfo::from)
@@ -182,7 +233,10 @@ impl ApiKeyCommandRunner {
                         .prompt()
                     {
                         Ok(should_expire) => should_expire,
-                        Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                        Err(
+                            InquireError::OperationCanceled
+                            | InquireError::OperationInterrupted,
+                        ) => {
                             ctx.terminate_app(TerminationMode::ForceTerminate, None);
                             return;
                         }
@@ -212,7 +266,7 @@ impl ApiKeyCommandRunner {
                                 ));
                             }
                             ExpireApiKeyResult::Unknown => {
-                                return Err(anyhow!("failed to expire API key"))
+                                return Err(anyhow!("failed to expire API key"));
                             }
                         };
                         print_expire_api_key_result(

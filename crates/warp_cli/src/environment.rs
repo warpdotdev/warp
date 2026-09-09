@@ -24,7 +24,10 @@ fn validate_description(s: &str) -> Result<String, String> {
 #[command(visible_alias = "e")]
 pub enum EnvironmentCommand {
     /// List cloud environments.
-    List,
+    List {
+        #[command(flatten)]
+        scope: ObjectScope,
+    },
     /// Manage base images for cloud environments.
     #[command(subcommand)]
     Image(ImageCommand),
@@ -104,7 +107,7 @@ pub enum EnvironmentCommand {
 impl EnvironmentCommand {
     pub(crate) fn as_str_for_tracing(&self) -> &'static str {
         match self {
-            EnvironmentCommand::List => "environment list",
+            EnvironmentCommand::List { .. } => "environment list",
             EnvironmentCommand::Image(_) => "environment image",
             EnvironmentCommand::Create { .. } => "environment create",
             EnvironmentCommand::Delete { .. } => "environment delete",

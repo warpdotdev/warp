@@ -8,7 +8,7 @@ use instant::Instant;
 use parking_lot::FairMutex;
 use session_sharing_protocol::common::{
     ActivePrompt, OrderedTerminalEvent, OrderedTerminalEventType, ParticipantId, Selection,
-    SessionId,
+    SelectionUpdate, SessionId,
 };
 use session_sharing_protocol::sharer::{
     DownstreamMessage, FailedToInitializeSessionReason, QuotaType, ReconnectToken, UpstreamMessage,
@@ -28,7 +28,9 @@ use crate::auth::auth_manager::AuthManager;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::TerminalModel;
-use crate::terminal::shared_session::{MAX_BYTES_SHAREABLE, SharedSessionSource};
+use crate::terminal::shared_session::{
+    MAX_BYTES_SHAREABLE, SELECTION_THROTTLE_PERIOD, SharedSessionSource,
+};
 use crate::test_util::assert_eventually;
 
 fn is_upstream_message_pty_bytes_read(
@@ -182,6 +184,20 @@ fn is_upstream_message_command_executed(
         event_no,
         event_type: OrderedTerminalEventType::CommandExecutionStarted { .. },
     }) if *event_no == expected_event_no)
+}
+
+fn is_upstream_message_selection_update(
+    message: UpstreamMessage,
+    expected_event_no: usize,
+    expected_selection: Selection,
+) -> bool {
+    matches!(
+        message,
+        UpstreamMessage::UpdateSelection(SelectionUpdate {
+            selection,
+            event_no,
+        }) if event_no == expected_event_no.into() && selection == expected_selection
+    )
 }
 
 fn create_network(
@@ -597,7 +613,6 @@ fn test_selection_updates_throttled_and_duplicates_ignored() {
         let ws_proxy_rx = network.read(&app, |network, _ctx| network.ws_proxy_rx.clone());
 
         assert_eq!(ws_proxy_rx.len(), 0);
-        // Rapid fire selection updates. Only the last should be sent up the websocket due to throttling.
         network.update(&mut app, |network, _ctx| {
             for i in 0..5 {
                 network.send_presence_selection_if_changed(Selection::Blocks {
@@ -605,21 +620,44 @@ fn test_selection_updates_throttled_and_duplicates_ignored() {
                 });
             }
         });
+        let first_update = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("First selection update should be sent before the timeout")
+            .expect("Selection update channel should remain open");
+        assert!(is_upstream_message_selection_update(
+            first_update,
+            0,
+            Selection::Blocks {
+                block_ids: vec!["block0".to_string().into()]
+            }
+        ));
 
-        // Only the very first and the last updates should go through, but not any of the intermediate ones.
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
-            "Selection updates should be throttled"
-        );
-
-        // Last sent block ID should be block4, and duplicate selection updates should be ignored.
+        let trailing_update = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Trailing selection update should be sent before the timeout")
+            .expect("Selection update channel should remain open");
+        assert!(is_upstream_message_selection_update(
+            trailing_update,
+            1,
+            Selection::Blocks {
+                block_ids: vec!["block4".to_string().into()]
+            }
+        ));
         network.update(&mut app, |network, _ctx| {
             network.send_presence_selection_if_changed(Selection::Blocks {
                 block_ids: vec!["block4".to_string().into()],
             });
         });
-        assert_eventually!(
-            ws_proxy_rx.len() == 2,
+        assert!(
+            ws_proxy_rx
+                .recv()
+                .with_timeout(SELECTION_THROTTLE_PERIOD * 2)
+                .await
+                .is_err(),
             "Duplicate selection updates should be ignored"
         );
 
@@ -627,10 +665,17 @@ fn test_selection_updates_throttled_and_duplicates_ignored() {
         network.update(&mut app, |network, _ctx| {
             network.send_presence_selection_if_changed(Selection::None);
         });
-        assert_eventually!(
-            ws_proxy_rx.len() == 3,
-            "Different selection updates should go through"
-        );
+        let distinct_update = ws_proxy_rx
+            .recv()
+            .with_timeout(Duration::from_secs(2))
+            .await
+            .expect("Distinct selection update should be sent before the timeout")
+            .expect("Selection update channel should remain open");
+        assert!(is_upstream_message_selection_update(
+            distinct_update,
+            2,
+            Selection::None
+        ));
     });
 }
 

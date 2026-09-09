@@ -105,7 +105,7 @@ impl UseComputerExecutor {
                     )
                     .await
                 {
-                    Ok(result) => UseComputerResult::Success(result),
+                    Ok(result) => UseComputerResult::success(result),
                     Err(error) => UseComputerResult::Error(error),
                 };
                 // Capture the finish offset immediately after the complete
@@ -125,7 +125,7 @@ impl UseComputerExecutor {
             move |(result, finish_offset, pointer_events), ctx| {
                 if meaningful {
                     RecordingController::handle(ctx).update(ctx, |controller, _| match result {
-                        UseComputerResult::Success(_) => {
+                        UseComputerResult::Success { .. } => {
                             if let Some(finish_offset) = finish_offset {
                                 controller.commit_action_group(
                                     conversation_id,

@@ -168,7 +168,7 @@ jobs:
 
       # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           cache: false
@@ -292,7 +292,7 @@ jobs:
 
       # Install go toolchain, which is needed for bundling a pprof binary.
       - name: Setup Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
           cache: false
@@ -2927,7 +2927,7 @@ jobs:
       # daily dev cuts and preview RCs.
       - name: Generate changelog via Oz (stable only)
         if: inputs.channel == 'stable'
-        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
+        uses: warpdotdev/oz-agent-action@d5c5a5c9eddb2abd3f7e9e171c6118ca401dd0b5 # main
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ needs.prepare_release.outputs.release_tag }}.

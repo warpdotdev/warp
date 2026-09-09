@@ -220,6 +220,11 @@ impl BaseClient {
         self.auth_state.user_id()
     }
 
+    /// Returns whether the authenticated principal is a service account.
+    pub fn is_service_account(&self) -> bool {
+        self.auth_state.is_service_account()
+    }
+
     pub fn access_token_ignoring_validity(&self) -> Option<String> {
         self.auth_state.get_access_token_ignoring_validity()
     }
@@ -251,6 +256,13 @@ impl BaseClient {
     /// Sets the default cloud-agent identifier inherited by subsequent requests.
     pub fn set_ambient_agent_task_id(&self, task_id: Option<String>) {
         *self.ambient_agent_task_id.write() = task_id;
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_ambient_workload_token_for_test(&self, token: String) {
+        *self.ambient_workload_token.lock() = Some(warp_isolation_platform::WorkloadToken {
+            token,
+            expires_at: None,
+        });
     }
 
     /// Returns an ambient agent workload token when the current runtime can issue one.
@@ -342,21 +354,6 @@ impl BaseClient {
             self.ambient_headers(AmbientHeaderPolicy::inherit_all())
                 .await?,
         );
-        Ok(options)
-    }
-
-    /// Returns GraphQL options for a session-authenticated operation scoped to a team.
-    pub async fn graphql_request_options_with_team(
-        &self,
-        timeout: Option<Duration>,
-        team_uid: Option<String>,
-    ) -> Result<RequestOptions> {
-        let mut options = self.graphql_request_options(timeout).await?;
-        if let Some(team_uid) = team_uid {
-            options
-                .headers
-                .insert(TEAM_UID_HEADER.to_string(), team_uid);
-        }
         Ok(options)
     }
 

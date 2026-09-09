@@ -57,8 +57,8 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, AttachmentInput, InitialSnapshotToken, SpawnAgentRequest,
 };
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::AISettings;
-use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 const HANDOFF_CONTINUE_PROMPT: &str = "Continue";
 const HANDOFF_APPLY_SNAPSHOT_PROMPT: &str = "Apply the workspace changes from my previous session.";
@@ -249,6 +249,7 @@ pub struct HandoffTargetMaterialization {
     pub title: Option<String>,
     /// Pre-snapshot request used to present the queued prompt immediately.
     pub request: SpawnAgentRequest,
+    pub team_scope: RequestTeamScope,
     /// One-shot signal the frontend consumes when the user cancels the handoff.
     pub cancel: oneshot::Sender<()>,
 }
@@ -291,6 +292,7 @@ pub struct PendingHandoff {
     snapshot_target: SnapshotUploadTarget,
     snapshot_disabled: bool,
     orchestration_handoff: Option<bool>,
+    team_scope: RequestTeamScope,
 }
 
 impl PendingHandoff {
@@ -541,7 +543,8 @@ pub fn prepare_handoff(
         .into_iter()
         .map(|environment| environment.id)
         .collect();
-    let scope = ResolvedTeamScope::from_scope(&controller.as_ref(ctx).team_context(ctx));
+    let scope = controller.as_ref(ctx).team_context(ctx);
+    let team_scope = RequestTeamScope::from_scope(&scope);
     let preferences = LLMPreferences::as_ref(ctx);
     let active_model_id = &preferences
         .get_active_base_model(&scope, ctx, Some(terminal_surface_id))
@@ -549,7 +552,6 @@ pub fn prepare_handoff(
     let model_id = preferences.cloud_runnable_oz_model_id_or_fallback(active_model_id);
     let model_is_cloud_runnable =
         preferences.is_cloud_runnable_oz_model_id(&LLMId::from(model_id.as_str()));
-    let scope = controller.as_ref(ctx).team_context(ctx);
     let computer_use_enabled = resolve_cloud_agent_computer_use_state(&scope, ctx).enabled;
     let config = AgentConfigSnapshot {
         environment_id: environment_id.map(|id| id.to_string()),
@@ -598,6 +600,7 @@ pub fn prepare_handoff(
         snapshot_target,
         snapshot_disabled,
         orchestration_handoff,
+        team_scope,
     })
 }
 
@@ -673,6 +676,7 @@ struct SnapshotSettledHandoff {
     restoration: Option<HandoffRestoration>,
     derived_workspace_had_content: bool,
     snapshot_failed: bool,
+    team_scope: RequestTeamScope,
 }
 
 /// Consumes a prepared handoff and begins its execution lifecycle.
@@ -754,7 +758,9 @@ async fn execute_validated_handoff(
                 },
                 forked.forked_conversation_id.clone(),
                 None,
+                forked.pending.team_scope,
             ),
+            team_scope: forked.pending.team_scope,
             cancel,
         };
         if let Err(error) = materialize_handoff_target(materialization)
@@ -798,8 +804,11 @@ async fn execute_validated_handoff(
         settled.spawn_ready,
         settled.forked_conversation_id,
         settled.initial_snapshot_token,
+        settled.team_scope,
     );
-    let response = ai_client.spawn_agent(request.clone()).await;
+    let response = ai_client
+        .spawn_agent(request.clone(), settled.team_scope)
+        .await;
     if cancellation
         .as_mut()
         .is_some_and(handoff_cancellation_requested)
@@ -903,6 +912,7 @@ async fn prepare_snapshot_for_spawn(forked: ForkedHandoff) -> SnapshotSettledHan
         snapshot_target,
         snapshot_disabled,
         orchestration_handoff,
+        team_scope,
     } = forked.pending;
     let (workspace, snapshot_result) = upload_handoff_snapshot(source_paths, snapshot_target).await;
     let derived_workspace_had_content =
@@ -931,6 +941,7 @@ async fn prepare_snapshot_for_spawn(forked: ForkedHandoff) -> SnapshotSettledHan
         restoration,
         derived_workspace_had_content,
         snapshot_failed,
+        team_scope,
     }
 }
 
@@ -949,6 +960,7 @@ fn build_spawn_request(
     handoff: SpawnReadyHandoff,
     forked_conversation_id: Option<String>,
     initial_snapshot_token: Option<InitialSnapshotToken>,
+    team_scope: RequestTeamScope,
 ) -> SpawnAgentRequest {
     let SpawnReadyHandoff {
         prompt,
@@ -985,7 +997,7 @@ fn build_spawn_request(
         mode,
         config: Some(config),
         title,
-        team: None,
+        team: Some(team_scope.team_uid().is_some()),
         skill: None,
         attachments,
         interactive: Some(true),

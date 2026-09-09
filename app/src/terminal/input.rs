@@ -186,7 +186,7 @@ use crate::ai::blocklist::{
     QueuedQueryOrigin, SlashCommandRequest, ai_brand_color, ai_indicator_height,
     render_ai_agent_mode_icon, render_ai_follow_up_icon,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::connected_self_hosted_workers::{
     ConnectedSelfHostedWorkersEvent, ConnectedSelfHostedWorkersModel,
@@ -195,7 +195,9 @@ use crate::ai::connected_self_hosted_workers::{
 use crate::ai::conversation_export::export_conversation_markdown;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::harness_availability::{
+    CloudAgentStartBlocker, HarnessAvailabilityModel, cloud_agent_start_blocker,
+};
 use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::predict::next_command_model::{
@@ -323,10 +325,13 @@ use crate::terminal::universal_developer_input::AtContextMenuDisabledReason;
 use crate::terminal::view::ambient_agent::{
     AuthSecretFtuxView, AuthSecretFtuxViewEvent, AuthSecretSelector, AuthSecretSelectorEvent,
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
+    cloud_agent_team_required_toast_message,
 };
+use crate::terminal::view::init::{CAN_ATTACH_FILE_KEY, CLI_AGENT_SESSION_ACTIVE_KEY};
 use crate::terminal::view::inline_banner::{PromptSuggestionsEvent, PromptSuggestionsView};
 use crate::terminal::view::{
-    AIQueryRouting, CodeDiffAction, resolve_ai_query_routing, resolve_ambient_agent_task_id,
+    AIQueryRouting, CodeDiffAction, file_attach_allowed_for_shared_session,
+    resolve_ai_query_routing, resolve_ambient_agent_task_id,
 };
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
@@ -1886,6 +1891,46 @@ pub struct Input {
     /// we snapshot the current input contents here so we can restore them after the command
     /// completes and the buffer would normally be cleared.
     input_contents_before_prompt_chip_command: Option<String>,
+
+    pending_shell_widget_handoff: Option<PendingShellWidgetHandoff>,
+}
+
+/// How a completed shell-widget handoff lands its selection. Fish's ctrl-t widget already performs
+/// token-aware replacement and reports the whole line; bash/zsh ctrl-t report a path fragment to
+/// splice at the cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellWidgetApplyMode {
+    Splice,
+    Replace,
+}
+
+struct PendingShellWidgetHandoff {
+    session_id: SessionId,
+    original_buffer: String,
+    selection: Option<String>,
+    block_id: BlockId,
+    apply_mode: ShellWidgetApplyMode,
+    cursor_offset: Option<ByteOffset>,
+}
+
+impl PendingShellWidgetHandoff {
+    fn maybe_apply_selection(&mut self, session_id: SessionId, selection: &str) {
+        if self.session_id != session_id {
+            return;
+        }
+        if !selection.is_empty() {
+            self.selection = Some(selection.to_string());
+        }
+    }
+
+    fn restore_text(&self) -> &str {
+        match (self.apply_mode, &self.selection) {
+            (ShellWidgetApplyMode::Replace, Some(selection)) => selection,
+            (ShellWidgetApplyMode::Replace, None) | (ShellWidgetApplyMode::Splice, _) => {
+                &self.original_buffer
+            }
+        }
+    }
 }
 
 struct AmbientAgentViewState {
@@ -2195,6 +2240,14 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("Input"))
         .with_key_binding("tab"),
+        EditableBinding::new(
+            "workspace:trigger_external_ctrl_t_file_search",
+            "External File Search",
+            WorkspaceAction::TriggerExternalCtrlTFileSearch,
+        )
+        .with_enabled(|| FeatureFlag::ShellWidgetHandoff.is_enabled())
+        .with_context_predicate(id!("Input") & !id!("VoltronActive") & !id!("LongRunningCommand"))
+        .with_key_binding("ctrl-t"),
     ]);
 
     if let Some(custom_action) = workflows::CategoriesView::custom_action() {
@@ -2517,6 +2570,10 @@ impl Input {
             if !affects_this_window {
                 return;
             }
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
             // `None` has to be applied, not skipped: it means the window's team configures no
             // self-hosted default, and leaving the previous value in place would keep the
             // selector and the run config pointed at another team's worker.
@@ -2587,8 +2644,6 @@ impl Input {
             }
         });
 
-        // Cloud-mode side effects on FTUX events: update the pane's harness auth secret, persist
-        // `last_selected_auth_secret`, mark FTUX completed.
         let vm_for_events = view_model.clone();
         ctx.subscribe_to_view(&ftux_view, move |_me, _, event, ctx| match event {
             AuthSecretFtuxViewEvent::SecretSelected { harness, name }
@@ -2598,11 +2653,15 @@ impl Input {
                 vm_for_events.update(ctx, |model, ctx| {
                     model.set_harness_auth_secret_name(Some(name.clone()), ctx);
                 });
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
-                    let mut map = settings.last_selected_auth_secret.value().clone();
-                    map.insert(harness.config_name().to_string(), name);
-                    let _ = settings.last_selected_auth_secret.set_value(map, ctx);
+                    settings.persist_auth_secret_preference(
+                        &team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Named(name)),
+                        ctx,
+                    );
                 });
             }
             AuthSecretFtuxViewEvent::Cancelled => {
@@ -2612,8 +2671,15 @@ impl Input {
             }
             AuthSecretFtuxViewEvent::Skipped { harness } => {
                 let harness = *harness;
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.mark_harness_auth_ftux_completed(harness, ctx);
+                    settings.persist_auth_secret_preference(
+                        &team_scope,
+                        harness,
+                        Some(AuthSecretPreference::Inherit),
+                        ctx,
+                    );
                 });
             }
             AuthSecretFtuxViewEvent::Failed { .. } => {}
@@ -4139,6 +4205,7 @@ impl Input {
             cloud_mode_composer_slash_command_data_source,
             ephemeral_message_model,
             input_contents_before_prompt_chip_command: None,
+            pending_shell_widget_handoff: None,
         };
 
         #[cfg(feature = "local_fs")]
@@ -6576,8 +6643,12 @@ impl Input {
                 let command = render_prompt_chip_shell_command(command, shell_type);
                 // Snapshot the current input so we can restore it after the command completes.
                 let current_input = self.buffer_text(ctx);
-                if self.try_execute_command_from_source(&command, CommandExecutionSource::User, ctx)
-                {
+                if self.try_execute_command_from_source(
+                    &command,
+                    CommandExecutionSource::User,
+                    true,
+                    ctx,
+                ) {
                     self.cancel_active_conversation(ctx, CancellationReason::UserCommandExecuted);
                     if !current_input.is_empty() {
                         self.input_contents_before_prompt_chip_command = Some(current_input);
@@ -6947,6 +7018,12 @@ impl Input {
         if did_start_listening {
             self.focus_input_box(ctx);
         }
+    }
+
+    pub(crate) fn attach_file(&mut self, ctx: &mut ViewContext<Self>) {
+        self.agent_input_footer.update(ctx, |footer, ctx| {
+            footer.select_file(ctx);
+        });
     }
 
     fn select_image(&mut self, ctx: &mut ViewContext<Self>) {
@@ -7648,6 +7725,7 @@ impl Input {
                 ai_metadata: None,
                 preserve_input,
             },
+            true,
             ctx,
         )
     }
@@ -7687,6 +7765,61 @@ impl Input {
 
     pub fn try_execute_command(&mut self, command: &str, ctx: &mut ViewContext<Self>) -> bool {
         self.try_execute_command_with_options(command, false, ctx)
+    }
+
+    /// Applies `selection` only if `session_id` matches the in-flight handoff.
+    pub fn set_external_shell_widget_selection(&mut self, session_id: SessionId, selection: &str) {
+        let Some(handoff) = self.pending_shell_widget_handoff.as_mut() else {
+            return;
+        };
+        handoff.maybe_apply_selection(session_id, selection);
+    }
+
+    /// Runs `helper_command` (a bootstrap-installed shell function), snapshotting the current
+    /// buffer so it can be restored once the command's block completes. Returns `true` if the
+    /// command was started.
+    pub fn trigger_external_shell_widget_handoff(
+        &mut self,
+        helper_command: &str,
+        apply_mode: ShellWidgetApplyMode,
+        capture_cursor: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> bool {
+        let Some(session_id) = self.active_block_session_id() else {
+            return false;
+        };
+        let original_buffer = self.buffer_text(ctx);
+        let cursor_offset = capture_cursor.then(|| {
+            self.editor
+                .as_ref(ctx)
+                .end_byte_index_of_last_selection(ctx)
+        });
+        let block_id = self.model.lock().block_list().active_block_id().clone();
+        // Prefixed with a leading space, the "ignorespace" convention.
+        let mut command = format!(" {helper_command}");
+        if let Some(cursor_offset) = cursor_offset
+            && apply_mode == ShellWidgetApplyMode::Replace
+        {
+            let char_cursor = original_buffer[..cursor_offset.as_usize()].chars().count();
+            command.push_str(&format!(" {char_cursor}:{}", hex::encode(&original_buffer)));
+        }
+        let started = self.try_execute_command_from_source(
+            &command,
+            CommandExecutionSource::User,
+            false, /* should_add_command_to_history */
+            ctx,
+        );
+        if started {
+            self.pending_shell_widget_handoff = Some(PendingShellWidgetHandoff {
+                session_id,
+                original_buffer,
+                selection: None,
+                block_id,
+                apply_mode,
+                cursor_offset,
+            });
+        }
+        started
     }
 
     fn try_execute_command_with_options(
@@ -7732,10 +7865,11 @@ impl Input {
             self.try_execute_command_from_source(
                 command,
                 CommandExecutionSource::QueuedCommand,
+                true,
                 ctx,
             )
         } else {
-            self.try_execute_command_from_source(command, CommandExecutionSource::User, ctx)
+            self.try_execute_command_from_source(command, CommandExecutionSource::User, true, ctx)
         }
     }
 
@@ -7779,6 +7913,7 @@ impl Input {
         &mut self,
         command: &str,
         source: CommandExecutionSource,
+        should_add_command_to_history: bool,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let CanExecuteCommand::No(reason) = self.can_execute_command(ctx) {
@@ -7936,7 +8071,12 @@ impl Input {
                 });
             }
 
-            self.start_block_and_write_command_to_pty(command, source, ctx);
+            self.start_block_and_write_command_to_pty(
+                command,
+                source,
+                should_add_command_to_history,
+                ctx,
+            );
             did_execute = true;
         } else {
             // We don't want to submit the command if precmd has not
@@ -13907,22 +14047,26 @@ impl Input {
                         .is_configuring_ambient_agent()
                 })
             {
-                if FeatureFlag::AgentHarness.is_enabled() {
-                    let availability = HarnessAvailabilityModel::as_ref(ctx);
-                    if !availability.has_any_enabled_harness() {
-                        let window_id = ctx.window_id();
-                        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                            ts.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "No agent harnesses are available. Contact your team admin."
-                                        .to_string(),
-                                ),
-                                window_id,
-                                ctx,
-                            );
-                        });
-                        return;
-                    }
+                let team_required = UserWorkspaces::as_ref(ctx).cloud_agents_require_team();
+                let has_enabled_harness = !FeatureFlag::AgentHarness.is_enabled()
+                    || HarnessAvailabilityModel::as_ref(ctx).has_any_enabled_harness();
+                let blocker_message =
+                    match cloud_agent_start_blocker(team_required, has_enabled_harness) {
+                        Some(CloudAgentStartBlocker::TeamRequired) => {
+                            Some(cloud_agent_team_required_toast_message(ctx).to_string())
+                        }
+                        Some(CloudAgentStartBlocker::NoEnabledHarnesses) => Some(
+                            "No agent harnesses are available. Contact your team admin."
+                                .to_string(),
+                        ),
+                        None => None,
+                    };
+                if let Some(message) = blocker_message {
+                    let window_id = ctx.window_id();
+                    ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                        ts.add_ephemeral_toast(DismissibleToast::error(message), window_id, ctx);
+                    });
+                    return;
                 }
 
                 let prompt = command.trim().to_owned();
@@ -15543,8 +15687,24 @@ impl Input {
                 && !cloud_setup_pre_first_exchange
                 && !self.has_queued_command_in_flight(ctx);
             let latest_block_id = self.model.lock().block_list().active_block_id().clone();
-            let input_contents_before_prompt_chip_command =
-                self.input_contents_before_prompt_chip_command.take();
+            // Prefer a prompt-chip restore (e.g. `cd`) over a shell-widget handoff restore.
+            let completed_handoff = self
+                .pending_shell_widget_handoff
+                .take_if(|handoff| handoff.block_id == block_completed_event.block_id);
+            if let Some(handoff) = &completed_handoff {
+                self.model
+                    .lock()
+                    .block_list_mut()
+                    .hide_block(&handoff.block_id);
+            }
+            let pending_input_restore = self
+                .input_contents_before_prompt_chip_command
+                .take()
+                .or_else(|| {
+                    completed_handoff
+                        .as_ref()
+                        .map(|handoff| handoff.restore_text().to_string())
+                });
 
             if should_clear_buffer {
                 // We want to reinitialize the buffer whenever a command is completed so that
@@ -15555,11 +15715,38 @@ impl Input {
                         .update(ctx, |editor, ctx| editor.reinitialize_buffer(None, ctx));
                     self.latest_buffer_operations = Vec::new();
 
-                    // If we have a pending input restore (from a prompt chip command like cd),
-                    // restore the input contents instead of leaving the buffer empty.
-                    if let Some(restore_text) = input_contents_before_prompt_chip_command {
+                    // If we have a pending input restore (from a prompt chip command like cd, or
+                    // a ctrl-r/ctrl-t external handoff), restore the input contents instead of
+                    // leaving the buffer empty.
+                    if let Some(restore_text) = pending_input_restore {
                         self.editor.update(ctx, |editor, ctx| {
                             editor.set_buffer_text(&restore_text, ctx);
+                            if let Some(handoff) = &completed_handoff {
+                                match (
+                                    handoff.apply_mode,
+                                    &handoff.selection,
+                                    handoff.cursor_offset,
+                                ) {
+                                    (
+                                        ShellWidgetApplyMode::Splice,
+                                        Some(insertion),
+                                        Some(cursor_offset),
+                                    ) => editor.select_and_replace(
+                                        insertion,
+                                        [cursor_offset..cursor_offset],
+                                        PlainTextEditorViewAction::InsertSelectedText,
+                                        ctx,
+                                    ),
+                                    (_, None, Some(cursor_offset)) => editor
+                                        .select_ranges_by_byte_offset(
+                                            [cursor_offset..cursor_offset],
+                                            ctx,
+                                        ),
+                                    (ShellWidgetApplyMode::Replace, Some(_), _)
+                                    | (ShellWidgetApplyMode::Splice, Some(_), None)
+                                    | (_, None, None) => {}
+                                }
+                            }
                         });
                         self.is_editor_empty_on_last_edit = false;
                     } else {
@@ -15718,6 +15905,7 @@ impl Input {
         &mut self,
         command: &str,
         source: CommandExecutionSource,
+        should_add_command_to_history: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         start_trace!("command_execution:start");
@@ -15793,7 +15981,7 @@ impl Input {
             workflow_id,
             session_id,
             workflow_command,
-            should_add_command_to_history: true,
+            should_add_command_to_history,
             source,
         })));
         end_trace!();
@@ -16691,6 +16879,13 @@ impl View for Input {
             }
         }
 
+        if CLIAgentSessionsModel::as_ref(app)
+            .session(self.terminal_view_id)
+            .is_some()
+        {
+            ctx.set.insert(CLI_AGENT_SESSION_ACTIVE_KEY);
+        }
+
         if self.buffer_text(app).is_empty() {
             ctx.set.insert(flags::EMPTY_INPUT_BUFFER);
         }
@@ -16801,6 +16996,13 @@ impl View for Input {
         let model_lock = self.model.lock();
         ctx.set
             .insert(model_lock.shared_session_status().as_keymap_context());
+        if file_attach_allowed_for_shared_session(
+            model_lock.shared_session_status(),
+            self.ambient_agent_view_model(),
+            app,
+        ) {
+            ctx.set.insert(CAN_ATTACH_FILE_KEY);
+        }
 
         if model_lock
             .block_list()

@@ -103,6 +103,19 @@ impl FakeGraphqlOperation {
         }
     }
 
+    fn successful_for_team(
+        expected_auth_token: Option<&str>,
+        expected_team_uid: &str,
+        send_count: Arc<AtomicUsize>,
+    ) -> Self {
+        Self {
+            expected_auth_token: expected_auth_token.map(ToOwned::to_owned),
+            expected_team_uid: Some(expected_team_uid.to_string()),
+            send_count,
+            result: FakeGraphqlResult::Success,
+        }
+    }
+
     fn rejected(
         expected_auth_token: Option<&str>,
         send_count: Arc<AtomicUsize>,
@@ -128,12 +141,6 @@ impl FakeGraphqlOperation {
             result: FakeGraphqlResult::ResponseErrors(messages),
         }
     }
-
-    /// Asserts that the resolved request options carry (or omit) this exact team header.
-    fn expect_team_uid(mut self, expected_team_uid: Option<&str>) -> Self {
-        self.expected_team_uid = expected_team_uid.map(ToOwned::to_owned);
-        self
-    }
 }
 
 impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
@@ -158,8 +165,8 @@ impl warp_graphql::client::Operation<()> for FakeGraphqlOperation {
         Box::pin(async move {
             assert_eq!(options.auth_token, self.expected_auth_token);
             assert_eq!(
-                options.headers.get(TEAM_UID_HEADER).cloned(),
-                self.expected_team_uid
+                options.headers.get(TEAM_UID_HEADER),
+                self.expected_team_uid.as_ref()
             );
             self.send_count.fetch_add(1, Ordering::SeqCst);
             match self.result {
@@ -219,6 +226,27 @@ fn refresh_disabled_sends_provided_bearer_token() {
     .unwrap();
 
     assert!(!base_client.is_auth_refresh_allowed());
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
+    assert_no_events(&event_receiver);
+}
+
+#[test]
+fn team_scoped_request_sends_configured_options_and_team_header() {
+    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
+    let send_count = Arc::new(AtomicUsize::new(0));
+
+    block_on(send_team_scoped_graphql_request(
+        &base_client,
+        FakeGraphqlOperation::successful_for_team(
+            Some("daemon-token"),
+            "team-uid",
+            send_count.clone(),
+        ),
+        None,
+        "team-uid".to_string(),
+    ))
+    .unwrap();
+
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
 }
@@ -287,42 +315,6 @@ fn external_user_not_in_context_returns_credentials_rejected_without_account_eve
         &error,
         "server rejected authentication credentials"
     ));
-    assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    assert_no_events(&event_receiver);
-}
-
-#[test]
-fn team_scoped_send_attaches_team_header_when_scope_is_supplied() {
-    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
-    let send_count = Arc::new(AtomicUsize::new(0));
-
-    block_on(send_team_scoped_graphql_request(
-        &base_client,
-        FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone())
-            .expect_team_uid(Some("team-123")),
-        None,
-        Some("team-123".to_string()),
-    ))
-    .unwrap();
-
-    assert_eq!(send_count.load(Ordering::SeqCst), 1);
-    assert_no_events(&event_receiver);
-}
-
-#[test]
-fn team_scoped_send_omits_team_header_when_scope_is_absent() {
-    let (base_client, event_receiver) = externally_authenticated_base_client("daemon-token");
-    let send_count = Arc::new(AtomicUsize::new(0));
-
-    block_on(send_team_scoped_graphql_request(
-        &base_client,
-        FakeGraphqlOperation::successful(Some("daemon-token"), send_count.clone())
-            .expect_team_uid(None),
-        None,
-        None,
-    ))
-    .unwrap();
-
     assert_eq!(send_count.load(Ordering::SeqCst), 1);
     assert_no_events(&event_receiver);
 }

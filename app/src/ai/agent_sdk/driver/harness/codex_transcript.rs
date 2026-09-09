@@ -20,7 +20,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::json_utils::entries_to_jsonl;
-use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::api::ServerConversationToken;
 
 /// Env var codex honors to override `~/.codex` (see codex `core/src/config/mod.rs`).
 const CODEX_HOME_ENV: &str = "CODEX_HOME";
@@ -78,7 +78,7 @@ pub(crate) struct CodexSessionMetadata {
 pub(crate) struct CodexResumeInfo {
     /// Warp server-side conversation id. Reused so subsequent transcript/block-snapshot
     /// uploads overwrite the same GCS objects.
-    pub(crate) conversation_id: AIConversationId,
+    pub(crate) conversation_id: ServerConversationToken,
     /// Codex session uuid passed to `codex resume <session_id>`. Matches `envelope.session_id`.
     pub(crate) session_id: Uuid,
     /// Envelope fetched from the server, written back to disk before launching codex.

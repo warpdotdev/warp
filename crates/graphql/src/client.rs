@@ -166,6 +166,9 @@ where
                     .is_some_and(|v| v.contains("text/html"));
 
                 if is_html {
+                    log::error!(
+                        "{operation_name} request to /graphql/v2 not authorized for staging"
+                    );
                     return Err(GraphQLError::StagingAccessBlocked);
                 }
             }
@@ -208,6 +211,7 @@ pub fn get_request_context() -> RequestContext {
 /// Returns a user-facing error message for the given [`UserFacingError`].
 pub fn get_user_facing_error_message(e: UserFacingError) -> String {
     match e.error {
+        UserFacingErrorInterface::PlatformError(e) => e.message,
         UserFacingErrorInterface::SharedObjectsLimitExceeded(e) => e.message,
         UserFacingErrorInterface::PersonalObjectsLimitExceeded(e) => e.message,
         UserFacingErrorInterface::AccountDelinquencyError(e) => e.message,

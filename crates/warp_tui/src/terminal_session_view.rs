@@ -38,9 +38,9 @@ use warp::tui_export::{
     ResolvedTeamScope, ServerConversationToken, ServerId, SessionSettings, Sessions, SessionsEvent,
     ShellCommandExecutorEvent, SizeInfo, SizeUpdate, SkillReference, SlashCommandDataSource as _,
     SlashCommandKind, SlashCommandSelectionBehavior, StartAgentExecutorEvent, StartAgentRequest,
-    StaticCommand, TelemetryEvent, TerminalModel, TerminalSurface, TerminalSurfaceInit,
-    TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId, TuiMcpVariableValue,
-    TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
+    StaticCommand, TeamContextForOperation, TelemetryEvent, TerminalModel, TerminalSurface,
+    TerminalSurfaceInit, TranscriptScope, TuiMcpAction, TuiMcpManager, TuiMcpServerId,
+    TuiMcpVariableValue, TuiOnboardingMarker, TuiOnboardingMarkers, TuiOnboardingMarkersEvent,
     TuiSlashCommandDataSource, TuiSlashCommandDataSourceArgs, TuiUpArrowHistoryItemKind,
     TuiUserInfoManager, TuiUserInfoManagerEvent, TuiZeroStateDataSource, UserTakeOverReason,
     UserWorkspaces, UserWorkspacesEvent, WAKEUP_THROTTLE_PERIOD, WarpConfig, WarpConfigUpdateEvent,
@@ -317,6 +317,7 @@ pub(crate) enum TuiTerminalSessionEvent {
     StartAgentConversation {
         request: Box<StartAgentRequest>,
         working_directory: Option<PathBuf>,
+        team_context: TeamContextForOperation,
     },
     CleanupFailedChildLaunch {
         conversation_id: AIConversationId,
@@ -1571,9 +1572,11 @@ impl TuiTerminalSessionView {
 
         ctx.subscribe_to_model(&start_agent_executor, |view, _, event, ctx| match event {
             StartAgentExecutorEvent::CreateAgent(request) => {
+                let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 ctx.emit(TuiTerminalSessionEvent::StartAgentConversation {
                     request: request.clone(),
                     working_directory: view.current_working_directory(ctx).map(PathBuf::from),
+                    team_context,
                 });
             }
             StartAgentExecutorEvent::CleanupFailedChildLaunch { conversation_id } => {
@@ -1685,11 +1688,13 @@ impl TuiTerminalSessionView {
         ctx.subscribe_to_model(&api_keys_menu, |_, _, _: &TuiApiKeysMenuEvent, ctx| {
             ctx.notify();
         });
+        let conversation_menu_team_context = UserWorkspaces::team_context_resolver(ctx.handle());
         let conversation_menu = ctx.add_model(|ctx| {
             TuiConversationMenuModel::new(
                 input_editor_model.clone(),
                 suggestions_mode.clone(),
                 conversation_selection.clone(),
+                conversation_menu_team_context,
                 window_id,
                 ctx,
             )
