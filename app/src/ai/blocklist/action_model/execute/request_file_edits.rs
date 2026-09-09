@@ -24,6 +24,7 @@ use vec1::{Vec1, vec1};
 use warp_core::send_telemetry_from_ctx;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity as _};
 
+use super::file_revisions::FileRevisionTracker;
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{
@@ -50,12 +51,15 @@ pub struct RequestFileEditsExecutor {
 }
 
 impl RequestFileEditsExecutor {
-    pub fn new(
+    pub(super) fn new(
         active_session: ModelHandle<ActiveSession>,
         terminal_view_id: EntityId,
+        file_revision_tracker: FileRevisionTracker,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let apply_diff_model = ctx.add_model(|_| ApplyDiffModel::new(active_session.clone()));
+        let apply_diff_model = ctx.add_model(|_| {
+            ApplyDiffModel::new(active_session.clone(), file_revision_tracker.clone())
+        });
         Self {
             active_session,
             apply_diff_model,
@@ -175,6 +179,9 @@ impl RequestFileEditsExecutor {
             return ActionExecution::NotReady;
         };
         let result_future = storage.accept_and_save(ctx);
+        let result_future = self.apply_diff_model.update(ctx, |model, ctx| {
+            model.track_applied_revisions(result_future, input.conversation_id, ctx)
+        });
 
         let identifiers = self
             .generate_ai_identifiers(&input.conversation_id, id, ctx)
@@ -250,7 +257,13 @@ impl RequestFileEditsExecutor {
         let id = id.clone();
 
         let apply_future = self.apply_diff_model.update(ctx, |model, ctx| {
-            model.apply_diffs(files, &ai_identifiers, passive_diff, ctx)
+            model.apply_diffs(
+                files,
+                input.conversation_id,
+                &ai_identifiers,
+                passive_diff,
+                ctx,
+            )
         });
 
         ctx.spawn(

@@ -4,6 +4,7 @@ pub(super) mod create_documents;
 pub(super) mod edit_documents;
 pub(super) mod fetch_conversation;
 pub(super) mod file_glob;
+mod file_revisions;
 pub(super) mod grep;
 pub(super) mod lrc_activity;
 pub(super) mod read_documents;
@@ -38,6 +39,7 @@ use create_documents::CreateDocumentsExecutor;
 use edit_documents::EditDocumentsExecutor;
 use fetch_conversation::FetchConversationExecutor;
 use file_glob::FileGlobExecutor;
+use file_revisions::FileRevisionTracker;
 #[cfg(feature = "local_fs")]
 use futures::AsyncReadExt;
 use futures::FutureExt;
@@ -298,8 +300,14 @@ impl BlocklistAIActionExecutor {
         team_context_resolver: TeamContextResolver,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
-        let read_files_executor =
-            ctx.add_model(|_| ReadFilesExecutor::new(active_session.clone(), terminal_view_id));
+        let file_revision_tracker = FileRevisionTracker::default();
+        let read_files_executor = ctx.add_model(|_| {
+            ReadFilesExecutor::new(
+                active_session.clone(),
+                terminal_view_id,
+                file_revision_tracker.clone(),
+            )
+        });
         let upload_artifact_executor = ctx
             .add_model(|_| UploadArtifactExecutor::new(active_session.clone(), terminal_view_id));
         let search_codebase_executor = ctx.add_model(|ctx| {
@@ -320,7 +328,12 @@ impl BlocklistAIActionExecutor {
             )
         });
         let request_file_edits_executor = ctx.add_model(|ctx| {
-            RequestFileEditsExecutor::new(active_session.clone(), terminal_view_id, ctx)
+            RequestFileEditsExecutor::new(
+                active_session.clone(),
+                terminal_view_id,
+                file_revision_tracker,
+                ctx,
+            )
         });
         let grep_executor =
             ctx.add_model(|_| GrepExecutor::new(active_session.clone(), terminal_view_id));

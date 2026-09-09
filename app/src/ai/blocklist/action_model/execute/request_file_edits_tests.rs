@@ -60,7 +60,14 @@ fn add_executor(app: &mut App) -> ModelHandle<RequestFileEditsExecutor> {
         app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
     let active_session =
         app.add_model(|ctx| ActiveSession::new(sessions.clone(), dispatcher.clone(), ctx));
-    app.add_model(|ctx| RequestFileEditsExecutor::new(active_session, EntityId::new(), ctx))
+    app.add_model(|ctx| {
+        RequestFileEditsExecutor::new(
+            active_session,
+            EntityId::new(),
+            FileRevisionTracker::default(),
+            ctx,
+        )
+    })
 }
 
 /// Registers a `TestStorage` for `action_id` and returns its observable state.

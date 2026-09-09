@@ -4,6 +4,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use super::file_revisions::FileRevisionTracker;
 use super::{
     ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
     describe_failed_files, read_local_file_context,
@@ -21,13 +22,19 @@ use crate::workspaces::user_workspaces::TeamContext;
 pub struct ReadFilesExecutor {
     active_session: ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
+    file_revision_tracker: FileRevisionTracker,
 }
 
 impl ReadFilesExecutor {
-    pub fn new(active_session: ModelHandle<ActiveSession>, terminal_view_id: EntityId) -> Self {
+    pub(super) fn new(
+        active_session: ModelHandle<ActiveSession>,
+        terminal_view_id: EntityId,
+        file_revision_tracker: FileRevisionTracker,
+    ) -> Self {
         Self {
             active_session,
             terminal_view_id,
+            file_revision_tracker,
         }
     }
 
@@ -111,6 +118,7 @@ impl ReadFilesExecutor {
         let shell = self.active_session.as_ref(ctx).shell_launch_data(ctx);
 
         let locations = locations.clone();
+        let file_revision_tracker = self.file_revision_tracker.clone();
 
         // Check if this is a remote session with a connected host.
         let session_type = self.active_session.as_ref(ctx).session_type(ctx);
@@ -225,9 +233,12 @@ impl ReadFilesExecutor {
                         failed_files,
                     })
                 }),
-                on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
+                on_complete: Box::new(move |res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
                     let action_result =
                         res.unwrap_or_else(|e| ReadFilesResult::Error(e.to_string()));
+                    if let ReadFilesResult::Success { files, .. } = &action_result {
+                        file_revision_tracker.record_file_contexts(conversation_id, files);
+                    }
                     AIAgentActionResultType::ReadFiles(action_result)
                 }),
             };
@@ -261,8 +272,11 @@ impl ReadFilesExecutor {
                     })
                 }
             }),
-            on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
+            on_complete: Box::new(move |res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
                 let action_result = res.unwrap_or_else(|e| ReadFilesResult::Error(e.to_string()));
+                if let ReadFilesResult::Success { files, .. } = &action_result {
+                    file_revision_tracker.record_file_contexts(conversation_id, files);
+                }
                 AIAgentActionResultType::ReadFiles(action_result)
             }),
         }
