@@ -111,7 +111,6 @@ const MIN_LINE_SPACING: f32 = 0.1;
 const MAX_LINE_SPACING: f32 = 5.;
 
 const INPUT_MODE_DROPDOWN_WIDTH: f32 = 225.;
-const WINDOW_BACKDROP_DROPDOWN_WIDTH: f32 = 150.;
 
 // Max and min sizes for new window creation in terms of rows and cols
 const MIN_NEW_WINDOW_ROWS_OR_COLS: u16 = 5;
@@ -2635,8 +2634,6 @@ impl AppearanceSettingsPageView {
     ) -> ViewHandle<Dropdown<AppearancePageAction>> {
         ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
-            dropdown.set_top_bar_max_width(WINDOW_BACKDROP_DROPDOWN_WIDTH);
-            dropdown.set_menu_width(WINDOW_BACKDROP_DROPDOWN_WIDTH, ctx);
             dropdown.set_items(
                 WindowBackdrop::ALL
                     .into_iter()
