@@ -24,8 +24,8 @@ use std::sync::Arc;
 use futures::FutureExt;
 use futures::future::{BoxFuture, join_all};
 use itertools::Itertools;
+use remote_server::ExpectedFileRevision;
 use warp_editor::multiline::AnyMultilineString;
-use warp_files::ExpectedFileRevision;
 use warp_util::file::FileSaveError;
 use warpui::AppContext;
 

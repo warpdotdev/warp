@@ -16,6 +16,7 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use pathfinder_geometry::vector::vec2f;
 use rand::distributions::Alphanumeric;
 use rand::{Rng as _, thread_rng};
+use remote_server::ExpectedFileRevision;
 use warp_core::features::FeatureFlag;
 use warp_core::platform::SessionPlatform;
 use warp_core::settings::ToggleableSetting;
@@ -26,7 +27,6 @@ use warp_core::ui::theme::color::internal_colors::{fg_overlay_6, neutral_1, neut
 use warp_editor::content::buffer::InitialBufferState;
 use warp_editor::render::element::VerticalExpansionBehavior;
 use warp_errors::report_error;
-use warp_files::ExpectedFileRevision;
 use warp_util::file::FileSaveError;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;

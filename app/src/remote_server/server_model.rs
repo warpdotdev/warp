@@ -11,12 +11,13 @@ use ::ai::index::full_source_code_embedding::{
     ContentHash, FragmentMetadata as LocalFragmentMetadata, NodeHash,
 };
 use ::ai::project_context::model::{ProjectContextModel, ProjectContextModelEvent};
+use remote_server::ExpectedFileRevision;
 use remote_server::proto::OpenBufferSuccess;
 use repo_metadata::repositories::{DetectedRepositories, RepoDetectionSource};
 use repo_metadata::{RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
 use warp_core::channel::ChannelState;
 use warp_core::{SessionId, safe_error};
-use warp_files::{ExpectedFileRevision, FileModel, FileModelEvent};
+use warp_files::{FileModel, FileModelEvent};
 use warp_util::content_version::ContentVersion;
 use warp_util::file::FileId;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
@@ -151,15 +152,12 @@ fn remote_agent_context_snapshot(
 fn expected_file_revision_from_proto(
     revision: super::proto::ExpectedFileRevision,
 ) -> ExpectedFileRevision {
-    let last_modified = revision
-        .last_modified_epoch_millis
-        .map(|millis| std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis));
     match revision.state {
         Some(super::proto::expected_file_revision::State::ContentSha256(digest)) => digest
             .try_into()
             .map(|content_digest| ExpectedFileRevision::Present {
                 content_digest,
-                last_modified,
+                last_modified: None,
             })
             .unwrap_or(ExpectedFileRevision::Uneditable),
         Some(super::proto::expected_file_revision::State::Missing(_)) => {
@@ -3872,11 +3870,22 @@ fn fragment_metadata_to_proto(
 /// Converts a [`ReadFileContextResult`] into its protobuf equivalent.
 fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContextResponse {
     use crate::ai::agent::AnyFileContent;
+    let revisions = result
+        .file_revisions
+        .into_iter()
+        .map(|revision| (revision.path, revision.content_digest))
+        .collect::<HashMap<_, _>>();
 
     let file_contexts = result
         .file_contexts
         .into_iter()
         .map(|fc| {
+            let content_sha256 = revisions
+                .get(&fc.file_name)
+                .copied()
+                .flatten()
+                .map(|digest| digest.to_vec())
+                .unwrap_or_default();
             let content = match fc.content {
                 AnyFileContent::StringContent(text) => {
                     super::proto::file_context_proto::Content::TextContent(text)
@@ -3896,6 +3905,7 @@ fn file_context_result_to_proto(result: ReadFileContextResult) -> ReadFileContex
                 line_range_end: fc.line_range.as_ref().map(|r| r.end as u32),
                 last_modified_epoch_millis,
                 line_count: fc.line_count as u32,
+                content_sha256,
             }
         })
         .collect();

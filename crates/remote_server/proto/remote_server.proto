@@ -462,6 +462,7 @@ message FileContextProto {
   optional uint32 line_range_end = 5;
   optional uint64 last_modified_epoch_millis = 6;
   uint32 line_count = 7;
+  bytes content_sha256 = 8;
 }
 
 // ── Ripgrep search (global search) ────────────────────────────────

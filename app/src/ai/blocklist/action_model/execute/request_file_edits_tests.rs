@@ -6,7 +6,7 @@ use async_channel::unbounded;
 use futures::FutureExt;
 use warpui::{App, AppContext, EntityId};
 
-use super::super::file_revisions::read_local_revisions;
+use super::super::file_revisions::FileRevision;
 use super::*;
 use crate::ai::agent::FileEdit;
 use crate::ai::agent::task::TaskId;
@@ -33,7 +33,13 @@ fn execute_passes_preprocessing_revisions_to_storage() {
 
         let conversation_id = AIConversationId::new();
         let tracker = FileRevisionTracker::default();
-        tracker.record_revisions(conversation_id, read_local_revisions([path.clone()]));
+        tracker.record_revisions(
+            conversation_id,
+            [(
+                path.clone(),
+                FileRevision::present("let value = old;\n", None),
+            )],
+        );
         let executor = add_executor_with_tracker(&mut app, tracker);
         let action_id = AIAgentActionId::from("preview-race".to_owned());
         let storage = register_storage(&mut app, &executor, &action_id);

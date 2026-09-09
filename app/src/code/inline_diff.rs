@@ -4,7 +4,7 @@ use std::sync::Arc;
 use ai::diff_validation::DiffType;
 #[cfg(not(target_family = "wasm"))]
 use futures::FutureExt;
-use warp_files::ExpectedFileRevision;
+use remote_server::ExpectedFileRevision;
 #[cfg(not(target_family = "wasm"))]
 use warp_files::{FileModel, FileModelEvent};
 use warp_util::file::FileId;

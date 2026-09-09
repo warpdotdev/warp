@@ -103,7 +103,7 @@ impl ApplyDiffModel {
         edits: &[FileEdit],
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
-    ) -> std::collections::HashMap<String, warp_files::ExpectedFileRevision> {
+    ) -> std::collections::HashMap<String, remote_server::ExpectedFileRevision> {
         let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
         self.file_revision_tracker
             .expected_revisions(

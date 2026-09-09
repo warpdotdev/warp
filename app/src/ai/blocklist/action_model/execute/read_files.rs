@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use futures::FutureExt;
@@ -6,11 +5,11 @@ use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use super::file_revisions::{
-    FileRevisionTracker, is_missing_error, read_local_revisions, read_remote_revisions,
+    FileRevision, FileRevisionTracker, is_missing_error, revision_from_remote_context,
 };
 use super::{
     ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
-    describe_failed_files, read_local_file_context,
+    ReadFileContextResult, describe_failed_files, read_local_file_context,
 };
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionResultType, AIAgentActionType, ReadFilesFailedFile,
@@ -28,18 +27,52 @@ pub struct ReadFilesExecutor {
     file_revision_tracker: FileRevisionTracker,
 }
 
-fn record_observed_revisions(
-    tracker: &FileRevisionTracker,
-    conversation_id: crate::ai::agent::conversation::AIConversationId,
-    revisions: Vec<(String, super::file_revisions::FileRevision)>,
-    observed_paths: &HashSet<&str>,
-) {
-    tracker.record_revisions(
-        conversation_id,
-        revisions
-            .into_iter()
-            .filter(|(path, _)| observed_paths.contains(path.as_str())),
-    );
+fn revisions_from_local_result(result: &ReadFileContextResult) -> Vec<(String, FileRevision)> {
+    result
+        .file_revisions
+        .iter()
+        .map(|observed| {
+            let revision = observed
+                .content_digest
+                .map(FileRevision::from_digest)
+                .unwrap_or(FileRevision::Uneditable);
+            (observed.path.clone(), revision)
+        })
+        .chain(
+            result
+                .failed_files
+                .iter()
+                .filter(|failed| is_missing_error(&failed.message))
+                .map(|failed| (failed.path.clone(), FileRevision::Missing)),
+        )
+        .collect()
+}
+
+fn revisions_from_remote_response(
+    response: &remote_server::proto::ReadFileContextResponse,
+) -> Vec<(String, FileRevision)> {
+    response
+        .file_contexts
+        .iter()
+        .map(|context| {
+            (
+                context.file_name.clone(),
+                revision_from_remote_context(context.clone()),
+            )
+        })
+        .chain(
+            response
+                .failed_files
+                .iter()
+                .filter(|failed| {
+                    failed
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| is_missing_error(&error.message))
+                })
+                .map(|failed| (failed.path.clone(), FileRevision::Missing)),
+        )
+        .collect()
 }
 
 impl ReadFilesExecutor {
@@ -198,29 +231,14 @@ impl ReadFilesExecutor {
                         max_file_bytes: None,
                         max_batch_bytes: None,
                     };
-                    let revisions = read_remote_revisions(&handle, &absolute_paths).await;
 
                     let response = handle
                         .read_file_context(request)
                         .await
                         .map_err(|e| anyhow::anyhow!("Remote read failed: {e}"))?;
-                    let observed_paths = response
-                        .file_contexts
-                        .iter()
-                        .map(|context| context.file_name.as_str())
-                        .chain(response.failed_files.iter().filter_map(|failed| {
-                            failed
-                                .error
-                                .as_ref()
-                                .is_some_and(|error| is_missing_error(&error.message))
-                                .then_some(failed.path.as_str())
-                        }))
-                        .collect::<HashSet<_>>();
-                    record_observed_revisions(
-                        &file_revision_tracker,
+                    file_revision_tracker.record_revisions(
                         conversation_id,
-                        revisions,
-                        &observed_paths,
+                        revisions_from_remote_response(&response),
                     );
 
                     let failed_files = response
@@ -286,17 +304,6 @@ impl ReadFilesExecutor {
         // Local path.
         ActionExecution::Async {
             execute_future: Box::pin(async move {
-                let revision_paths = locations
-                    .iter()
-                    .map(|location| {
-                        host_native_absolute_path(
-                            &location.name,
-                            &shell,
-                            &current_working_directory,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let revisions = read_local_revisions(revision_paths);
                 let result = read_local_file_context(
                     &locations,
                     current_working_directory,
@@ -305,20 +312,8 @@ impl ReadFilesExecutor {
                     None,
                 )
                 .await?;
-                let observed_paths = result
-                    .file_contexts
-                    .iter()
-                    .map(|context| context.file_name.as_str())
-                    .chain(result.failed_files.iter().filter_map(|failed| {
-                        is_missing_error(&failed.message).then_some(failed.path.as_str())
-                    }))
-                    .collect::<HashSet<_>>();
-                record_observed_revisions(
-                    &file_revision_tracker,
-                    conversation_id,
-                    revisions,
-                    &observed_paths,
-                );
+                file_revision_tracker
+                    .record_revisions(conversation_id, revisions_from_local_result(&result));
                 if result.failed_files.is_empty() {
                     Ok(ReadFilesResult::Success {
                         files: result.file_contexts,

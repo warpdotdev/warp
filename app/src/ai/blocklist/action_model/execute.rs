@@ -63,6 +63,8 @@ pub use run_agents::{RunAgentsExecutor, RunAgentsExecutorEvent, RunAgentsSpawnin
 pub use run_agents::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use send_message::SendMessageToAgentExecutor;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "local_fs")]
+use sha2::{Digest, Sha256};
 pub use shell_command::{ShellCommandExecutor, ShellCommandExecutorEvent};
 pub use start_agent::{
     StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
@@ -1121,9 +1123,17 @@ const MAX_FILE_READ_BYTES: usize = 1_000_000;
 pub struct ReadFileContextResult {
     /// [`FileContext`] data for all files that could be read.
     pub file_contexts: Vec<FileContext>,
+    /// Raw content revisions captured by the same file reads.
+    pub file_revisions: Vec<FileContentRevision>,
     /// Requested files that could not be read, each paired with a reason-specific
     /// failure message (missing, too large, or unprocessable).
     pub failed_files: Vec<ReadFilesFailedFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct FileContentRevision {
+    pub path: String,
+    pub content_digest: Option<[u8; 32]>,
 }
 
 /// Builds a single, reason-accurate summary from a batch of file-read failures,
@@ -1165,6 +1175,7 @@ pub async fn read_local_file_context(
     {
         let mut result = ReadFileContextResult {
             file_contexts: Vec::new(),
+            file_revisions: Vec::new(),
             failed_files: Vec::new(),
         };
 
@@ -1218,10 +1229,15 @@ pub async fn read_local_file_context(
                     TextFileReadResult::Segments {
                         segments,
                         bytes_read,
+                        content_digest,
                     } => {
                         if let Some(remaining) = &mut batch_bytes_remaining {
                             *remaining = remaining.saturating_sub(bytes_read);
                         }
+                        result.file_revisions.push(FileContentRevision {
+                            path: path_str,
+                            content_digest,
+                        });
                         result
                             .file_contexts
                             .extend(segments.into_iter().map(|seg| FileContext {
@@ -1251,10 +1267,15 @@ pub async fn read_local_file_context(
                 BinaryFileReadResult::Context {
                     file_context,
                     bytes_read,
+                    content_digest,
                 } => {
                     if let Some(remaining) = &mut batch_bytes_remaining {
                         *remaining = remaining.saturating_sub(bytes_read);
                     }
+                    result.file_revisions.push(FileContentRevision {
+                        path: path_str,
+                        content_digest,
+                    });
                     result.file_contexts.push(file_context);
                 }
                 BinaryFileReadResult::NotFound => result.failed_files.push(ReadFilesFailedFile {
@@ -1342,6 +1363,7 @@ enum BinaryFileReadResult {
     Context {
         file_context: FileContext,
         bytes_read: usize,
+        content_digest: Option<[u8; 32]>,
     },
     /// The file does not exist on disk.
     NotFound,
@@ -1375,6 +1397,8 @@ async fn read_binary_file_context(
         Err(FileLoadError::DoesNotExist) => return Ok(BinaryFileReadResult::NotFound),
         Err(FileLoadError::IOError(e)) => return Err(anyhow::anyhow!(e)),
     };
+    let content_digest = (content.len() <= warp_files::MAX_GUARDED_REVISION_BYTES as usize)
+        .then(|| Sha256::digest(&content).into());
 
     let mime_type = from_path(path).first_or_octet_stream().to_string();
     let processed_content = if is_supported_image_mime_type(&mime_type) {
@@ -1414,6 +1438,7 @@ async fn read_binary_file_context(
             last_modified,
         ),
         bytes_read,
+        content_digest,
     })
 }
 

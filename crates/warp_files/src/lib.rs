@@ -9,7 +9,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_channel::Sender;
@@ -19,7 +19,6 @@ use futures::io::{AsyncBufReadExt, BufReader};
 use futures::{FutureExt, StreamExt};
 use notify_debouncer_full::notify::{RecursiveMode, WatchFilter};
 use remote_server::manager::RemoteServerManager;
-use remote_server::proto::expected_file_revision;
 use repo_metadata::repositories::DetectedRepositories;
 use repo_metadata::repository::{RepositorySubscriber, SubscriberId};
 use repo_metadata::{CanonicalizedPath, Repository, RepositoryUpdate, RepositoryWatchMode};
@@ -33,6 +32,7 @@ use warpui_core::{Entity, ModelContext, ModelHandle, SingletonEntity};
 use watcher::{BulkFilesystemWatcher, BulkFilesystemWatcherEvent};
 
 pub mod text_file_reader;
+pub use remote_server::ExpectedFileRevision;
 pub use text_file_reader::{TextFileReadResult, TextFileSegment};
 
 #[derive(Debug)]
@@ -81,51 +81,14 @@ fn stale_file_error(path: &Path) -> FileSaveError {
 /// dropped on app teardown, in which case the outcome is treated as success.
 pub type SaveFuture = BoxFuture<'static, Result<(), Arc<FileSaveError>>>;
 
-const MAX_GUARDED_REVISION_BYTES: u64 = 1_000_000;
+pub const MAX_GUARDED_REVISION_BYTES: u64 = 1_000_000;
 
-/// File state an edit was prepared against.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExpectedFileRevision {
-    Present {
-        content_digest: [u8; 32],
-        last_modified: Option<SystemTime>,
-    },
-    Missing,
-    Uneditable,
-}
-
-impl ExpectedFileRevision {
-    /// Builds a digest-only revision from exact file content.
-    pub fn from_content(content: impl AsRef<[u8]>) -> Self {
-        Self::Present {
-            content_digest: Sha256::digest(content).into(),
-            last_modified: None,
-        }
-    }
-    fn to_remote(self) -> remote_server::proto::ExpectedFileRevision {
-        let (state, last_modified_epoch_millis) = match self {
-            Self::Present {
-                content_digest,
-                last_modified,
-            } => (
-                Some(expected_file_revision::State::ContentSha256(
-                    content_digest.to_vec(),
-                )),
-                last_modified.and_then(|time| {
-                    time.duration_since(SystemTime::UNIX_EPOCH)
-                        .ok()
-                        .map(|duration| duration.as_millis() as u64)
-                }),
-            ),
-            Self::Missing => (Some(expected_file_revision::State::Missing(true)), None),
-            Self::Uneditable => (Some(expected_file_revision::State::Uneditable(true)), None),
-        };
-        remote_server::proto::ExpectedFileRevision {
-            state,
-            last_modified_epoch_millis,
-        }
-    }
-}
+// Guarded mutations are serialized within a Warp process, including requests
+// served for remote sessions. Portable filesystem APIs do not provide an
+// atomic compare-and-swap for arbitrary path contents, so a non-cooperating
+// process can still change a path after the final comparison and before the
+// write, delete, or rename syscall.
+static GUARDED_PERSISTENCE_LOCK: Mutex<()> = Mutex::new(());
 
 fn guarded_revision_matches(
     file: &mut std::fs::File,
@@ -164,7 +127,11 @@ fn guarded_revision_matches(
     Ok(<[u8; 32]>::from(hasher.finalize()) == content_digest)
 }
 
-fn guarded_write(path: &Path, content: &[u8], expected: ExpectedFileRevision) -> io::Result<bool> {
+fn guarded_write_unlocked(
+    path: &Path,
+    content: &[u8],
+    expected: ExpectedFileRevision,
+) -> io::Result<bool> {
     match expected {
         ExpectedFileRevision::Missing => {
             let file = std::fs::OpenOptions::new()
@@ -200,8 +167,17 @@ fn guarded_write(path: &Path, content: &[u8], expected: ExpectedFileRevision) ->
         ExpectedFileRevision::Uneditable => Ok(false),
     }
 }
+fn guarded_write(path: &Path, content: &[u8], expected: ExpectedFileRevision) -> io::Result<bool> {
+    let _guard = GUARDED_PERSISTENCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    guarded_write_unlocked(path, content, expected)
+}
 
 fn guarded_delete(path: &Path, expected: ExpectedFileRevision) -> io::Result<bool> {
+    let _guard = GUARDED_PERSISTENCE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match expected {
         ExpectedFileRevision::Present { .. } => {
             let file = std::fs::OpenOptions::new().read(true).open(path);
@@ -767,6 +743,8 @@ impl FileModel {
             requested_ranges,
             max_bytes,
         );
+        let mut revision_hasher = Some(Sha256::new());
+        let mut revision_bytes = 0_u64;
 
         // Use `read_line()` instead of `lines()` so we can detect whether each
         // line was terminated by a newline. `lines()` strips this information,
@@ -784,6 +762,14 @@ impl FileModel {
             };
             if bytes_read == 0 {
                 break; // EOF
+            }
+            revision_bytes += bytes_read as u64;
+            if revision_bytes <= MAX_GUARDED_REVISION_BYTES {
+                if let Some(hasher) = &mut revision_hasher {
+                    hasher.update(line_buf.as_bytes());
+                }
+            } else {
+                revision_hasher = None;
             }
 
             // Strip the line terminator (`\n` or `\r\n`) and record whether
@@ -804,6 +790,7 @@ impl FileModel {
         Ok(TextFileReadResult::Segments {
             segments,
             bytes_read,
+            content_digest: revision_hasher.map(|hasher| hasher.finalize().into()),
         })
     }
 
@@ -1015,7 +1002,7 @@ impl FileModel {
                 ctx.spawn(
                     async move {
                         handle
-                            .write_file(path, content, Some(expected_revision.to_remote()))
+                            .write_file(path, content, Some(expected_revision.to_proto()))
                             .await
                     },
                     move |me, result, ctx| {
@@ -1053,6 +1040,9 @@ impl FileModel {
                 let guarded_source = file_path.clone();
                 let guarded_target = new_path.clone();
                 let saved = blocking::unblock(move || {
+                    let _guard = GUARDED_PERSISTENCE_LOCK
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let target_matches = match expected_revisions.target {
                         ExpectedFileRevision::Missing => !guarded_target.exists(),
                         ExpectedFileRevision::Present { .. } => {
@@ -1072,7 +1062,7 @@ impl FileModel {
                     if !target_matches {
                         return Ok(false);
                     }
-                    if !guarded_write(
+                    if !guarded_write_unlocked(
                         &guarded_source,
                         content.as_bytes(),
                         expected_revisions.source,
@@ -1145,7 +1135,7 @@ impl FileModel {
                 ctx.spawn(
                     async move {
                         handle
-                            .delete_file(path, Some(expected_revision.to_remote()))
+                            .delete_file(path, Some(expected_revision.to_proto()))
                             .await
                     },
                     move |me, result, ctx| {
