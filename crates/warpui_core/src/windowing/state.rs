@@ -127,10 +127,6 @@ impl WindowManager {
             .set_all_windows_background_blur_radius(blur_radius_pixels)
     }
 
-    pub fn set_all_windows_background_backdrop(&self, backdrop: crate::platform::WindowBackdrop) {
-        self.platform.set_all_windows_background_backdrop(backdrop)
-    }
-
     pub fn set_window_title(&self, window_id: WindowId, title: &str) {
         self.platform.set_window_title(window_id, title)
     }

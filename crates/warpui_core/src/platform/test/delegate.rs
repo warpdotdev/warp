@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -42,6 +43,9 @@ pub struct IntegrationTestDelegate {
 
 pub struct Window {
     callbacks: WindowCallbacks,
+    #[cfg(feature = "test-util")]
+    background_blur_radius_pixels: Option<u8>,
+    background_backdrop: Cell<platform::WindowBackdrop>,
 }
 
 impl AppDelegate {
@@ -78,11 +82,18 @@ impl platform::WindowManager for WindowManager {
     fn open_window(
         &mut self,
         window_id: WindowId,
-        _window_options: WindowOptions,
+        window_options: WindowOptions,
         callbacks: WindowCallbacks,
     ) -> Result<()> {
-        self.windows
-            .insert(window_id, Rc::new(Window { callbacks }));
+        self.windows.insert(
+            window_id,
+            Rc::new(Window {
+                callbacks,
+                #[cfg(feature = "test-util")]
+                background_blur_radius_pixels: window_options.background_blur_radius_pixels,
+                background_backdrop: Cell::new(window_options.background_backdrop),
+            }),
+        );
         Ok(())
     }
 
@@ -135,10 +146,6 @@ impl platform::WindowManager for WindowManager {
     }
 
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
-        // no-op for tests
-    }
-
-    fn set_all_windows_background_backdrop(&self, _backdrop: platform::WindowBackdrop) {
         // no-op for tests
     }
 
@@ -428,6 +435,10 @@ impl platform::Window for Window {
         platform::FullscreenState::Normal
     }
 
+    fn set_background_backdrop(&self, backdrop: platform::WindowBackdrop) {
+        self.background_backdrop.set(backdrop);
+    }
+
     fn set_titlebar_height(&self, _height: f64) {}
 
     fn as_ctx(&self) -> &dyn platform::WindowContext {
@@ -452,6 +463,16 @@ impl platform::Window for Window {
 
     fn uses_native_window_decorations(&self) -> bool {
         false
+    }
+
+    #[cfg(feature = "test-util")]
+    fn background_blur_radius_pixels_for_test(&self) -> Option<u8> {
+        self.background_blur_radius_pixels
+    }
+
+    #[cfg(feature = "test-util")]
+    fn background_backdrop_for_test(&self) -> platform::WindowBackdrop {
+        self.background_backdrop.get()
     }
 }
 

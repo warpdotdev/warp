@@ -18209,6 +18209,12 @@ impl Workspace {
             WindowSettingsChangedEvent::BackgroundOpacity { .. } => {
                 ctx.notify();
             }
+            WindowSettingsChangedEvent::BackgroundBackdrop { .. } => {
+                let backdrop = *WindowSettings::as_ref(ctx).background_backdrop;
+                if let Some(window) = ctx.windows().platform_window(ctx.window_id()) {
+                    window.set_background_backdrop(backdrop);
+                }
+            }
             WindowSettingsChangedEvent::LeftPanelVisibilityAcrossTabs { .. } => {
                 if self.left_panel_visibility_across_tabs_enabled(ctx) {
                     self.left_panel_open = self

@@ -2383,7 +2383,6 @@ impl AppearanceSettingsPageView {
     }
 
     fn set_window_backdrop(&mut self, backdrop: WindowBackdrop, ctx: &mut ViewContext<Self>) {
-        ctx.windows().set_all_windows_background_backdrop(backdrop);
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
             report_if_error!(window_settings.background_backdrop.set_value(backdrop, ctx));
         });

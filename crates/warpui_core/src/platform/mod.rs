@@ -520,6 +520,7 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     fn toggle_maximized(&self);
     fn toggle_fullscreen(&self);
     fn fullscreen_state(&self) -> FullscreenState;
+    fn set_background_backdrop(&self, _backdrop: WindowBackdrop) {}
     /// Whether the window has the native OS window frame (title bar and buttons).
     fn uses_native_window_decorations(&self) -> bool;
     fn set_titlebar_height(&self, height: f64);
@@ -533,6 +534,16 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     fn callbacks(&self) -> &WindowCallbacks;
 
     fn as_any(&self) -> &dyn std::any::Any;
+
+    #[cfg(feature = "test-util")]
+    fn background_blur_radius_pixels_for_test(&self) -> Option<u8> {
+        None
+    }
+
+    #[cfg(feature = "test-util")]
+    fn background_backdrop_for_test(&self) -> WindowBackdrop {
+        WindowBackdrop::None
+    }
 }
 
 pub trait WindowContext {
@@ -673,9 +684,6 @@ pub trait WindowManager {
 
     /// Sets the background blur radius for all windows to the given `blur_radius_pixels` value.
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8);
-
-    /// [Windows only] Sets the system backdrop material for all windows.
-    fn set_all_windows_background_backdrop(&self, backdrop: WindowBackdrop);
 
     fn set_window_title(&self, window_id: WindowId, title: &str);
 

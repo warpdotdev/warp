@@ -17,7 +17,7 @@ use terminal::view::ActiveSessionState;
 use warp_editor::editor::NavigationKey;
 #[cfg(feature = "local_fs")]
 use warp_files::FileModel;
-use warpui::platform::WindowStyle;
+use warpui::platform::{WindowBackdrop, WindowStyle};
 use warpui::{AddSingletonModel, App, ViewHandle};
 use watcher::HomeDirectoryWatcher;
 
@@ -268,6 +268,33 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
         )
     });
     workspace
+}
+
+#[test]
+fn test_background_backdrop_setting_updates_existing_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        let window_id = workspace.update(&mut app, |_, ctx| ctx.window_id());
+
+        WindowSettings::handle(&app).update(&mut app, |window_settings, ctx| {
+            window_settings
+                .background_backdrop
+                .set_value(WindowBackdrop::Acrylic, ctx)
+                .expect("backdrop setting should update");
+        });
+
+        app.read(|ctx| {
+            let window = ctx
+                .windows()
+                .platform_window(window_id)
+                .expect("window should be open");
+            assert_eq!(
+                window.background_backdrop_for_test(),
+                WindowBackdrop::Acrylic
+            );
+        });
+    });
 }
 
 #[cfg(not(target_family = "wasm"))]

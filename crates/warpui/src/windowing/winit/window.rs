@@ -302,19 +302,6 @@ impl platform::WindowManager for WindowManager {
         // https://docs.rs/winit/latest/winit/window/struct.Window.html#method.set_blur
     }
 
-    #[cfg_attr(not(windows), allow(unused_variables))]
-    fn set_all_windows_background_backdrop(&self, backdrop: WindowBackdrop) {
-        #[cfg(windows)]
-        {
-            let backdrop = winit_backdrop(backdrop);
-            for window in self.windows.values() {
-                if let Some(inner) = window.inner.borrow().as_ref() {
-                    inner.window.set_system_backdrop(backdrop);
-                }
-            }
-        }
-    }
-
     fn set_window_title(&self, window_id: WindowId, title: &str) {
         if let Some(window) = self.windows.get(&window_id) {
             window.set_title(title);
@@ -607,11 +594,6 @@ impl platform::WindowManager for IntegrationTestWindowManager {
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8) {
         self.window_manager
             .set_all_windows_background_blur_radius(blur_radius_pixels)
-    }
-
-    fn set_all_windows_background_backdrop(&self, backdrop: WindowBackdrop) {
-        self.window_manager
-            .set_all_windows_background_backdrop(backdrop)
     }
 
     fn set_window_title(&self, window_id: WindowId, title: &str) {
@@ -1609,6 +1591,18 @@ impl crate::platform::Window for Window {
                     .or(window.is_maximized().then_some(FullscreenState::Maximized))
             })
             .unwrap_or_default()
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn set_background_backdrop(&self, backdrop: WindowBackdrop) {
+        #[cfg(windows)]
+        {
+            use super::windows::WindowExt;
+
+            if let Some(inner) = self.inner.borrow().as_ref() {
+                inner.window.set_system_backdrop(winit_backdrop(backdrop));
+            }
+        }
     }
 
     fn supports_transparency(&self) -> bool {

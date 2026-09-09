@@ -8,12 +8,14 @@ use std::task::{Context, Poll};
 use anyhow::Result;
 use futures_util::{Stream, stream};
 use parking_lot::Mutex;
+use pathfinder_geometry::vector::vec2f;
 
 use super::*;
 use crate::r#async::Timer;
 use crate::elements::*;
 use crate::keymap::Keystroke;
 use crate::keymap::macros::*;
+use crate::platform::WindowBackdrop;
 
 #[path = "transfer_view_tests.rs"]
 mod transfer_view_tests;
@@ -23,6 +25,65 @@ mod ref_count_tests;
 
 #[path = "try_update_view_tests.rs"]
 mod try_update_view_tests;
+
+#[test]
+fn test_reopen_closed_window_uses_current_background_settings() {
+    #[derive(Default)]
+    struct RootView;
+
+    impl Entity for RootView {
+        type Event = ();
+    }
+
+    impl View for RootView {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "RootView"
+        }
+    }
+
+    impl TypedActionView for RootView {
+        type Action = ();
+    }
+
+    App::test((), |mut app| async move {
+        let window_id = app.update(|ctx| {
+            ctx.add_window(
+                AddWindowOptions {
+                    window_bounds: WindowBounds::ExactPosition(RectF::new(
+                        vec2f(0., 0.),
+                        vec2f(800., 600.),
+                    )),
+                    ..Default::default()
+                },
+                |_| RootView,
+            )
+            .0
+        });
+        let closed_window = app
+            .update(|ctx| ctx.handle_window_closed(window_id))
+            .expect("window should close");
+
+        app.update(|ctx| {
+            ctx.reopen_closed_window(closed_window, Some(23), WindowBackdrop::MicaAlt);
+        });
+
+        app.read(|ctx| {
+            let window = ctx
+                .windows()
+                .platform_window(window_id)
+                .expect("window should reopen");
+            assert_eq!(window.background_blur_radius_pixels_for_test(), Some(23));
+            assert_eq!(
+                window.background_backdrop_for_test(),
+                WindowBackdrop::MicaAlt
+            );
+        });
+    });
+}
 
 #[test]
 fn test_subscribe_and_emit_from_model() {
