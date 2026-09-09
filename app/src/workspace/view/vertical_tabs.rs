@@ -2812,7 +2812,7 @@ fn render_grouped_tabs_header(
     let title_element = render_row_title_line(
         title_element,
         false,
-        should_show_tab_group_activity_indicator(is_collapsed, has_unread_activity),
+        is_collapsed && has_unread_activity,
         None,
         theme,
     );
@@ -3419,10 +3419,6 @@ pub(super) fn render_title_indicator(theme: &WarpTheme) -> Box<dyn Element> {
     .with_width(INDICATOR_DOT_SIZE)
     .with_height(INDICATOR_DOT_SIZE)
     .finish()
-}
-
-fn should_show_tab_group_activity_indicator(is_collapsed: bool, has_unread_activity: bool) -> bool {
-    is_collapsed && has_unread_activity
 }
 
 /// Whether a row should surface the synchronized-inputs indicator. Mirrors the
