@@ -79,6 +79,10 @@ pub enum UserWorkspacesEvent {
     ToggleTeamDiscoverabilityRejected(anyhow::Error),
     JoinTeamWithTeamDiscoverySuccess,
     JoinTeamWithTeamDiscoveryRejected(anyhow::Error),
+    JoinTeamInWorkspaceSuccess {
+        team_uid: ServerId,
+    },
+    JoinTeamInWorkspaceRejected(anyhow::Error),
     FetchDiscoverableTeamsSuccess(Vec<DiscoverableTeam>),
     FetchDiscoverableTeamsRejected(anyhow::Error),
     TransferTeamOwnershipSuccess,
@@ -1147,6 +1151,38 @@ impl UserWorkspaces {
         let _ = ctx.spawn(
             async move { team_client.join_team_with_team_discovery(team_uid).await },
             Self::on_join_team_with_team_discovery,
+        );
+    }
+
+    fn on_join_team_in_workspace(
+        &mut self,
+        team_uid: ServerId,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                if self.is_member_of_team(team_uid) {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceSuccess { team_uid });
+                } else {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(
+                        anyhow::anyhow!("joined team missing from refreshed workspace metadata"),
+                    ));
+                }
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn join_team_in_workspace(&mut self, team_uid: ServerId, ctx: &mut ModelContext<Self>) {
+        let team_client = self.team_client.clone();
+        let _ = ctx.spawn(
+            async move { team_client.join_team_in_workspace(team_uid).await },
+            move |me, result, ctx| {
+                me.on_join_team_in_workspace(team_uid, result, ctx);
+            },
         );
     }
 

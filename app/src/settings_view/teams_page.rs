@@ -17,8 +17,8 @@ use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    CrossAxisAlignment, Element, Expanded, Flex, FormattedTextElement, HighlightedHyperlink,
+    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
     Shrinkable, Stack, Text,
 };
@@ -36,6 +36,7 @@ use warpui::{
 
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::join_teams_modal::{JoinTeamsModal, JoinTeamsModalEvent};
 use super::settings_page::{
     MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, render_banner,
     render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
@@ -90,6 +91,9 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const JOIN_ANOTHER_TEAM_HEADER: &str = "Join another team";
+const JOIN_ANOTHER_TEAM_DESCRIPTION: &str = "Your workspace has more teams you can join.";
+const BROWSE_TEAMS_BUTTON_LABEL: &str = "Browse teams";
 const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
     "Contact an admin to join a team to gain access to more features.";
@@ -224,6 +228,7 @@ pub enum TeamsPageAction {
     JoinTeamWithTeamDiscovery {
         team_uid: ServerId,
     },
+    ShowJoinTeamsModal,
     ShowTransferOwnershipModal {
         new_owner_email: String,
         new_owner_uid: UserUid,
@@ -345,6 +350,7 @@ struct TeamsWidgetMouseHandles {
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
     workspace_admin_panel_link: HighlightedHyperlink,
+    browse_teams_button: MouseStateHandle,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -531,6 +537,7 @@ pub struct TeamsPageView {
     show_team_action_confirmation_dialog: bool,
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
+    join_teams_modal_state: ModalViewState<Modal<JoinTeamsModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
     open_team_states: Vec<DiscoverableTeamState>,
@@ -664,6 +671,7 @@ impl TypedActionView for TeamsPageView {
                 self.join_team_with_team_discovery(*team_uid, ctx);
                 ctx.notify();
             }
+            TeamsPageAction::ShowJoinTeamsModal => self.show_join_teams_modal(ctx),
             TeamsPageAction::ShowTransferOwnershipModal {
                 new_owner_email,
                 new_owner_uid,
@@ -889,6 +897,29 @@ impl TeamsPageView {
             me.handle_transfer_ownership_modal_close_event(event, ctx);
         });
 
+        let join_teams_modal_body = ctx.add_typed_action_view(|_| JoinTeamsModal::new());
+        ctx.subscribe_to_view(&join_teams_modal_body, |me, _, event, ctx| {
+            me.handle_join_teams_modal_event(event, ctx);
+        });
+        let join_teams_modal = ctx.add_typed_action_view(|ctx| {
+            Modal::new(
+                Some(JOIN_ANOTHER_TEAM_HEADER.to_string()),
+                join_teams_modal_body,
+                ctx,
+            )
+            .with_modal_style(UiComponentStyles {
+                height: Some(500.),
+                ..Default::default()
+            })
+            .with_body_style(UiComponentStyles {
+                height: Some(430.),
+                ..Default::default()
+            })
+        });
+        ctx.subscribe_to_view(&join_teams_modal, |me, _, event, ctx| {
+            me.handle_join_teams_modal_close_event(event, ctx);
+        });
+
         let member_actions_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
         ctx.subscribe_to_view(&member_actions_menu, |me, _, event, ctx| {
             if let menu::Event::Close { .. } = event {
@@ -927,6 +958,7 @@ impl TeamsPageView {
             show_team_action_confirmation_dialog: false,
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
+            join_teams_modal_state: ModalViewState::new(join_teams_modal),
             discoverable_teams_states: Vec::new(),
             open_team_states,
             rename_team_editor,
@@ -1088,6 +1120,30 @@ impl TeamsPageView {
             UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(err) => {
                 self.show_error("Failed to join team", Some(err), ctx);
             }
+            UserWorkspacesEvent::JoinTeamInWorkspaceSuccess { team_uid } => {
+                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                    update_manager.refresh_updated_objects(ctx);
+                });
+                let team_name = self
+                    .user_workspaces
+                    .as_ref(ctx)
+                    .team_from_uid(*team_uid)
+                    .map(|team| team.name.clone())
+                    .unwrap_or_else(|| "team".to_string());
+                self.close_join_teams_modal(ctx);
+                self.show_success(format!("Successfully joined {team_name}"), ctx);
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenNewWindowForTeam {
+                    team_uid: *team_uid,
+                });
+            }
+            UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err) => {
+                self.join_teams_modal_state.view.update(ctx, |modal, ctx| {
+                    modal.body().update(ctx, |body, ctx| {
+                        body.set_joining_team(None, ctx);
+                    });
+                });
+                self.show_error("Failed to join team", Some(err), ctx);
+            }
             UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(teams) => {
                 self.discoverable_teams_states = teams
                     .iter()
@@ -1167,6 +1223,7 @@ impl TeamsPageView {
         // Only one modal renders (see `get_modal_content`), so opening one must clear the other
         // rather than leave it queued behind for a target the user has moved on from.
         self.clear_transfer_ownership_modal(ctx);
+        self.clear_join_teams_modal(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1215,7 +1272,9 @@ impl TeamsPageView {
     /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
     /// centered on it lands wherever the scroll offset happens to put it.
     pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
-        if self.transfer_ownership_modal_state.is_open() {
+        if self.join_teams_modal_state.is_open() {
+            Some(self.join_teams_modal_state.render())
+        } else if self.transfer_ownership_modal_state.is_open() {
             Some(self.transfer_ownership_modal_state.render())
         } else if self.show_team_action_confirmation_dialog {
             Some(ChildView::new(&self.team_action_confirmation_dialog).finish())
@@ -1311,6 +1370,61 @@ impl TeamsPageView {
         }
     }
 
+    fn handle_join_teams_modal_event(
+        &mut self,
+        event: &JoinTeamsModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            JoinTeamsModalEvent::Join { team_uid } => {
+                self.user_workspaces
+                    .update(ctx, move |user_workspaces, ctx| {
+                        user_workspaces.join_team_in_workspace(*team_uid, ctx);
+                    });
+            }
+        }
+    }
+
+    fn handle_join_teams_modal_close_event(
+        &mut self,
+        event: &ModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ModalEvent::Close => self.close_join_teams_modal(ctx),
+        }
+    }
+
+    fn clear_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.join_teams_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_join_teams_modal(ctx);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
+    fn show_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
+        self.clear_transfer_ownership_modal(ctx);
+        let teams = self
+            .open_team_states
+            .iter()
+            .map(|state| state.team.clone())
+            .collect();
+        self.join_teams_modal_state.view.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                body.set_teams(teams, ctx);
+            });
+        });
+        self.join_teams_modal_state.open();
+        ctx.focus(&self.join_teams_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
     /// Closes the transfer-ownership modal and takes back the focus it was given on open, so
     /// Escape stops dispatching into a view that is no longer rendered. Announcing the change is
     /// the caller's job, as it is for [`Self::clear_team_action_confirmation`].
@@ -1333,6 +1447,7 @@ impl TeamsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.clear_team_action_confirmation();
+        self.clear_join_teams_modal(ctx);
         self.transfer_ownership_modal_state
             .view
             .update(ctx, |modal, ctx| {
@@ -2466,6 +2581,13 @@ impl TeamsWidget {
             chip_editor_style,
             app,
         ));
+        if !view.open_team_states.is_empty() {
+            main_content.add_child(
+                Container::new(self.render_join_another_team_row(appearance))
+                    .with_padding_top(CONTENT_SEPARATION_PADDING)
+                    .finish(),
+            );
+        }
 
         // 4) Horizontal separator between the invite flows and the team members
         // list. 32px of breathing room above and below to match the design.
@@ -2534,21 +2656,61 @@ impl TeamsWidget {
             }
         }
         main_content.add_child(button_row.finish());
-
-        if workspace.is_native_workspaces_enabled() && !view.open_team_states.is_empty() {
-            main_content.add_child(
-                Container::new(render_separator(appearance))
-                    .with_padding_top(32.)
-                    .with_padding_bottom(32.)
-                    .finish(),
-            );
-            main_content.add_child(self.render_join_teams_section(
-                &view.open_team_states,
-                appearance,
-                JOIN_TEAM_HEADER,
-            ));
-        }
         main_content.finish()
+    }
+
+    fn render_join_another_team_row(&self, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let copy = Expanded::new(
+            1.,
+            Flex::column()
+                .with_child(
+                    Text::new_inline(
+                        JOIN_ANOTHER_TEAM_HEADER,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_style(Properties::default().weight(Weight::Bold))
+                    .with_color(theme.active_ui_text_color().into())
+                    .finish(),
+                )
+                .with_child(
+                    Text::new(
+                        JOIN_ANOTHER_TEAM_DESCRIPTION,
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .finish(),
+                )
+                .finish(),
+        )
+        .finish();
+        let button = appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Secondary,
+                self.mouse_state_handles.browse_teams_button.clone(),
+            )
+            .with_centered_text_label(BROWSE_TEAMS_BUTTON_LABEL.to_string())
+            .with_style(UiComponentStyles {
+                height: Some(36.),
+                font_weight: Some(Weight::Medium),
+                ..Default::default()
+            })
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(TeamsPageAction::ShowJoinTeamsModal);
+            })
+            .finish();
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(copy)
+            .with_child(Container::new(button).with_margin_left(16.).finish())
+            .finish()
     }
 
     fn render_header(

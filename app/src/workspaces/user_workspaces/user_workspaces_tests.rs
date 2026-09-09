@@ -1852,6 +1852,54 @@ fn switching_a_window_to_its_current_team_announces_nothing() {
     })
 }
 
+#[test]
+fn joining_a_workspace_team_retains_memberships_and_preserves_the_current_window() {
+    let (platform, security, mut joined_workspace) = platform_and_security();
+    joined_workspace.open_teams.clear();
+    let initial_workspace = workspace_for_test(&platform);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![initial_workspace]);
+
+        let window_id = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(window_id, Some(platform.uid), ctx);
+            user_workspaces.on_join_team_in_workspace(
+                security.uid,
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![joined_workspace],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                }),
+                ctx,
+            );
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces
+                    .current_workspace()
+                    .expect("workspace should remain selected")
+                    .teams
+                    .iter()
+                    .map(|team| team.uid)
+                    .collect::<Vec<_>>(),
+                vec![platform.uid, security.uid]
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(window_id),
+                Some(platform.uid)
+            );
+        });
+    })
+}
+
 /// The switcher's own visibility rule, which the TUI indicator reuses rather than
 /// reimplementing so the two front-ends cannot disagree about who counts as multi-team.
 #[test]
@@ -4355,7 +4403,7 @@ fn test_workspace_open_teams_survive_metadata_conversion() {
         team_accepting_invites: true,
     }];
 
-    let response: WorkspacesMetadataResponse = gql_user(None, vec![workspace]).into();
+    let response = workspaces_metadata_response_from_gql(gql_user(None, vec![workspace]), false);
 
     let open_teams = &response.workspaces[0].open_teams;
     assert_eq!(open_teams.len(), 1);

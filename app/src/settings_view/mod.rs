@@ -97,6 +97,7 @@ mod execution_profile_view;
 mod features;
 mod features_page;
 pub(crate) mod handoff_environment_creation_modal;
+mod join_teams_modal;
 pub mod keybindings;
 mod knowledge_page;
 mod main_page;

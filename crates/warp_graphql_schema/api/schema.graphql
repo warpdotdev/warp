@@ -1981,6 +1981,16 @@ type IssueTaskIdentityTokenOutput implements Response {
 }
 
 union IssueTaskIdentityTokenResult = IssueTaskIdentityTokenOutput | UserFacingError
+input JoinTeamInWorkspaceInput {
+  teamUid: ID!
+}
+
+type JoinTeamInWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinTeamInWorkspaceResult = JoinTeamInWorkspaceOutput | UserFacingError
 
 input JoinTeamWithTeamDiscoveryInput {
   entrypoint: TeamDiscoveryEntrypoint!
@@ -3157,6 +3167,7 @@ type RootMutation {
   giveUpNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   grabNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
+  joinTeamInWorkspace(input: JoinTeamInWorkspaceInput!, requestContext: RequestContext!): JoinTeamInWorkspaceResult!
   joinTeamWithTeamDiscovery(input: JoinTeamWithTeamDiscoveryInput!, requestContext: RequestContext!): JoinTeamWithTeamDiscoveryResult!
 
   """The API for leaving an object as a direct guest or link-shared."""

@@ -316,8 +316,9 @@ fn native_workspace_member_gets_join_or_empty_state() {
         vec![TeamsPageSection::NoTeamsToJoin]
     );
 }
+
 #[test]
-fn native_workspace_member_on_a_team_can_see_additional_open_teams() {
+fn native_workspace_member_on_a_team_can_join_another_open_team() {
     let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
     workspace.teams.push(team_with_members(
         vec![member(MEMBER_EMAIL, MembershipRole::User)],
@@ -342,7 +343,7 @@ fn non_native_workspace_does_not_show_open_teams() {
 }
 
 #[test]
-fn native_workspace_with_no_open_teams_does_not_show_join_section() {
+fn native_workspace_with_no_open_teams_does_not_show_join_another_team_row() {
     let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
 
     let states = TeamsPageView::open_team_states_for_workspace(Some(&workspace));
