@@ -201,7 +201,7 @@ jobs:
           WARP_NOTARIZATION_PASSWORD: ${{ secrets.WARP_NOTARIZATION_PASSWORD }}
 
       - name: Archive ${{ matrix.arch }} macOS settings schema
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: settings-schema-macos-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -825,7 +825,7 @@ jobs:
 
       - name: Upload TUI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-macos-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-macos-${{ matrix.arch }}.tar.gz
@@ -1038,7 +1038,7 @@ jobs:
 
       - name: Upload TUI as workflow artifact
         if: ${{ needs.prepare_release.outputs.should_publish != 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-linux-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: warp-tui-${{ steps.get-config.outputs.channel }}-linux-${{ matrix.arch }}.tar.gz
@@ -1141,7 +1141,7 @@ jobs:
           GIT_RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
       - name: Archive canonical Linux settings schema
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: settings-schema-linux-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2106,7 +2106,7 @@ jobs:
           PDB_FILE_PATH: ${{ steps.build_tui.outputs.pdb_file_path }}
 
       - name: Archive Windows TUI binary build
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-tui-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2258,7 +2258,7 @@ jobs:
           RELEASE_ARCH: ${{ matrix.release_arch }}
 
       - name: Upload Windows TUI installer
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-windows-tui-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           path: |
@@ -2329,7 +2329,7 @@ jobs:
           PDB_FILE_PATH: ${{ steps.build_cli.outputs.pdb_file_path }}
 
       - name: Archive Windows CLI binary build
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-cli-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
@@ -2589,14 +2589,14 @@ jobs:
 
       - name: Archive canonical Windows settings schema
         if: ${{ matrix.arch == 'x64' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: settings-schema-windows-${{ steps.get-config.outputs.channel }}
           retention-days: 1
           path: ${{ runner.temp }}\settings_schema.json
 
       - name: Archive Windows binary build
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-binary-${{ matrix.arch }}-${{ steps.get-config.outputs.channel }}
           retention-days: 1
