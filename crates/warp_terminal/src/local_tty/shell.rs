@@ -16,6 +16,7 @@ use warp_util::path::{
 };
 
 use crate::bootstrap::{generate_session_id, init_shell_script_for_shell};
+use crate::local_tty::dev_container::DevContainerShellStarter;
 use crate::local_tty::docker_sandbox::DockerSandboxShellStarter;
 use crate::shell::{ShellLaunchData, ShellName, ShellType};
 
@@ -65,6 +66,12 @@ pub enum ShellStarter {
     /// the resolved workspace path, read-only init-script mount, and base
     /// Docker image (`--template <base_image>`).
     DockerSandbox(DockerSandboxShellStarter),
+    /// Bootstrap a shell inside an already-running Dev Container via plain
+    /// `docker exec` (not `devcontainer exec`; see
+    /// [`DevContainerShellStarter`] for why). Bringing the container up
+    /// happens earlier, before this starter is constructed; see
+    /// `crate::terminal::view::dev_container`.
+    DevContainer(DevContainerShellStarter),
 }
 
 impl ShellStarter {
@@ -155,6 +162,43 @@ impl ShellStarter {
                                     session_id: generate_session_id(),
                                 },
                                 base_image,
+                            ),
+                        ))
+                        .into(),
+                    );
+                }
+                ShellLaunchData::DevContainer {
+                    workspace_folder,
+                    docker_path,
+                    container_id,
+                    remote_user,
+                    remote_workspace_folder,
+                    sandbox_id,
+                    session_id,
+                } => {
+                    // `docker_path`, `container_id`, `remote_user`,
+                    // `remote_workspace_folder`, and `session_id` are
+                    // resolved/picked by the caller
+                    // (`crate::terminal::view::dev_container`) before this
+                    // starter is constructed, mirroring how `sbx_path` is
+                    // resolved for the Docker sandbox. `session_id` in
+                    // particular must be reused rather than regenerated
+                    // here: it's already baked into the init/bootstrap
+                    // scripts staged into the container during preflight.
+                    return Some(
+                        ShellStarterSource::Override(ShellStarter::DevContainer(
+                            DevContainerShellStarter::new(
+                                DirectShellStarter {
+                                    args: Vec::new(),
+                                    shell_path: docker_path,
+                                    shell_type: ShellType::Bash,
+                                    session_id,
+                                },
+                                workspace_folder,
+                                container_id,
+                                remote_user,
+                                remote_workspace_folder,
+                                sandbox_id,
                             ),
                         ))
                         .into(),
@@ -277,6 +321,7 @@ impl ShellStarter {
         match self {
             ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter.shell_type(),
             ShellStarter::DockerSandbox(starter) => starter.shell_type(),
+            ShellStarter::DevContainer(starter) => starter.shell_type(),
             ShellStarter::Wsl(starter) => starter.shell_type(),
         }
     }
@@ -289,10 +334,15 @@ impl ShellStarter {
         matches!(self, ShellStarter::DockerSandbox(_))
     }
 
+    pub fn is_dev_container(&self) -> bool {
+        matches!(self, ShellStarter::DevContainer(_))
+    }
+
     fn display_name(&self) -> &str {
         match self {
             Self::Direct(starter) => starter.display_name(),
             Self::DockerSandbox(starter) => starter.display_name(),
+            Self::DevContainer(starter) => starter.display_name(),
             Self::Wsl(starter) => starter.distribution(),
             Self::MSYS2(starter) => {
                 if starter
@@ -316,6 +366,9 @@ impl ShellStarter {
                 starter.logical_shell_path().to_string_lossy().into_owned()
             }
             Self::DockerSandbox(starter) => {
+                starter.logical_shell_path().to_string_lossy().into_owned()
+            }
+            Self::DevContainer(starter) => {
                 starter.logical_shell_path().to_string_lossy().into_owned()
             }
             Self::Wsl(starter) => starter.distribution().to_owned(),

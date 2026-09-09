@@ -97,6 +97,7 @@ impl LocalShellState {
             ShellStarterSourceOrWslName::Source(starter_source) => match starter_source.into() {
                 ShellStarter::Direct(starter) | ShellStarter::MSYS2(starter) => starter,
                 ShellStarter::DockerSandbox(docker_starter) => docker_starter.direct,
+                ShellStarter::DevContainer(dev_container_starter) => dev_container_starter.direct,
                 ShellStarter::Wsl(_) => return LocalShellState::NotLoaded,
             },
             // TODO(CORE-3020): Implement WSL for the Local Shell model.

@@ -1,13 +1,18 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::{FairMutex, Mutex};
 use warpui::App;
 
 use super::*;
+use crate::terminal::ShellLaunchData;
 use crate::terminal::event_listener::ChannelEventListener;
 use crate::terminal::model::StartCommandOutcome;
 use crate::terminal::model::ansi::{Handler, PreexecValue};
-use crate::terminal::model::session::{SessionId, SessionInfo, Sessions};
+use crate::terminal::model::session::{
+    BootstrapSessionType, HostInfo, IsSSHWrapperSession, SessionId, SessionInfo, Sessions,
+};
+use crate::terminal::shell::Shell;
 
 #[derive(Clone, Default)]
 struct TestEventLoopSender {
@@ -26,6 +31,115 @@ fn terminal_model() -> Arc<FairMutex<TerminalModel>> {
         None,
         Some(ChannelEventListener::new_for_test()),
     )))
+}
+
+fn session_info_with_launch_data(launch_data: Option<ShellLaunchData>) -> SessionInfo {
+    SessionInfo {
+        session_id: SessionId::from(1),
+        shell: Shell::new(ShellType::Bash, None, None, HashSet::new(), None),
+        launch_data,
+        histfile: None,
+        user: "test-user".to_owned(),
+        hostname: "test-host".to_owned(),
+        subshell_info: None,
+        path: None,
+        environment_variable_names: HashSet::new(),
+        aliases: HashMap::new(),
+        abbreviations: HashMap::new(),
+        function_names: HashSet::new(),
+        builtins: HashSet::new(),
+        keywords: Vec::new(),
+        is_ssh_wrapper_session: IsSSHWrapperSession::No,
+        home_dir: None,
+        cdpath: None,
+        editor: None,
+        session_type: BootstrapSessionType::Local,
+        host_info: HostInfo::default(),
+        wsl_name: None,
+        spawning_session_id: None,
+    }
+}
+
+/// Sets up a `PtyController` with a fake event loop sender, returning both so
+/// tests can drive `initialize_shell` and inspect what it sent.
+fn controller_with_test_sender(
+    app: &mut App,
+) -> (
+    ModelHandle<PtyController<TestEventLoopSender>>,
+    TestEventLoopSender,
+) {
+    let model = terminal_model();
+    let (_model_events_tx, model_events_rx) = async_channel::unbounded();
+    let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let sessions = app.add_model(|_| Sessions::new_for_test());
+    let model_events =
+        app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    let line_editor_status =
+        app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+    let sender = TestEventLoopSender::default();
+    let controller = app.add_model(|ctx| {
+        PtyController::new(
+            sender.clone(),
+            model_events,
+            line_editor_status,
+            sessions,
+            executor_command_rx,
+            model,
+            ctx,
+        )
+    });
+    (controller, sender)
+}
+
+#[test]
+fn initialize_shell_is_noop_for_dev_container_session() {
+    App::test((), |mut app| async move {
+        let (controller, sender) = controller_with_test_sender(&mut app);
+        let session_info = session_info_with_launch_data(Some(ShellLaunchData::DevContainer {
+            workspace_folder: "/home/user/project".into(),
+            docker_path: "/usr/bin/docker".into(),
+            container_id: "abc123".to_owned(),
+            remote_user: None,
+            remote_workspace_folder: "/workspaces/project".to_owned(),
+            sandbox_id: "deadbeef".to_owned(),
+            session_id: SessionId::from(1),
+        }));
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.initialize_shell(&session_info, ctx);
+        });
+
+        assert!(
+            sender.messages.lock().is_empty(),
+            "Dev Container sessions bootstrap from files already staged into the container, so \
+             Warp must not also type the bootstrap script into the pty."
+        );
+    });
+}
+
+#[test]
+fn initialize_shell_writes_bootstrap_bytes_for_local_session() {
+    App::test((), |mut app| async move {
+        let (controller, sender) = controller_with_test_sender(&mut app);
+        let session_info = session_info_with_launch_data(Some(ShellLaunchData::Executable {
+            executable_path: "/bin/bash".into(),
+            shell_type: ShellType::Bash,
+        }));
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.initialize_shell(&session_info, ctx);
+        });
+
+        assert!(
+            sender
+                .messages
+                .lock()
+                .iter()
+                .any(|message| matches!(message, Message::Input(_))),
+            "A local (non-Dev-Container) session should still have its bootstrap script written \
+             to the pty."
+        );
+    });
 }
 
 #[test]
@@ -263,5 +377,198 @@ fn rejected_queued_in_band_start_is_cancelled_without_writing_bytes() {
             assert!(!line_editor_status.is_line_editor_active());
         });
         drop(model_events_tx);
+    });
+}
+
+/// Sets up a `PtyController` with an active session whose shell has an input-reporting sequence
+/// (zsh, unconditionally), so tests can drive the probe/settle-delay behavior in
+/// `execute_next_queued_write`.
+fn controller_with_active_zsh_session(
+    app: &mut App,
+) -> (
+    ModelHandle<PtyController<TestEventLoopSender>>,
+    ModelHandle<LineEditorStatus>,
+    TestEventLoopSender,
+) {
+    let session_id = SessionId::from(7);
+    let session_info = SessionInfo {
+        shell: Shell::new(ShellType::Zsh, None, None, HashSet::new(), None),
+        session_id,
+        ..session_info_with_launch_data(None)
+    };
+
+    let model = terminal_model();
+    let (_model_events_tx, model_events_rx) = async_channel::unbounded();
+    let (_executor_command_tx, executor_command_rx) = async_channel::unbounded();
+    let sessions = app.add_model(|_| {
+        let mut sessions = Sessions::new_for_test();
+        sessions.register_session_for_test(session_info);
+        sessions
+    });
+    let model_events =
+        app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
+    model_events.update(app, |dispatcher, _| {
+        dispatcher.set_active_session_id(session_id);
+    });
+    let line_editor_status =
+        app.add_model(|ctx| LineEditorStatus::new(model_events.clone(), sessions.clone(), ctx));
+    let sender = TestEventLoopSender::default();
+    let controller = app.add_model(|ctx| {
+        PtyController::new(
+            sender.clone(),
+            model_events,
+            line_editor_status.clone(),
+            sessions,
+            executor_command_rx,
+            model,
+            ctx,
+        )
+    });
+    (controller, line_editor_status, sender)
+}
+
+/// Regression test for the input-reporting probe being echoed instead of consumed by the shell:
+/// a write queued behind the probe must not be sent in the same synchronous tick, since a relay
+/// slow enough to separate the probe's `write()` from the shell consuming it could otherwise let
+/// the two land in the same read.
+#[test]
+fn queued_write_behind_probe_is_deferred_to_a_separate_tick() {
+    App::test((), |mut app| async move {
+        let (controller, line_editor_status, sender) = controller_with_active_zsh_session(&mut app);
+
+        controller.update(&mut app, |controller, _| {
+            controller.pending_writes.push_back(PtyWrite::Bytes {
+                bytes: b"queued-write".to_vec().into(),
+            });
+        });
+
+        line_editor_status.update(&mut app, |line_editor_status, ctx| {
+            line_editor_status.set_active_for_test(ctx);
+        });
+
+        {
+            let messages = sender.messages.lock();
+            assert_eq!(
+                messages.len(),
+                1,
+                "only the input-reporting probe should be sent in the same tick as Active"
+            );
+            assert!(matches!(
+                &messages[0],
+                Message::Input(bytes) if bytes[..] == [escape_sequences::C0::ESC, b'i']
+            ));
+        }
+
+        warpui::r#async::Timer::after(PENDING_WRITE_SETTLE_DELAY * 4).await;
+
+        let messages = sender.messages.lock();
+        assert_eq!(
+            messages.len(),
+            2,
+            "the write queued behind the probe should be sent once it has settled"
+        );
+        assert!(matches!(
+            &messages[1],
+            Message::Input(bytes) if bytes[..] == *b"queued-write"
+        ));
+    });
+}
+
+/// Companion to the regression test above, covering the gap it didn't: a write enqueued *after*
+/// the probe has already gone out (e.g. a real command or bindkey queued during the settle
+/// window, before the delay clears) must also be deferred, not just one that was already queued
+/// when `Active` fired.
+#[test]
+fn write_enqueued_during_settle_window_is_deferred_to_a_separate_tick() {
+    App::test((), |mut app| async move {
+        let (controller, line_editor_status, sender) = controller_with_active_zsh_session(&mut app);
+
+        line_editor_status.update(&mut app, |line_editor_status, ctx| {
+            line_editor_status.set_active_for_test(ctx);
+        });
+        assert_eq!(
+            sender.messages.lock().len(),
+            1,
+            "only the input-reporting probe should be sent when nothing else is queued yet"
+        );
+
+        // Simulate a write being enqueued during the settle window, the same way write_command
+        // or queue_in_band_command would.
+        controller.update(&mut app, |controller, ctx| {
+            controller.pending_writes.push_back(PtyWrite::Bytes {
+                bytes: b"typeahead".to_vec().into(),
+            });
+            controller.execute_next_queued_write(ctx);
+        });
+        assert_eq!(
+            sender.messages.lock().len(),
+            1,
+            "a write enqueued during the settle window must not be sent adjacent to the probe"
+        );
+
+        warpui::r#async::Timer::after(PENDING_WRITE_SETTLE_DELAY * 4).await;
+
+        let messages = sender.messages.lock();
+        assert_eq!(
+            messages.len(),
+            2,
+            "the write enqueued during the settle window should be sent once it has settled"
+        );
+        assert!(matches!(
+            &messages[1],
+            Message::Input(bytes) if bytes[..] == *b"typeahead"
+        ));
+    });
+}
+
+/// Companion to the two regression tests above, covering the write classes that bypass
+/// `pending_writes` entirely: `write_bytes`/`write_agent_bytes` (Ctrl-C/Ctrl-D, other raw
+/// terminal input, and agent input all go through one of the two) send straight to the event
+/// loop via `send_write_to_event_loop`, so they need their own settle-window gate rather than
+/// inheriting `execute_next_queued_write`'s.
+#[test]
+fn write_bytes_and_agent_bytes_during_settle_window_are_deferred_to_a_separate_tick() {
+    App::test((), |mut app| async move {
+        let (controller, line_editor_status, sender) = controller_with_active_zsh_session(&mut app);
+
+        line_editor_status.update(&mut app, |line_editor_status, ctx| {
+            line_editor_status.set_active_for_test(ctx);
+        });
+        assert_eq!(
+            sender.messages.lock().len(),
+            1,
+            "only the input-reporting probe should be sent when nothing else is queued yet"
+        );
+
+        // Ctrl-C (write_bytes) and agent input (write_agent_bytes) during the settle window must
+        // not land adjacent to the probe, even though the line editor is inactive while a
+        // foreground command runs -- the exact circumstance under which a user would send either.
+        controller.update(&mut app, |controller, ctx| {
+            controller.write_bytes(&[escape_sequences::C0::ETX][..], ctx);
+            controller.write_agent_bytes(b"agent-input".to_vec(), &AIAgentPtyWriteMode::Raw, ctx);
+        });
+        assert_eq!(
+            sender.messages.lock().len(),
+            1,
+            "writes sent via write_bytes/write_agent_bytes during the settle window must not be \
+             sent adjacent to the probe"
+        );
+
+        warpui::r#async::Timer::after(PENDING_WRITE_SETTLE_DELAY * 4).await;
+
+        let messages = sender.messages.lock();
+        assert_eq!(
+            messages.len(),
+            3,
+            "both deferred writes should be sent once the settle window clears"
+        );
+        assert!(matches!(
+            &messages[1],
+            Message::Input(bytes) if bytes[..] == [escape_sequences::C0::ETX]
+        ));
+        assert!(matches!(
+            &messages[2],
+            Message::Input(bytes) if bytes[..] == *b"agent-input"
+        ));
     });
 }

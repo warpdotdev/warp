@@ -4908,6 +4908,7 @@ impl TuiTerminalSessionView {
             | SlashCommandKind::AddMcp
             | SlashCommandKind::CreateEnvironment
             | SlashCommandKind::CreateDockerSandbox
+            | SlashCommandKind::CreateDevContainer
             | SlashCommandKind::EditSkill
             | SlashCommandKind::AddPrompt
             | SlashCommandKind::AddRule

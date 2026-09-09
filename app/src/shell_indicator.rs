@@ -46,8 +46,11 @@ impl TryFrom<&ShellLaunchData> for ShellIndicatorType {
                 s if s.contains("arch") => Ok(Self::Arch),
                 _ => Ok(Self::Linux),
             },
-            // Docker sandbox containers are Linux regardless of host.
-            ShellLaunchData::DockerSandbox { .. } => Ok(Self::Linux),
+            // Docker sandbox and Dev Container sessions are Linux regardless
+            // of host.
+            ShellLaunchData::DockerSandbox { .. } | ShellLaunchData::DevContainer { .. } => {
+                Ok(Self::Linux)
+            }
         }
     }
 }
