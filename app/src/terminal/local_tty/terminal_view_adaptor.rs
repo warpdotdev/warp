@@ -1172,26 +1172,44 @@ impl TerminalManager<TerminalView> {
                     return;
                 }
 
-                let viewer_is_executor = terminal_view
+                // Control actions injected via the server's conversation steering API are
+                // attributed to the sharer, who is never in its own viewer list, so they bypass
+                // the viewer role check just like injected agent prompts.
+                let mut is_sharer = false;
+                let viewer_role_opt = terminal_view
                     .as_ref(ctx)
                     .shared_session_presence_manager()
-                    .and_then(|manager| manager.as_ref(ctx).viewer_role(participant_id))
-                    .map(|role| role.can_execute())
-                    .unwrap_or_else(|| {
-                        log::warn!("Failed to get viewer's role during control action request");
-                        false
+                    .and_then(|manager| {
+                        let manager_ref = manager.as_ref(ctx);
+                        if manager_ref.sharer_id() == *participant_id {
+                            is_sharer = true;
+                            None
+                        } else {
+                            manager_ref.viewer_role(participant_id)
+                        }
                     });
 
-                if !viewer_is_executor {
-                    network.update(ctx, |network, _ctx| {
-                        network.send_control_action_rejection(
-                            participant_id.clone(),
-                            request_id.clone(),
-                            ControlActionFailureReason::InsufficientPermissions,
-                        );
-                    });
-                    return;
-                };
+                if !is_sharer {
+                    let viewer_is_executor = viewer_role_opt
+                        .map(|role| role.can_execute())
+                        .unwrap_or_else(|| {
+                            log::warn!(
+                                "Failed to get viewer's role during control action request for participant_id={participant_id} (not sharer)"
+                            );
+                            false
+                        });
+
+                    if !viewer_is_executor {
+                        network.update(ctx, |network, _ctx| {
+                            network.send_control_action_rejection(
+                                participant_id.clone(),
+                                request_id.clone(),
+                                ControlActionFailureReason::InsufficientPermissions,
+                            );
+                        });
+                        return;
+                    }
+                }
 
                 match action {
                     ControlAction::CancelConversation {
