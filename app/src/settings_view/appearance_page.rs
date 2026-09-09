@@ -3133,7 +3133,6 @@ impl SettingsWidget for CustomAppIconWidget {
             "Customize your app icon",
             show_bundle_warning.then_some("Changing the app icon requires the app to be bundled."),
             None,
-            None,
             LocalOnlyIconState::Hidden,
             None,
             &view.app_icon_dropdown,
@@ -3256,7 +3255,6 @@ impl SettingsWidget for CustomWindowSizeWidget {
                 })
                 .finish(),
             None,
-            &view.window_backdrop_dropdown,
         ));
         if *window_settings.open_windows_at_custom_size.value() {
             column.add_child(
