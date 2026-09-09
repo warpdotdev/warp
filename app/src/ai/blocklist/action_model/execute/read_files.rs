@@ -4,7 +4,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
-use super::file_revisions::FileRevisionTracker;
+use super::file_revisions::{FileRevisionTracker, read_local_revisions, read_remote_revisions};
 use super::{
     ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput,
     describe_failed_files, read_local_file_context,
@@ -150,17 +150,23 @@ impl ReadFilesExecutor {
         if let Some(handle) = host_request_handle {
             return ActionExecution::Async {
                 execute_future: Box::pin(async move {
+                    let absolute_paths = locations
+                        .iter()
+                        .map(|location| {
+                            host_native_absolute_path(
+                                &location.name,
+                                &shell,
+                                &current_working_directory,
+                            )
+                        })
+                        .collect::<Vec<_>>();
                     let request = remote_server::proto::ReadFileContextRequest {
                         files: locations
                             .iter()
-                            .map(|loc| {
-                                let absolute_path = host_native_absolute_path(
-                                    &loc.name,
-                                    &shell,
-                                    &current_working_directory,
-                                );
-                                remote_server::proto::ReadFileContextFile {
-                                    path: absolute_path,
+                            .zip(&absolute_paths)
+                            .map(
+                                |(loc, absolute_path)| remote_server::proto::ReadFileContextFile {
+                                    path: absolute_path.clone(),
                                     line_ranges: loc
                                         .lines
                                         .iter()
@@ -169,12 +175,14 @@ impl ReadFilesExecutor {
                                             end: r.end as u32,
                                         })
                                         .collect(),
-                                }
-                            })
+                                },
+                            )
                             .collect(),
                         max_file_bytes: None,
                         max_batch_bytes: None,
                     };
+                    let revisions = read_remote_revisions(&handle, &absolute_paths).await;
+                    file_revision_tracker.record_revisions(conversation_id, revisions);
 
                     let response = handle
                         .read_file_context(request)
@@ -233,12 +241,9 @@ impl ReadFilesExecutor {
                         failed_files,
                     })
                 }),
-                on_complete: Box::new(move |res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
+                on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
                     let action_result =
                         res.unwrap_or_else(|e| ReadFilesResult::Error(e.to_string()));
-                    if let ReadFilesResult::Success { files, .. } = &action_result {
-                        file_revision_tracker.record_file_contexts(conversation_id, files);
-                    }
                     AIAgentActionResultType::ReadFiles(action_result)
                 }),
             };
@@ -247,6 +252,18 @@ impl ReadFilesExecutor {
         // Local path.
         ActionExecution::Async {
             execute_future: Box::pin(async move {
+                let revision_paths = locations
+                    .iter()
+                    .map(|location| {
+                        host_native_absolute_path(
+                            &location.name,
+                            &shell,
+                            &current_working_directory,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                file_revision_tracker
+                    .record_revisions(conversation_id, read_local_revisions(revision_paths));
                 let result = read_local_file_context(
                     &locations,
                     current_working_directory,
@@ -272,11 +289,8 @@ impl ReadFilesExecutor {
                     })
                 }
             }),
-            on_complete: Box::new(move |res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
+            on_complete: Box::new(|res: Result<ReadFilesResult, anyhow::Error>, _ctx| {
                 let action_result = res.unwrap_or_else(|e| ReadFilesResult::Error(e.to_string()));
-                if let ReadFilesResult::Success { files, .. } = &action_result {
-                    file_revision_tracker.record_file_contexts(conversation_id, files);
-                }
                 AIAgentActionResultType::ReadFiles(action_result)
             }),
         }

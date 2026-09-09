@@ -153,10 +153,10 @@ impl RequestFileEditsExecutor {
             action:
                 AIAgentAction {
                     id,
-                    action: AIAgentActionType::RequestFileEdits { .. },
+                    action: AIAgentActionType::RequestFileEdits { file_edits, .. },
                     ..
                 },
-            ..
+            conversation_id,
         } = input
         else {
             return ActionExecution::InvalidAction;
@@ -171,26 +171,63 @@ impl RequestFileEditsExecutor {
             ));
         }
 
-        // The storage surface persists its (possibly user-edited) diffs and
-        // resolves with the assembled result. The entry stays registered until
-        // the action's terminal result funnels through `discard_pending`.
-        let Some(storage) = self.diff_storages.get(id) else {
+        if !self.diff_storages.contains_key(id) {
             log::warn!("Tried to execute a RequestFileEdits action without a registered storage");
             return ActionExecution::NotReady;
-        };
-        let result_future = storage.accept_and_save(ctx);
-        let result_future = self.apply_diff_model.update(ctx, |model, ctx| {
-            model.track_applied_revisions(result_future, input.conversation_id, ctx)
+        }
+
+        let validation_future = self.apply_diff_model.update(ctx, |model, ctx| {
+            model.validate_revisions(file_edits, conversation_id, ctx)
         });
+        let (result_tx, result_rx) = oneshot::channel();
+        let action_id = id.clone();
+        ctx.spawn(
+            validation_future,
+            move |me, validation, ctx| match validation {
+                Err(error) => {
+                    result_tx
+                        .send(RequestFileEditsResult::DiffApplicationFailed {
+                            error: DiffApplicationError::error_for_conversation(&vec1![error]),
+                        })
+                        .ok();
+                }
+                Ok(()) => {
+                    let Some(storage) = me.diff_storages.get(&action_id) else {
+                        result_tx
+                            .send(RequestFileEditsResult::DiffApplicationFailed {
+                                error: "The review surface holding these edits no longer exists"
+                                    .to_string(),
+                            })
+                            .ok();
+                        return;
+                    };
+                    let result_future = storage.accept_and_save(ctx);
+                    let result_future = me.apply_diff_model.update(ctx, |model, ctx| {
+                        model.track_applied_revisions(result_future, conversation_id, ctx)
+                    });
+                    ctx.spawn(result_future, move |_me, result, _ctx| {
+                        result_tx.send(result).ok();
+                    });
+                }
+            },
+        );
+        let result_future = async move {
+            result_rx
+                .await
+                .unwrap_or_else(|_| RequestFileEditsResult::DiffApplicationFailed {
+                    error: "The file edit operation ended before saving".to_string(),
+                })
+        }
+        .boxed();
 
         let identifiers = self
-            .generate_ai_identifiers(&input.conversation_id, id, ctx)
+            .generate_ai_identifiers(&conversation_id, id, ctx)
             .unwrap_or_else(|| AIIdentifiers {
-                client_conversation_id: Some(input.conversation_id),
+                client_conversation_id: Some(conversation_id),
                 ..Default::default()
             });
-        let passive_diff = BlocklistAIHistoryModel::as_ref(ctx)
-            .is_entirely_passive_conversation(&input.conversation_id);
+        let passive_diff =
+            BlocklistAIHistoryModel::as_ref(ctx).is_entirely_passive_conversation(&conversation_id);
 
         ActionExecution::new_async(result_future, move |result, ctx| {
             if let RequestFileEditsResult::Success {

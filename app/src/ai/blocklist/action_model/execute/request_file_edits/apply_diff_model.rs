@@ -8,13 +8,15 @@
 //! - **Local**: calls [`apply_edits`] with a `std::fs`-backed closure.
 //! - **Remote**: calls [`apply_edits`] with a [`RemoteServerClient`]-backed closure.
 
-use ai::diff_validation::AIRequestedCodeDiff;
+use ai::diff_validation::{AIRequestedCodeDiff, ParsedDiff};
 use futures::FutureExt;
 use vec1::Vec1;
 use warpui::r#async::BoxFuture;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity as _};
 
-use super::super::file_revisions::FileRevisionTracker;
+use super::super::file_revisions::{
+    FileRevisionTracker, read_local_revisions, read_remote_revisions,
+};
 use super::diff_application::{DiffApplicationError, FileReadResult, apply_edits};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::{AIIdentifiers, FileEdit, RequestFileEditsResult};
@@ -30,41 +32,31 @@ pub(crate) struct ApplyDiffModel {
     file_revision_tracker: FileRevisionTracker,
 }
 
-async fn read_remote_revisions(
-    handle: &remote_server::manager::HostRequestHandle,
-    paths: &[String],
-) -> Vec<(String, std::time::SystemTime)> {
-    if paths.is_empty() {
-        return Vec::new();
+fn absolute_edit_paths(edits: &[FileEdit], session_context: &SessionContext) -> Vec<String> {
+    let mut paths = Vec::new();
+    for edit in edits {
+        if let Some(path) = edit.file() {
+            paths.push(crate::ai::paths::host_native_absolute_path(
+                path,
+                session_context.shell(),
+                session_context.current_working_directory(),
+            ));
+        }
+        if let FileEdit::Edit(ParsedDiff::V4AEdit {
+            move_to: Some(path),
+            ..
+        }) = edit
+        {
+            paths.push(crate::ai::paths::host_native_absolute_path(
+                path,
+                session_context.shell(),
+                session_context.current_working_directory(),
+            ));
+        }
     }
-
-    let request = remote_server::proto::ReadFileContextRequest {
-        files: paths
-            .iter()
-            .map(|path| remote_server::proto::ReadFileContextFile {
-                path: path.clone(),
-                line_ranges: vec![],
-            })
-            .collect(),
-        max_file_bytes: Some(1),
-        max_batch_bytes: None,
-    };
-    let Ok(response) = handle.read_file_context(request).await else {
-        return Vec::new();
-    };
-
-    response
-        .file_contexts
-        .into_iter()
-        .filter_map(|context| {
-            context.last_modified_epoch_millis.map(|millis| {
-                (
-                    context.file_name,
-                    std::time::UNIX_EPOCH + std::time::Duration::from_millis(millis),
-                )
-            })
-        })
-        .collect()
+    paths.sort_unstable();
+    paths.dedup();
+    paths
 }
 
 impl Entity for ApplyDiffModel {
@@ -80,6 +72,50 @@ impl ApplyDiffModel {
             active_session,
             file_revision_tracker,
         }
+    }
+
+    pub fn validate_revisions(
+        &self,
+        edits: &[FileEdit],
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> BoxFuture<'static, Result<(), DiffApplicationError>> {
+        let session_context = SessionContext::from_session(self.active_session.as_ref(ctx), ctx);
+        let expected_revisions = self.file_revision_tracker.expected_revisions(
+            conversation_id,
+            absolute_edit_paths(edits, &session_context),
+        );
+        let host_request_handle = session_context.host_id().map(|host_id| {
+            remote_server::manager::RemoteServerManager::as_ref(ctx).host_request_handle(host_id)
+        });
+        let is_remote = session_context.is_remote();
+
+        async move {
+            for (path, expected_revision) in expected_revisions {
+                let current = if is_remote {
+                    let Some(handle) = &host_request_handle else {
+                        return Err(DiffApplicationError::RemoteFileOperationsUnsupported);
+                    };
+                    read_remote_file(handle, &path).await
+                } else {
+                    read_local_file(path.clone())
+                };
+                match current.with_expected_revision(Some(expected_revision)) {
+                    FileReadResult::Changed => {
+                        return Err(DiffApplicationError::FileChanged { file: path });
+                    }
+                    FileReadResult::ReadError(message) => {
+                        return Err(DiffApplicationError::ReadFailed {
+                            file: path,
+                            message,
+                        });
+                    }
+                    FileReadResult::Found { .. } | FileReadResult::NotFound => {}
+                }
+            }
+            Ok(())
+        }
+        .boxed()
     }
 
     /// Resolves session context and remote client from the model context, then
@@ -98,15 +134,7 @@ impl ApplyDiffModel {
         let ai_identifiers = ai_identifiers.clone();
         let expected_revisions = self.file_revision_tracker.expected_revisions(
             conversation_id,
-            edits.iter().filter_map(|edit| {
-                edit.file().map(|path| {
-                    crate::ai::paths::host_native_absolute_path(
-                        path,
-                        session_context.shell(),
-                        session_context.current_working_directory(),
-                    )
-                })
-            }),
+            absolute_edit_paths(&edits, &session_context),
         );
 
         let host_request_handle = session_context.host_id().map(|host_id| {
@@ -219,15 +247,7 @@ impl ApplyDiffModel {
                     None => Vec::new(),
                 }
             } else {
-                updated_paths
-                    .iter()
-                    .filter_map(|path| {
-                        std::fs::metadata(path)
-                            .and_then(|metadata| metadata.modified())
-                            .ok()
-                            .map(|last_modified| (path.clone(), last_modified))
-                    })
-                    .collect()
+                read_local_revisions(updated_paths)
             };
             file_revision_tracker.record_revisions(conversation_id, revisions);
             file_revision_tracker.record_missing_files(conversation_id, deleted_paths);
@@ -316,3 +336,7 @@ async fn read_remote_file(
         Err(err) => FileReadResult::ReadError(format!("{err}")),
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+#[path = "apply_diff_model_tests.rs"]
+mod tests;

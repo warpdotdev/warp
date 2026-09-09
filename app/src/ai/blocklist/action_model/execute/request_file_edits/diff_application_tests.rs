@@ -45,7 +45,10 @@ fn test_search_replace_rejects_unrelated_external_insert() {
                             .to_string(),
                         last_modified: Some(externally_modified),
                     }
-                    .with_expected_revision(Some(FileRevision::Modified(last_read))),
+                    .with_expected_revision(Some(FileRevision::present(
+                        "let value = old_value;\n",
+                        Some(last_read),
+                    ))),
                 )
             },
         )
@@ -90,7 +93,10 @@ fn test_overwrite_rejects_external_edit() {
                         content: "human replacement\n".to_string(),
                         last_modified: Some(externally_modified),
                     }
-                    .with_expected_revision(Some(FileRevision::Modified(last_read))),
+                    .with_expected_revision(Some(FileRevision::present(
+                        "original content\n",
+                        Some(last_read),
+                    ))),
                 )
             },
         )
@@ -129,7 +135,10 @@ fn test_search_replace_rejects_externally_mutated_search_block() {
                         content: "let timeout = 15;\n".to_string(),
                         last_modified: Some(externally_modified),
                     }
-                    .with_expected_revision(Some(FileRevision::Modified(last_read))),
+                    .with_expected_revision(Some(FileRevision::present(
+                        "let timeout = 10;\n",
+                        Some(last_read),
+                    ))),
                 )
             },
         )
@@ -1522,6 +1531,55 @@ fn test_apply_v4a_rename_to_existing_file() {
             }
             other => panic!("Expected Update diff_type for target, got {other:?}"),
         }
+    });
+}
+
+#[test]
+fn test_apply_v4a_rename_rejects_externally_changed_target() {
+    App::test((), |app| async move {
+        let mut source_file = NamedTempFile::new().expect("Failed to create source file");
+        let source_path = source_file.path().to_string_lossy().to_string();
+        writeln!(&mut source_file, "source content").unwrap();
+
+        let mut target_file = NamedTempFile::new().expect("Failed to create target file");
+        let target_path = target_file.path().to_string_lossy().to_string();
+        writeln!(&mut target_file, "external target content").unwrap();
+        let last_modified = target_file
+            .as_file()
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok();
+
+        let edit = FileEdit::Edit(ParsedDiff::V4AEdit {
+            file: Some(source_path),
+            move_to: Some(target_path.clone()),
+            hunks: vec![],
+        });
+        let expected_target = FileRevision::present("previous target content\n", last_modified);
+        let target_for_read = target_path.clone();
+
+        let result = apply_edits(
+            vec![edit],
+            &SessionContext::new_for_test(),
+            &AIIdentifiers::default(),
+            app.background_executor(),
+            Arc::new(AuthState::new_for_test()),
+            false,
+            move |path| {
+                let expected = (path == target_for_read).then_some(expected_target);
+                async move {
+                    let content = std::fs::read_to_string(&path);
+                    FileReadResult::from(content).with_expected_revision(expected)
+                }
+            },
+        )
+        .await;
+
+        let errors = result.expect_err("stale rename target should not be overwritten");
+        assert!(matches!(
+            errors.as_slice(),
+            [DiffApplicationError::FileChanged { file }] if file == &target_path
+        ));
     });
 }
 

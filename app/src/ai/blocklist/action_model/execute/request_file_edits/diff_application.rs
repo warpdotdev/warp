@@ -66,13 +66,10 @@ impl FileReadResult {
         };
         let current_revision = match &self {
             FileReadResult::Found {
-                last_modified: Some(last_modified),
+                content,
+                last_modified,
                 ..
-            } => FileRevision::Modified(*last_modified),
-            FileReadResult::Found {
-                last_modified: None,
-                ..
-            } => return FileReadResult::Changed,
+            } => FileRevision::present(content, *last_modified),
             FileReadResult::NotFound => FileRevision::Missing,
             FileReadResult::ReadError(_) | FileReadResult::Changed => return self,
         };
