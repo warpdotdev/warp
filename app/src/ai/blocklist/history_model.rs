@@ -1000,7 +1000,11 @@ impl BlocklistAIHistoryModel {
         pinned: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+        if self.conversations_by_id.contains_key(&conversation_id) {
+            self.apply_overlay_identity_on_materialize(conversation_id, ctx);
+            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+                return;
+            };
             if conversation.is_pinned() == pinned {
                 return;
             }
@@ -1064,6 +1068,26 @@ impl BlocklistAIHistoryModel {
             },
             |_, _, _| {},
         );
+    }
+
+    fn apply_overlay_identity_on_materialize(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(identity) = self.orchestration_child_identities.remove(&conversation_id) else {
+            return;
+        };
+        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+            self.orchestration_child_identities
+                .insert(conversation_id, identity);
+            return;
+        };
+        if conversation.is_pinned() == identity.conversation_data.pinned {
+            return;
+        }
+        conversation.set_pinned(identity.conversation_data.pinned);
+        conversation.write_updated_conversation_state(ctx);
     }
 
     /// Sets a live conversation's server token, updates the reverse index, and
@@ -1381,6 +1405,7 @@ impl BlocklistAIHistoryModel {
             let new_status = conversation.status().clone();
             self.conversations_by_id
                 .insert(conversation_id, conversation);
+            self.apply_overlay_identity_on_materialize(conversation_id, ctx);
 
             // Emit UpdatedConversationStatus for restored conversations so that
             // the workspace can set tab indicators appropriately

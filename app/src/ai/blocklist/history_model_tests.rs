@@ -1249,6 +1249,106 @@ fn overlay_only_child_pin_toggle_persists_without_loading_task_body() {
 }
 
 #[test]
+fn overlay_pin_then_hydrate_before_writer_then_unpin_restarts_unpinned() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<ModelEvent>(8);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+        let unpinned_data =
+            child_conversation_data(parent_id, &parent_run_id, &child_run_id, "Agent 1");
+        let conversations = vec![
+            persisted_agent_conversation(child_id, unpinned_data.clone(), now, None),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+        let terminal_view_id = EntityId::new();
+        let stale_snapshot = AIConversation::new_restored(
+            child_id,
+            vec![create_api_task(
+                &format!("task-{child_id}"),
+                vec![create_user_query_message(
+                    "message-1",
+                    &format!("task-{child_id}"),
+                    "request-1",
+                    "Child query",
+                )],
+            )],
+            Some(unpinned_data.clone()),
+        )
+        .expect("stale pre-pin snapshot should restore");
+
+        history_model.update(&mut app, |model, ctx| {
+            model.set_conversation_pinned(child_id, true, ctx);
+            model.restore_conversations(terminal_view_id, vec![stale_snapshot], ctx);
+            assert!(
+                model.conversation(&child_id).is_some_and(|c| c.is_pinned()),
+                "hydration must take overlay pin over the stale DB snapshot",
+            );
+            model.set_conversation_pinned(child_id, false, ctx);
+            assert!(!model.is_pinned_conversation(&child_id));
+        });
+
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.recv_timeout(Duration::from_millis(200)) {
+            events.push(event);
+        }
+        let mut folded = unpinned_data;
+        for event in events {
+            match event {
+                ModelEvent::UpdateAgentConversationData {
+                    conversation_id: persisted_id,
+                    conversation_data,
+                } if persisted_id == child_id.to_string() => {
+                    folded = conversation_data;
+                }
+                ModelEvent::UpdateMultiAgentConversation {
+                    conversation_id: persisted_id,
+                    conversation_data,
+                    ..
+                } if persisted_id == child_id.to_string() => {
+                    folded = conversation_data;
+                }
+                _ => {}
+            }
+        }
+        assert!(
+            !folded.pinned,
+            "ordered persistence must end unpinned after hydrate-then-unpin",
+        );
+
+        let restarted = vec![
+            persisted_agent_conversation(child_id, folded, now, None),
+            persisted_agent_conversation(
+                parent_id,
+                parent_conversation_data(&parent_run_id),
+                now - chrono::Duration::seconds(1),
+                Some("Parent query"),
+            ),
+        ];
+        let restarted_model = BlocklistAIHistoryModel::new(vec![], vec![], &restarted);
+        assert!(restarted_model.conversation(&child_id).is_none());
+        assert!(
+            !restarted_model.is_pinned_conversation(&child_id),
+            "restart from ordered writes must not resurrect the overlay pin",
+        );
+    });
+}
+
+#[test]
 fn prompt_history_candidates_seeds_from_snapshot_then_appends_session_prompts() {
     App::test((), |mut app| async move {
         let now = Local::now();
