@@ -254,6 +254,18 @@ fn workspace_admin_without_team_role_can_promote_demote_and_remove() {
 }
 
 #[test]
+fn workspace_admin_gets_team_management_permissions() {
+    let team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], true);
+    let workspace = admin_workspace(MEMBER_EMAIL);
+
+    assert!(TeamsPageView::has_admin_permissions(
+        &team,
+        &workspace,
+        MEMBER_EMAIL
+    ));
+}
+
+#[test]
 fn workspace_admin_without_native_workspaces_policy_can_manage_members() {
     let team = team_with_members(
         vec![

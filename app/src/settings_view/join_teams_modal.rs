@@ -1,5 +1,5 @@
 use warpui::elements::{
-    Border, ClippedScrollStateHandle, ClippedScrollable, Container, CornerRadius,
+    Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
     CrossAxisAlignment, Expanded, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle,
     ParentElement, Radius, ScrollbarWidth, Text,
 };
@@ -12,6 +12,9 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 use crate::appearance::Appearance;
 use crate::server::ids::ServerId;
 use crate::workspaces::team::DiscoverableTeam;
+const SUBTITLE: &str = "You can join any open team in your Warp workspace.";
+const MAX_VISIBLE_TEAMS: usize = 4;
+const TEAM_LIST_MAX_HEIGHT: f32 = 264.;
 
 struct JoinableTeamState {
     team: DiscoverableTeam,
@@ -142,10 +145,9 @@ impl JoinTeamsModal {
                 .with_child(join_button)
                 .finish(),
         )
-        .with_uniform_padding(16.)
+        .with_uniform_padding(12.)
         .with_border(Border::all(1.).with_border_fill(theme.outline()))
         .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
-        .with_margin_bottom(12.)
         .finish()
     }
 }
@@ -162,20 +164,41 @@ impl View for JoinTeamsModal {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let mut teams = Flex::column();
+        let mut teams = Flex::column().with_spacing(8.);
         for team in &self.teams {
             teams.add_child(self.render_team(team, appearance));
         }
+        let teams = teams.finish();
+        let teams = if self.teams.len() > MAX_VISIBLE_TEAMS {
+            ConstrainedBox::new(
+                ClippedScrollable::vertical(
+                    self.scroll_state.clone(),
+                    teams,
+                    ScrollbarWidth::Auto,
+                    theme.nonactive_ui_text_color().into(),
+                    theme.active_ui_text_color().into(),
+                    warpui::elements::Fill::None,
+                )
+                .finish(),
+            )
+            .with_height(TEAM_LIST_MAX_HEIGHT)
+            .finish()
+        } else {
+            teams
+        };
 
-        ClippedScrollable::vertical(
-            self.scroll_state.clone(),
-            teams.finish(),
-            ScrollbarWidth::Auto,
-            theme.nonactive_ui_text_color().into(),
-            theme.active_ui_text_color().into(),
-            warpui::elements::Fill::None,
-        )
-        .finish()
+        Flex::column()
+            .with_child(
+                Text::new(
+                    SUBTITLE.to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(theme.sub_text_color(theme.surface_2()).into())
+                .finish(),
+            )
+            .with_child(Container::new(teams).with_margin_top(16.).finish())
+            .finish()
     }
 }
 

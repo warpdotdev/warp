@@ -91,7 +91,6 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
-const JOIN_ANOTHER_TEAM_HEADER: &str = "Join another team";
 const BROWSE_TEAMS_BUTTON_LABEL: &str = "Browse teams";
 const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
@@ -902,16 +901,23 @@ impl TeamsPageView {
         });
         let join_teams_modal = ctx.add_typed_action_view(|ctx| {
             Modal::new(
-                Some(JOIN_ANOTHER_TEAM_HEADER.to_string()),
+                Some(BROWSE_TEAMS_BUTTON_LABEL.to_string()),
                 join_teams_modal_body,
                 ctx,
             )
             .with_modal_style(UiComponentStyles {
-                height: Some(500.),
+                width: Some(360.),
+                height: Some(424.),
+                ..Default::default()
+            })
+            .with_header_style(UiComponentStyles {
+                height: Some(64.),
+                padding: Some(Coords::uniform(24.).top(18.).bottom(12.)),
                 ..Default::default()
             })
             .with_body_style(UiComponentStyles {
-                height: Some(430.),
+                height: Some(360.),
+                padding: Some(Coords::uniform(24.).top(8.)),
                 ..Default::default()
             })
         });
@@ -1988,8 +1994,8 @@ impl TeamsPageView {
         workspace: &Workspace,
     ) -> Vec<Item> {
         let mut combined = Vec::new();
-        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email)
-            || workspace.is_workspace_admin(current_user_email);
+        let current_user_has_admin_permissions =
+            Self::has_admin_permissions(team, workspace, current_user_email);
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
 
         // pending email invites
@@ -2109,6 +2115,11 @@ impl TeamsPageView {
         });
 
         combined
+    }
+
+    fn has_admin_permissions(team: &Team, workspace: &Workspace, current_user_email: &str) -> bool {
+        team.has_admin_permissions(current_user_email)
+            || workspace.is_workspace_admin(current_user_email)
     }
 }
 
@@ -2515,7 +2526,8 @@ impl TeamsWidget {
         let cloud_model = view.cloud_model.as_ref(app);
         let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
-        let has_admin_permissions = team_metadata.has_admin_permissions(&current_user_email);
+        let has_admin_permissions =
+            TeamsPageView::has_admin_permissions(team_metadata, workspace, &current_user_email);
         let is_owner = team_metadata.has_owner_permissions(&current_user_email);
         let remaining_workspace_and_team_credits =
             ai_request_usage_model.total_current_workspace_and_team_bonus_credits_remaining(app);
