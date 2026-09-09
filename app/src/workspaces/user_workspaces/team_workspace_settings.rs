@@ -152,6 +152,8 @@ impl TeamScope for TeamlessScopeForTest {
 /// Resolves a [`TeamContext`] on demand from a view captured up front. See
 /// [`UserWorkspaces::team_context_resolver`].
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
+pub(crate) type TeamContextForOperationResolver =
+    Rc<dyn Fn(&AppContext) -> TeamContextForOperation>;
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
@@ -266,6 +268,14 @@ impl UserWorkspaces {
     /// a view at the boundaries where they need one.
     pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
+    }
+
+    pub(crate) fn team_context_for_operation_resolver(
+        resolver: TeamContextResolver,
+    ) -> TeamContextForOperationResolver {
+        Rc::new(move |app| TeamContextForOperation {
+            team_uid: resolver(app).team_uid(),
+        })
     }
 
     /// A resolver for tests that build a model without a window to resolve against.

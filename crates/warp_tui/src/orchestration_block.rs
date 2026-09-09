@@ -425,8 +425,7 @@ impl TuiOrchestrationBlock {
     }
 
     fn handle_team_scope_change(&mut self, ctx: &mut ViewContext<Self>) {
-        let team_context = (self.team_context_resolver)(ctx);
-        let team_scope = ResolvedTeamScope::from_scope(&team_context);
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let state = &mut self.orchestration_edit_state.orchestration_config_state;
         state.auth_secret_selection = AuthSecretSelection::Unset;
         state.revalidate_after_catalog_change(&team_scope, ctx);

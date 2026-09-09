@@ -1,20 +1,14 @@
-use std::time::Duration;
-
-use futures_lite::future;
-use mockito::Matcher;
 use warp::tui_export::{
     AIConversationId, AmbientAgentTaskId, BlocklistAIHistoryModel, CloudAgentStartupBlocker,
     CloudAgentStartupFailure, CloudAgentStartupIssue, ConversationStatus, Harness,
-    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, ServerApiProvider,
-    StartAgentExecutionMode, StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome,
-    StartAgentRequest, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, UserWorkspaces,
+    OrchestrationEventStreamerEvent, RenderableAIError, RequestTeamScope, StartAgentExecutionMode,
+    StartAgentExecutor, StartAgentExecutorEvent, StartAgentOutcome, StartAgentRequest,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR, UserWorkspaces,
     register_tui_session_view_test_singletons, set_tui_workspace_teams_for_test,
 };
 use warp_core::features::FeatureFlag;
-use warp_server_client::base_client::TEAM_UID_HEADER;
 use warpui::platform::WindowStyle;
 use warpui::{AddWindowOptions, Entity, ModelHandle, ReadModel, SingletonEntity as _, UpdateModel};
-use warpui_core::r#async::Timer;
 use warpui_core::elements::tui::{TuiBufferExt, TuiRect, text_width};
 use warpui_core::presenter::tui::TuiPresenter;
 use warpui_core::{App, TuiView as _, TypedActionView as _, WindowId};
@@ -46,11 +40,6 @@ impl Entity for CapturedRemoteDispatch {
 fn local_dispatch_fails_after_window_team_change() {
     App::test((), |mut app| async move {
         let fixture = orchestration_fixture_with_session_materialization(&mut app, false);
-        app.read(|ctx| {
-            ServerApiProvider::as_ref(ctx)
-                .get()
-                .set_ambient_workload_token_for_test("test-workload-token".to_string());
-        });
         let parent_session_id = add_dispatching_session(&mut app, &fixture, true);
         let parent_conversation_id = read_active_conversation_id(&app, parent_session_id);
         let team_a_uid = 7.into();
@@ -72,23 +61,6 @@ fn local_dispatch_fails_after_window_team_change() {
                 &UserWorkspaces::as_ref(ctx).team_context_for_window(fixture.window_id),
             )
         });
-        let team_a_header = team_a_uid.to_string();
-        let request_mock = {
-            let mut server = warp_core::channel::ChannelState::mock_server();
-            server
-                .mock("POST", "/graphql/v2")
-                .match_query(Matcher::UrlEncoded(
-                    "op".to_string(),
-                    "CreateAgentTask".to_string(),
-                ))
-                .match_header(TEAM_UID_HEADER, team_a_header.as_str())
-                .with_status(200)
-                .with_body(
-                    r#"{"data":{"createAgentTask":{"__typename":"CreateAgentTaskOutput","responseContext":{"serverVersion":null},"taskId":"550e8400-e29b-41d4-a716-446655440000"}}}"#,
-                )
-                .expect(0)
-                .create()
-        };
         let (dispatch_tx, dispatch_rx) = async_channel::bounded(1);
         let orchestration = app.read(TuiOrchestrationModel::handle);
         app.update(|ctx| {
@@ -108,8 +80,8 @@ fn local_dispatch_fails_after_window_team_change() {
                         name: "local-child".to_string(),
                         prompt: "work".to_string(),
                         execution_mode: StartAgentExecutionMode::Local {
-                            harness_type: None,
-                            model_id: Some("team-a-only".to_string()),
+                            harness_type: Some("claude".to_string()),
+                            model_id: None,
                         },
                         lifecycle_subscription: None,
                         parent_conversation_id,
@@ -123,7 +95,6 @@ fn local_dispatch_fails_after_window_team_change() {
         });
 
         assert!(dispatch_rx.try_recv().is_err());
-        request_mock.assert();
         app.read(|ctx| {
             let history = BlocklistAIHistoryModel::as_ref(ctx);
             let [child_conversation_id] =

@@ -189,9 +189,8 @@ fn window_team_change_reseeds_the_auth_secret_for_the_new_scope() {
                 workspaces.register_window(other_window_id, Some(team_a), ctx);
                 workspaces.switch_window_to_team(window_id, team_b, ctx);
             });
-            let team_b_scope = ResolvedTeamScope::from_scope(
-                &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
-            );
+            let team_b_scope =
+                UserWorkspaces::as_ref(ctx).team_context_for_window_operation(window_id);
             set_tui_auth_secret_preference_for_test(
                 &team_b_scope,
                 Harness::Claude,
