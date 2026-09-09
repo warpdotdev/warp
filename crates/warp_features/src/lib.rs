@@ -91,9 +91,6 @@ pub enum FeatureFlag {
     /// A setting to enable a traditional completions experience.
     ClassicCompletions,
 
-    /// Force enable classic completions.
-    ForceClassicCompletions,
-
     /// If enabled, autosuggestions are hidden when the tab completions
     /// menu is open (except when using completions-as-you-type).
     RemoveAutosuggestionDuringTabCompletions,
