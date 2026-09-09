@@ -289,6 +289,102 @@ fn pill_bar_data_layer_finds_restored_children_before_pane_creation() {
 }
 
 #[test]
+fn overlay_only_child_overflow_menu_includes_view_in_oz() {
+    use chrono::Utc;
+    use uuid::Uuid;
+    use warpui::App;
+
+    use crate::ai::blocklist::BlocklistAIHistoryModel;
+    use crate::persistence::model::{
+        AgentConversation, AgentConversationData, AgentConversationRecord,
+    };
+
+    App::test((), |app| async move {
+        let parent_id = AIConversationId::new();
+        let child_id = AIConversationId::new();
+        let parent_run_id = Uuid::new_v4().to_string();
+        let child_run_id = Uuid::new_v4().to_string();
+        let now = Utc::now().naive_utc();
+        let conversations = vec![
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: 1,
+                    conversation_id: child_id.to_string(),
+                    conversation_data: serde_json::to_string(&AgentConversationData {
+                        server_conversation_token: Some("child-token".to_string()),
+                        conversation_usage_metadata: None,
+                        reverted_action_ids: None,
+                        forked_from_server_conversation_token: None,
+                        artifacts_json: None,
+                        parent_agent_id: Some(parent_run_id.clone()),
+                        agent_name: Some("Agent 1".to_string()),
+                        orchestration_harness_type: None,
+                        parent_conversation_id: Some(parent_id.to_string()),
+                        is_remote_child: false,
+                        root_task_is_optimistic: None,
+                        run_id: Some(child_run_id.clone()),
+                        autoexecute_override: None,
+                        last_event_sequence: None,
+                        pinned: false,
+                    })
+                    .expect("child conversation data should serialize"),
+                    last_modified_at: now,
+                    summary: None,
+                },
+                tasks: vec![],
+            },
+            AgentConversation {
+                conversation: AgentConversationRecord {
+                    id: 2,
+                    conversation_id: parent_id.to_string(),
+                    conversation_data: serde_json::to_string(&AgentConversationData {
+                        server_conversation_token: Some("parent-token".to_string()),
+                        conversation_usage_metadata: None,
+                        reverted_action_ids: None,
+                        forked_from_server_conversation_token: None,
+                        artifacts_json: None,
+                        parent_agent_id: None,
+                        agent_name: None,
+                        orchestration_harness_type: None,
+                        parent_conversation_id: None,
+                        is_remote_child: false,
+                        root_task_is_optimistic: None,
+                        run_id: Some(parent_run_id),
+                        autoexecute_override: None,
+                        last_event_sequence: None,
+                        pinned: false,
+                    })
+                    .expect("parent conversation data should serialize"),
+                    last_modified_at: now - chrono::Duration::seconds(1),
+                    summary: None,
+                },
+                tasks: vec![],
+            },
+        ];
+
+        let history_model = app
+            .add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &conversations));
+
+        history_model.read(&app, |model, _| {
+            assert!(model.conversation(&child_id).is_none());
+            assert_eq!(
+                model.run_id_for_conversation(&child_id),
+                Some(child_run_id.clone())
+            );
+        });
+
+        app.read(|ctx| {
+            let url = OrchestrationPillBar::oz_run_url_for_conversation(child_id, ctx)
+                .expect("overlay-only children with a run_id should expose View in Oz");
+            assert!(
+                url.ends_with(&format!("/runs/{child_run_id}")),
+                "View in Oz URL should use the overlay run_id, got {url}",
+            );
+        });
+    });
+}
+
+#[test]
 fn navigation_action_for_child_pill_reveals_existing_child_pane() {
     let conversation_id = AIConversationId::new();
 

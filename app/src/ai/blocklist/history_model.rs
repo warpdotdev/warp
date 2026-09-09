@@ -13,6 +13,7 @@ use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::client_action::{Action, StartNewConversation};
 use warp_multi_agent_api::message::tool_call::Tool;
@@ -46,6 +47,7 @@ use crate::persistence::model::{AgentConversation, AgentConversationData};
 #[cfg(feature = "local_fs")]
 use crate::persistence::{database_file_path_for_current_scope, establish_ro_connection};
 use crate::server::server_api::ServerApiProvider;
+use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::view::blocklist_filter;
 use crate::ui_components::icons::Icon;
@@ -253,9 +255,7 @@ pub(crate) struct PromptHistoryEntry {
 /// fields until the child's pane materializes the full conversation.
 #[derive(Debug, Clone)]
 struct OrchestrationChildIdentity {
-    agent_name: Option<String>,
-    pinned: bool,
-    is_remote_child: bool,
+    conversation_data: AgentConversationData,
 }
 
 /// Responsible for managing the history of user and AI exchanges.
@@ -564,9 +564,7 @@ impl BlocklistAIHistoryModel {
         self.orchestration_child_identities.insert(
             child_id,
             OrchestrationChildIdentity {
-                agent_name: conversation_data.agent_name.clone(),
-                pinned: conversation_data.pinned,
-                is_remote_child: conversation_data.is_remote_child,
+                conversation_data: conversation_data.clone(),
             },
         );
     }
@@ -580,7 +578,7 @@ impl BlocklistAIHistoryModel {
             .or_else(|| {
                 self.orchestration_child_identities
                     .get(conversation_id)
-                    .and_then(|identity| identity.agent_name.as_deref())
+                    .and_then(|identity| identity.conversation_data.agent_name.as_deref())
             })
     }
 
@@ -591,7 +589,7 @@ impl BlocklistAIHistoryModel {
             .or_else(|| {
                 self.orchestration_child_identities
                     .get(conversation_id)
-                    .map(|identity| identity.is_remote_child)
+                    .map(|identity| identity.conversation_data.is_remote_child)
             })
             .unwrap_or(false)
     }
@@ -603,9 +601,23 @@ impl BlocklistAIHistoryModel {
             .or_else(|| {
                 self.orchestration_child_identities
                     .get(conversation_id)
-                    .map(|identity| identity.pinned)
+                    .map(|identity| identity.conversation_data.pinned)
             })
             .unwrap_or(false)
+    }
+
+    pub(crate) fn run_id_for_conversation(
+        &self,
+        conversation_id: &AIConversationId,
+    ) -> Option<String> {
+        self.conversations_by_id
+            .get(conversation_id)
+            .and_then(AIConversation::run_id)
+            .or_else(|| {
+                self.orchestration_child_identities
+                    .get(conversation_id)
+                    .and_then(|identity| identity.conversation_data.run_id.clone())
+            })
     }
 
     /// Creates a new child agent conversation.
@@ -988,22 +1000,70 @@ impl BlocklistAIHistoryModel {
         pinned: bool,
         ctx: &mut ModelContext<Self>,
     ) {
-        let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
+        if let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) {
+            if conversation.is_pinned() == pinned {
+                return;
+            }
+            conversation.set_pinned(pinned);
+            conversation.write_updated_conversation_state(ctx);
+        } else if let Some(identity) = self
+            .orchestration_child_identities
+            .get_mut(&conversation_id)
+        {
+            if identity.conversation_data.pinned == pinned {
+                return;
+            }
+            identity.conversation_data.pinned = pinned;
+            let conversation_data = identity.conversation_data.clone();
+            Self::persist_overlay_conversation_data(conversation_id, conversation_data, ctx);
+        } else {
             log::warn!(
                 "set_conversation_pinned called for conversation {conversation_id:?} that is \
                  not loaded; pin state change to {pinned} will not be persisted."
             );
             return;
-        };
-        if conversation.is_pinned() == pinned {
-            return;
         }
-        conversation.set_pinned(pinned);
-        conversation.write_updated_conversation_state(ctx);
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
             terminal_surface_id: self.terminal_surface_id_for_conversation(&conversation_id),
             conversation_id,
         });
+    }
+
+    fn persist_overlay_conversation_data(
+        conversation_id: AIConversationId,
+        conversation_data: AgentConversationData,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if conversation_data.is_remote_child && FeatureFlag::OrchestrationUnifiedStack.is_enabled()
+        {
+            return;
+        }
+        if !*GeneralSettings::as_ref(ctx).restore_session
+            || !AppExecutionMode::as_ref(ctx).can_save_session()
+        {
+            return;
+        }
+        let Some(sqlite_sender) = GlobalResourceHandlesProvider::as_ref(ctx)
+            .get()
+            .model_event_sender
+            .clone()
+        else {
+            return;
+        };
+        let event = ModelEvent::UpdateAgentConversationData {
+            conversation_id: conversation_id.to_string(),
+            conversation_data,
+        };
+        ctx.spawn(
+            async move {
+                if let Err(e) = sqlite_sender.send(event) {
+                    log::warn!(
+                        "Failed to send overlay conversation data to sqlite writer thread: {e:?}"
+                    );
+                }
+            },
+            |_, _, _| {},
+        );
     }
 
     /// Sets a live conversation's server token, updates the reverse index, and
