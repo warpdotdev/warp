@@ -29,7 +29,6 @@ use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
 use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
-use crate::server::team_scope::RequestTeamScope;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
@@ -95,10 +94,6 @@ fn persist_plan_config_with_harness(
                 status,
             );
     });
-}
-
-fn request_scope_for_team(team_uid: i64) -> RequestTeamScope {
-    RequestTeamScope::from_scope(&team_scope_for_team(team_uid))
 }
 
 fn team_scope_for_team(team_uid: i64) -> TeamContextForOperation {
