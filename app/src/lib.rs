@@ -2301,7 +2301,7 @@ pub(crate) fn initialize_app(
         )
     });
     ctx.subscribe_to_model(&cloud_preferences_syncer, |_, event, ctx| {
-        if matches!(event, CloudPreferencesSyncerEvent::InitialLoadCompleted) {
+        if let CloudPreferencesSyncerEvent::InitialLoadCompleted = event {
             window_settings::migrate_legacy_background_backdrop(ctx);
         }
     });

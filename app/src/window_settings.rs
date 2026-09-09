@@ -100,18 +100,39 @@ define_settings_group!(WindowSettings, settings: [
     },
 ]);
 
-pub(crate) fn migrate_legacy_background_backdrop(ctx: &mut AppContext) {
+pub(crate) fn stage_legacy_background_backdrop(ctx: &mut AppContext) {
     WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
         if settings.background_backdrop.is_value_explicitly_set()
             || !*settings.legacy_override_blur_texture
         {
             return;
         }
-        report_if_error!(
-            settings
-                .background_backdrop
-                .set_value(WindowBackdrop::Acrylic, ctx)
-        );
+        report_if_error!(settings.background_backdrop.load_value(
+            WindowBackdrop::Acrylic,
+            false,
+            ctx
+        ));
+    });
+}
+
+pub(crate) fn migrate_legacy_background_backdrop(ctx: &mut AppContext) {
+    WindowSettings::handle(ctx).update(ctx, |settings, ctx| {
+        if settings.background_backdrop.is_value_explicitly_set() {
+            return;
+        }
+        if *settings.legacy_override_blur_texture {
+            report_if_error!(
+                settings
+                    .background_backdrop
+                    .set_value(WindowBackdrop::Acrylic, ctx)
+            );
+        } else {
+            report_if_error!(settings.background_backdrop.load_value(
+                WindowBackdrop::None,
+                false,
+                ctx
+            ));
+        }
     });
 }
 
@@ -198,3 +219,7 @@ impl BackgroundOpacity {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "window_settings_tests.rs"]
+mod tests;

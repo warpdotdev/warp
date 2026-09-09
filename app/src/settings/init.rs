@@ -39,7 +39,7 @@ use crate::terminal::settings::TerminalSettings;
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::undo_close::UndoCloseSettings;
-use crate::window_settings::{WindowSettings, migrate_legacy_background_backdrop};
+use crate::window_settings::{WindowSettings, stage_legacy_background_backdrop};
 use crate::workflows::aliases::WorkflowAliases;
 use crate::workspace::tab_settings::TabSettings;
 
@@ -64,7 +64,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     FontSettings::register(ctx);
     TabSettings::register(ctx);
     WindowSettings::register(ctx);
-    migrate_legacy_background_backdrop(ctx);
+    stage_legacy_background_backdrop(ctx);
     SafeModeSettings::register(ctx);
     TerminalSettings::register(ctx);
     PaneSettings::register(ctx);
