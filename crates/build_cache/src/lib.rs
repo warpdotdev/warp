@@ -545,6 +545,8 @@ where
 
     let prepare_run_command = Arc::clone(&run_command);
     let prepare_cache_root = cache_root.clone();
+    // Preparing inside the source stream prevents permission fallbacks from racing while still
+    // allowing each preparation to overlap dry-run detections already in flight.
     let candidates = stream::unfold(candidate_receiver(repositories), move |mut receiver| {
         let run_command = Arc::clone(&prepare_run_command);
         let cache_root = prepare_cache_root.clone();

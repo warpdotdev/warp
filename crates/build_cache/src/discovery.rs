@@ -1,3 +1,10 @@
+//! Deterministic discovery of repository roots that may need independent build caches.
+//!
+//! Repositories are scanned in cache-key order. Each repository root is emitted before marked
+//! descendants selected by a sorted depth-first walk, so scan limits always retain the same roots.
+//! The blocking filesystem walk feeds a bounded async channel: a full channel backpressures the
+//! walk, and dropping the receiver stops it at the next cancellation check. [`CandidateKey`]
+//! encodes root-first canonical order independently of delivery timing.
 use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
@@ -66,6 +73,7 @@ const CODEBASE_MARKER_PATHS: &[&[&str]] = &[
     &[".config", "mise", "config.toml"],
 ];
 
+/// Canonical detection order: repository key, then root before normalized descendant paths.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct CandidateKey {
     pub repo_key: RepoCacheKey,
@@ -80,6 +88,10 @@ pub(super) struct CacheCandidate {
     pub stable_child_id: Option<String>,
 }
 
+/// Emits one repository root followed by its distinct marked descendants.
+///
+/// The walk inspects entries below the candidate depth because multi-component markers can identify
+/// shallower roots. Returning `false` means the receiver was dropped and all discovery must stop.
 fn produce_repository_candidates(
     key: RepoCacheKey,
     source: RepositoryCacheSource,
@@ -202,6 +214,10 @@ impl TruncationReason {
     }
 }
 
+/// Starts discovery on Tokio's blocking pool and returns its bounded candidate receiver.
+///
+/// The current span is entered on the blocking thread so per-repository diagnostics remain part of
+/// the cache-setup trace. Dropping the receiver unblocks a pending send and cancels further scans.
 pub(super) fn candidate_receiver(
     repositories: Vec<RepositoryCacheSource>,
 ) -> mpsc::Receiver<CacheCandidate> {
@@ -214,6 +230,7 @@ pub(super) fn candidate_receiver(
     receiver
 }
 
+/// Emits candidates in canonical repository order until discovery completes or the receiver closes.
 pub(super) fn produce_candidates(
     repositories: Vec<RepositoryCacheSource>,
     sender: mpsc::Sender<CacheCandidate>,
@@ -264,6 +281,7 @@ fn child_candidate(
     }
 }
 
+/// Hashes normalized components with a fixed separator so child cache identities are host-agnostic.
 fn stable_child_id(normalized_relative_path: &Path) -> String {
     let mut hasher = Sha256::new();
     for (index, component) in normalized_relative_path.components().enumerate() {
@@ -283,6 +301,7 @@ fn stable_child_id(normalized_relative_path: &Path) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Returns a non-empty, relative UTF-8 path containing only normal components.
 fn normalize_relative_path(root: &Path, path: &Path) -> Option<PathBuf> {
     let relative = path.strip_prefix(root).ok()?;
     let mut normalized = PathBuf::new();
@@ -299,6 +318,7 @@ fn normalize_relative_path(root: &Path, path: &Path) -> Option<PathBuf> {
     Some(normalized)
 }
 
+/// Maps a marker entry to the directory where spacectl must run to observe that marker.
 fn marker_candidate_paths(entry: &DirEntry, root: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if entry.file_type().is_file()
