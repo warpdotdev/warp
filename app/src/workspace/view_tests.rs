@@ -270,6 +270,30 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+#[test]
+fn test_team_navigation_mode() {
+    assert_eq!(
+        team_navigation_mode(true, true, true, false),
+        TeamNavigationMode::TeamSwitcher
+    );
+    assert_eq!(
+        team_navigation_mode(true, true, false, true),
+        TeamNavigationMode::TeamSwitcher
+    );
+    assert_eq!(
+        team_navigation_mode(true, true, false, false),
+        TeamNavigationMode::Hidden
+    );
+    assert_eq!(
+        team_navigation_mode(false, false, false, true),
+        TeamNavigationMode::BrowseTeams
+    );
+    assert_eq!(
+        team_navigation_mode(false, false, false, false),
+        TeamNavigationMode::Hidden
+    );
+}
+
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_open_new_window_for_team_reuses_existing_team_window() {

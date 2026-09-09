@@ -426,7 +426,7 @@ fn non_native_workspace_does_not_show_open_teams() {
 }
 
 #[test]
-fn native_workspace_with_no_open_teams_does_not_show_join_another_team_row() {
+fn native_workspace_with_no_open_teams_does_not_offer_browse_teams() {
     let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
 
     let states = TeamsPageView::open_team_states_for_workspace(Some(&workspace));

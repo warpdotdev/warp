@@ -17,8 +17,8 @@ use warp_errors::report_error;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
     Align, Border, ChildAnchor, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Element, Expanded, Flex, FormattedTextElement, HighlightedHyperlink,
-    Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    CrossAxisAlignment, Element, Flex, FormattedTextElement, HighlightedHyperlink, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
     ParentElement, ParentOffsetBounds, Radius, SavePosition, ScrollTarget, ScrollToPositionMode,
     Shrinkable, Stack, Text,
 };
@@ -92,7 +92,6 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
 const JOIN_ANOTHER_TEAM_HEADER: &str = "Join another team";
-const JOIN_ANOTHER_TEAM_DESCRIPTION: &str = "Your workspace has more teams you can join.";
 const BROWSE_TEAMS_BUTTON_LABEL: &str = "Browse teams";
 const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
@@ -1878,12 +1877,7 @@ impl TeamsPageView {
         };
 
         workspace
-            .open_teams
-            .iter()
-            .filter(|open_team| {
-                let open_team_uid = ServerId::from_string_lossy(&open_team.team_uid);
-                workspace.teams.iter().all(|team| team.uid != open_team_uid)
-            })
+            .joinable_teams()
             .cloned()
             .map(DiscoverableTeamState::new)
             .collect()
@@ -2590,13 +2584,6 @@ impl TeamsWidget {
             chip_editor_style,
             app,
         ));
-        if !view.open_team_states.is_empty() {
-            main_content.add_child(
-                Container::new(self.render_join_another_team_row(appearance))
-                    .with_padding_top(CONTENT_SEPARATION_PADDING)
-                    .finish(),
-            );
-        }
 
         // 4) Horizontal separator between the invite flows and the team members
         // list. 32px of breathing room above and below to match the design.
@@ -2668,57 +2655,29 @@ impl TeamsWidget {
         main_content.finish()
     }
 
-    fn render_join_another_team_row(&self, appearance: &Appearance) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let copy = Expanded::new(
-            1.,
-            Flex::column()
-                .with_child(
-                    Text::new_inline(
-                        JOIN_ANOTHER_TEAM_HEADER,
-                        appearance.ui_font_family(),
-                        appearance.ui_font_size(),
-                    )
-                    .with_style(Properties::default().weight(Weight::Bold))
-                    .with_color(theme.active_ui_text_color().into())
-                    .finish(),
-                )
-                .with_child(
-                    Text::new(
-                        JOIN_ANOTHER_TEAM_DESCRIPTION,
-                        appearance.ui_font_family(),
-                        appearance.ui_font_size(),
-                    )
-                    .with_color(theme.sub_text_color(theme.background()).into())
-                    .finish(),
-                )
-                .finish(),
-        )
-        .finish();
-        let button = appearance
+    fn render_browse_teams_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+        appearance
             .ui_builder()
             .button(
-                ButtonVariant::Secondary,
+                ButtonVariant::Link,
                 self.mouse_state_handles.browse_teams_button.clone(),
             )
-            .with_centered_text_label(BROWSE_TEAMS_BUTTON_LABEL.to_string())
-            .with_style(UiComponentStyles {
-                height: Some(36.),
-                font_weight: Some(Weight::Medium),
-                ..Default::default()
-            })
+            .with_text_and_icon_label(
+                TextAndIcon::new(
+                    TextAndIconAlignment::IconFirst,
+                    BROWSE_TEAMS_BUTTON_LABEL,
+                    Icon::Search.to_warpui_icon(appearance.theme().accent()),
+                    MainAxisSize::Min,
+                    MainAxisAlignment::Center,
+                    vec2f(14., 14.),
+                )
+                .with_inner_padding(4.),
+            )
             .build()
             .with_cursor(Cursor::PointingHand)
             .on_click(|ctx, _, _| {
                 ctx.dispatch_typed_action(TeamsPageAction::ShowJoinTeamsModal);
             })
-            .finish();
-        Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(copy)
-            .with_child(Container::new(button).with_margin_left(16.).finish())
             .finish()
     }
 
@@ -2790,14 +2749,28 @@ impl TeamsWidget {
         }
 
         team_name_header.add_child(left_side.finish());
-
-        // Upgrade / billing links
+        let has_joinable_teams = !view.open_team_states.is_empty();
+        let mut right_side = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_main_axis_size(MainAxisSize::Min);
+        if has_joinable_teams {
+            right_side.add_child(self.render_browse_teams_button(appearance));
+        }
         if has_admin_permissions {
-            team_name_header.add_child(self.render_billing_links(
-                team,
-                use_workspace_admin_panel,
-                appearance,
-            ));
+            let billing_links =
+                self.render_billing_links(team, use_workspace_admin_panel, appearance);
+            right_side.add_child(if has_joinable_teams {
+                Container::new(billing_links)
+                    .with_border(Border::left(1.).with_border_fill(appearance.theme().outline()))
+                    .with_margin_left(12.)
+                    .finish()
+            } else {
+                billing_links
+            });
+        }
+        if has_joinable_teams || has_admin_permissions {
+            team_name_header.add_child(right_side.finish());
         }
 
         team_name_header.finish()

@@ -111,6 +111,13 @@ impl Workspace {
             .is_some_and(|policy| policy.enabled)
     }
 
+    pub fn joinable_teams(&self) -> impl Iterator<Item = &DiscoverableTeam> {
+        self.open_teams.iter().filter(|open_team| {
+            let open_team_uid = ServerId::from_string_lossy(&open_team.team_uid);
+            self.teams.iter().all(|team| team.uid != open_team_uid)
+        })
+    }
+
     pub fn is_native_workspaces_admin(&self, user_email: &str) -> bool {
         self.is_workspace_admin(user_email) && self.is_native_workspaces_enabled()
     }
