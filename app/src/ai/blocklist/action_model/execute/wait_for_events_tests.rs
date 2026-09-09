@@ -4,7 +4,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use warp_core::features::FeatureFlag;
 use warpui::{App, EntityId};
 
 use super::{
@@ -82,14 +81,12 @@ fn watchdog_timeout_preserves_large_stamped_value() {
 
 #[test]
 fn execute_invokes_parent_registration_for_child_conversations() {
-    // `execute()` must route into the orchestration streamer behind the flag.
+    // `execute()` must route into the orchestration streamer.
     // A child conversation is eligible for wait-time parent registration —
     // with multi-level orchestration a mid-tree node may have children of
     // its own — so the streamer issues a `get_ambient_agent_task` fetch,
     // and the wait still flips the conversation into WaitingForEvents.
     App::test((), |mut app| async move {
-        let _flag_guard = FeatureFlag::WaitForEventsParentRegistration.override_enabled(true);
-
         let terminal_view_id = EntityId::new();
         let history_model =
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));

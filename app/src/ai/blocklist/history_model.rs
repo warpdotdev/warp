@@ -631,9 +631,6 @@ impl BlocklistAIHistoryModel {
             true,
             ctx,
         );
-        // `start_new_child_conversation` already marked this remote above;
-        // this call is now a no-op (kept for clarity / backward compat).
-        self.mark_conversation_as_remote_child(conversation_id, ctx);
         if !fallback_title.is_empty()
             && let Some(conversation) = self.conversation_mut(&conversation_id)
         {
@@ -877,19 +874,6 @@ impl BlocklistAIHistoryModel {
             conversation_id,
             title,
         });
-    }
-    pub fn mark_conversation_as_remote_child(
-        &mut self,
-        conversation_id: AIConversationId,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        {
-            let Some(conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
-                return;
-            };
-            conversation.mark_as_remote_child();
-        }
-        self.persist_conversation_state(conversation_id, ctx);
     }
 
     /// Updates the persisted `last_event_sequence` for a conversation and

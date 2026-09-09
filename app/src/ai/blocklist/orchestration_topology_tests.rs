@@ -433,7 +433,10 @@ fn has_local_orchestrated_children_ignores_remote_children() {
                 ConversationStatus::InProgress,
                 ctx,
             );
-            history_model.mark_conversation_as_remote_child(remote_child, ctx);
+            history_model
+                .conversation_mut(&remote_child)
+                .expect("remote child conversation should exist")
+                .mark_as_remote_child();
         });
 
         // A remote child runs on its own worker and is not orphaned by a
