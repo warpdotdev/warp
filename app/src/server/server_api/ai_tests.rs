@@ -11,8 +11,9 @@ use super::{
     ConnectedSelfHostedWorker, CreateAgentRequest, ExecutionLocation, ForkConversationResponse,
     ListConnectedSelfHostedWorkersResponse, ListRunsResponse, PrepareAttachmentUploadsResponse,
     ReadAgentMessageResponse, RunFollowupRequest, RunSortBy, RunSortOrder, SpawnAgentRequest,
-    TaskListFilter, UploadFieldValue, UserQueryMode, build_fork_conversation_url,
-    build_list_agent_runs_url, build_run_followup_url, is_unknown_git_credential_schema_error,
+    TaskGitCredentialsError, TaskListFilter, UploadFieldValue, UserQueryMode,
+    build_fork_conversation_url, build_list_agent_runs_url, build_run_followup_url,
+    is_unknown_git_credential_schema_error,
 };
 use crate::notebooks::NotebookId;
 use crate::server::ids::ServerId;
@@ -1498,13 +1499,17 @@ fn upload_url_fallback_is_uploaded_as_a_put_with_its_content_type() {
 
 #[test]
 fn unknown_git_credential_schema_error_matches_undeployed_partial_refresh_fields() {
-    assert!(is_unknown_git_credential_schema_error(&anyhow::anyhow!(
-        "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
-    )));
-    assert!(is_unknown_git_credential_schema_error(&anyhow::anyhow!(
-        "Unknown argument \"acceptsPartialRefresh\" on field \"taskGitCredentials\""
-    )));
-    assert!(!is_unknown_git_credential_schema_error(&anyhow::anyhow!(
-        "Failed to fetch task git credentials"
-    )));
+    assert!(is_unknown_git_credential_schema_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!(
+            "Cannot query field \"failedHosts\" on type \"TaskGitCredentialsOutput\""
+        ))
+    ));
+    assert!(is_unknown_git_credential_schema_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!(
+            "Unknown argument \"acceptsPartialRefresh\" on field \"taskGitCredentials\""
+        ))
+    ));
+    assert!(!is_unknown_git_credential_schema_error(
+        &TaskGitCredentialsError::Request(anyhow::anyhow!("Failed to fetch task git credentials"))
+    ));
 }
