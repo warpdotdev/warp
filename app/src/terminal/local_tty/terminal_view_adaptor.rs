@@ -152,7 +152,7 @@ fn accept_agent_prompt(
     // this is true independent of whether the CLI-harness session above has actually started a
     // live PTY yet.
     if let Some(task_id) =
-        LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(terminal_view_id)
+        LocalAgentTaskSyncModel::as_ref(ctx).cli_harness_task_id_for_terminal_view(terminal_view_id)
     {
         if !request.attachments.is_empty() {
             log::warn!(

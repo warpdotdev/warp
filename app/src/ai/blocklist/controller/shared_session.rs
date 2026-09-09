@@ -858,14 +858,14 @@ impl BlocklistAIController {
     /// The task ID a no-token prompt landing right now must not spawn a native `AIConversation`
     /// for, because it is (or is configured to be) backed by a third-party CLI-harness session.
     /// Two independent signals are checked, since either can be true without the other:
-    /// - `LocalAgentTaskSyncModel::task_id_for_terminal_view`: the harness session has been
+    /// - `LocalAgentTaskSyncModel::cli_harness_task_id_for_terminal_view`: the harness session has been
     ///   registered for this pane (true from harness setup time, before its process launches).
     /// - `AmbientAgentTask::is_third_party_harness`: the task's stored config says it runs on a
     ///   third-party harness, independent of whether a session has registered for this pane yet
     ///   (e.g. very early in setup, or if registration is ever skipped by a bug).
     fn cli_harness_backed_task_id(&self, ctx: &AppContext) -> Option<AmbientAgentTaskId> {
         LocalAgentTaskSyncModel::as_ref(ctx)
-            .task_id_for_terminal_view(self.terminal_surface_id)
+            .cli_harness_task_id_for_terminal_view(self.terminal_surface_id)
             .or_else(|| {
                 self.ambient_agent_task_id.filter(|task_id| {
                     AgentConversationsModel::as_ref(ctx)

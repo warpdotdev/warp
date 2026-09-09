@@ -13590,8 +13590,8 @@ impl TerminalView {
         &self,
         ctx: &AppContext,
     ) -> Option<AIConversationId> {
-        let task_id =
-            LocalAgentTaskSyncModel::as_ref(ctx).task_id_for_terminal_view(self.view_id)?;
+        let task_id = LocalAgentTaskSyncModel::as_ref(ctx)
+            .cli_harness_task_id_for_terminal_view(self.view_id)?;
         let matches_task = |conversation: &&AIConversation| conversation.task_id() == Some(task_id);
 
         let history_model = BlocklistAIHistoryModel::as_ref(ctx);
