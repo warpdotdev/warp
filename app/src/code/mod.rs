@@ -4,7 +4,9 @@ use std::ops::AddAssign;
 
 use pathfinder_geometry::rect::RectF;
 use warp_errors::{ErrorExt, register_error};
-use warp_util::file::{FileLoadError, FileSaveError};
+#[cfg(not(target_family = "wasm"))]
+use warp_util::file::FileLoadError;
+use warp_util::file::FileSaveError;
 use warpui::AppContext;
 use warpui::elements::DropTargetData;
 
@@ -53,6 +55,7 @@ impl ErrorExt for ImmediateSaveError {
 }
 register_error!(ImmediateSaveError);
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn file_load_error_message(error: &FileLoadError) -> String {
     match error {
         FileLoadError::TooLarge {
@@ -77,6 +80,7 @@ pub(crate) fn file_load_error_message(error: &FileLoadError) -> String {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn format_file_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut size = bytes as f64;
