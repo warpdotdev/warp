@@ -198,11 +198,22 @@ def assert_submits_only_resource_files() -> None:
             "automations/nightly/automation.md": "---\nagent: main\n---\nrun\n",
             "runners/linux.yaml": "platform:\n  linux:\n    dockerImage: ubuntu:24.04\n",
             "scorers/tests/scorer.md": "---\nagents: [main]\n---\nRubric.\n",
+            "benchmarks/terminal-bench/suite.yaml": "name: Terminal Bench\nagent: main\n",
+            "benchmarks/terminal-bench/tasks/build.yaml": (
+                "title: Build\nprompt: Build it.\nsuccessCriteria: It builds.\n"
+            ),
             "webhooks/ci.yaml": "authMode: token\nsecretName: CI_TOKEN\n",
             "skills/helper/SKILL.md": "---\nname: helper\n---\nhelp\n",
             "agents/main/skills/inner/SKILL.md": "---\nname: inner\n---\nhelp\n",
             "README.md": "unrelated",
             "agents/main/notes.txt": "unrelated",
+            "benchmarks/README.md": "unrelated",
+            "benchmarks/terminal-bench/tasks/paused.yaml.disabled": "unrelated",
+            "benchmarks/terminal-bench/notes.yaml": "unsupported benchmark resource path",
+            "benchmarks/terminal-bench/tasks/CON.yaml": "invalid benchmark task slug",
+            "benchmarks/terminal-bench/tasks/nested/inner.yaml": (
+                "unsupported benchmark resource path"
+            ),
             # Not a canonical webhook path: the server would not classify a
             # nested file as a source, so submitting it would be noise.
             "webhooks/nested/inner.yaml": "authMode: token\n",
@@ -219,6 +230,8 @@ def assert_submits_only_resource_files() -> None:
             "automations/nightly/automation.md",
             "runners/linux.yaml",
             "scorers/tests/scorer.md",
+            "benchmarks/terminal-bench/suite.yaml",
+            "benchmarks/terminal-bench/tasks/build.yaml",
             "webhooks/ci.yaml",
         }
         if submitted != expected:
