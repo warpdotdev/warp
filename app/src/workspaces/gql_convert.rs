@@ -106,7 +106,19 @@ impl From<GqlTeamMember> for TeamMember {
 /// they can operate as in the client. Filtering here keeps every consumer of
 /// `Workspace::teams` (team switcher, team spaces, warp drive teams, ...)
 /// scoped to real memberships.
-fn retain_authenticated_teams(workspace: &mut Workspace, user_uid: UserUid) {
+///
+/// Service accounts are never recorded as a human `TeamMember` (that list only tracks
+/// user-role memberships), so this membership check cannot recognize them and would strip
+/// every team out from under any service account. Skip it in that case and trust the server
+/// to have already scoped `teams` to the service account's own team.
+fn retain_authenticated_teams(
+    workspace: &mut Workspace,
+    user_uid: UserUid,
+    is_service_account: bool,
+) {
+    if is_service_account {
+        return;
+    }
     workspace
         .teams
         .retain(|team| team.members.iter().any(|member| member.uid == user_uid));
@@ -1446,55 +1458,61 @@ impl From<GqlWorkspace> for Workspace {
     }
 }
 
-impl From<GqlUser> for WorkspacesMetadataResponse {
-    fn from(gql_user: GqlUser) -> WorkspacesMetadataResponse {
-        let user_uid = UserUid::new(&gql_user.profile.uid);
+/// Converts the `GetWorkspacesMetadataForUser` response into [`WorkspacesMetadataResponse`].
+///
+/// `is_service_account` controls whether [`retain_authenticated_teams`] filters each
+/// workspace's teams down to the caller's own human memberships; see that function's doc
+/// comment for why service accounts must skip it.
+pub fn workspaces_metadata_response_from_gql(
+    gql_user: GqlUser,
+    is_service_account: bool,
+) -> WorkspacesMetadataResponse {
+    let user_uid = UserUid::new(&gql_user.profile.uid);
 
-        let workspaces: Vec<Workspace> = gql_user
-            .workspaces
-            .clone()
-            .into_iter()
-            .filter(|gql_workspace| {
-                // TODO(skambashi): REV-717: Clean up this code once every user always has
-                // a workspace, and the server no longer returns a placeholder workspace.
-                gql_workspace.uid != PLACEHOLDER_WORKSPACE_UID.into()
-            })
-            .map(|gql_workspace| {
-                let mut workspace = gql_workspace.into();
-                retain_authenticated_teams(&mut workspace, user_uid);
-                workspace
-            })
-            .collect();
+    let workspaces: Vec<Workspace> = gql_user
+        .workspaces
+        .clone()
+        .into_iter()
+        .filter(|gql_workspace| {
+            // TODO(skambashi): REV-717: Clean up this code once every user always has
+            // a workspace, and the server no longer returns a placeholder workspace.
+            gql_workspace.uid != PLACEHOLDER_WORKSPACE_UID.into()
+        })
+        .map(|gql_workspace| {
+            let mut workspace = gql_workspace.into();
+            retain_authenticated_teams(&mut workspace, user_uid, is_service_account);
+            workspace
+        })
+        .collect();
 
-        let joinable_teams = gql_user
-            .discoverable_teams
-            .clone()
-            .into_iter()
-            .map(|gql_joinable_team| gql_joinable_team.into())
-            .collect();
+    let joinable_teams = gql_user
+        .discoverable_teams
+        .clone()
+        .into_iter()
+        .map(|gql_joinable_team| gql_joinable_team.into())
+        .collect();
 
-        let experiments = gql_user
-            .experiments
-            .and_then(|experiments| convert_to_server_experiment!(experiments));
+    let experiments = gql_user
+        .experiments
+        .and_then(|experiments| convert_to_server_experiment!(experiments));
 
-        // A teamless user's only workspace is the placeholder filtered out
-        // above, so the user-level policy is the only place their add-on
-        // credits purchase policy — gating and premium pricing alike —
-        // survives (see
-        // [`crate::workspaces::user_workspaces::UserWorkspaces::purchase_policy`]).
-        let user_purchase_policy = gql_user
-            .billing_metadata
-            .and_then(|billing_metadata| billing_metadata.tier.purchase_add_on_credits_policy)
-            .map(Into::into);
+    // A teamless user's only workspace is the placeholder filtered out
+    // above, so the user-level policy is the only place their add-on
+    // credits purchase policy — gating and premium pricing alike —
+    // survives (see
+    // [`crate::workspaces::user_workspaces::UserWorkspaces::purchase_policy`]).
+    let user_purchase_policy = gql_user
+        .billing_metadata
+        .and_then(|billing_metadata| billing_metadata.tier.purchase_add_on_credits_policy)
+        .map(Into::into);
 
-        // TODO(skambashi) refactor to return back workspaces, and not teams
-        WorkspacesMetadataResponse {
-            workspaces,
-            joinable_teams,
-            experiments,
-            ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
-            user_purchase_policy,
-        }
+    // TODO(skambashi) refactor to return back workspaces, and not teams
+    WorkspacesMetadataResponse {
+        workspaces,
+        joinable_teams,
+        experiments,
+        ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
+        user_purchase_policy,
     }
 }
 

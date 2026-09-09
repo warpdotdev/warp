@@ -31,6 +31,7 @@ use chrono::{DateTime, FixedOffset};
 use factory::FactoryClient;
 use instant::Instant;
 use managed_mcp::ManagedMcpClient;
+use managed_secrets::AppManagedSecretsClient;
 use object::ObjectClient;
 use parking_lot::Mutex;
 use referral::ReferralsClient;
@@ -43,7 +44,6 @@ use url::Url;
 use warp_core::context_flag::ContextFlag;
 use warp_core::telemetry::TelemetryEvent;
 use warp_errors::{AnyhowErrorExt, ErrorExt, register_error, report_error};
-use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::HttpStatusError;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
@@ -1563,7 +1563,7 @@ impl ServerApiProvider {
         self.server_api.clone()
     }
 
-    pub fn get_managed_secrets_client(&self) -> Arc<dyn ManagedSecretsClient> {
+    pub fn get_managed_secrets_client(&self) -> Arc<AppManagedSecretsClient> {
         self.server_api.clone()
     }
 

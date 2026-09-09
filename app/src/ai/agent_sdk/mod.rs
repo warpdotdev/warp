@@ -39,7 +39,6 @@ use warp_graphql::object_permissions::OwnerType;
 use warp_isolation_platform::IsolationPlatformError;
 #[cfg(not(target_family = "wasm"))]
 use warp_logging::log_file_path;
-use warp_managed_secrets::ManagedSecretManager;
 use warp_server_client::iap::{IapManager, IapManagerEvent};
 use warpui::platform::TerminationMode;
 use warpui::{AppContext, ModelSpawner, SingletonEntity};
@@ -56,7 +55,7 @@ use crate::ai::agent_sdk::setup_observability::{
     OzRunTimelineEvent, SetupClientEventReporter, SetupStep,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::ambient_agents::task::HarnessConfig;
+use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
@@ -76,6 +75,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{
     AIClient, AgentConfigSnapshot, GitCredential, TaskGitCredentialsError,
 };
+use crate::server::server_api::managed_secrets::AppManagedSecretManager as ManagedSecretManager;
 use crate::server::team_scope::RequestTeamScope;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
@@ -636,15 +636,42 @@ impl warpui::Entity for AgentDriverRunner {
 
 impl warpui::SingletonEntity for AgentDriverRunner {}
 
-fn resolve_local_run_team_scope(
+fn resolve_agent_driver_team_scope(
     args: &RunAgentArgs,
     ctx: &AppContext,
 ) -> anyhow::Result<Option<TeamScopeForCli>> {
-    if args.task_id.is_some() {
+    // We need a team scope if either:
+    // 1. This is a local team-visible task that doesn't exist on the server yet.
+    // 2. This task is authenticated as a service account
+    if args.task_id.is_some() && !AuthStateProvider::as_ref(ctx).get().is_service_account() {
         return Ok(None);
     }
     let scope = common::resolve_team_scope(&args.team_selection, ctx)?;
     Ok(Some(scope))
+}
+
+/// Converts a server-reported [`TaskScope`] into the [`TeamScopeForCli`] the driver's headless
+/// window should be registered under.
+///
+/// This is the task's *actual* ownership, as recorded on the server, and takes precedence over
+/// any scope resolved from CLI args or the caller's team memberships: a service-account worker
+/// resuming an existing `--task-id` run may belong to zero, one, or many teams that have nothing
+/// to do with the specific task it was asked to continue, so only the task's own scope can say
+/// which team (if any) actually owns it.
+fn team_scope_for_task_scope(scope: &TaskScope) -> TeamScopeForCli {
+    if !scope.is_team() {
+        return TeamScopeForCli::Personal;
+    }
+    match ServerId::try_from(scope.uid.as_str()) {
+        Ok(team_uid) => TeamScopeForCli::Team(team_uid),
+        Err(err) => {
+            log::warn!(
+                "Task reported an invalid team scope uid '{}': {err}",
+                scope.uid
+            );
+            TeamScopeForCli::Personal
+        }
+    }
 }
 
 impl AgentDriverRunner {
@@ -682,8 +709,8 @@ impl AgentDriverRunner {
             )
             .await?;
         let args_for_team_scope = args.clone();
-        let local_run_team_scope = foreground
-            .spawn(move |_, ctx| resolve_local_run_team_scope(&args_for_team_scope, ctx))
+        let agent_driver_team_scope = foreground
+            .spawn(move |_, ctx| resolve_agent_driver_team_scope(&args_for_team_scope, ctx))
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
 
@@ -737,7 +764,7 @@ impl AgentDriverRunner {
                 Self::build_driver_options_and_task(
                     &foreground,
                     args,
-                    local_run_team_scope,
+                    agent_driver_team_scope,
                     &server_api,
                     &setup_events,
                 )
@@ -985,12 +1012,20 @@ impl AgentDriverRunner {
                 return Ok(());
             }
             Err(err) if git_credentials_configured_with_gh => {
+                // gh already configured github.com above, so a failed server
+                // fetch degrades to GitHub-only credentials instead of
+                // failing a run that previously worked without the fetch.
                 log::warn!(
                     "Failed to fetch git credentials; continuing with gh-configured GitHub credentials only: {err:#}"
                 );
                 return Ok(());
             }
             Err(err) => {
+                log::warn!("Failed to fetch git credentials before skill resolution: {err:#}");
+                tracing::warn!(
+                    error = ?err,
+                    "Failed to fetch git credentials before skill resolution"
+                );
                 return Err(AgentDriverError::GitCredentialsFetchFailed(err));
             }
         };
@@ -1074,7 +1109,7 @@ impl AgentDriverRunner {
     async fn build_driver_options_and_task(
         foreground: &ModelSpawner<Self>,
         args: RunAgentArgs,
-        local_run_team_scope: Option<TeamScopeForCli>,
+        agent_driver_team_scope: Option<TeamScopeForCli>,
         server_api: &Arc<dyn AIClient>,
         setup_events: &SetupClientEventReporter,
     ) -> Result<(AgentDriverOptions, Task, Option<String>), AgentDriverError> {
@@ -1100,13 +1135,13 @@ impl AgentDriverRunner {
 
         // Build the AgentConfigSnapshot, Task, and AgentDriverOptions
         let prompt_clone = prompt.clone();
-        let (merged_config, mut task, mut driver_options, local_run_team_scope) = foreground
+        let (merged_config, mut task, mut driver_options, agent_driver_team_scope) = foreground
             .spawn(move |_, ctx| -> anyhow::Result<_> {
                 let (merged_config, task) = build_merged_config_and_task(
                     &args,
                     &resolved_skill,
                     &prompt_clone,
-                    local_run_team_scope.as_ref(),
+                    agent_driver_team_scope.as_ref(),
                     ctx,
                 )?;
 
@@ -1150,7 +1185,7 @@ impl AgentDriverRunner {
                     mcp_startup_timeout: args.mcp_startup_timeout.map(|duration| duration.into()),
                 };
 
-                Ok((merged_config, task, driver_options, local_run_team_scope))
+                Ok((merged_config, task, driver_options, agent_driver_team_scope))
             })
             .await?
             .map_err(AgentDriverError::ConfigBuildFailed)?;
@@ -1161,6 +1196,7 @@ impl AgentDriverRunner {
         // The existing-task branch also surfaces the task's `conversation_id` (if any) so
         // the caller can wire up resume without a separate `--conversation` arg.
         let task_conversation_id = if let Some(task_id_str) = task_id_str {
+            driver_options.team_scope = agent_driver_team_scope;
             setup_events
                 .record_result(
                     SetupStep::TaskDataFetch,
@@ -1190,7 +1226,7 @@ impl AgentDriverRunner {
                 server_api,
                 prompt_for_task_creation,
                 merged_config,
-                local_run_team_scope.expect("new local runs resolve a team scope"),
+                agent_driver_team_scope.expect("new local runs resolve a team scope"),
                 &mut driver_options,
             )
             .await?;
@@ -1398,6 +1434,7 @@ impl AgentDriverRunner {
             task_harness,
             task_harness_model_config,
             additional_source_repos,
+            task_team_scope,
         ) = match task_metadata_result {
             Ok(Some(task_metadata)) => {
                 // The task's harness is stored on the snapshot; if absent, it's the default Oz.
@@ -1412,15 +1449,17 @@ impl AgentDriverRunner {
                 let additional_source_repos = agent_config_snapshot
                     .and_then(|config| config.additional_source_repos)
                     .unwrap_or_default();
+                let task_team_scope = task_metadata.scope.as_ref().map(team_scope_for_task_scope);
                 (
                     task_metadata.parent_run_id,
                     task_metadata.conversation_id,
                     Some(task_harness),
                     task_harness_model_config,
                     additional_source_repos,
+                    task_team_scope,
                 )
             }
-            Ok(None) => (None, None, None, None, Vec::new()),
+            Ok(None) => (None, None, None, None, Vec::new(), None),
             Err(err) => return Err(AgentDriverError::TaskMetadataFetchFailed(err)),
         };
 
@@ -1440,6 +1479,13 @@ impl AgentDriverRunner {
         driver_options.parent_run_id = parent_run_id;
         driver_options.additional_source_repos = additional_source_repos;
         driver_options.secrets = secrets;
+        // The server-reported task scope is authoritative for the headless window this run
+        // creates (see `team_scope_for_task_scope`); it supersedes whatever scope was resolved
+        // from CLI args before the task was fetched. Older servers that don't send `scope` fall
+        // back to that earlier resolution.
+        if let Some(task_team_scope) = task_team_scope {
+            driver_options.team_scope = Some(task_team_scope);
+        }
         // CLI flags continue to take precedence so users can still override per-invocation.
         if driver_options.third_party_harness_model_config.is_none() {
             driver_options.third_party_harness_model_config = task_harness_model_config;

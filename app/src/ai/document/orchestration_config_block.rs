@@ -254,8 +254,6 @@ impl OrchestrationConfigBlockView {
 
         // Repopulate pickers when the server-provided harness list,
         // harness model catalogs, or per-harness auth secrets change.
-        // Without an `AuthSecretsLoaded` handler the picker stays on
-        // "Loading…" forever after the lazy fetch completes.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
@@ -276,13 +274,7 @@ impl OrchestrationConfigBlockView {
                     ctx.notify();
                 }
                 HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
-                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
-                    // Repopulate even on fetch failure to replace "Loading…".
-                    // The Deleted event also triggers a refresh so any
-                    // already-mounted picker drops the deleted entry from
-                    // its menu.
+                | HarnessAvailabilityEvent::AuthSecretsChanged => {
                     if me.pickers_initialized {
                         oc::repopulate_all_pickers(
                             &mut me.orchestration_edit_state.orchestration_config_state,
@@ -294,6 +286,7 @@ impl OrchestrationConfigBlockView {
                     ctx.notify();
                 }
                 HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
@@ -424,9 +417,10 @@ impl OrchestrationConfigBlockView {
             return;
         };
         // Only auto-open on `Loaded([])`. Other fetch states are
-        // ambiguous; the `AuthSecretsLoaded` subscription will retry.
+        // ambiguous; the `AuthSecretsChanged` subscription will retry.
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let has_zero_loaded = matches!(
-            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness),
+            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(&team_scope, harness),
             AuthSecretFetchState::Loaded(secrets) if secrets.is_empty()
         );
         if !has_zero_loaded {
@@ -629,6 +623,7 @@ impl OrchestrationConfigBlockView {
             self.orchestration_edit_state
                 .orchestration_config_state
                 .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
+                &scope,
                 &self
                     .orchestration_edit_state
                     .orchestration_config_state
@@ -1127,9 +1122,10 @@ impl TypedActionView for OrchestrationConfigBlockView {
             OrchestrationConfigBlockAction::AuthSecretChanged { auth_secret_name } => {
                 // No `apply_field_change`: secrets are user-scoped and
                 // persisted side-channel, not baked into `OrchestrationConfig`.
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
+                    .apply_auth_secret_change(&team_scope, auth_secret_name.clone(), ctx);
                 ctx.notify();
             }
             OrchestrationConfigBlockAction::CreateNewAuthSecretRequested => {

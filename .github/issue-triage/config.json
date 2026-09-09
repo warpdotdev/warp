@@ -4,13 +4,25 @@
       "color": "d73a4a",
       "description": "Something isn't working."
     },
+    "agent:bug": {
+      "color": "8ff8fd",
+      "description": "Bugs/regressions. Assigned by Warp triage agent."
+    },
+    "agent:feature": {
+      "color": "f47f64",
+      "description": "This issue is a feature request, not a bug report. Assigned by Warp triage agent."
+    },
+    "agent:security": {
+      "color": "a0ce9f",
+      "description": "Security issues/vulnerabilities that are immediately escalated. Assigned by Warp triage agent."
+    },
+    "agent:documentation": {
+      "color": "5f966f",
+      "description": "Missing documentation. Assigned by Warp triage agent."
+    },
     "enhancement": {
       "color": "a2eeef",
       "description": "New feature or request."
-    },
-    "documentation": {
-      "color": "0075ca",
-      "description": "Improvements or additions to documentation."
     },
     "duplicate": {
       "color": "cfd3d7",
@@ -35,6 +47,10 @@
     "ready-to-implement": {
       "color": "0e8a16",
       "description": "The issue is ready for implementation work."
+    },
+    "agent:priority-high": {
+      "color": "b60205",
+      "description": "High-priority issues that are immediately escalated. Assigned by Warp triage agent."
     },
     "repro:high": {
       "color": "b60205",

@@ -217,7 +217,8 @@ pub struct UpdateSecretArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ListSecretsArgs {
-    // TODO: consider flags to filter secrets.
+    #[clap(flatten)]
+    pub scope: ObjectScope,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -252,3 +253,7 @@ impl fmt::Display for SecretType {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secret_tests.rs"]
+mod tests;

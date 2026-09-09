@@ -419,14 +419,18 @@ enum AuthSecretNamesInput {
 /// managed-secret names. Secret values are never included — names only.
 /// Status mirrors `AuthSecretFetchState`; the `CreateNewAuthSecret`
 /// footer is emitted for harnesses with managed-secret types.
-pub fn api_key_snapshot(state: &OrchestrationConfigState, ctx: &AppContext) -> OptionSnapshot {
+pub fn api_key_snapshot<S: TeamScope + ?Sized>(
+    state: &OrchestrationConfigState,
+    team_scope: &S,
+    ctx: &AppContext,
+) -> OptionSnapshot {
     let Some(harness) = Harness::parse_orchestration_harness(&state.harness_type) else {
         return OptionSnapshot::ready(Vec::new(), None);
     };
     if harness == Harness::Oz {
         return OptionSnapshot::ready(Vec::new(), None);
     }
-    let names = match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness) {
+    let names = match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(team_scope, harness) {
         AuthSecretFetchState::Loaded(secrets) => {
             AuthSecretNamesInput::Loaded(secrets.iter().map(|s| s.name.clone()).collect())
         }

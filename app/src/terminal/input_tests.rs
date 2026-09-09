@@ -38,6 +38,7 @@ use crate::ai::agent::{
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions, ResponseStreamId};
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -109,9 +110,11 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workspace::{ActiveSession, OneTimeModalModel, ToastStack, WorkspaceRegistry};
+use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::{TeamContextForOperation, UserWorkspaces};
+use crate::workspaces::workspace::Workspace;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider,
     ReferralThemeStatus, experiments,
@@ -1666,6 +1669,173 @@ fn attach_ambient_view_model_skips_composer_selectors_for_actual_shared_session_
             assert!(
                 input.auth_secret_ftux_view().is_none(),
                 "an actual shared-session viewer must not build the auth-secret FTUX view"
+            );
+        });
+    });
+}
+
+#[test]
+fn auth_secret_selectors_follow_their_own_window_team() {
+    App::test((), |mut app| async move {
+        let _cloud_mode_input_v2 = FeatureFlag::CloudModeInputV2.override_enabled(true);
+        initialize_app(&mut app);
+
+        let team_a = Team::from_local_cache(1.into(), "Team A".to_string(), None, None, None, None);
+        let team_b = Team::from_local_cache(2.into(), "Team B".to_string(), None, None, None, None);
+        let workspace = Workspace::from_local_cache(
+            "workspace_uid123456789".to_string().into(),
+            "Workspace".to_string(),
+            Some(vec![team_a.clone(), team_b.clone()]),
+            None,
+        );
+        let workspace_uid = workspace.uid;
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.update_workspaces(vec![workspace], ctx);
+                workspaces.set_current_workspace_uid(workspace_uid, ctx);
+            });
+            CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.persist_auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_a.uid),
+                    Harness::Claude,
+                    Some(AuthSecretPreference::Named("team-a-key".to_string())),
+                    ctx,
+                );
+                settings.persist_auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_b.uid),
+                    Harness::Claude,
+                    Some(AuthSecretPreference::Named("team-b-key".to_string())),
+                    ctx,
+                );
+            });
+        });
+
+        let tips_a = app.add_model(|_| TipsCompleted::default());
+        let (window_a, terminal_a) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_a, None, ctx)
+        });
+        let tips_b = app.add_model(|_| TipsCompleted::default());
+        let (window_b, terminal_b) = app.add_window(WindowStyle::NotStealFocus, move |ctx| {
+            TerminalView::new_for_test(tips_b, None, ctx)
+        });
+        terminal_a.update(&mut app, |view, _| {
+            view.model.lock().set_is_dummy_cloud_mode_session(true);
+        });
+        terminal_b.update(&mut app, |view, _| {
+            view.model.lock().set_is_dummy_cloud_mode_session(true);
+        });
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_a.uid, ctx);
+            workspaces.switch_window_to_team(window_b, team_a.uid, ctx);
+        });
+
+        let input_a = terminal_a.read(&app, |view, _| view.input().clone());
+        let terminal_a_id = terminal_a.read(&app, |view, _| view.id());
+        let weak_terminal_a = terminal_a.downgrade();
+        let view_model_a = input_a.update(&mut app, |input, ctx| {
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_a_id, weak_terminal_a, ctx));
+            view_model.update(ctx, |model, ctx| model.set_harness(Harness::Claude, ctx));
+            input.attach_ambient_agent_view_model(view_model.clone(), ctx);
+            view_model
+        });
+
+        let input_b = terminal_b.read(&app, |view, _| view.input().clone());
+        let terminal_b_id = terminal_b.read(&app, |view, _| view.id());
+        let weak_terminal_b = terminal_b.downgrade();
+        let view_model_b = input_b.update(&mut app, |input, ctx| {
+            let view_model = ctx
+                .add_model(|ctx| AmbientAgentViewModel::new(terminal_b_id, weak_terminal_b, ctx));
+            view_model.update(ctx, |model, ctx| model.set_harness(Harness::Claude, ctx));
+            input.attach_ambient_agent_view_model(view_model.clone(), ctx);
+            view_model
+        });
+
+        assert_eq!(
+            view_model_a.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-key".to_string())
+        );
+        assert_eq!(
+            view_model_b.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-key".to_string())
+        );
+        let ftux_a = input_a.read(&app, |input, _| {
+            input
+                .auth_secret_ftux_view()
+                .cloned()
+                .expect("cloud composer should have an auth-secret FTUX view")
+        });
+        ftux_a.update(&mut app, |_, ctx| {
+            ctx.emit(AuthSecretFtuxViewEvent::SecretSelected {
+                harness: Harness::Claude,
+                name: "team-a-ftux-key".to_string(),
+            });
+        });
+        assert_eq!(
+            view_model_a.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-ftux-key".to_string())
+        );
+        app.read(|ctx| {
+            let settings = CloudAgentSettings::as_ref(ctx);
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_a.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Named("team-a-ftux-key".to_string()))
+            );
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_b.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Named("team-b-key".to_string()))
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.switch_window_to_team(window_a, team_b.uid, ctx);
+        });
+
+        assert_eq!(
+            view_model_a.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-b-key".to_string())
+        );
+        assert_eq!(
+            view_model_b.read(&app, |model, _| {
+                model.selected_harness_auth_secret_name().map(str::to_owned)
+            }),
+            Some("team-a-key".to_string())
+        );
+
+        ftux_a.update(&mut app, |_, ctx| {
+            ctx.emit(AuthSecretFtuxViewEvent::Skipped {
+                harness: Harness::Claude,
+            });
+        });
+        app.read(|ctx| {
+            let settings = CloudAgentSettings::as_ref(ctx);
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_a.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Named("team-a-ftux-key".to_string()))
+            );
+            assert_eq!(
+                settings.auth_secret_preference(
+                    &TeamContextForOperation::new_for_test(team_b.uid),
+                    Harness::Claude,
+                ),
+                Some(AuthSecretPreference::Inherit)
             );
         });
     });
