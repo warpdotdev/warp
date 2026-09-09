@@ -70,6 +70,7 @@ pub struct ViewSnapshot {
     pub font_family: FamilyId,
     pub placeholder_font_family: FamilyId,
     pub font_properties: Properties,
+    pub text_alignment: TextAlignment,
     pub line_height: f32,
     pub line_height_ratio: f32,
     pub em_width: f32,

@@ -68,7 +68,7 @@ use warpui::platform::keyboard::KeyCode;
 use warpui::platform::{Cursor, FilePickerConfiguration, OperatingSystem};
 use warpui::text::TextBuffer;
 use warpui::text::word_boundaries::WordBoundariesPolicy;
-use warpui::text_layout::TextStyle;
+use warpui::text_layout::{TextAlignment, TextStyle};
 use warpui::ui_components::button::ButtonTooltipPosition;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::windowing::WindowManager;
@@ -1773,6 +1773,7 @@ pub struct EditorView {
     windowing_state_handle: ModelHandle<WindowManager>,
 
     text_options: TextOptions,
+    text_alignment: TextAlignment,
     use_settings_line_height_ratio: bool,
     focused: bool,
     get_cursor_colors_fn: CursorColorsFn,
@@ -2940,6 +2941,7 @@ impl EditorView {
             font_family: self.font_family(appearance),
             placeholder_font_family: self.placeholder_font_family(appearance),
             font_properties: self.font_properties(appearance),
+            text_alignment: self.text_alignment,
             line_height: self.line_height(font_cache, appearance),
             line_height_ratio: self.line_height_ratio(appearance),
             em_width: self.em_width(font_cache, appearance),
@@ -3000,6 +3002,16 @@ impl EditorView {
     pub fn single_line(options: SingleLineEditorOptions, ctx: &mut ViewContext<Self>) -> Self {
         let options: EditorOptions = options.into();
         Self::new(options, ctx)
+    }
+
+    pub fn with_text_alignment(mut self, text_alignment: TextAlignment) -> Self {
+        self.text_alignment = text_alignment;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn text_alignment(&self) -> TextAlignment {
+        self.text_alignment
     }
 
     /// Creates an [`EditorView`] with an empty buffer
@@ -3190,6 +3202,7 @@ impl EditorView {
             scroll_position: Arc::new(Mutex::new(Vector2F::zero())),
             autoscroll_requested: Arc::new(Mutex::new(false)),
             text_options: options.text,
+            text_alignment: Default::default(),
             use_settings_line_height_ratio: options.use_settings_line_height_ratio,
             windowing_state_handle,
             focused: false,

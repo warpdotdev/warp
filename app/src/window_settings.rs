@@ -1,6 +1,9 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warpui::{AppContext, WindowId};
+#[cfg(test)]
+#[path = "window_settings_tests.rs"]
+mod tests;
 
 define_settings_group!(WindowSettings, settings: [
     background_blur_radius: BackgroundBlurRadius {
@@ -89,16 +92,58 @@ define_settings_group!(WindowSettings, settings: [
 ]);
 
 impl ZoomLevel {
+    pub const MIN: u16 = 50;
+    pub const MAX: u16 = 350;
     /// Available zoom values (percent): 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350.
     /// This corresponds to a zoom factor range of [0.5, 3.5].
     /// Used for zoom level adjustments and the zoom dropdown in appearance settings.
     pub const VALUES: [u16; 15] = [
         50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350,
     ];
+    /// Parses an integer percentage, allowing surrounding ASCII whitespace and
+    /// one optional trailing percent sign.
+    pub fn parse_percentage(input: &str) -> Option<u16> {
+        let input = input.trim_matches(|character: char| character.is_ascii_whitespace());
+        let input = input.strip_suffix('%').unwrap_or(input);
+        input
+            .parse::<u16>()
+            .ok()
+            .filter(|value| (Self::MIN..=Self::MAX).contains(value))
+    }
+
+    /// Returns the next preset above or below `current`.
+    pub fn next_preset(current: u16, increase: bool) -> u16 {
+        if increase {
+            Self::VALUES
+                .iter()
+                .copied()
+                .find(|preset| *preset > current)
+                .unwrap_or(current)
+        } else {
+            Self::VALUES
+                .iter()
+                .rev()
+                .copied()
+                .find(|preset| *preset < current)
+                .unwrap_or(current)
+        }
+    }
 
     /// Returns the current [`ZoomLevel`] as a percentage (so that it be can be used as a zoom factor).
     pub fn as_zoom_factor(&self) -> f32 {
         self.inner as f32 / 100.0
+    }
+
+    fn validate(&self, new_value: u16) -> u16 {
+        if new_value < Self::MIN {
+            log::warn!("Window zoom level should not be smaller than {}", Self::MIN);
+            Self::MIN
+        } else if new_value > Self::MAX {
+            log::warn!("Window zoom level should not be bigger than {}", Self::MAX);
+            Self::MAX
+        } else {
+            new_value
+        }
     }
 }
 

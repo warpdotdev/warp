@@ -23,7 +23,7 @@ use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::keymap::Keystroke;
 use warpui::platform::keyboard::KeyCode;
 use warpui::text_layout::{
-    self, ComputeBaselinePositionArgs, DEFAULT_TOP_BOTTOM_RATIO, LayoutCache,
+    self, ComputeBaselinePositionArgs, DEFAULT_TOP_BOTTOM_RATIO, LayoutCache, TextAlignment,
 };
 use warpui::text_selection_utils::{
     NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
@@ -212,6 +212,19 @@ pub struct EditorElement {
 }
 
 impl EditorElement {
+    fn aligned_line_x_offset(
+        alignment: TextAlignment,
+        available_width: f32,
+        line_width: f32,
+    ) -> f32 {
+        let remaining_width = (available_width - line_width).max(0.);
+        match alignment {
+            TextAlignment::Left => 0.,
+            TextAlignment::Center => remaining_width / 2.,
+            TextAlignment::Right => remaining_width,
+        }
+    }
+
     /// Creates a new editor element.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -760,7 +773,7 @@ impl EditorElement {
             content_origin + vec2f(layout.left_notch_layout_width_px, 0.)
         } else {
             content_origin
-        };
+        } + vec2f(layout.line_x_offset(row, line_layout), 0.);
 
         let start_x = if row == selection.start.row() {
             line_layout.x_for_index(selection.start.column() as usize)
@@ -1014,6 +1027,10 @@ impl EditorElement {
                     // Note that we don't want to start from top of line (don't want
                     // a massive cursor for large line heights).
                     let cursor_origin = text_content_origin
+                        + vec2f(
+                            layout.line_x_offset(cursor_position.row(), cursor_row_layout),
+                            0.,
+                        )
                         + vec2f(
                             0.,
                             // 1. Go down by baseline position (which is 80% of line height due to top bottom ratio).
@@ -1280,11 +1297,12 @@ impl EditorElement {
 
         for (ix, line) in layout.frame_layouts.displayed_lines().enumerate() {
             // Push over text content origin due to left notch, if the first line is visible.
-            let text_content_origin = if ix == 0 && first_visible_row == 0 {
+            let row = first_visible_row + ix as u32;
+            let text_content_origin = if row == 0 {
                 content_origin + vec2f(layout.left_notch_layout_width_px, 0.)
             } else {
                 content_origin
-            };
+            } + vec2f(layout.line_x_offset(row, line), 0.);
             let line_origin = text_content_origin + vec2f(0., ix as f32 * line_height);
 
             if let Some(point) =
@@ -1381,7 +1399,10 @@ impl EditorElement {
             .frame_layouts
             .get_line(0)
             .map(|first_line| {
-                content_origin.x() + first_line.width + layout.left_notch_layout_width_px
+                content_origin.x()
+                    + layout.left_notch_layout_width_px
+                    + layout.line_x_offset(0, first_line)
+                    + first_line.width
                     > right_notch_origin.x()
             })
             .unwrap_or(false);
@@ -1620,6 +1641,15 @@ impl Element for EditorElement {
         } else {
             vec![]
         };
+        let first_suggestion_line_row = (!placeholder_suggestion_text_line_layouts.is_empty())
+            .then(|| match view_snapshot.autosuggestion_location() {
+                Some(AutosuggestionLocation::Inline(logical_line_ix)) => {
+                    frame_layouts.end_of_logical_row(logical_line_ix) as u32
+                }
+                Some(AutosuggestionLocation::EndOfBuffer) | None => {
+                    frame_layouts.num_lines().saturating_sub(1) as u32
+                }
+            });
         // Set the height of the element, in case we don't have enough text to fill
         // in all the space.
         if size.y().is_infinite() || view_snapshot.autogrow {
@@ -1770,6 +1800,8 @@ impl Element for EditorElement {
             top_section_height_px,
             left_notch_layout_width_px,
             right_notch_layout_width_px,
+            text_alignment: view_snapshot.text_alignment,
+            first_suggestion_line_row,
         });
         size
     }
@@ -1892,23 +1924,11 @@ impl Element for EditorElement {
             // It's mutable and updated according to the width of autosuggestion lines. And it is only drawn at the last line of autosuggestion.
             let mut last_autosuggestion_glyph_position = Some(vec2f(0., 0.));
 
-            // The autosuggestion location should be expressed in a soft-wrapped row coordinate
-            // In other words, in what soft-wrapped row can we find the last character in the logical row that has the autosuggestion?
-            let autosuggestion_soft_wrapped_line = view_snapshot
-                .autosuggestion_location()
-                .as_ref()
-                .and_then(|l| match l {
-                    AutosuggestionLocation::EndOfBuffer => None,
-                    AutosuggestionLocation::Inline(logical_line_ix) => {
-                        Some(layout.frame_layouts.end_of_logical_row(*logical_line_ix))
-                    }
-                });
-
             self.paint_lines(
                 content_origin,
                 layout,
                 line_height,
-                autosuggestion_soft_wrapped_line,
+                layout.first_suggestion_line_row.map(|row| row as usize),
                 ctx,
                 app,
                 &mut last_autosuggestion_glyph_position,
@@ -2043,7 +2063,7 @@ impl Element for EditorElement {
                     content_origin + vec2f(layout.left_notch_layout_width_px, 0.)
                 } else {
                     content_origin
-                };
+                } + vec2f(layout.line_x_offset(row, line), 0.);
 
                 let x_offset = line.x_for_index(soft_wrap_point.column() as usize);
                 let bounds = text_content_origin + vec2f(x_offset, y_offset);
@@ -2220,9 +2240,33 @@ struct LayoutState {
     /// they doesn't exist).
     left_notch_layout_width_px: f32,
     right_notch_layout_width_px: f32,
+    text_alignment: TextAlignment,
+    first_suggestion_line_row: Option<u32>,
 }
 
 impl LayoutState {
+    fn line_x_offset(&self, row: u32, line: &text_layout::Line) -> f32 {
+        let (left_inset, right_inset) = if row == 0 {
+            (
+                self.left_notch_layout_width_px,
+                self.right_notch_layout_width_px,
+            )
+        } else {
+            (0., 0.)
+        };
+        let available_width = (self.size.x() - left_inset - right_inset).max(0.);
+        let suggestion_width = self
+            .first_suggestion_line_row
+            .filter(|suggestion_row| *suggestion_row == row)
+            .and_then(|_| self.placeholder_suggestion_text_line_layouts.first())
+            .map_or(0., |suggestion| suggestion.width);
+        EditorElement::aligned_line_x_offset(
+            self.text_alignment,
+            available_width,
+            line.width + suggestion_width,
+        )
+    }
+
     /// Computes the scroll width of this editor in pixels.
     fn scroll_width(
         &self,
@@ -2329,21 +2373,22 @@ impl PaintState {
             is_clamped = true;
             row = max_row;
         }
-        let shifted_position = if row == 0 {
-            // Note that the given position is shifted for the left notch's width, but we don't
-            // want the DisplayPoint col to be shifted over, hence we subtract the width.
-            vec2f(
-                position.x() - layout.left_notch_layout_width_px,
-                position.y(),
-            )
-        } else {
-            position
-        };
-
         let line = layout
             .frame_layouts
             .get_line(row as usize)
             .expect("Should be clamped to last possible line");
+        let line_x_offset = layout.line_x_offset(row, line);
+        let shifted_position = if row == 0 {
+            // Note that the given position is shifted for the left notch's width, but we don't
+            // want the DisplayPoint col to be shifted over, hence we subtract the width. The
+            // alignment offset is likewise visual-only and must not affect the resolved column.
+            vec2f(
+                position.x() - layout.left_notch_layout_width_px - line_x_offset,
+                position.y(),
+            )
+        } else {
+            position - vec2f(line_x_offset, 0.)
+        };
 
         let x = shifted_position.x() + (scroll_position.x() * view_snapshot.em_width);
 
