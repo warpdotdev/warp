@@ -3542,7 +3542,8 @@ impl SettingsWidget for WindowBackdropWidget {
         let mut col = Flex::column().with_child(render_dropdown_item(
             appearance,
             "Window backdrop",
-            None,
+            (*WindowSettings::as_ref(app).background_opacity == BackgroundOpacity::MAX)
+                .then_some("Backdrop is not visible at opacity 100%"),
             None,
             LocalOnlyIconState::for_setting(
                 BackgroundBackdrop::storage_key(),

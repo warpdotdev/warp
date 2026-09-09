@@ -54,7 +54,7 @@ lazy_static! {
         HashSet::from([Keystroke::parse("cmdorctrl-v").unwrap()]);
 }
 /// The system backdrop material applied behind a window's transparent content.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "schema_gen", derive(schemars::JsonSchema))]
 pub enum WindowBackdrop {
@@ -74,53 +74,6 @@ impl WindowBackdrop {
         Self::Acrylic,
         Self::MicaAlt,
     ];
-}
-
-impl<'de> Deserialize<'de> for WindowBackdrop {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct WindowBackdropVisitor;
-
-        impl serde::de::Visitor<'_> for WindowBackdropVisitor {
-            type Value = WindowBackdrop;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a window backdrop name or the legacy acrylic-enabled boolean")
-            }
-
-            fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                Ok(if value {
-                    WindowBackdrop::Acrylic
-                } else {
-                    WindowBackdrop::None
-                })
-            }
-
-            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-            where
-                E: serde::de::Error,
-            {
-                match value {
-                    "none" => Ok(WindowBackdrop::None),
-                    "auto" => Ok(WindowBackdrop::Auto),
-                    "mica" => Ok(WindowBackdrop::Mica),
-                    "acrylic" => Ok(WindowBackdrop::Acrylic),
-                    "mica_alt" => Ok(WindowBackdrop::MicaAlt),
-                    _ => Err(E::unknown_variant(
-                        value,
-                        &["none", "auto", "mica", "acrylic", "mica_alt"],
-                    )),
-                }
-            }
-        }
-
-        deserializer.deserialize_any(WindowBackdropVisitor)
-    }
 }
 
 #[cfg(feature = "settings_value")]
