@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -60,6 +61,29 @@ struct PendingDiffParse {
 /// `BufferEdit` to the remote server. Long enough to coalesce rapid
 /// keystrokes, short enough for the remote view to feel responsive.
 const REMOTE_EDIT_DEBOUNCE: Duration = Duration::from_millis(200);
+const MAX_EDITOR_BUFFER_CONTENT_BYTES: usize = 100 * 1024 * 1024;
+// Byte length alone does not bound `BufferText` storage because every newline occupies a fixed-size
+// fragment even when the line itself is empty.
+const MAX_EDITOR_BUFFER_NEWLINE_COUNT: usize = 1_000_000;
+
+fn editor_buffer_load_error(content: &str) -> Option<FileLoadError> {
+    if content.len() > MAX_EDITOR_BUFFER_CONTENT_BYTES {
+        return Some(editor_limit_exceeded_error());
+    }
+    let exceeds_newline_limit = content
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .nth(MAX_EDITOR_BUFFER_NEWLINE_COUNT)
+        .is_some();
+    exceeds_newline_limit.then(editor_limit_exceeded_error)
+}
+
+fn editor_limit_exceeded_error() -> FileLoadError {
+    FileLoadError::IOError(io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        "File exceeds Code editor loading limits",
+    ))
+}
 
 /// Accumulates incremental edits for a single remote buffer during a
 /// debounce window before sending them as a single `BufferEdit` message.
@@ -493,6 +517,13 @@ impl GlobalBufferModel {
         let Some(state) = self.buffers.get_mut(&file_id) else {
             return;
         };
+        if let Some(error) = editor_buffer_load_error(content) {
+            ctx.emit(GlobalBufferModelEvent::FailedToLoad {
+                file_id,
+                error: Rc::new(error),
+            });
+            return;
+        }
 
         let Some(buffer) = state.buffer.upgrade(ctx) else {
             self.cleanup_file_id(file_id, ctx);
@@ -709,6 +740,20 @@ impl GlobalBufferModel {
                 base_version,
                 new_version,
             } => {
+                if self.buffers.get(id).is_some_and(|state| !state.is_loaded()) {
+                    if let Some(state) = self.buffers.get_mut(id) {
+                        state.set_initial_content_version(*new_version);
+                    }
+                    self.populate_buffer_with_read_content(
+                        *id,
+                        content,
+                        *base_version,
+                        *new_version,
+                        true,
+                        ctx,
+                    );
+                    return;
+                }
                 if let Some(buffer) = self.buffer_handle_for_id(*id, ctx) {
                     if buffer.as_ref(ctx).version_match(base_version) {
                         self.populate_buffer_with_read_content(
