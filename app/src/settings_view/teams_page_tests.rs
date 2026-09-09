@@ -1,4 +1,14 @@
+#[cfg(not(target_family = "wasm"))]
+use std::cell::RefCell;
+#[cfg(not(target_family = "wasm"))]
+use std::rc::Rc;
+
+#[cfg(not(target_family = "wasm"))]
+use warpui::App;
+
 use super::*;
+#[cfg(not(target_family = "wasm"))]
+use crate::workspace::view::tests::{initialize_app, mock_workspace};
 use crate::workspaces::team::TeamMember;
 use crate::workspaces::workspace::{
     EmailInvite, MultiAdminPolicy, NativeWorkspacesPolicy, Tier, WorkspaceMember,
@@ -12,6 +22,67 @@ fn member(email: &str, role: MembershipRole) -> TeamMember {
         role,
         is_disabled: false,
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn joining_a_workspace_team_opens_only_a_new_scoped_window() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let source_workspace = mock_workspace(&mut app);
+        let source_window_id = source_workspace.update(&mut app, |_, ctx| ctx.window_id());
+        let source_team_uid: ServerId = 123.into();
+        let joined_team_uid: ServerId = 456.into();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.register_window(source_window_id, Some(source_team_uid), ctx);
+        });
+        let teams_page = source_workspace.update(&mut app, |_, ctx| {
+            ctx.add_typed_action_view(TeamsPageView::new)
+        });
+
+        let changed_window_ids = Rc::new(RefCell::new(Vec::new()));
+        let changed_window_ids_for_subscription = changed_window_ids.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), move |_, event, _| {
+                if let UserWorkspacesEvent::WindowTeamChanged { window_id } = event {
+                    changed_window_ids_for_subscription
+                        .borrow_mut()
+                        .push(*window_id);
+                }
+            });
+        });
+        let initial_window_count = app.window_ids().len();
+
+        teams_page.update(&mut app, |teams_page, ctx| {
+            teams_page.handle_model_event(
+                &UserWorkspacesEvent::JoinTeamInWorkspaceSuccess {
+                    team_uid: joined_team_uid,
+                },
+                ctx,
+            );
+        });
+
+        assert_eq!(app.window_ids().len(), initial_window_count + 1);
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(
+                user_workspaces.team_uid_for_window(source_window_id),
+                Some(source_team_uid)
+            );
+            let joined_window_ids = ctx
+                .window_ids()
+                .filter(|window_id| {
+                    user_workspaces.team_uid_for_window(*window_id) == Some(joined_team_uid)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(joined_window_ids.len(), 1);
+            assert_eq!(
+                changed_window_ids.borrow().as_slice(),
+                joined_window_ids.as_slice()
+            );
+        });
+    });
 }
 
 fn disabled_member(email: &str, role: MembershipRole) -> TeamMember {
@@ -317,6 +388,7 @@ fn native_workspace_member_gets_join_or_empty_state() {
     );
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn native_workspace_member_on_a_team_can_join_another_open_team() {
     let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
@@ -330,6 +402,17 @@ fn native_workspace_member_on_a_team_can_join_another_open_team() {
 
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].team.name, "Second Team");
+}
+
+#[cfg(target_family = "wasm")]
+#[test]
+fn wasm_does_not_expose_open_workspace_teams() {
+    let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::User, true);
+    workspace.open_teams = vec![open_team("0000000000000000000002", "Second Team")];
+
+    let states = TeamsPageView::open_team_states_for_workspace(Some(&workspace));
+
+    assert!(states.is_empty());
 }
 
 #[test]
@@ -351,6 +434,7 @@ fn native_workspace_with_no_open_teams_does_not_show_join_another_team_row() {
     assert!(states.is_empty());
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn joined_team_disappears_from_open_teams_after_membership_refresh() {
     let joined_team_uid = "0000000000000000000002";

@@ -1132,6 +1132,7 @@ impl TeamsPageView {
                     .unwrap_or_else(|| "team".to_string());
                 self.close_join_teams_modal(ctx);
                 self.show_success(format!("Successfully joined {team_name}"), ctx);
+                #[cfg(not(target_family = "wasm"))]
                 ctx.dispatch_typed_action(&WorkspaceAction::OpenNewWindowForTeam {
                     team_uid: *team_uid,
                 });
@@ -1861,6 +1862,14 @@ impl TeamsPageView {
             });
     }
 
+    #[cfg(target_family = "wasm")]
+    fn open_team_states_for_workspace(
+        _workspace: Option<&Workspace>,
+    ) -> Vec<DiscoverableTeamState> {
+        Vec::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     fn open_team_states_for_workspace(workspace: Option<&Workspace>) -> Vec<DiscoverableTeamState> {
         let Some(workspace) =
             workspace.filter(|workspace| workspace.is_native_workspaces_enabled())
