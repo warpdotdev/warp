@@ -2719,6 +2719,9 @@ impl TeamsWidget {
         if workspace.is_native_workspaces_enabled() {
             (!is_team_owner && workspace.teams.len() > 1).then_some(TeamFooterAction::Leave)
         } else if team.billing_metadata.customer_type == CustomerType::Enterprise {
+            // We don't allow users on enterprise teams to leave or delete their team,
+            // since their enterprise agreement is tied to it, and it helps enforce that others
+            // can't join some other team that doesn't have stricter security guarantees.
             None
         } else if is_team_owner {
             Some(TeamFooterAction::Delete)

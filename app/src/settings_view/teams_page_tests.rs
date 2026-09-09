@@ -413,6 +413,48 @@ fn native_workspace_member_cannot_leave_their_only_team() {
 }
 
 #[test]
+fn native_workspace_owner_can_leave_an_enterprise_team_when_not_team_owner() {
+    let mut team = team_with_members(vec![member(ADMIN_EMAIL, MembershipRole::Admin)], true);
+    team.billing_metadata.customer_type = CustomerType::Enterprise;
+    let mut other_team = team.clone();
+    other_team.uid = 2.into();
+    let mut workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::Owner, true);
+    workspace.teams = vec![team.clone(), other_team];
+
+    assert_eq!(
+        TeamsWidget::team_footer_action(&team, &workspace, false),
+        Some(TeamFooterAction::Leave)
+    );
+}
+
+#[test]
+fn native_workspace_team_owner_must_transfer_ownership_before_leaving() {
+    let mut team = team_with_members(vec![member(OWNER_EMAIL, MembershipRole::Owner)], true);
+    team.billing_metadata.customer_type = CustomerType::Enterprise;
+    let mut other_team = team.clone();
+    other_team.uid = 2.into();
+    let mut workspace = workspace_with_member(OWNER_EMAIL, MembershipRole::Owner, true);
+    workspace.teams = vec![team.clone(), other_team];
+
+    assert_eq!(
+        TeamsWidget::team_footer_action(&team, &workspace, true),
+        None
+    );
+}
+
+#[test]
+fn non_native_enterprise_workspace_keeps_team_actions_hidden() {
+    let mut team = team_with_members(vec![member(ADMIN_EMAIL, MembershipRole::Admin)], true);
+    team.billing_metadata.customer_type = CustomerType::Enterprise;
+    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::Admin, false);
+
+    assert_eq!(
+        TeamsWidget::team_footer_action(&team, &workspace, false),
+        None
+    );
+}
+
+#[test]
 fn native_workspace_member_can_leave_when_another_membership_remains() {
     let team = team_with_members(vec![member(MEMBER_EMAIL, MembershipRole::User)], false);
     let mut other_team = team.clone();

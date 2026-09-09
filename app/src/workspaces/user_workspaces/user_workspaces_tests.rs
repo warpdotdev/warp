@@ -1423,7 +1423,7 @@ fn admin_billing_link_for_default_team_rejects_regular_members() {
 }
 
 #[test]
-fn test_window_team_assignment_falls_back_when_team_is_removed() {
+fn test_every_departed_team_window_falls_back_when_team_is_removed() {
     let first_team = team_for_test();
     let mut removed_team = team_for_test();
     removed_team.uid = 456.into();
@@ -1432,19 +1432,56 @@ fn test_window_team_assignment_falls_back_when_team_is_removed() {
 
     App::test((), |mut app| async move {
         initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
-
-        let window_id = WindowId::new();
+        let first_removed_team_window = WindowId::new();
+        let second_removed_team_window = WindowId::new();
+        let existing_fallback_team_window = WindowId::new();
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.set_team_for_window(window_id, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(first_removed_team_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(second_removed_team_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(existing_fallback_team_window, first_team.uid, ctx);
             workspace.teams.retain(|team| team.uid != removed_team.uid);
             user_workspaces.update_workspaces(vec![workspace], ctx);
         });
 
         app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
             assert_eq!(
-                UserWorkspaces::as_ref(ctx).team_uid_for_window(window_id),
+                user_workspaces.team_uid_for_window(first_removed_team_window),
                 Some(first_team.uid)
             );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(second_removed_team_window),
+                Some(first_team.uid)
+            );
+            assert_eq!(
+                user_workspaces.team_uid_for_window(existing_fallback_team_window),
+                Some(first_team.uid)
+            );
+        });
+    })
+}
+
+#[test]
+fn test_every_departed_team_window_becomes_teamless_without_remaining_memberships() {
+    let removed_team = team_for_test();
+    let mut workspace = workspace_for_test(&removed_team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace.clone()]);
+
+        let first_window = WindowId::new();
+        let second_window = WindowId::new();
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(first_window, removed_team.uid, ctx);
+            user_workspaces.set_team_for_window(second_window, removed_team.uid, ctx);
+            workspace.teams.clear();
+            user_workspaces.update_workspaces(vec![workspace], ctx);
+        });
+
+        app.read(|ctx| {
+            let user_workspaces = UserWorkspaces::as_ref(ctx);
+            assert_eq!(user_workspaces.team_uid_for_window(first_window), None);
+            assert_eq!(user_workspaces.team_uid_for_window(second_window), None);
         });
     })
 }
