@@ -19909,6 +19909,12 @@ impl Workspace {
     /// Upper bound on each edge spacer's rendered width, proportional to
     /// tab's max width (tabs have flex 1 and max width of 200).
     const GROUP_EDGE_SPACER_MAX_WIDTH: f32 = Self::GROUP_EDGE_SPACER_FLEX * 200.0;
+    fn tab_group_has_unread_activity(&self, group_id: TabGroupId, ctx: &AppContext) -> bool {
+        group_member_indices(&self.tabs, group_id).any(|index| {
+            let pane_group = self.tabs[index].pane_group.as_ref(ctx);
+            vertical_tabs::pane_group_has_unread_activity(pane_group, ctx)
+        })
+    }
 
     /// Renders a contiguous run of grouped tabs as one tab-bar slot: header
     /// + (when expanded) member tabs.
@@ -19941,6 +19947,7 @@ impl Workspace {
         let member_range = first_index..first_index + run_len;
         let any_member_active = !self.current_workspace_state.is_agent_management_view_open
             && member_range.contains(&self.active_tab_index);
+        let has_unread_activity = is_collapsed && self.tab_group_has_unread_activity(group.id, ctx);
 
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
         // Header fills one slot like a member tab capped at the same 200px as a tab.
@@ -19951,6 +19958,7 @@ impl Workspace {
                     group,
                     &mouse_states,
                     is_collapsed,
+                    has_unread_activity,
                     any_member_active,
                     is_first_in_bar,
                     group_color,
@@ -20143,6 +20151,7 @@ impl Workspace {
         group: &TabGroup,
         mouse_states: &HorizontalTabGroupMouseStates,
         is_collapsed: bool,
+        has_unread_activity: bool,
         any_member_active: bool,
         is_first_in_bar: bool,
         group_color: Option<ColorU>,
@@ -20178,23 +20187,24 @@ impl Workspace {
             } else {
                 (8., normal_right_pad)
             };
-            Container::new(
-                Flex::row()
-                    .with_main_axis_size(MainAxisSize::Max)
-                    .with_main_axis_alignment(MainAxisAlignment::Center)
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_spacing(6.)
-                    .with_child(render_group_member_icon_collage(
-                        &member_kinds,
-                        GROUP_ICON_COLLAGE_SIZE,
-                        appearance,
-                    ))
-                    .with_child(Shrinkable::new(1.0, name).finish())
-                    .finish(),
-            )
-            .with_padding_left(left_pad)
-            .with_padding_right(right_pad)
-            .finish()
+            let mut row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(6.)
+                .with_child(render_group_member_icon_collage(
+                    &member_kinds,
+                    GROUP_ICON_COLLAGE_SIZE,
+                    appearance,
+                ))
+                .with_child(Shrinkable::new(1.0, name).finish());
+            if has_unread_activity {
+                row.add_child(vertical_tabs::render_title_indicator(theme));
+            }
+            Container::new(row.finish())
+                .with_padding_left(left_pad)
+                .with_padding_right(right_pad)
+                .finish()
         };
         // Overlays the right-justified pin, like a regular tab's close/pin slot.
         let with_pin = |inner: Box<dyn Element>| -> Box<dyn Element> {
@@ -20212,19 +20222,20 @@ impl Workspace {
         };
 
         // Compact header: just the collage, like a tab dropping its title.
-        let compact_content = Clipped::new(
-            Flex::row()
-                .with_main_axis_size(MainAxisSize::Max)
-                .with_main_axis_alignment(MainAxisAlignment::Center)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(render_group_member_icon_collage(
-                    &member_kinds,
-                    TAB_INDICATOR_HEIGHT,
-                    appearance,
-                ))
-                .finish(),
-        )
-        .finish();
+        let mut compact_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.)
+            .with_child(render_group_member_icon_collage(
+                &member_kinds,
+                TAB_INDICATOR_HEIGHT,
+                appearance,
+            ));
+        if has_unread_activity {
+            compact_row.add_child(vertical_tabs::render_title_indicator(theme));
+        }
+        let compact_content = Clipped::new(compact_row.finish()).finish();
 
         // Pinned group with a fixed name: show the pin, hide it as the header
         // shrinks, then fall back to just the icon.

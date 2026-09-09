@@ -16,10 +16,10 @@ use super::{
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    should_show_tab_group_header, shows_synced_inputs_indicator,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
-    summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
-    terminal_pull_request_badge_label, terminal_search_text_fragments,
+    should_show_tab_group_activity_indicator, should_show_tab_group_header,
+    shows_synced_inputs_indicator, sort_summary_primary_labels_status_first,
+    summary_overflow_count, summary_search_text_fragments, terminal_kind_badge_label,
+    terminal_primary_line_data, terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
     vtab_diff_stats_text,
 };
@@ -46,6 +46,13 @@ fn code_summary_kind(title: &str) -> SummaryPaneKind {
     SummaryPaneKind::Code {
         title: title.to_string(),
     }
+}
+
+#[test]
+fn tab_group_activity_indicator_requires_collapsed_group_with_unread_activity() {
+    assert!(should_show_tab_group_activity_indicator(true, true));
+    assert!(!should_show_tab_group_activity_indicator(false, true));
+    assert!(!should_show_tab_group_activity_indicator(true, false));
 }
 
 #[test]
