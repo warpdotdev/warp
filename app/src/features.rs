@@ -389,8 +389,6 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::CloudMode,
         #[cfg(feature = "cloud_mode_from_local_session")]
         FeatureFlag::CloudModeFromLocalSession,
-        #[cfg(feature = "cloud_mode_image_context")]
-        FeatureFlag::CloudModeImageContext,
         #[cfg(feature = "summarization_via_message_replacement")]
         FeatureFlag::SummarizationViaMessageReplacement,
         #[cfg(feature = "pluggable_notifications")]

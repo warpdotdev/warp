@@ -10346,7 +10346,7 @@ fn restore_cloud_followup_input_after_upload_failure_restores_prompt() {
 }
 
 #[test]
-fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_flag() {
+fn should_upload_cloud_followup_attachments_reflects_pending_attachments() {
     use base64::Engine as _;
 
     let attachment = PendingAttachment::Image(ImageContext {
@@ -10360,17 +10360,9 @@ fn should_upload_cloud_followup_attachments_matches_cloud_mode_image_context_fla
         !Input::should_upload_cloud_followup_attachments(&[]),
         "no pending attachments should submit the text-only follow-up immediately"
     );
-
-    let flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(false);
-    assert!(
-        !Input::should_upload_cloud_followup_attachments(std::slice::from_ref(&attachment)),
-        "follow-up attachments should not upload while CloudModeImageContext is disabled"
-    );
-    drop(flag_guard);
-    let _flag_guard = FeatureFlag::CloudModeImageContext.override_enabled(true);
     assert!(
         Input::should_upload_cloud_followup_attachments(&[attachment]),
-        "follow-up attachments should upload when CloudModeImageContext is enabled"
+        "follow-up attachments should upload when present"
     );
 }
 

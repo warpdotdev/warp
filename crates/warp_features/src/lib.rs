@@ -661,9 +661,6 @@ pub enum FeatureFlag {
     /// Enables image upload for ambient agents.
     AmbientAgentsImageUpload,
 
-    /// Enables image attachment support for cloud mode conversations.
-    CloudModeImageContext,
-
     /// Enables loading and returning bundled skills in the SkillManager.
     BundledSkills,
 

@@ -4522,11 +4522,6 @@ impl Input {
                             ctx,
                         );
                     } else {
-                        if !pending_attachments.is_empty() {
-                            log::warn!(
-                                "Cannot upload cloud follow-up attachments: CloudModeImageContext is disabled"
-                            );
-                        }
                         ctx.emit(Event::SubmitCloudFollowup { prompt });
                     }
                 } else {
@@ -4556,7 +4551,7 @@ impl Input {
     }
 
     fn should_upload_cloud_followup_attachments(pending_attachments: &[PendingAttachment]) -> bool {
-        !pending_attachments.is_empty() && FeatureFlag::CloudModeImageContext.is_enabled()
+        !pending_attachments.is_empty()
     }
 
     /// Primary entry point for submitting the input buffer as an AI query. Routes to the correct
@@ -4853,10 +4848,6 @@ impl Input {
         &self,
         ctx: &mut ViewContext<Self>,
     ) -> HandoffLaunchAttachments {
-        if !FeatureFlag::CloudModeImageContext.is_enabled() {
-            return HandoffLaunchAttachments::default();
-        }
-
         let mut request_attachments: Vec<AttachmentInput> = self
             .ai_context_model
             .as_ref(ctx)
@@ -11830,12 +11821,9 @@ impl Input {
 
         // Shared session viewers cannot attach images unless in cloud mode
         let is_viewer = self.model.lock().shared_session_status().is_viewer();
-        let is_cloud_mode_with_images = FeatureFlag::CloudModeImageContext.is_enabled()
-            && self
-                .ambient_agent_view_model()
-                .is_some_and(|ambient_agent_model| {
-                    ambient_agent_model.as_ref(ctx).is_ambient_agent()
-                });
+        let is_cloud_mode_with_images = self
+            .ambient_agent_view_model()
+            .is_some_and(|ambient_agent_model| ambient_agent_model.as_ref(ctx).is_ambient_agent());
         if is_viewer && !is_cloud_mode_with_images {
             self.insert_clipboard_text_content(ctx, content);
             return;
@@ -11891,15 +11879,11 @@ impl Input {
 
     /// Check if we can attach on filepaths paste or drag-drop
     fn can_attach_on_filepaths_paste_or_dragdrop(&self, ctx: &mut ViewContext<Self>) -> bool {
-        // Shared session viewers cannot attach images unless in cloud mode
-        // with the CloudModeImageContext feature enabled.
+        // Shared session viewers cannot attach images unless in cloud mode.
         let is_viewer = self.model.lock().shared_session_status().is_viewer();
-        let is_cloud_mode_with_images = FeatureFlag::CloudModeImageContext.is_enabled()
-            && self
-                .ambient_agent_view_model()
-                .is_some_and(|ambient_agent_model| {
-                    ambient_agent_model.as_ref(ctx).is_ambient_agent()
-                });
+        let is_cloud_mode_with_images = self
+            .ambient_agent_view_model()
+            .is_some_and(|ambient_agent_model| ambient_agent_model.as_ref(ctx).is_ambient_agent());
         if is_viewer && !is_cloud_mode_with_images {
             return false;
         }
@@ -15191,8 +15175,7 @@ impl Input {
         let ambient_agent_task_id = self
             .ambient_agent_view_model()
             .and_then(|ambient_agent_model| ambient_agent_model.as_ref(ctx).task_id());
-        let has_uploads = (!images.is_empty() || !files.is_empty())
-            && FeatureFlag::CloudModeImageContext.is_enabled();
+        let has_uploads = !images.is_empty() || !files.is_empty();
 
         if let Some(task_id) = ambient_agent_task_id.filter(|_| has_uploads) {
             // Upload files first, then send prompt with file references in callback

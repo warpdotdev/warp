@@ -2183,13 +2183,10 @@ impl AgentInputFooter {
         is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
-            && self
-                .ambient_agent_view_model
-                .as_ref()
-                .is_some_and(|ambient_agent_model| {
-                    ambient_agent_model.as_ref(app).is_ambient_agent()
-                });
+        let is_cloud_mode = self
+            .ambient_agent_view_model
+            .as_ref()
+            .is_some_and(|ambient_agent_model| ambient_agent_model.as_ref(app).is_ambient_agent());
         if !item.available_in().is_available_for_agent_view()
             || !item.available_to_session_viewer(shared_status, is_cloud_mode)
         {

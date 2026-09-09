@@ -3035,8 +3035,8 @@ pub(crate) fn file_attach_allowed_for_shared_session(
     ambient_agent_view_model: Option<&ModelHandle<ambient_agent::AmbientAgentViewModel>>,
     ctx: &AppContext,
 ) -> bool {
-    let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
-        && ambient_agent_view_model.is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
+    let is_cloud_mode =
+        ambient_agent_view_model.is_some_and(|model| model.as_ref(ctx).is_ambient_agent());
     AgentToolbarItemKind::FileAttach
         .available_to_session_viewer(shared_session_status, is_cloud_mode)
 }
