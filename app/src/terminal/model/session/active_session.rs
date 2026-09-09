@@ -103,19 +103,7 @@ impl ActiveSession {
     /// case-insensitive filesystems. Remote session paths are standardized and tagged with
     /// the connected host ID.
     pub fn location_for_path(&self, path: &str, app: &AppContext) -> Option<LocalOrRemotePath> {
-        match self.session_type(app) {
-            Some(SessionType::WarpifiedRemote {
-                host_id: Some(host_id),
-            }) => StandardizedPath::try_new(path)
-                .ok()
-                .map(|path| LocalOrRemotePath::Remote(RemotePath::new(host_id, path))),
-            Some(SessionType::WarpifiedRemote { host_id: None }) => None,
-            Some(SessionType::Local) | None => {
-                let path =
-                    dunce::canonicalize(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path));
-                Some(LocalOrRemotePath::Local(path))
-            }
-        }
+        location_for_session_type(self.session_type(app), path)
     }
 
     pub fn current_working_directory_location(
@@ -144,3 +132,25 @@ pub enum ActiveSessionEvent {
 impl Entity for ActiveSession {
     type Event = ActiveSessionEvent;
 }
+
+fn location_for_session_type(
+    session_type: Option<SessionType>,
+    path: &str,
+) -> Option<LocalOrRemotePath> {
+    match session_type {
+        Some(SessionType::WarpifiedRemote {
+            host_id: Some(host_id),
+        }) => StandardizedPath::try_new(path)
+            .ok()
+            .map(|path| LocalOrRemotePath::Remote(RemotePath::new(host_id, path))),
+        Some(SessionType::WarpifiedRemote { host_id: None }) => None,
+        Some(SessionType::Local) | None => {
+            let path = dunce::canonicalize(Path::new(path)).unwrap_or_else(|_| PathBuf::from(path));
+            Some(LocalOrRemotePath::Local(path))
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "active_session_tests.rs"]
+mod tests;

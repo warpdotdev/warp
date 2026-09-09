@@ -3883,6 +3883,15 @@ impl RemoteServerManager {
             // current remote server session.
             self.last_navigation.remove(&session_id);
 
+            // Session-scoped HostId must drop before the reconnect delay so
+            // consumers fail closed until the next successful handshake.
+            ctx.emit(RemoteServerManagerEvent::SessionDisconnected {
+                session_id,
+                host_id: host_id.clone(),
+                exit_status: exit_status.clone(),
+                was_reconnect_attempt: false,
+            });
+
             self.attempt_reconnect(
                 session_id,
                 ReconnectParams {

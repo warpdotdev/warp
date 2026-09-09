@@ -175,7 +175,9 @@ impl Sessions {
         // (see `new_command_executor_for_local_tty_session`) so we no
         // longer need to wire it here on connect/disconnect.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::SshRemoteServer.is_enabled() {
+        if FeatureFlag::remote_server_backend_enabled()
+            && ctx.has_singleton_model::<RemoteServerManager>()
+        {
             let mgr = RemoteServerManager::handle(ctx);
             ctx.subscribe_to_model(&mgr, |sessions, _, event, ctx| match event {
                 RemoteServerManagerEvent::SessionConnected {
@@ -232,10 +234,12 @@ impl Sessions {
                 | RemoteServerManagerEvent::GitHubRepositoryInfoPushReceived { .. } => {}
                 RemoteServerManagerEvent::SessionReconnected {
                     session_id: sid,
+                    host_id,
                     client,
                     ..
                 } => {
                     if let Some(session) = sessions.sessions.get(sid) {
+                        session.set_remote_host_id(Some(host_id.clone()));
                         let new_executor =
                             Arc::new(RemoteServerCommandExecutor::new(*sid, client.clone()));
                         session.set_command_executor(new_executor);
@@ -404,11 +408,10 @@ impl Sessions {
         // RemoteServerCommandExecutor already has its client baked in, so
         // nothing else needs to be wired here.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::SshRemoteServer.is_enabled()
-            && matches!(
-                session_info.session_type,
-                BootstrapSessionType::WarpifiedRemote
-            )
+        if matches!(
+            session_info.session_type,
+            BootstrapSessionType::WarpifiedRemote,
+        ) && ctx.has_singleton_model::<RemoteServerManager>()
             && let Some(host_id) = RemoteServerManager::as_ref(ctx).host_id_for_session(session_id)
         {
             session.set_remote_host_id(Some(host_id.clone()));
@@ -683,6 +686,7 @@ impl SessionInfo {
         let session_type = Self::determine_session_type(
             &init_shell_value,
             matches!(&is_ssh_wrapper_session, IsSSHWrapperSession::Yes { .. }),
+            launch_data.as_ref(),
         );
 
         let spawning_session_id = if matches!(session_type, BootstrapSessionType::WarpifiedRemote)
@@ -723,7 +727,11 @@ impl SessionInfo {
     fn determine_session_type(
         init_shell_value: &InitShellValue,
         is_ssh_session: bool,
+        launch_data: Option<&ShellLaunchData>,
     ) -> BootstrapSessionType {
+        if matches!(launch_data, Some(ShellLaunchData::DevContainer { .. })) {
+            return BootstrapSessionType::WarpifiedRemote;
+        }
         match get_local_hostname() {
             Ok(local_hostname) => {
                 // Ensures subshells are treated as local
@@ -747,8 +755,8 @@ impl SessionInfo {
     fn determine_session_type(
         _init_shell_value: &InitShellValue,
         _is_ssh_session: bool,
+        _launch_data: Option<&ShellLaunchData>,
     ) -> BootstrapSessionType {
-        // When the `remote_tty` feature is enabled--the session is always considered remote.
         BootstrapSessionType::WarpifiedRemote
     }
 
@@ -925,6 +933,24 @@ impl From<BootstrapSessionType> for SessionType {
             BootstrapSessionType::WarpifiedRemote => SessionType::WarpifiedRemote { host_id: None },
         }
     }
+}
+
+/// Whether this session origin should use a connected remote-server backend.
+#[cfg(feature = "local_tty")]
+pub(crate) fn session_origin_uses_remote_server(session_info: &SessionInfo) -> bool {
+    if FeatureFlag::SshRemoteServer.is_enabled()
+        && matches!(
+            session_info.is_ssh_wrapper_session,
+            IsSSHWrapperSession::Yes { .. }
+        )
+    {
+        return true;
+    }
+    FeatureFlag::LocalDevContainer.is_enabled()
+        && matches!(
+            session_info.launch_data,
+            Some(ShellLaunchData::DevContainer { .. })
+        )
 }
 
 /// Represents session state and context, mostly populated and constructed at session bootstrap
@@ -1802,6 +1828,11 @@ pub mod testing {
 
         pub fn with_id(mut self, id: impl Into<SessionId>) -> Self {
             self.session_id = id.into();
+            self
+        }
+
+        pub fn with_launch_data(mut self, launch_data: ShellLaunchData) -> Self {
+            self.launch_data = Some(launch_data);
             self
         }
 

@@ -19,7 +19,7 @@ pub(super) async fn install_binary(socket_path: &Path) -> InstallOutcome {
             result: Ok(()),
         },
         Err(server_err) => {
-            if scp_fallback::should_try_install(&server_err) {
+            if crate::remote_server::tarball_cache::should_try_client_copy(&server_err) {
                 log::info!("Remote server install failed; falling back to SCP upload");
                 match scp_fallback::install(socket_path).await {
                     Ok(()) => InstallOutcome {

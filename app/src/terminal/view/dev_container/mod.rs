@@ -15,6 +15,8 @@ mod newline;
 pub(crate) mod operation;
 #[cfg(feature = "local_tty")]
 pub(crate) mod registry;
+#[cfg(all(unix, feature = "local_tty"))]
+pub(crate) mod remote_server;
 #[cfg(feature = "local_tty")]
 mod stream;
 #[cfg(all(feature = "local_tty", not(feature = "remote_tty")))]
@@ -286,6 +288,8 @@ impl TerminalView {
         if !operation.read(ctx, |operation, _| operation.shows_retry_and_close()) {
             return;
         }
+        #[cfg(unix)]
+        self.deregister_dev_container_remote_setup(ctx);
         let attempt_id = operation.update(ctx, |operation, ctx| operation.begin_retry(ctx));
         let key = operation.read(ctx, |operation, _| operation.key().clone());
         registry::DevContainerBuildRegistry::handle(ctx).update(ctx, |registry, _| {
@@ -307,6 +311,8 @@ impl TerminalView {
             let key = operation.read(ctx, |operation, _| operation.key().clone());
             self.dev_container_awaiting_layout = false;
             self.clear_dev_container_pty_resize();
+            #[cfg(unix)]
+            self.deregister_dev_container_remote_setup(ctx);
             operation.update(ctx, |operation, ctx| {
                 operation.tombstone(ctx);
                 operation.mark_cancelled(ctx);
@@ -845,18 +851,9 @@ impl TerminalView {
                         }
                         match staging_result {
                             Ok(()) => {
-                                if me.dev_container_build.is_some() {
-                                    me.dev_container_build.as_ref().unwrap().update(
-                                        ctx,
-                                        |operation, ctx| {
-                                            operation.set_phase(
-                                                operation::DevContainerBuildPhase::Attach,
-                                                ctx,
-                                            );
-                                            operation.complete(ctx);
-                                        },
-                                    );
-                                    ctx.emit(super::Event::ReplaceDevContainerBuildPane {
+                                #[cfg(unix)]
+                                {
+                                    me.start_dev_container_remote_server(
                                         workspace_folder,
                                         docker_path,
                                         container_id,
@@ -864,27 +861,20 @@ impl TerminalView {
                                         remote_workspace_folder,
                                         sandbox_id,
                                         session_id,
-                                    });
-                                    return;
+                                        operation_id,
+                                        attempt_id,
+                                        ctx,
+                                    );
                                 }
-                                me.show_dev_container_toast(
-                                    format!(
-                                        "Dev container ready — opening session in {}…",
-                                        workspace_folder.display()
-                                    ),
-                                    ToastFlavor::Success,
-                                    ctx,
-                                );
-                                me.create_and_push_dev_container(
-                                    workspace_folder,
-                                    docker_path,
-                                    container_id,
-                                    remote_user,
-                                    remote_workspace_folder,
-                                    sandbox_id,
-                                    session_id,
-                                    ctx,
-                                );
+                                #[cfg(not(unix))]
+                                {
+                                    me.fail_dev_container_build(
+                                        operation::DevContainerBuildPhase::Staging,
+                                        "Dev Container remote server is only supported on Linux and macOS"
+                                            .to_owned(),
+                                        ctx,
+                                    );
+                                }
                             }
                             Err(e) => {
                                 let message =

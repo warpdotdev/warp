@@ -131,6 +131,7 @@ pub(crate) struct DevContainerBuildOperation {
     last_output_at: Arc<Mutex<Instant>>,
     output_tx: async_channel::Sender<()>,
     output_rx: async_channel::Receiver<()>,
+    remote_server_session_id: Option<warp_core::SessionId>,
 }
 
 impl DevContainerBuildOperation {
@@ -150,6 +151,7 @@ impl DevContainerBuildOperation {
             last_output_at: Arc::new(Mutex::new(Instant::now())),
             output_tx,
             output_rx,
+            remote_server_session_id: None,
         }
     }
 
@@ -296,8 +298,23 @@ impl DevContainerBuildOperation {
         self.status = DevContainerBuildStatus::Running;
         self.cancel = DevContainerBuildCancel::new();
         *self.last_output_at.lock() = Instant::now();
+        self.remote_server_session_id = None;
         ctx.notify();
         self.attempt_id
+    }
+
+    pub(crate) fn set_remote_server_session_id(
+        &mut self,
+        session_id: Option<warp_core::SessionId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.remote_server_session_id = session_id;
+        ctx.notify();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_server_session_id(&self) -> Option<warp_core::SessionId> {
+        self.remote_server_session_id
     }
 }
 

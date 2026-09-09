@@ -19,6 +19,8 @@ pub mod auth_context;
 pub mod codebase_index_model;
 #[cfg(not(target_family = "wasm"))]
 mod codebase_index_status;
+#[cfg(all(unix, not(target_family = "wasm")))]
+pub mod dev_container_transport;
 pub mod diff_state_proto;
 #[cfg(not(target_family = "wasm"))]
 pub mod diff_state_tracker;
@@ -33,6 +35,8 @@ pub mod server_buffer_tracker;
 pub mod server_model;
 #[cfg(not(target_family = "wasm"))]
 pub mod ssh_transport;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod tarball_cache;
 #[cfg(unix)]
 pub mod unix;
 
