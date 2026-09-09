@@ -1,7 +1,12 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use string_offset::ByteOffset;
 use warp_ripgrep::search::Submatch;
+use warp_util::local_or_remote_path::LocalOrRemotePath;
 
-use super::GlobalSearchView;
+use super::{GlobalSearchView, MAX_MATCH_COUNT};
+use crate::workspace::view::global_search::GlobalSearchMatch;
 use crate::workspace::view::global_search::model::{GlobalSearch, MAX_STORED_LINE_TEXT_BYTES};
 
 fn submatch(byte_start: usize, byte_end: usize) -> Submatch {
@@ -169,4 +174,43 @@ fn highlighting_is_still_accurate_after_ingestion_time_truncation() {
         .map(|(_, ch)| ch)
         .collect();
     assert_eq!(highlighted, "NEEDLE");
+}
+
+#[test]
+fn nested_root_fan_out_stops_at_the_stored_match_ceiling() {
+    let roots = [
+        LocalOrRemotePath::Local(PathBuf::from("/workspace")),
+        LocalOrRemotePath::Local(PathBuf::from("/workspace/project")),
+    ];
+    let location = LocalOrRemotePath::Local(PathBuf::from("/workspace/project/file.txt"));
+    let mut directory_entries = Vec::new();
+    let mut directory_indices = HashMap::new();
+    let mut stored_match_count = 0;
+
+    for _ in 0..=MAX_MATCH_COUNT / roots.len() {
+        let reached_capacity = GlobalSearchView::store_progress_item(
+            &roots,
+            &mut directory_entries,
+            &mut directory_indices,
+            &mut stored_match_count,
+            GlobalSearchMatch {
+                location: location.clone(),
+                line_number: 1,
+                column_num: Some(1),
+                line_text: "match".to_string(),
+                submatches: vec![submatch(0, 5)],
+            },
+        );
+        if reached_capacity {
+            break;
+        }
+    }
+
+    let retained_match_count: usize = directory_entries
+        .iter()
+        .flat_map(|directory| &directory.matched_paths.paths)
+        .map(|path| path.matches.len())
+        .sum();
+    assert_eq!(stored_match_count, MAX_MATCH_COUNT);
+    assert_eq!(retained_match_count, MAX_MATCH_COUNT);
 }

@@ -13,7 +13,7 @@ use remote_server::proto::RipgrepSearchSuccess;
 use remote_server::protocol::RequestId;
 use string_offset::ByteOffset;
 use warp_errors::report_error;
-use warp_ripgrep::search::{Match as RipgrepMatch, Submatch};
+use warp_ripgrep::search::{Match as RipgrepMatch, SearchEvent, Submatch};
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warp_util::remote_path::RemotePath;
 use warp_util::standardized_path::StandardizedPath;
@@ -41,7 +41,7 @@ struct ActiveSearch {
     local_source_failed: bool,
     remote_source_failures: usize,
     total_match_count: usize,
-    /// True when any remote source hit the server-side match cap.
+    /// True when any source omitted results because it reached a limit.
     capped: bool,
 }
 
@@ -235,10 +235,7 @@ impl GlobalSearch {
                 )
                 .await;
                 match result {
-                    Ok(match_count) => Some(SourceResult {
-                        match_count,
-                        capped: false,
-                    }),
+                    Ok(result) => Some(result),
                     Err(err) => {
                         report_error!(
                             err.context("GlobalSearch: warp_ripgrep CLI search failed or aborted")
@@ -411,7 +408,7 @@ impl GlobalSearch {
         ignore_case: bool,
         multiline: bool,
         spawner: ModelSpawner<GlobalSearch>,
-    ) -> Result<usize> {
+    ) -> Result<SourceResult> {
         let roots_display: Vec<_> = roots.iter().map(|r| r.display().to_string()).collect();
         log::info!(
             "GlobalSearch: starting warp_ripgrep CLI search with pattern={pattern}, roots={:?}",
@@ -424,11 +421,19 @@ impl GlobalSearch {
         futures::pin_mut!(stream);
 
         let mut total_match_count: usize = 0;
+        let mut capped = false;
         let mut num_unbatched_emitted: usize = 0;
         let mut batch: Vec<GlobalSearchMatch> = Vec::new();
         let mut last_batch_flush_at = Instant::now();
 
-        while let Some(raw_match) = stream.next().await {
+        while let Some(event) = stream.next().await {
+            let raw_match = match event {
+                SearchEvent::Match(raw_match) => raw_match,
+                SearchEvent::LimitReached => {
+                    capped = true;
+                    continue;
+                }
+            };
             // Expand each submatch into its own result row (matching
             // the old per-submatch behavior). Each row gets the line
             // text trimmed up to that particular submatch.
@@ -465,7 +470,10 @@ impl GlobalSearch {
             flush_batch(&spawner, search_id, &mut batch).await;
         }
 
-        Ok(total_match_count)
+        Ok(SourceResult {
+            match_count: total_match_count,
+            capped,
+        })
     }
 
     fn local_match_to_global(m: RipgrepMatch) -> GlobalSearchMatch {

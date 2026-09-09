@@ -29,6 +29,15 @@ pub struct Match {
     pub submatches: Vec<Submatch>,
 }
 
+/// One item emitted by a streaming search.
+#[derive(Clone, Debug)]
+pub enum SearchEvent {
+    /// A file-content match.
+    Match(Match),
+    /// At least one file was skipped after reaching the searcher heap limit.
+    LimitReached,
+}
+
 /// Entry point for the ripgrep subprocess.
 ///
 /// Runs a ripgrep search in-process and writes JSON results to stdout.
@@ -80,8 +89,6 @@ fn search_to_writer<W: Write + Send>(
         let matcher = matcher.clone();
         let output = &output;
 
-        // Allocate once per thread and reuse across entries.
-        let mut buf = Vec::new();
         let heap_limit = if multiline {
             SEARCHER_MULTILINE_HEAP_LIMIT
         } else {
@@ -107,34 +114,32 @@ fn search_to_writer<W: Write + Send>(
                 return WalkState::Continue;
             }
 
-            // Search into the thread-local buffer, then flush the
-            // complete JSON lines to stdout under a lock so that
-            // output from parallel threads never interleaves.
-            buf.clear();
-            let mut printer = JSONBuilder::new().build(std::io::Cursor::new(&mut buf));
-
-            if let Err(err) = searcher.search_path(
-                &matcher,
-                entry.path(),
-                printer.sink_with_path(&matcher, entry.path()),
-            ) {
-                log::warn!(
-                    "ripgrep search error for {}: {}",
-                    entry.path().display(),
-                    err
-                );
-            }
-
-            if !buf.is_empty() {
-                let Ok(mut out) = output.lock() else {
-                    // Mutex poisoned — another search thread panicked.
-                    return WalkState::Quit;
-                };
-                if out.write_all(&buf).is_err() {
-                    // Stdout pipe is broken (parent likely cancelled the
-                    // search), so stop walking.
-                    return WalkState::Quit;
+            let Ok(mut out) = output.lock() else {
+                return WalkState::Quit;
+            };
+            let search_result = {
+                let mut printer = JSONBuilder::new().build(&mut *out);
+                searcher.search_path(
+                    &matcher,
+                    entry.path(),
+                    printer.sink_with_path(&matcher, entry.path()),
+                )
+            };
+            if let Err(err) = search_result {
+                if err.to_string().contains("configured allocation limit") {
+                    if out.write_all(b"{\"type\":\"limit_reached\"}\n").is_err() {
+                        return WalkState::Quit;
+                    }
+                } else {
+                    log::warn!(
+                        "ripgrep search error for {}: {}",
+                        entry.path().display(),
+                        err
+                    );
                 }
+            }
+            if out.flush().is_err() {
+                return WalkState::Quit;
             }
 
             WalkState::Continue
@@ -155,7 +160,7 @@ mod process_impl {
     use futures::io::{AsyncBufReadExt as _, BufReader};
     use futures::stream::Stream;
 
-    use super::{Match, Submatch};
+    use super::{Match, SearchEvent, Submatch};
     use crate::types::RipgrepMessage;
 
     /// Searches `paths` for lines matching `patterns` and returns all results.
@@ -171,11 +176,19 @@ mod process_impl {
         multiline: bool,
     ) -> anyhow::Result<Vec<Match>> {
         let stream = search_streaming(patterns, paths, ignore_case, multiline)?;
-        Ok(stream.collect().await)
+        Ok(stream
+            .filter_map(|event| async move {
+                match event {
+                    SearchEvent::Match(m) => Some(m),
+                    SearchEvent::LimitReached => None,
+                }
+            })
+            .collect()
+            .await)
     }
 
-    /// Searches `paths` for lines matching `patterns`, returning a stream
-    /// of matches as they are found.
+    /// Searches `paths` for lines matching `patterns`, returning matches and
+    /// limit notifications as they are found.
     ///
     /// This is the preferred entry point when responsiveness matters (e.g.
     /// the global search UI). The caller controls batching and throttling.
@@ -184,7 +197,7 @@ mod process_impl {
         paths: &[PathBuf],
         ignore_case: bool,
         multiline: bool,
-    ) -> anyhow::Result<impl Stream<Item = Match>> {
+    ) -> anyhow::Result<impl Stream<Item = SearchEvent>> {
         let child = spawn_search_process(patterns, paths, ignore_case, multiline)?;
         Ok(match_stream_from_child(child))
     }
@@ -226,7 +239,7 @@ mod process_impl {
     }
 
     /// Turns a child process (with piped stdout) into a stream of parsed matches.
-    fn match_stream_from_child(mut child: async_process::Child) -> impl Stream<Item = Match> {
+    fn match_stream_from_child(mut child: async_process::Child) -> impl Stream<Item = SearchEvent> {
         let stdout = child
             .stdout
             .take()
@@ -260,9 +273,12 @@ mod process_impl {
                             line_text: data.lines.text,
                             submatches,
                         };
-                        return Some((m, (reader, child)));
+                        return Some((SearchEvent::Match(m), (reader, child)));
                     }
                     Ok(RipgrepMessage::Begin | RipgrepMessage::End) => continue,
+                    Ok(RipgrepMessage::LimitReached) => {
+                        return Some((SearchEvent::LimitReached, (reader, child)));
+                    }
                     Err(err) => {
                         log::warn!("ripgrep: failed to parse JSON line: {err}");
                         continue;

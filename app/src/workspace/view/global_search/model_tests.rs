@@ -1,13 +1,17 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
+use futures::channel::oneshot;
 use remote_server::HostId;
 use remote_server::proto::{RipgrepSearchMatch, RipgrepSearchSubmatch, RipgrepSearchSuccess};
 use string_offset::ByteOffset;
 use warp_ripgrep::search::Submatch;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
+use warpui::App;
 
-use super::{GlobalSearch, MAX_STORED_LINE_TEXT_BYTES};
+use super::{ActiveSearch, GlobalSearch, MAX_STORED_LINE_TEXT_BYTES, SearchSource, SourceResult};
 use crate::workspace::view::global_search::GlobalSearchMatch;
+use crate::workspace::view::global_search::view::GlobalSearchEvent;
 
 fn host() -> HostId {
     HostId::new("test-host".to_string())
@@ -153,4 +157,45 @@ fn expanded_matches_are_bounded_before_batching() {
         &results[0].line_text[submatch.byte_start.as_usize()..submatch.byte_end.as_usize()],
         "TARGET"
     );
+}
+
+#[test]
+fn local_heap_limit_status_marks_the_completed_search_as_capped() {
+    App::test((), |mut app| async move {
+        let model = app.add_model(|_| GlobalSearch::new());
+        let (sender, receiver) = oneshot::channel();
+        let sender = Arc::new(Mutex::new(Some(sender)));
+        app.update(|ctx| {
+            ctx.subscribe_to_model(&model, move |_, event, _| {
+                if let GlobalSearchEvent::Completed { capped, .. } = event
+                    && let Some(sender) = sender.lock().unwrap().take()
+                {
+                    let _ = sender.send(*capped);
+                }
+            });
+        });
+
+        model.update(&mut app, |model, ctx| {
+            model.active_search = Some(ActiveSearch {
+                search_id: 7,
+                remaining_sources: 1,
+                completed_sources: 0,
+                local_source_failed: false,
+                remote_source_failures: 0,
+                total_match_count: 0,
+                capped: false,
+            });
+            model.handle_source_completed(
+                7,
+                SearchSource::Local,
+                Some(SourceResult {
+                    match_count: 0,
+                    capped: true,
+                }),
+                ctx,
+            );
+        });
+
+        assert!(receiver.await.unwrap());
+    });
 }
