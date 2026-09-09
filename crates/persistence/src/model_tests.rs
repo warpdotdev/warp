@@ -155,9 +155,11 @@ fn inference_usage_with_web_search(
             output_cost_in_cents,
             input_cache_read_cost_in_cents: 0.0,
             input_cache_write_cost_in_cents: 0.0,
+            ..Default::default()
         }),
         web_search_count,
         web_search_cost_in_cents,
+        ..Default::default()
     }
 }
 
@@ -220,6 +222,44 @@ fn charged_usage_totals_add_assign_sums_web_search_fields() {
 }
 
 #[test]
+fn charged_usage_totals_sums_credit_fields() {
+    let charges = api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            "primary_agent".to_string(),
+            api::ChargedUsage {
+                direct_api_inference_usage: HashMap::from([(
+                    "claude-4.5".to_string(),
+                    api::InferenceUsage {
+                        token_count: None,
+                        token_cost: Some(api::TokenCost {
+                            input_cost_in_credits: 1.0,
+                            output_cost_in_credits: 2.0,
+                            input_cache_read_cost_in_credits: 3.0,
+                            input_cache_write_cost_in_credits: 4.0,
+                            ..Default::default()
+                        }),
+                        web_search_cost_in_credits: 5.0,
+                        ..Default::default()
+                    },
+                )]),
+                platform_usage_in_credits: 6.0,
+                ..Default::default()
+            },
+        )]),
+    };
+
+    let totals = ChargedUsageTotals::from(&charges);
+
+    assert_eq!(totals.input_cost_in_credits, 1.0);
+    assert_eq!(totals.output_cost_in_credits, 2.0);
+    assert_eq!(totals.input_cache_read_cost_in_credits, 3.0);
+    assert_eq!(totals.input_cache_write_cost_in_credits, 4.0);
+    assert_eq!(totals.web_search_cost_in_credits, 5.0);
+    assert_eq!(totals.platform_cost_in_credits, 6.0);
+    assert_eq!(totals.total_cost_in_credits(), 21.0);
+}
+
+#[test]
 fn charged_usage_totals_deserializes_legacy_payload_without_web_search_fields() {
     let totals: ChargedUsageTotals = serde_json::from_str(
         r#"{"input_cost_in_cents":1.0,"output_cost_in_cents":2.0,"input_cache_read_cost_in_cents":0.0,"input_cache_write_cost_in_cents":0.0,"platform_cost_in_cents":0.0,"input_tokens":10,"output_tokens":5,"input_cache_read_tokens":0,"input_cache_write_tokens":0}"#,
@@ -228,6 +268,7 @@ fn charged_usage_totals_deserializes_legacy_payload_without_web_search_fields() 
 
     assert_eq!(totals.web_search_count, 0);
     assert_eq!(totals.web_search_cost_in_cents, 0.0);
+    assert_eq!(totals.total_cost_in_credits(), 0.0);
     assert!((totals.total_cost_in_cents() - 3.0).abs() < 1e-6);
 }
 

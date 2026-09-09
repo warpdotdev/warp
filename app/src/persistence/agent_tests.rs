@@ -134,9 +134,14 @@ fn request_metadata_round_trips_through_conversation_and_persistence() {
                                 output_cost_in_cents: 2.0,
                                 input_cache_read_cost_in_cents: 3.0,
                                 input_cache_write_cost_in_cents: 4.0,
+                                input_cost_in_credits: 1.5,
+                                output_cost_in_credits: 2.5,
+                                input_cache_read_cost_in_credits: 3.5,
+                                input_cache_write_cost_in_credits: 4.5,
                             }),
                             web_search_count: 2,
                             web_search_cost_in_cents: 5.0,
+                            web_search_cost_in_credits: 5.5,
                         },
                     )]),
                     byok_inference_usage: HashMap::new(),
@@ -146,6 +151,7 @@ fn request_metadata_round_trips_through_conversation_and_persistence() {
                         seconds: 7,
                         nanos: 600,
                     }),
+                    platform_usage_in_credits: 6.5,
                 },
             )]),
         }),
@@ -158,10 +164,7 @@ fn request_metadata_round_trips_through_conversation_and_persistence() {
             lines_added: 11,
             lines_removed: 12,
         }),
-        context_window: Some(api::message::request_metadata::ContextWindow {
-            usage: 0.75,
-            summarized: true,
-        }),
+        context_window: Some(api::message::request_metadata::ContextWindow { usage: 0.75 }),
     };
     let mut task = task_with_user_query("task-metadata", "Inspect metadata", "Root title");
     task.messages.push(api::Message {
