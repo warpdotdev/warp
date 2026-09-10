@@ -11,7 +11,8 @@ pub enum SecretCommand {
     /// Create a new secret.
     ///
     /// Use `oz secret create claude api-key <NAME>` to create a Claude/Anthropic auth secret,
-    /// or `oz secret create codex api-key <NAME>` to create a Codex/OpenAI auth secret.
+    /// `oz secret create codex api-key <NAME>` to create a Codex/OpenAI auth secret, or
+    /// `oz secret create docker-registry <NAME>` to create a container registry credential.
     Create(CreateSecretArgs),
     /// Delete a secret.
     Delete(DeleteSecretArgs),
@@ -68,6 +69,9 @@ pub enum CreateProvider {
     Anthropic(AnthropicCreateArgs),
     /// Create a Codex/OpenAI auth secret.
     Codex(CodexCreateArgs),
+    /// Create a container registry credential secret.
+    #[command(name = "docker-registry")]
+    DockerRegistry(DockerRegistryCreateArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -181,6 +185,26 @@ pub struct BedrockAccessKeyArgs {
     /// AWS region for the Bedrock endpoint. If not provided, prompts interactively.
     #[arg(long = "region")]
     pub region: Option<String>,
+}
+
+/// Arguments for creating a container registry credential secret.
+#[derive(Debug, Clone, Args)]
+pub struct DockerRegistryCreateArgs {
+    #[clap(flatten)]
+    pub common: CommonSecretCreateArgs,
+
+    /// Bare registry hostname, no scheme or path (e.g. ghcr.io). If not provided, prompts
+    /// interactively.
+    #[arg(long = "host")]
+    pub host: Option<String>,
+
+    /// Registry username. If not provided, prompts interactively.
+    #[arg(long = "username")]
+    pub username: Option<String>,
+
+    /// Registry password or access token. If not provided, prompts interactively.
+    #[arg(long = "password")]
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
