@@ -23,9 +23,12 @@ use std::collections::VecDeque;
 
 use parking_lot::{Condvar, Mutex};
 
-/// Matches `regex_automata`'s own `MAX_POOL_STACKS`, so worst-case retention per matcher
-/// is `THREAD_COUNT + 1` = 9 caches, at most `9 * 10 MiB` ≈ 90 MiB given globset's 10 MiB
-/// `hybrid_cache_capacity` per compiled matcher.
+/// Matches `regex_automata`'s own `MAX_POOL_STACKS`. With one job in flight per worker at
+/// a time and no re-entry, this bounds retention to at most 9 cache objects per
+/// individual `regex_automata::Pool` (8 non-owner values, one per worker, plus the one
+/// owner slot) — a conservative ceiling, since a failed shard lock discards its transient
+/// guard rather than retaining it, and a panicked worker is simply not replaced, so
+/// neither raises that count.
 ///
 /// Dispatch overhead was measured directly (repository benchmarks, not shipped):
 /// single-call round-trip cost through this pool is ~15–20 µs versus ~0.1–0.6 µs called
