@@ -91,6 +91,8 @@ pub enum UserWorkspacesEvent {
     SetTeamMemberRoleRejected(anyhow::Error),
     RemoveUserFromTeamSuccess,
     RemoveUserFromTeamRejected(anyhow::Error),
+    RemoveUserFromWorkspaceSuccess,
+    RemoveUserFromWorkspaceRejected(anyhow::Error),
     UpdateWorkspaceSettingsSuccess,
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
@@ -941,6 +943,39 @@ impl UserWorkspaces {
                     .await
             },
             Self::on_remove_user_from_team,
+        );
+    }
+
+    fn on_remove_user_from_workspace(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess);
+            }
+        };
+        ctx.notify();
+    }
+
+    pub fn remove_user_from_workspace(
+        &mut self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        entrypoint: CloudObjectEventEntrypoint,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let workspace_client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                workspace_client
+                    .remove_user_from_workspace(user_uid, workspace_uid, entrypoint)
+                    .await
+            },
+            Self::on_remove_user_from_workspace,
         );
     }
 

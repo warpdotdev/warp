@@ -2865,6 +2865,18 @@ type RemoveUserFromTeamOutput implements Response {
 }
 
 union RemoveUserFromTeamResult = RemoveUserFromTeamOutput | UserFacingError
+input RemoveUserFromWorkspaceInput {
+  entrypoint: CloudObjectEventEntrypoint!
+  userUid: ID!
+  workspaceUid: ID!
+}
+
+type RemoveUserFromWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union RemoveUserFromWorkspaceResult = RemoveUserFromWorkspaceOutput | UserFacingError
 
 input RenameTeamInput {
   newName: String!
@@ -3196,6 +3208,7 @@ type RootMutation {
   in v2. Usage of the `leaveTeam` mutation in v1 will eventually be removed.
   """
   removeUserFromTeam(input: RemoveUserFromTeamInput!, requestContext: RequestContext!): RemoveUserFromTeamResult!
+  removeUserFromWorkspace(input: RemoveUserFromWorkspaceInput!, requestContext: RequestContext!): RemoveUserFromWorkspaceResult!
   renameTeam(input: RenameTeamInput!, requestContext: RequestContext!): RenameTeamResult!
   resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult!
   sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!

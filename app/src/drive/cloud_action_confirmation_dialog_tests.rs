@@ -1,0 +1,57 @@
+use super::*;
+
+const MEMBER_EMAIL: &str = "member@example.com";
+const WORKSPACE_NAME: &str = "Acme";
+
+#[test]
+fn native_workspace_team_removal_uses_membership_scope_copy() {
+    let mut dialog = CloudActionConfirmationDialog::new();
+    dialog.set_variant(
+        CloudActionConfirmationDialogVariant::RemoveNativeWorkspaceTeamMember {
+            member_email: MEMBER_EMAIL.to_string(),
+            workspace_name: WORKSPACE_NAME.to_string(),
+        },
+    );
+
+    assert_eq!(dialog.title_text(), "Remove from team?");
+    assert_eq!(
+        dialog.body_text(),
+        "Are you sure you want to remove member@example.com from this team? member@example.com will still keep their Acme workspace membership and their other team memberships."
+    );
+    assert_eq!(dialog.confirm_button_text(), "Remove from team");
+    assert!(!dialog.body_text().contains("credits"));
+}
+
+#[test]
+fn workspace_removal_uses_workspace_eviction_copy() {
+    let mut dialog = CloudActionConfirmationDialog::new();
+    dialog.set_variant(
+        CloudActionConfirmationDialogVariant::RemoveWorkspaceMember {
+            member_email: MEMBER_EMAIL.to_string(),
+            workspace_name: WORKSPACE_NAME.to_string(),
+        },
+    );
+
+    assert_eq!(dialog.title_text(), "Remove from workspace?");
+    assert_eq!(
+        dialog.body_text(),
+        "Are you sure you want to remove member@example.com from the workspace? This will remove member@example.com from all teams in Acme and from the workspace itself."
+    );
+    assert_eq!(dialog.confirm_button_text(), "Remove from workspace");
+}
+
+#[test]
+fn non_native_team_removal_retains_reload_credits_copy() {
+    let mut dialog = CloudActionConfirmationDialog::new();
+    dialog.set_variant(CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits);
+
+    assert_eq!(
+        dialog.title_text(),
+        "Are you sure you want to remove this member?"
+    );
+    assert_eq!(
+        dialog.body_text(),
+        REMOVE_TEAM_MEMBER_RELOAD_CREDITS_BODY_TEXT
+    );
+    assert_eq!(dialog.confirm_button_text(), "Remove Member");
+}

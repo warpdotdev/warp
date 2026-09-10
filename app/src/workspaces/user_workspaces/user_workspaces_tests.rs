@@ -3802,6 +3802,76 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
 }
 
 #[test]
+fn test_remove_user_from_workspace_calls_workspace_client_and_emits_success() {
+    let user_uid = UserUid::new("member-uid");
+    let team = team_for_test();
+    let workspace = workspace_for_test(&team);
+    let workspace_uid = workspace.uid;
+    let updated_workspace = workspace.clone();
+
+    App::test((), |mut app| async move {
+        let mut workspace_client = MockWorkspaceClient::new();
+        workspace_client
+            .expect_remove_user_from_workspace()
+            .withf(move |actual_user_uid, actual_workspace_uid, entrypoint| {
+                *actual_user_uid == user_uid
+                    && *actual_workspace_uid == workspace_uid
+                    && matches!(entrypoint, CloudObjectEventEntrypoint::TeamSettings)
+            })
+            .times(1)
+            .returning(move |_, _, _| {
+                Ok(WorkspacesMetadataWithPricing {
+                    metadata: WorkspacesMetadataResponse {
+                        workspaces: vec![updated_workspace.clone()],
+                        joinable_teams: vec![],
+                        experiments: None,
+                        ai_credit_availability: None,
+                        user_purchase_policy: None,
+                    },
+                    pricing_info: None,
+                })
+            });
+
+        app.add_singleton_model(PrivacySettings::mock);
+        app.add_singleton_model(|ctx| {
+            UserWorkspaces::mock(
+                Arc::new(MockTeamClient::new()),
+                Arc::new(workspace_client),
+                vec![workspace],
+                ctx,
+            )
+        });
+
+        let user_workspaces_handle = UserWorkspaces::handle(&app);
+        let (sender, receiver) = async_channel::unbounded();
+        app.update(|ctx| {
+            ctx.subscribe_to_model(
+                &user_workspaces_handle,
+                move |_, event: &UserWorkspacesEvent, _| {
+                    if matches!(event, UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess) {
+                        let _ = sender.try_send(());
+                    }
+                },
+            );
+        });
+
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.remove_user_from_workspace(
+                user_uid,
+                workspace_uid,
+                CloudObjectEventEntrypoint::TeamSettings,
+                ctx,
+            );
+        });
+
+        receiver
+            .recv()
+            .await
+            .expect("expected RemoveUserFromWorkspaceSuccess to be emitted");
+    })
+}
+
+#[test]
 fn test_remove_user_from_team_rejected_emits_error_event_without_updating_workspaces() {
     let team = team_for_test();
     let team_uid = team.uid;

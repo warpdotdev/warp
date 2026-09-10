@@ -40,6 +40,7 @@ pub mod record_object_action;
 pub mod remove_object_guest;
 pub mod remove_object_link_permissions;
 pub mod remove_user_from_team;
+pub mod remove_user_from_workspace;
 pub mod rename_team;
 pub mod request_bonus;
 pub mod reset_invite_links;
