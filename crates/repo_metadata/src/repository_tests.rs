@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -479,5 +479,75 @@ fn unchanged_tracked_remote_ref_does_not_notify_subscribers() {
                 }
             });
         },
+    );
+}
+
+// Shared git directory derivation. Git guarantees a linked worktree's git dir has
+// the shape `<common-git-dir>/worktrees/<name>`, for both normal and bare layouts.
+
+#[test]
+fn common_git_dir_for_normal_worktree_strips_the_worktrees_pair() {
+    assert_eq!(
+        Repository::derive_common_git_dir(Path::new("/repo/.git/worktrees/feature")),
+        PathBuf::from("/repo/.git"),
+    );
+}
+
+#[test]
+fn common_git_dir_for_bare_worktree_strips_the_worktrees_pair() {
+    // A bare repository has no ancestor named `.git`, so an ancestor search finds
+    // nothing here and the worktrees of one bare repo would scatter.
+    assert_eq!(
+        Repository::derive_common_git_dir(Path::new("/repos/api.git/worktrees/feature")),
+        PathBuf::from("/repos/api.git"),
+    );
+}
+
+#[test]
+fn common_git_dir_for_main_checkout_is_itself() {
+    assert_eq!(
+        Repository::derive_common_git_dir(Path::new("/repo/.git")),
+        PathBuf::from("/repo/.git"),
+    );
+}
+
+#[test]
+fn common_git_dir_without_a_worktrees_pair_is_itself_not_an_ancestor() {
+    // Anything that is not `<dir>/worktrees/<name>` is already the common
+    // directory; walking up to some unrelated `.git` ancestor would be wrong.
+    assert_eq!(
+        Repository::derive_common_git_dir(Path::new("/repo/.git/modules/sub")),
+        PathBuf::from("/repo/.git/modules/sub"),
+    );
+}
+
+#[test]
+fn worktrees_of_one_repository_share_a_common_git_dir() {
+    assert_eq!(
+        Repository::derive_common_git_dir(Path::new("/repos/api.git/worktrees/feature")),
+        Repository::derive_common_git_dir(Path::new("/repos/api.git/worktrees/hotfix")),
+    );
+}
+
+#[test]
+fn worktrees_of_different_repositories_do_not_share_a_common_git_dir() {
+    assert_ne!(
+        Repository::derive_common_git_dir(Path::new("/repos/api.git/worktrees/feature")),
+        Repository::derive_common_git_dir(Path::new("/repos/web.git/worktrees/feature")),
+    );
+}
+
+#[test]
+fn common_git_directory_is_not_stored_when_it_equals_the_external_git_dir() {
+    // The main checkout's gitdir is its own common dir, so there is nothing
+    // separate to store; only linked worktrees record one.
+    let main = StandardizedPath::try_from_local(Path::new("/repo/.git")).unwrap();
+    assert_eq!(Repository::derive_common_git_directory(&main), None);
+
+    let worktree =
+        StandardizedPath::try_from_local(Path::new("/repo/.git/worktrees/feature")).unwrap();
+    assert_eq!(
+        Repository::derive_common_git_directory(&worktree),
+        Some(StandardizedPath::try_from_local(Path::new("/repo/.git")).unwrap()),
     );
 }

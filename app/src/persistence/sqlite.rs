@@ -1021,6 +1021,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         },
                         collapsed: group.collapsed,
                         pinned: group.pinned,
+                        project_key: group.project_key.clone(),
                     })
                     .collect();
                 diesel::insert_into(schema::tab_groups::dsl::tab_groups)
@@ -1056,6 +1057,7 @@ fn save_app_state(conn: &mut SqliteConnection, app_state: &AppState) -> Result<(
                         .group_id
                         .and_then(|group_id| tab_group_row_ids.get(&group_id).copied()),
                     pinned: tab.pinned,
+                    placed_by_automation: tab.placed_by_automation,
                 })
                 .collect();
 
@@ -2569,6 +2571,7 @@ fn read_sqlite_data(
                             color,
                             collapsed: group.collapsed,
                             pinned: group.pinned,
+                            project_key: group.project_key,
                         });
                     }
                     let saved_tabs: Vec<_> = tabs_for_window
@@ -2610,6 +2613,7 @@ fn read_sqlite_data(
                                 right_panel,
                                 group_id,
                                 pinned: tab.pinned,
+                                placed_by_automation: tab.placed_by_automation,
                             })
                         })
                         .collect();

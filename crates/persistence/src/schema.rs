@@ -363,6 +363,7 @@ diesel::table! {
         color -> Nullable<Text>,
         collapsed -> Bool,
         pinned -> Bool,
+        project_key -> Nullable<Text>,
     }
 }
 
@@ -374,6 +375,7 @@ diesel::table! {
         color -> Nullable<Text>,
         tab_group_id -> Nullable<Integer>,
         pinned -> Bool,
+        placed_by_automation -> Bool,
     }
 }
 

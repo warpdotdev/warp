@@ -15,6 +15,7 @@ mod home;
 mod lightbox_view;
 mod native_modal;
 mod one_time_modal_model;
+pub mod project_key;
 mod registry;
 pub mod rewind_confirmation_dialog;
 pub mod sync_inputs;

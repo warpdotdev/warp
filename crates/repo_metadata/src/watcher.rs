@@ -130,6 +130,21 @@ impl DirectoryWatcher {
         self.find_containing_directory(&standardized)
     }
 
+    /// Like [`Self::get_watched_directory_for_path`], but for a path that is
+    /// already canonicalized (symlinks resolved).
+    ///
+    /// Performs no filesystem I/O, so it is safe on a hot path such as a
+    /// directory change. A non-canonical path may fail to match the
+    /// canonicalized watched directories — use
+    /// [`Self::get_watched_directory_for_path`] for those.
+    pub fn get_watched_directory_for_canonical_path(
+        &self,
+        path: &Path,
+    ) -> Option<ModelHandle<Repository>> {
+        let standardized = StandardizedPath::try_from_local(path).ok()?;
+        self.find_containing_directory(&standardized)
+    }
+
     /// Find the watched directory that contains the given path, if any.
     fn find_containing_directory(
         &self,

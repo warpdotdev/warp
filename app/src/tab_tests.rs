@@ -3,12 +3,17 @@ use std::collections::HashMap;
 use warpui::platform::keyboard::KeyCode;
 
 use super::{
-    SelectedTabColor, ShortcutModifierKind, TAB_ACTIVATE_BINDING_NAMES,
-    TAB_ACTIVATE_LAST_BINDING_NAME, TabShortcutModifierState, next_tab_color,
-    tab_activate_binding_name, tab_group_menu_entry_flags,
+    AUTO_GROUP_TABS_MENU_TOOLTIP, MOVE_TO_GROUP_LABEL, SelectedTabColor, ShortcutModifierKind,
+    TAB_ACTIVATE_BINDING_NAMES, TAB_ACTIVATE_LAST_BINDING_NAME, TURN_OFF_AUTO_GROUP_TABS_LABEL,
+    TURN_ON_AUTO_GROUP_TABS_LABEL, TabShortcutModifierState, auto_group_tabs_menu_label,
+    next_tab_color, tab_activate_binding_name, tab_group_menu_entry_flags,
+    tab_group_menu_items_for,
 };
+use crate::menu::MenuItem;
+use crate::settings_view::auto_group_tabs_toggle_action;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::ui_components::color_dot::TAB_COLOR_OPTIONS;
+use crate::workspace::WorkspaceAction;
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 
 /// Build a `tab_groups` map containing exactly the given group ids.
@@ -21,6 +26,28 @@ fn groups(ids: &[TabGroupId]) -> HashMap<TabGroupId, TabGroup> {
         })
         .collect()
 }
+
+/// Stand-in label for a divider, so a single `assert_eq!` on the section can
+/// pin both the entries and where the dividers fall between them.
+const DIVIDER: &str = "<divider>";
+
+/// The label of every row in a built menu section, in order.
+fn labels(items: &[MenuItem<WorkspaceAction>]) -> Vec<&str> {
+    items
+        .iter()
+        .map(|item| match item {
+            MenuItem::Item(fields) => fields.label(),
+            MenuItem::Separator => DIVIDER,
+            MenuItem::ItemsRow { .. } => "<items row>",
+            MenuItem::Submenu { fields, .. } => fields.label(),
+            MenuItem::Header { fields, .. } => fields.label(),
+        })
+        .collect()
+}
+
+/// The tab index every menu-section test builds for; which tab it is does not
+/// matter to the automatic-grouping entry, which is deliberately not tab-scoped.
+const TAB_INDEX: usize = 0;
 
 // GH-13073: a tab that is the sole member of its group must NOT be offered
 // "New group with tab" (it would just recreate an identical single-tab group);
@@ -184,5 +211,173 @@ fn next_tab_color_follows_the_canonical_palette_and_clears_after_the_last_color(
     assert_eq!(
         next_tab_color(Some(AnsiColorIdentifier::White)),
         SelectedTabColor::Color(TAB_COLOR_OPTIONS[0])
+    );
+}
+
+// R19: with the automatic-grouping mode available, the shared per-tab menu
+// offers the toggle, and a divider fences it off from the tab-scoped entries
+// above it. The full ordering is asserted so a later entry cannot quietly slip
+// in between the divider and the toggle and inherit the fence.
+#[test]
+fn auto_group_tabs_toggle_is_offered_behind_a_divider() {
+    let own = TabGroupId::new();
+    let other = TabGroupId::new();
+
+    let items = tab_group_menu_items_for(
+        TAB_INDEX,
+        Some(own),
+        &groups(&[own, other]),
+        /* is_only_member */ false,
+        /* auto_group_tabs */ Some(false),
+    );
+
+    assert_eq!(
+        labels(&items),
+        vec![
+            "New group with tab",
+            MOVE_TO_GROUP_LABEL,
+            "Remove from group",
+            DIVIDER,
+            TURN_ON_AUTO_GROUP_TABS_LABEL,
+        ],
+        "the automatic-grouping toggle should close the section, behind a divider"
+    );
+}
+
+// The divider is still drawn when only one tab-scoped entry precedes the
+// toggle, which is the common case for an ungrouped tab.
+#[test]
+fn auto_group_tabs_toggle_is_divided_from_a_lone_tab_scoped_entry() {
+    let items = tab_group_menu_items_for(
+        TAB_INDEX,
+        /* group_id */ None,
+        &HashMap::new(),
+        /* is_only_member */ false,
+        /* auto_group_tabs */ Some(false),
+    );
+
+    assert_eq!(
+        labels(&items),
+        vec!["New group with tab", DIVIDER, TURN_ON_AUTO_GROUP_TABS_LABEL,],
+    );
+}
+
+// With the mode unavailable (feature flags off) the entry must not exist at
+// all — not disabled, not present-but-inert — and it must not leave a dangling
+// divider at the end of the section either.
+#[test]
+fn auto_group_tabs_toggle_is_absent_when_the_mode_is_unavailable() {
+    let own = TabGroupId::new();
+    let other = TabGroupId::new();
+
+    let items = tab_group_menu_items_for(
+        TAB_INDEX,
+        Some(own),
+        &groups(&[own, other]),
+        /* is_only_member */ false,
+        /* auto_group_tabs */ None,
+    );
+
+    assert_eq!(
+        labels(&items),
+        vec![
+            "New group with tab",
+            MOVE_TO_GROUP_LABEL,
+            "Remove from group",
+        ],
+        "with the mode unavailable the section should hold only tab-scoped entries"
+    );
+}
+
+/// A menu row is laid out against `menu::DEFAULT_WIDTH` and clips instead of
+/// wrapping, and nothing measures a label's advance width at build time — so
+/// the stand-in for "fits a row" is the longest entry this same menu already
+/// ships. A label that outgrows it renders cut off, as the first version of the
+/// automatic-grouping toggle did.
+const LONGEST_EXISTING_MENU_LABEL: &str = "Close Tabs to the Right";
+
+// The entry's meaning is split across two surfaces because a row cannot hold
+// all of it: the label says which way activating it flips the mode and has to
+// fit, the tooltip carries the window-wide scope its tab-scoped neighbours
+// don't have.
+#[test]
+fn auto_group_tabs_toggle_label_reflects_state_and_fits_a_menu_row() {
+    assert_eq!(
+        auto_group_tabs_menu_label(false),
+        TURN_ON_AUTO_GROUP_TABS_LABEL
+    );
+    assert_eq!(
+        auto_group_tabs_menu_label(true),
+        TURN_OFF_AUTO_GROUP_TABS_LABEL
+    );
+    assert_ne!(
+        auto_group_tabs_menu_label(true),
+        auto_group_tabs_menu_label(false),
+        "the label must read differently with the mode on vs off"
+    );
+
+    for (enabled, expected_verb) in [(false, "Turn on"), (true, "Turn off")] {
+        let label = auto_group_tabs_menu_label(enabled);
+        assert!(
+            label.starts_with(expected_verb),
+            "{label:?} should say what activating it does"
+        );
+        assert!(
+            label.chars().count() <= LONGEST_EXISTING_MENU_LABEL.chars().count(),
+            "{label:?} is longer than {LONGEST_EXISTING_MENU_LABEL:?} and will clip in the menu"
+        );
+    }
+
+    assert!(
+        AUTO_GROUP_TABS_MENU_TOOLTIP.contains("every window"),
+        "the scope that no longer fits the label has to survive in the tooltip"
+    );
+}
+
+// The label the menu actually renders tracks the setting, so the entry never
+// invites the user to turn on a mode that is already on.
+#[test]
+fn auto_group_tabs_toggle_entry_label_tracks_the_setting() {
+    for (enabled, expected) in [
+        (false, TURN_ON_AUTO_GROUP_TABS_LABEL),
+        (true, TURN_OFF_AUTO_GROUP_TABS_LABEL),
+    ] {
+        let items = tab_group_menu_items_for(
+            TAB_INDEX,
+            /* group_id */ None,
+            &HashMap::new(),
+            /* is_only_member */ false,
+            Some(enabled),
+        );
+        assert_eq!(labels(&items).last(), Some(&expected));
+    }
+}
+
+// The toggle must not become a second writer of `appearance.tabs.auto_group_tabs`:
+// it dispatches the same settings-page action the Settings switch and the
+// keybinding use, so all three share one write path and one telemetry event.
+#[test]
+fn auto_group_tabs_toggle_routes_through_the_settings_page_toggle() {
+    let items = tab_group_menu_items_for(
+        TAB_INDEX,
+        /* group_id */ None,
+        &HashMap::new(),
+        /* is_only_member */ false,
+        /* auto_group_tabs */ Some(false),
+    );
+
+    let action = items
+        .last()
+        .expect("section should end with the toggle")
+        .item_on_select_action()
+        .expect("the toggle should dispatch an action");
+
+    assert_eq!(
+        format!("{action:?}"),
+        format!(
+            "{:?}",
+            WorkspaceAction::DispatchToSettingsTab(auto_group_tabs_toggle_action())
+        ),
+        "expected the existing settings toggle, got {action:?}"
     );
 }

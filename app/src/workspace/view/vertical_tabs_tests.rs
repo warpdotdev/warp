@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use warpui::EntityId;
+use warp_core::features::FeatureFlag;
 use warpui::elements::PositionedElementOffsetBounds;
+use warpui::{App, EntityId};
 
 use super::{
     AgentTabTextPreference, SummaryPaneKind, SummaryPaneKindIcons, TerminalAgentText,
@@ -12,7 +13,7 @@ use super::{
     VerticalTabsDetailTargetKind, VerticalTabsSummaryBranchEntry, VerticalTabsSummaryData,
     VerticalTabsSummaryPrimaryLabel, branch_label_display, coalesce_summary_branch_entries,
     code_detail_kind_label, compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
-    detail_target_for_hovered_row, non_terminal_search_text_fragments,
+    detail_target_for_hovered_row, member_defers_drag_to_group, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
     push_normalized_unique_summary_label, search_fragments_contain_query,
     select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
@@ -31,6 +32,7 @@ use crate::safe_triangle::SafeTriangle;
 use crate::tab::{ShortcutModifierKind, reveals_shortcut_hints};
 use crate::terminal::CLIAgent;
 use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use crate::workspace::view::tests::{group_tabs_for_test, initialize_app, mock_workspace};
 
 fn label(text: &str) -> VerticalTabsSummaryPrimaryLabel {
     VerticalTabsSummaryPrimaryLabel {
@@ -1241,4 +1243,89 @@ fn summary_search_fragments_include_hidden_overflow_values() {
     assert!(search_fragments_contain_query(&fragments, "#789"));
     assert!(search_fragments_contain_query(&fragments, "+2"));
     assert!(search_fragments_contain_query(&fragments, "-3"));
+}
+
+#[test]
+fn vertical_panel_and_horizontal_bar_agree_on_member_drag_suppression() {
+    // R22. The two tab bars must never disagree about which members give up
+    // their per-tab drag, so both ask `Workspace::suppresses_member_drag`.
+    // Rendering both bars in a unit test would need a laid-out window, so this
+    // compares what each bar computes for the same workspace instead: the
+    // vertical panel through its own `member_defers_drag_to_group` wrapper, the
+    // horizontal bar through the shared predicate it calls directly.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..3 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            assert_eq!(workspace.tab_count(), 4);
+
+            // [0] alone in a keyed group, [1] alone in a manual group,
+            // [2, 3] together in a keyed group.
+            let keyed_sole = group_tabs_for_test(workspace, &[0], Some("/work/api/.git"));
+            let manual_sole = group_tabs_for_test(workspace, &[1], None);
+            let keyed_pair = group_tabs_for_test(workspace, &[2, 3], Some("/work/web/.git"));
+
+            // Pinned expectations first, so "the two bars agree" can't pass by
+            // both being wrong.
+            assert!(
+                !workspace.suppresses_member_drag(keyed_sole),
+                "the sole member of a keyed group keeps its own drag"
+            );
+            assert!(
+                workspace.suppresses_member_drag(manual_sole),
+                "the sole member of a manual group defers to the group drag"
+            );
+            assert!(
+                !workspace.suppresses_member_drag(keyed_pair),
+                "members of a multi-member group keep their own drag"
+            );
+
+            for (tab_index, group_id, case) in [
+                (0, keyed_sole, "sole member of a keyed group"),
+                (1, manual_sole, "sole member of a manual group"),
+                (2, keyed_pair, "first member of a multi-member keyed group"),
+                (3, keyed_pair, "last member of a multi-member keyed group"),
+            ] {
+                let horizontal = workspace.suppresses_member_drag(group_id);
+                let vertical =
+                    member_defers_drag_to_group(workspace, &workspace.tabs[tab_index], true);
+                assert_eq!(
+                    vertical, horizontal,
+                    "the two tab bars disagree for the {case}"
+                );
+            }
+        });
+    });
+}
+
+#[test]
+fn vertical_panel_top_level_row_never_defers_its_drag_to_a_group() {
+    // A tab drawn as a top-level row isn't inside a group container, so there
+    // is no group drag to defer to even while it still carries a `group_id`.
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+    let _auto_grouping_guard = FeatureFlag::AutoTabGrouping.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.add_terminal_tab(false, ctx);
+            let manual_sole = group_tabs_for_test(workspace, &[0], None);
+
+            assert!(workspace.suppresses_member_drag(manual_sole));
+            assert!(!member_defers_drag_to_group(
+                workspace,
+                &workspace.tabs[0],
+                false
+            ));
+        });
+    });
 }
