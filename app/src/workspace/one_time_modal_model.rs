@@ -88,6 +88,7 @@ impl OneTimeModalModel {
                     UserWorkspacesEvent::TeamsChanged => {
                         me.has_fetched_workspaces = true;
                         me.maybe_recheck_free_ai_removal_modal(ctx);
+                        me.maybe_recheck_feature_intro_modal(ctx);
                     }
                     _ => {}
                 }
@@ -547,6 +548,16 @@ impl OneTimeModalModel {
             return;
         }
         self.check_and_trigger_free_ai_removal_modal(ctx);
+    }
+
+    fn maybe_recheck_feature_intro_modal(&mut self, ctx: &mut ModelContext<Self>) {
+        if !self.has_completed_initial_modal_checks
+            || self.is_any_modal_open()
+            || self.active_feature_intro.is_some()
+        {
+            return;
+        }
+        self.check_and_trigger_feature_intro_modal(ctx);
     }
 
     fn check_and_trigger_free_ai_removal_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {

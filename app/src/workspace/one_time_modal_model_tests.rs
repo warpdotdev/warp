@@ -1,4 +1,5 @@
 use futures::FutureExt;
+use settings::Setting as _;
 use warp_core::features::FeatureFlag;
 use warpui::{App, SingletonEntity};
 
@@ -421,6 +422,63 @@ fn factories_feature_intro_selects_configured_eligible_unseen_entry_and_marks_it
     });
 }
 
+#[test]
+fn factories_feature_intro_rechecks_when_cta_metadata_arrives() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let _flag = FeatureFlag::FactoriesLaunchModal.override_enabled(true);
+
+        terminal.update(&mut app, |_, ctx| {
+            AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings
+                    .did_check_to_trigger_free_ai_removal_modal
+                    .set_value(true, ctx)
+                    .unwrap();
+                for intro in FEATURE_INTROS {
+                    if intro.id == FeatureIntroId::FactoriesLaunch {
+                        break;
+                    }
+                    settings.mark_feature_intro_seen(intro.id.as_key(), ctx);
+                }
+            });
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                model.has_completed_initial_modal_checks = true;
+                assert!(!model.check_and_trigger_feature_intro_modal(ctx));
+            });
+
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.set_factories_launch_modal_cta_url(Some(
+                    "https://warp-dev.chilipiper.com/round-robin/factories-warp-intro".to_string(),
+                ));
+                workspaces.update_workspaces(vec![], ctx);
+            });
+        });
+
+        app.read(|ctx| {
+            assert_eq!(
+                OneTimeModalModel::as_ref(ctx).active_feature_intro,
+                Some(FeatureIntroId::FactoriesLaunch)
+            );
+            assert!(
+                AISettings::as_ref(ctx)
+                    .is_feature_intro_seen(FeatureIntroId::FactoriesLaunch.as_key())
+            );
+        });
+
+        terminal.update(&mut app, |_, ctx| {
+            OneTimeModalModel::handle(ctx).update(ctx, |model, ctx| {
+                model.mark_feature_intro_dismissed(ctx);
+            });
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.update_workspaces(vec![], ctx);
+            });
+        });
+        app.read(|ctx| {
+            assert_eq!(OneTimeModalModel::as_ref(ctx).active_feature_intro, None);
+        });
+    });
+}
 #[test]
 fn feature_intro_skipped_when_all_seen() {
     App::test((), |mut app| async move {

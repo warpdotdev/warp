@@ -85,8 +85,6 @@ pub struct FeatureIntro {
     pub cta_target: Option<FeatureIntroCtaTarget>,
 }
 
-/// The registry of feature-intro popovers, in priority order. On startup the
-/// first entry whose id has not yet been seen is shown.
 pub const FEATURE_INTROS: &[FeatureIntro] = &[
     FeatureIntro {
         id: FeatureIntroId::CustomModelRouter,
