@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use session_sharing_protocol::common::ParticipantId;
 use warpui::{App, SingletonEntity};
 
 use super::{
@@ -44,6 +45,113 @@ where
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+#[test]
+fn startup_queue_claims_only_one_fifo_row_until_dispatch_finishes() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        let (first, second) = model.update(&mut app, |queue, ctx| {
+            queue.begin_native_setup(id, ctx);
+            let first = queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "first".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            let second = queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "second".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            assert!(queue.claim_injection(id, first, ctx).is_none());
+            queue.finish_native_setup(id, ctx);
+            queue.finish_native_initial_turn(id, ctx);
+            assert!(queue.claim_injection(id, second, ctx).is_none());
+            assert!(queue.claim_injection(id, first, ctx).is_some());
+            assert!(queue.claim_injection(id, first, ctx).is_none());
+            assert!(queue.peek_autofire(id).is_none());
+            assert!(queue.remove_by_id(id, first, ctx).is_none());
+            (first, second)
+        });
+        model.update(&mut app, |queue, ctx| {
+            queue.finish_injection_dispatch(id, first, None, ctx);
+            queue.finish_injection_dispatch(id, first, None, ctx);
+            assert_eq!(queue.queue(id).len(), 1);
+            assert_eq!(
+                queue.claim_injection(id, second, ctx).unwrap().text(),
+                "second"
+            );
+        });
+    });
+}
+
+#[test]
+fn empty_native_queue_captures_injections_until_initial_turn_finishes() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        model.update(&mut app, |queue, ctx| {
+            queue.begin_native_setup(id, ctx);
+            queue.finish_native_initial_turn(id, ctx);
+            assert!(queue.is_dispatch_blocked(id));
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.has_queue(id));
+            assert!(queue.has_pending_native_injections(id));
+            assert!(queue.is_dispatch_blocked(id));
+            queue.finish_native_initial_turn(id, ctx);
+            assert!(!queue.has_pending_native_injections(id));
+            assert!(!queue.is_dispatch_blocked(id));
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.has_pending_native_injections(id));
+        });
+    });
+}
+
+#[test]
+fn failed_startup_dispatch_retains_unsent_rows_and_stops_auto_drain() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        model.update(&mut app, |queue, ctx| {
+            let first = queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "first".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "second".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            assert!(queue.claim_injection(id, first, ctx).is_some());
+            queue.finish_injection_dispatch(id, first, Some("download failed".into()), ctx);
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["first", "second"]
+            );
+            assert_eq!(queue.injection_error(id), Some("download failed"));
+            assert!(queue.peek_autofire(id).is_none());
+            assert!(queue.pop_front(id, ctx).is_none());
+        });
+    });
 }
 
 fn initial_cloud_mode_query(text: &str) -> QueuedQuery {

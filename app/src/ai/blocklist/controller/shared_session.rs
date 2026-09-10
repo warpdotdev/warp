@@ -681,6 +681,15 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         // Map server token to sharer's local conversation ID
+        if self.queue_native_startup_injection(
+            &prompt,
+            server_conversation_token.as_ref(),
+            &attachments,
+            &participant_id,
+            ctx,
+        ) {
+            return;
+        }
         let conversation_id = server_conversation_token
             .and_then(|id| self.find_existing_conversation_by_server_token(&id.to_string(), ctx))
             .and_then(

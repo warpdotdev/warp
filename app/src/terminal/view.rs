@@ -5468,6 +5468,14 @@ impl TerminalView {
                 && let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx)
             {
                 self.drain_queued_prompts(*conversation_id, reason, ctx);
+            } else if QueuedQueryModel::as_ref(ctx).has_queue(*conversation_id) {
+                log::info!(
+                    "event=turn_drain_deferred terminal_id={:?} conversation_id={conversation_id} active_subagent={has_active_subagent} has_finished_block={} queue_len={}",
+                    self.view_id,
+                    self.finish_reason_for_conversation(*conversation_id, ctx)
+                        .is_some(),
+                    QueuedQueryModel::as_ref(ctx).queue(*conversation_id).len(),
+                );
             }
 
             // If the most recent action in the current interaction turn created or updated a plan
@@ -5584,7 +5592,7 @@ impl TerminalView {
 
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
     /// conversation finishes.
-    fn drain_queued_prompts(
+    pub(crate) fn drain_queued_prompts(
         &mut self,
         conversation_id: AIConversationId,
         finish_reason: FinishReason,
@@ -5596,6 +5604,9 @@ impl TerminalView {
                 let first_row_is_in_edit_mode =
                     QueuedQueryModel::as_ref(ctx).first_row_is_in_edit_mode(conversation_id);
                 if first_row_is_in_edit_mode && !input_is_empty {
+                    log::info!(
+                        "event=turn_drain_deferred conversation_id={conversation_id} reason=editing_head_with_local_draft",
+                    );
                     return;
                 }
 
@@ -5604,6 +5615,24 @@ impl TerminalView {
                 let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
                     Some(AutofireAction::Submit { query_id, text }) => {
+                        if QueuedQueryModel::as_ref(ctx)
+                            .queue(conversation_id)
+                            .iter()
+                            .any(|row| {
+                                row.id() == query_id && row.shared_session_prompt().is_some()
+                            })
+                        {
+                            // TODO: Deliver startup injections together when Oz supports non-interrupting
+                            // batch delivery, consistent with third-party harness startup queue draining.
+                            self.ai_controller.update(ctx, |controller, ctx| {
+                                controller.send_queued_shared_session_prompt(
+                                    conversation_id,
+                                    query_id,
+                                    ctx,
+                                );
+                            });
+                            return;
+                        }
                         self.input.update(ctx, |input, ctx| {
                             input.submit_queued_prompt_for_active_pane(
                                 text,

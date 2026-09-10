@@ -4318,6 +4318,19 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         // Read the origin before dispatch; the row is removed once it fires.
+        if QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id) {
+            return;
+        }
+        if QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .any(|row| row.id() == query_id && row.shared_session_prompt().is_some())
+        {
+            self.ai_controller.update(ctx, |controller, ctx| {
+                controller.send_queued_shared_session_prompt(conversation_id, query_id, ctx);
+            });
+            return;
+        }
         let origin = QueuedQueryModel::as_ref(ctx)
             .queue(conversation_id)
             .iter()

@@ -8,6 +8,7 @@ mod pending_response_streams;
 pub mod response_stream;
 pub(super) mod shared_session;
 mod slash_command;
+mod startup_queue;
 use std::collections::{HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
@@ -339,6 +340,7 @@ pub struct BlocklistAIController {
     should_refresh_available_llms_on_stream_finish: bool,
 
     shared_session_state: shared_session::SharedSessionState,
+    native_prompt_conversation_id: Option<AIConversationId>,
 
     /// Ambient agent task ID attached to this controller. This is a property of the controller, and not an individual
     /// conversation, because the ambient agent task driver owns the entire Warp window working on a task, and any
@@ -648,6 +650,7 @@ impl BlocklistAIController {
             team_context_resolver,
             should_refresh_available_llms_on_stream_finish: false,
             shared_session_state: shared_session::SharedSessionState::default(),
+            native_prompt_conversation_id: None,
             ambient_agent_task_id: None,
             attachments_download_dir: None,
             pending_auto_resume_handles: HashMap::new(),
@@ -1361,7 +1364,14 @@ impl BlocklistAIController {
         ctx: &mut ModelContext<Self>,
     ) {
         let participant_id = self.get_sharer_participant_id();
-        let which_task = match self.context_model.as_ref(ctx).selected_conversation_id(ctx) {
+        let target_conversation =
+            if matches!(ai_input, AIAgentInput::StartFromAmbientRunPrompt { .. }) {
+                self.native_prompt_conversation_id
+                    .or_else(|| self.context_model.as_ref(ctx).selected_conversation_id(ctx))
+            } else {
+                self.context_model.as_ref(ctx).selected_conversation_id(ctx)
+            };
+        let which_task = match target_conversation {
             Some(id) => {
                 let Some(conversation) = BlocklistAIHistoryModel::as_ref(ctx).conversation(&id)
                 else {
@@ -2664,6 +2674,11 @@ impl BlocklistAIController {
             }
         }
 
+        if self.native_prompt_conversation_id == Some(conversation_id) && !is_passive_request {
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.finish_native_setup(conversation_id, ctx);
+            });
+        }
         ctx.emit(BlocklistAIControllerEvent::SentRequest {
             contains_user_query: input_contains_user_query,
             is_queued_prompt,
@@ -2760,6 +2775,12 @@ impl BlocklistAIController {
         // Remove any locked pending-LRC queries so they don't linger after cancellation.
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_pending_lrc_rows(conversation_id, ctx);
+            if matches!(
+                reason.conversation_outcome(),
+                CancellationOutcome::Cancelled
+            ) {
+                model.cancel_injection_dispatch(conversation_id, ctx);
+            }
         });
 
         if !self
