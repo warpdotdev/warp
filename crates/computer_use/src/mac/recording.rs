@@ -221,10 +221,6 @@ fn new_ffmpeg_capture_command(config: &RecordingConfig, width: u32, height: u32)
         .args(["-c:v", "libx264"])
         .args(["-preset", "ultrafast"])
         .args(["-pix_fmt", "yuv420p"])
-        // AVFoundation timestamps frames with a microsecond timebase. Without
-        // an explicit output rate, ffmpeg treats that as an extremely high
-        // constant frame rate and duplicates frames until the file duration
-        // collapses toward zero.
         .args(["-r", &config.frame_rate.to_string()]);
     // Apply playback speed: rescale presentation timestamps so the video
     // plays faster than real time. A multiplier of 4 makes a 4-minute
