@@ -815,9 +815,13 @@ impl RunAgentsCardView {
             return;
         }
         if matches!(
-            self.action_model
-                .as_ref(ctx)
-                .get_action_status(&self.action_id),
+            self.block_model
+                .conversation_id(ctx)
+                .and_then(|conversation_id| {
+                    self.action_model
+                        .as_ref(ctx)
+                        .get_action_status_for_conversation(conversation_id, &self.action_id)
+                }),
             Some(AIActionStatus::Finished(_)) | Some(AIActionStatus::RunningAsync)
         ) {
             return;
@@ -1263,9 +1267,13 @@ impl View for RunAgentsCardView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let status = self
-            .action_model
-            .as_ref(app)
-            .get_action_status(&self.action_id);
+            .block_model
+            .conversation_id(app)
+            .and_then(|conversation_id| {
+                self.action_model
+                    .as_ref(app)
+                    .get_action_status_for_conversation(conversation_id, &self.action_id)
+            });
 
         if let Some(AIActionStatus::Finished(result)) = &status {
             if let AIAgentActionResultType::RunAgents(orchestrate_result) = &result.result {

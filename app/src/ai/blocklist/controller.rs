@@ -3068,21 +3068,34 @@ impl BlocklistAIController {
                                             ctx,
                                         )
                                     });
-                                if let Err(e) = apply_result {
-                                    report_error!(
-                                        anyhow::Error::new(e).context(
+                                match apply_result {
+                                    Ok(()) => {
+                                        for result in server_owned_failures {
+                                            let Some(result_conversation_id) = history_model
+                                                .as_ref(ctx)
+                                                .conversation_id_for_task(&result.task_id)
+                                            else {
+                                                log::warn!(
+                                                    "Could not find conversation for server-owned \
+                                                     action result task: {:?}",
+                                                    result.task_id
+                                                );
+                                                continue;
+                                            };
+                                            self.action_model.update(ctx, |action_model, ctx| {
+                                                action_model.apply_server_owned_run_agents_failure(
+                                                    result_conversation_id,
+                                                    result,
+                                                    ctx,
+                                                );
+                                            });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        report_error!(anyhow::Error::new(e).context(
                                             "Failed to apply client actions to conversation"
-                                        )
-                                    );
-                                }
-                                for result in server_owned_failures {
-                                    self.action_model.update(ctx, |action_model, ctx| {
-                                        action_model.apply_server_owned_run_agents_failure(
-                                            conversation_id,
-                                            result,
-                                            ctx,
-                                        );
-                                    });
+                                        ));
+                                    }
                                 }
                             }
                         }

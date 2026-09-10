@@ -29,6 +29,7 @@ use crate::ai::blocklist::{
 };
 use crate::ai::geap_credentials::{GeapPolicy, current_geap_policy_for_any_team};
 use crate::ai::llms::{LLMId, LLMModelHost, LLMProvider};
+use crate::server::experiments::ServerExperiments;
 use crate::server::ids::ServerId;
 use crate::terminal::TerminalView;
 use crate::test_util::terminal::{
@@ -51,6 +52,29 @@ fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
 }
 
 fn run_agents_failure_client_actions(
+    task_id: &TaskId,
+    request_id: &str,
+    tool_call_id: &str,
+) -> warp_multi_agent_api::ResponseEvent {
+    run_agents_failure_response_event(
+        vec![warp_multi_agent_api::ClientAction {
+            action: Some(warp_multi_agent_api::client_action::Action::CreateTask(
+                warp_multi_agent_api::client_action::CreateTask {
+                    task: Some(warp_multi_agent_api::Task {
+                        id: task_id.to_string(),
+                        ..Default::default()
+                    }),
+                },
+            )),
+        }],
+        task_id,
+        request_id,
+        tool_call_id,
+    )
+}
+
+fn run_agents_failure_response_event(
+    mut preceding_actions: Vec<warp_multi_agent_api::ClientAction>,
     task_id: &TaskId,
     request_id: &str,
     tool_call_id: &str,
@@ -103,19 +127,21 @@ fn run_agents_failure_client_actions(
         ..Default::default()
     };
 
+    preceding_actions.push(warp_multi_agent_api::ClientAction {
+        action: Some(
+            warp_multi_agent_api::client_action::Action::AddMessagesToTask(
+                warp_multi_agent_api::client_action::AddMessagesToTask {
+                    task_id: task_id.to_string(),
+                    messages: vec![tool_call_message, failure_message],
+                },
+            ),
+        ),
+    });
+
     warp_multi_agent_api::ResponseEvent {
         r#type: Some(response_event::Type::ClientActions(
             response_event::ClientActions {
-                actions: vec![warp_multi_agent_api::ClientAction {
-                    action: Some(
-                        warp_multi_agent_api::client_action::Action::AddMessagesToTask(
-                            warp_multi_agent_api::client_action::AddMessagesToTask {
-                                task_id: task_id.to_string(),
-                                messages: vec![tool_call_message, failure_message],
-                            },
-                        ),
-                    ),
-                }],
+                actions: preceding_actions,
             },
         )),
     }
@@ -125,6 +151,7 @@ fn run_agents_failure_client_actions(
 fn live_owner_stream_installs_server_owned_run_agents_failure_without_follow_up_result() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
         let terminal = add_window_with_terminal(&mut app, None);
         let tool_call_id = "server-owned-run-agents";
 
@@ -211,7 +238,7 @@ fn live_owner_stream_installs_server_owned_run_agents_failure_without_follow_up_
         let action_id = tool_call_id.to_owned().into();
         action_model.read(&app, |model, _| {
             let Some(crate::ai::blocklist::AIActionStatus::Finished(result)) =
-                model.get_action_status(&action_id)
+                model.get_action_status_for_conversation(conversation_id, &action_id)
             else {
                 panic!("expected server-owned terminal result");
             };
@@ -227,6 +254,182 @@ fn live_owner_stream_installs_server_owned_run_agents_failure_without_follow_up_
     });
 }
 
+#[test]
+fn live_owner_stream_installs_server_owned_failure_in_split_conversation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|ctx| ServerExperiments::new_from_cache(vec![], ctx));
+        let terminal = add_window_with_terminal(&mut app, None);
+        let tool_call_id = "split-server-owned-run-agents";
+        let split_task_id = TaskId::new("split-server-task".to_owned());
+
+        let (original_conversation_id, action_model) = terminal.update(&mut app, |view, ctx| {
+            let terminal_surface_id = view.id();
+            let stream_id = ResponseStreamId::new_for_test();
+            let (conversation_id, original_task_id) =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let conversation_id = history.start_new_conversation(
+                        terminal_surface_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    let task_id = history
+                        .conversation(&conversation_id)
+                        .unwrap()
+                        .get_root_task_id()
+                        .clone();
+                    history
+                        .update_conversation_for_new_request_input(
+                            RequestInput {
+                                conversation_id,
+                                input_messages: HashMap::from([(task_id.clone(), vec![])]),
+                                working_directory: None,
+                                model_id: LLMId::from("test-model"),
+                                coding_model_id: LLMId::from("test-coding-model"),
+                                cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+                                computer_use_model_id: LLMId::from("test-computer-use-model"),
+                                shared_session_response_initiator: None,
+                                request_start_ts: Local::now(),
+                                supported_tools_override: None,
+                            },
+                            stream_id.clone(),
+                            terminal_surface_id,
+                            ctx,
+                        )
+                        .unwrap();
+                    (conversation_id, task_id)
+                });
+            let stream = ctx.add_model(|_| ResponseStream::new_for_test(stream_id.clone()));
+            view.ai_controller().update(ctx, |controller, ctx| {
+                controller.register_mock_stream_for_test(
+                    stream_id,
+                    conversation_id,
+                    stream.clone(),
+                    ctx,
+                );
+            });
+
+            let split_point_message = warp_multi_agent_api::Message {
+                id: "split-point".to_owned(),
+                task_id: original_task_id.to_string(),
+                message: Some(warp_multi_agent_api::message::Message::AgentOutput(
+                    warp_multi_agent_api::message::AgentOutput {
+                        text: "Continue in a new conversation".to_owned(),
+                    },
+                )),
+                request_id: "split-request".to_owned(),
+                ..Default::default()
+            };
+            let preceding_actions = vec![
+                warp_multi_agent_api::ClientAction {
+                    action: Some(warp_multi_agent_api::client_action::Action::CreateTask(
+                        warp_multi_agent_api::client_action::CreateTask {
+                            task: Some(warp_multi_agent_api::Task {
+                                id: original_task_id.to_string(),
+                                ..Default::default()
+                            }),
+                        },
+                    )),
+                },
+                warp_multi_agent_api::ClientAction {
+                    action: Some(
+                        warp_multi_agent_api::client_action::Action::AddMessagesToTask(
+                            warp_multi_agent_api::client_action::AddMessagesToTask {
+                                task_id: original_task_id.to_string(),
+                                messages: vec![split_point_message],
+                            },
+                        ),
+                    ),
+                },
+                warp_multi_agent_api::ClientAction {
+                    action: Some(
+                        warp_multi_agent_api::client_action::Action::StartNewConversation(
+                            warp_multi_agent_api::client_action::StartNewConversation {
+                                start_from_message_id: "split-point".to_owned(),
+                            },
+                        ),
+                    ),
+                },
+                warp_multi_agent_api::ClientAction {
+                    action: Some(warp_multi_agent_api::client_action::Action::CreateTask(
+                        warp_multi_agent_api::client_action::CreateTask {
+                            task: Some(warp_multi_agent_api::Task {
+                                id: split_task_id.to_string(),
+                                ..Default::default()
+                            }),
+                        },
+                    )),
+                },
+            ];
+
+            stream.update(ctx, |stream, ctx| {
+                stream.emit_response_event_for_test(
+                    warp_multi_agent_api::ResponseEvent {
+                        r#type: Some(response_event::Type::Init(response_event::StreamInit {
+                            request_id: "split-request".to_owned(),
+                            conversation_id: "split-server-conversation".to_owned(),
+                            run_id: String::new(),
+                        })),
+                    },
+                    ctx,
+                );
+                stream.emit_response_event_for_test(
+                    run_agents_failure_response_event(
+                        preceding_actions,
+                        &split_task_id,
+                        "split-request",
+                        tool_call_id,
+                    ),
+                    ctx,
+                );
+                stream.emit_response_event_for_test(
+                    warp_multi_agent_api::ResponseEvent {
+                        r#type: Some(response_event::Type::Finished(
+                            response_event::StreamFinished {
+                                reason: Some(response_event::stream_finished::Reason::Done(
+                                    response_event::stream_finished::Done {},
+                                )),
+                                ..Default::default()
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+                stream.emit_after_stream_finished_for_test(ctx);
+            });
+
+            (conversation_id, view.ai_action_model().clone())
+        });
+
+        let split_conversation_id =
+            BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+                history
+                    .conversation_id_for_task(&split_task_id)
+                    .expect("split task should belong to the new conversation")
+            });
+        assert_ne!(original_conversation_id, split_conversation_id);
+        let action_id = tool_call_id.to_owned().into();
+        action_model.read(&app, |model, _| {
+            assert!(
+                model
+                    .get_action_result_for_conversation(original_conversation_id, &action_id)
+                    .is_none()
+            );
+            assert!(matches!(
+                model.get_action_status_for_conversation(split_conversation_id, &action_id),
+                Some(crate::ai::blocklist::AIActionStatus::Finished(_))
+            ));
+            assert!(
+                model
+                    .get_finished_action_results(split_conversation_id)
+                    .is_none()
+            );
+            assert!(!model.has_unfinished_actions_for_conversation(split_conversation_id));
+        });
+    });
+}
 fn image_attachment(file_name: &str) -> PendingAttachment {
     PendingAttachment::Image(ImageContext {
         data: String::new(),

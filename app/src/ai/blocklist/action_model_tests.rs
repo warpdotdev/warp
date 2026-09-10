@@ -177,7 +177,9 @@ fn server_owned_run_agents_failure_suppresses_preprocessed_action_and_outbound_r
         Timer::after(Duration::from_millis(1)).await;
 
         action_model.read(&app, |model, _| {
-            let Some(AIActionStatus::Finished(result)) = model.get_action_status(&action_id) else {
+            let Some(AIActionStatus::Finished(result)) =
+                model.get_action_status_for_conversation(conversation_id, &action_id)
+            else {
                 panic!("expected terminal action status");
             };
             assert!(matches!(
@@ -192,6 +194,67 @@ fn server_owned_run_agents_failure_suppresses_preprocessed_action_and_outbound_r
             );
             assert!(model.get_finished_action_results(conversation_id).is_none());
             assert!(!model.has_unfinished_actions_for_conversation(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn shared_session_result_with_same_id_is_scoped_to_conversation() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (first_conversation_id, second_conversation_id, action_model) =
+            terminal.update(&mut app, |terminal, ctx| {
+                let (first, second) =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                        (
+                            history.start_new_conversation(terminal.id(), false, true, false, ctx),
+                            history.start_new_conversation(terminal.id(), false, true, false, ctx),
+                        )
+                    });
+                let action_model = terminal.ai_action_model().clone();
+                action_model.update(ctx, |model, _| model.set_view_only(true));
+                (first, second, action_model)
+            });
+        let action_id = AIAgentActionId::from("shared-conversation-local".to_owned());
+
+        action_model.update(&mut app, |model, ctx| {
+            model.apply_server_owned_run_agents_failure(
+                first_conversation_id,
+                server_owned_failure("shared-conversation-local"),
+                ctx,
+            );
+            assert!(
+                model
+                    .get_action_result_for_conversation(second_conversation_id, &action_id)
+                    .is_none()
+            );
+            model.apply_finished_action_result(
+                second_conversation_id,
+                AIAgentActionResult {
+                    id: action_id.clone(),
+                    task_id: TaskId::new("second-task".to_owned()),
+                    result: AIAgentActionResultType::InitProject,
+                },
+                ctx,
+            );
+        });
+
+        action_model.read(&app, |model, _| {
+            assert!(matches!(
+                model
+                    .get_action_result_for_conversation(first_conversation_id, &action_id)
+                    .map(|result| &result.result),
+                Some(AIAgentActionResultType::RunAgents(
+                    RunAgentsResult::Failure { .. }
+                ))
+            ));
+            assert!(matches!(
+                model
+                    .get_action_result_for_conversation(second_conversation_id, &action_id)
+                    .map(|result| &result.result),
+                Some(AIAgentActionResultType::InitProject)
+            ));
         });
     });
 }

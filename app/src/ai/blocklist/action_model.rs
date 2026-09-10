@@ -666,12 +666,62 @@ impl BlocklistAIActionModel {
             .values()
             .flat_map(|results| results.iter())
             .find(|result| &result.id == id)
+            .or_else(|| self.past_action_results.get(id))
+    }
+    pub fn get_action_result_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        id: &AIAgentActionId,
+    ) -> Option<&Arc<AIAgentActionResult>> {
+        self.finished_action_results
+            .get(&conversation_id)
+            .and_then(|results| results.iter().find(|result| &result.id == id))
             .or_else(|| {
                 self.server_owned_action_results
-                    .values()
-                    .find_map(|results| results.get(id))
+                    .get(&conversation_id)
+                    .and_then(|results| results.get(id))
             })
             .or_else(|| self.past_action_results.get(id))
+    }
+
+    pub fn get_action_status_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+        id: &AIAgentActionId,
+    ) -> Option<AIActionStatus> {
+        if let Some((index, _)) = self
+            .pending_actions
+            .get(&conversation_id)
+            .and_then(|actions| {
+                actions
+                    .iter()
+                    .enumerate()
+                    .find(|(_, action)| &action.id == id)
+            })
+        {
+            if index == 0
+                && !self.is_view_only
+                && !self.running_actions.contains_key(&conversation_id)
+            {
+                return Some(AIActionStatus::Blocked);
+            }
+            return Some(AIActionStatus::Queued);
+        }
+
+        self.running_actions
+            .get(&conversation_id)
+            .filter(|running| running.contains(id))
+            .map(|_| AIActionStatus::RunningAsync)
+            .or_else(|| {
+                self.get_action_result_for_conversation(conversation_id, id)
+                    .map(|result| AIActionStatus::Finished(result.clone()))
+            })
+            .or_else(|| {
+                self.pending_preprocessed_actions
+                    .get(&conversation_id)
+                    .is_some_and(|preprocessing| preprocessing.contains(id))
+                    .then_some(AIActionStatus::Preprocessing)
+            })
     }
 
     fn has_server_owned_action_result(
