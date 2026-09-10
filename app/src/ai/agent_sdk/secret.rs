@@ -14,9 +14,8 @@ use warp_cli::secret::{
     ListSecretsArgs, SecretCommand, SecretType, UpdateSecretArgs, ValueArgs,
 };
 
-/// Mirrors the server's registry-host format check (a bare host, no scheme or path), so a
-/// malformed host is caught before prompting for the remaining fields or making a network
-/// request, matching the same rule the web UI enforces client-side.
+/// Mirrors the server's registry-host format check (a bare host, no scheme or path), matching
+/// the same rule the web UI enforces client-side.
 fn validate_registry_host(host: &str) -> Result<()> {
     if host.contains("://") || host.contains('/') {
         anyhow::bail!("Registry host must not include a scheme or path.");
