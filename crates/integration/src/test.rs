@@ -163,7 +163,8 @@ use warp::integration_testing::workspace::assert_tab_count;
 use warp::integration_testing::{self, view_of_type};
 use warp::pane_group::AGENT_MODE_PANE_DEFAULT_MINIMUM_WIDTH;
 use warp::settings::{
-    CompletionsOpenWhileTyping, CtrlTabBehavior, INPUT_MODE, MonospaceFontSize, TabBehavior,
+    CompletionsOpenWhileTyping, CtrlTabBehavior, INPUT_MODE, MonospaceFontSize,
+    NativeShellCompletionsEnabled, TabBehavior,
 };
 use warp::settings_view::keybindings::KeybindingsView;
 use warp::settings_view::{FeaturesPageAction, SettingsAction, SettingsSection, SettingsView};
@@ -5192,6 +5193,10 @@ pub fn test_alias_expansion_has_limit() -> Builder {
     new_builder()
         // TODO(CORE-2732): Flakey on Powershell (Linux)
         .set_should_run_test(skip_if_powershell_core_2303)
+        .with_user_defaults(HashMap::from([(
+            NativeShellCompletionsEnabled::storage_key().to_string(),
+            false.to_string(),
+        )]))
         .with_setup(|utils| {
             let dir = utils.test_dir();
             write_rc_files_for_test(
