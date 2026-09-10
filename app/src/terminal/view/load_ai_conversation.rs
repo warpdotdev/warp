@@ -425,7 +425,12 @@ impl TerminalView {
                             AIAgentActionType::EditDocuments { .. } => {
                                 if let Some(result) =
                                     self.ai_action_model.read(ctx, |action_model, _| {
-                                        action_model.get_action_result(&action.id).cloned()
+                                        action_model
+                                            .get_action_result_for_conversation(
+                                                conversation_id,
+                                                &action.id,
+                                            )
+                                            .cloned()
                                     })
                                     && let AIAgentActionResultType::EditDocuments(
                                         EditDocumentsResult::Success { updated_documents },
@@ -1185,3 +1190,7 @@ impl TerminalView {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "load_ai_conversation_tests.rs"]
+mod tests;
