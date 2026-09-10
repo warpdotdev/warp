@@ -203,8 +203,17 @@ pub struct DockerRegistryCreateArgs {
     pub username: Option<String>,
 
     /// Registry password or access token. If not provided, prompts interactively.
-    #[arg(long = "password")]
+    ///
+    /// Prefer `--password-file` in non-interactive/scripted contexts: passing the password
+    /// directly on the command line can leak it via shell history or process listings (e.g.
+    /// `ps`).
+    #[arg(long = "password", conflicts_with = "password_file")]
     pub password: Option<String>,
+
+    /// File to read the registry password or access token from. Avoids exposing the value via
+    /// shell history or process listings the way `--password` can.
+    #[arg(long = "password-file")]
+    pub password_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -100,3 +100,41 @@ fn create_docker_registry_requires_name() {
     let result = TestSecret::try_parse_from(["test", "create", "docker-registry"]);
     assert!(result.is_err());
 }
+
+#[test]
+fn create_docker_registry_accepts_password_file() {
+    let args = parse_create(&[
+        "create",
+        "docker-registry",
+        "my-registry",
+        "--password-file",
+        "password.txt",
+    ]);
+    let Some(CreateProvider::DockerRegistry(docker_registry)) = &args.provider else {
+        panic!("expected docker-registry provider subcommand");
+    };
+
+    assert!(docker_registry.password.is_none());
+    assert_eq!(
+        docker_registry
+            .password_file
+            .as_ref()
+            .and_then(|p| p.to_str()),
+        Some("password.txt")
+    );
+}
+
+#[test]
+fn create_docker_registry_rejects_password_and_password_file() {
+    let result = TestSecret::try_parse_from([
+        "test",
+        "create",
+        "docker-registry",
+        "my-registry",
+        "--password",
+        "token-value",
+        "--password-file",
+        "password.txt",
+    ]);
+    assert!(result.is_err());
+}

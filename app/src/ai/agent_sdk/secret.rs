@@ -131,6 +131,7 @@ enum SecretInput {
         host: Option<String>,
         username: Option<String>,
         password: Option<String>,
+        password_file: Option<std::path::PathBuf>,
     },
 }
 
@@ -172,7 +173,8 @@ impl SecretInput {
                 host,
                 username,
                 password,
-            } => read_docker_registry_secret_value(host, username, password),
+                password_file,
+            } => read_docker_registry_secret_value(host, username, password, password_file),
         }
     }
 }
@@ -229,6 +231,7 @@ fn create_secret(ctx: &mut AppContext, args: CreateSecretArgs) -> Result<()> {
                 host: a.host,
                 username: a.username,
                 password: a.password,
+                password_file: a.password_file,
             },
             a.common.description,
             a.common.scope,
@@ -913,8 +916,9 @@ fn read_docker_registry_secret_value(
     host: Option<String>,
     username: Option<String>,
     password: Option<String>,
+    password_file: Option<std::path::PathBuf>,
 ) -> Result<Option<ManagedSecretValue>> {
-    const NON_INTERACTIVE_REQUIRED_MSG: &str = "Container registry credentials require --host, --username, and --password in non-interactive mode";
+    const NON_INTERACTIVE_REQUIRED_MSG: &str = "Container registry credentials require --host, --username, and one of --password or --password-file in non-interactive mode";
 
     let host = match host {
         Some(v) if !v.is_empty() => v,
@@ -954,20 +958,33 @@ fn read_docker_registry_secret_value(
     let password = match password {
         Some(v) if !v.is_empty() => v,
         _ => {
-            if !io::stdin().is_terminal() {
-                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
-            }
-            match Password::new("Registry password or access token:")
-                .with_display_toggle_enabled()
-                .without_confirmation()
-                .prompt()
-            {
-                Ok(value) if !value.is_empty() => value,
-                Ok(_) => return Ok(None),
-                Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+            if let Some(password_file) = password_file {
+                let value = fs::read_to_string(&password_file).with_context(|| {
+                    format!(
+                        "Failed to read registry password from: {}",
+                        password_file.display()
+                    )
+                })?;
+                let value = value.trim_end_matches(['\n', '\r']);
+                if value.is_empty() {
                     return Ok(None);
                 }
-                Err(err) => return Err(err.into()),
+                value.to_owned()
+            } else if !io::stdin().is_terminal() {
+                return Err(anyhow::anyhow!(NON_INTERACTIVE_REQUIRED_MSG));
+            } else {
+                match Password::new("Registry password or access token:")
+                    .with_display_toggle_enabled()
+                    .without_confirmation()
+                    .prompt()
+                {
+                    Ok(value) if !value.is_empty() => value,
+                    Ok(_) => return Ok(None),
+                    Err(InquireError::OperationCanceled | InquireError::OperationInterrupted) => {
+                        return Ok(None);
+                    }
+                    Err(err) => return Err(err.into()),
+                }
             }
         }
     };
