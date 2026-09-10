@@ -624,11 +624,25 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),
-        RenderableAIError::TransientNetworkError { .. } => (
+        RenderableAIError::TransientNetworkError { stream_started, .. } => {
+            let error_code = if *stream_started {
+                PlatformErrorCode::AgentStreamFailure
+            } else {
+                PlatformErrorCode::AgentStreamNetworkError
+            };
+            (
+                AgentTaskState::Error,
+                Some(TaskStatusUpdate::with_error_code(
+                    error.to_string(),
+                    error_code,
+                )),
+            )
+        }
+        RenderableAIError::AgentStreamFailure(error_message) => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
-                error.to_string(),
-                PlatformErrorCode::InternalError,
+                error_message,
+                PlatformErrorCode::AgentStreamFailure,
             )),
         ),
         RenderableAIError::Other {

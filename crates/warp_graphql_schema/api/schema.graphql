@@ -2657,6 +2657,13 @@ Used in task status messages to identify the class of error.
 See platformerrors package for the canonical definitions.
 """
 enum PlatformErrorCode {
+  """MAA response stream started and then terminally failed."""
+  AGENT_STREAM_FAILURE
+
+  """
+  MAA response stream never started before terminal network recovery exhaustion.
+  """
+  AGENT_STREAM_NETWORK_ERROR
   """Request lacks valid authentication credentials (e.g. invalid API key)."""
   AUTHENTICATION_REQUIRED
 

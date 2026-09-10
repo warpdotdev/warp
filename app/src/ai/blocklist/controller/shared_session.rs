@@ -482,6 +482,7 @@ impl BlocklistAIController {
             finished,
             conversation_id,
             did_exchange_contain_user_query,
+            false,
             ctx,
         );
     }

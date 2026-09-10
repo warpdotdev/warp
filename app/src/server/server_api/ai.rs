@@ -259,7 +259,7 @@ impl TaskStatusUpdate {
         Self {
             message: message.into(),
             error_code: Some(error_code),
-            platform_error: None,
+            platform_error: Some(Box::new(PlatformErrorInfo::new(error_code, false))),
         }
     }
 }

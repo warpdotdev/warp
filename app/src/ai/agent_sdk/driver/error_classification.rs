@@ -430,7 +430,9 @@ pub fn classify_driver_error(error: &AgentDriverError) -> (AgentTaskState, TaskS
 /// `PlatformErrorCode` first, then share this mapping.
 fn task_state_for_platform_error_code(code: PlatformErrorCode) -> AgentTaskState {
     match code {
-        PlatformErrorCode::AuthenticationRequired
+        PlatformErrorCode::AgentStreamFailure
+        | PlatformErrorCode::AgentStreamNetworkError
+        | PlatformErrorCode::AuthenticationRequired
         | PlatformErrorCode::InternalError
         | PlatformErrorCode::ResourceUnavailable => AgentTaskState::Error,
         PlatformErrorCode::BudgetExceeded

@@ -39,6 +39,14 @@ fn assert_update(
     match (update, expected_code, message_contains) {
         (Some(u), code, msg) => {
             assert_eq!(u.error_code, code, "unexpected PlatformErrorCode");
+            if let Some(code) = code {
+                let platform_error = u
+                    .platform_error
+                    .as_ref()
+                    .expect("error codes must include structured platform error information");
+                assert_eq!(platform_error.code, code);
+                assert!(!platform_error.retryable);
+            }
             if let Some(substr) = msg {
                 assert!(
                     u.message.contains(substr),
@@ -162,7 +170,7 @@ fn other_user_error_is_failed_with_invalid_request() {
 }
 
 #[test]
-fn transient_network_error_is_error_with_internal_and_debug_details() {
+fn never_started_transient_network_error_has_network_error_code() {
     assert_update(
         classify_renderable_error(&RenderableAIError::transient_network_error(
             false,
@@ -170,8 +178,35 @@ fn transient_network_error_is_error_with_internal_and_debug_details() {
             TransientNetworkErrorKind::UnfinishedExchange,
         )),
         AgentTaskState::Error,
-        Some(PlatformErrorCode::InternalError),
+        Some(PlatformErrorCode::AgentStreamNetworkError),
         Some("Debug info: stream completed with an unfinished exchange"),
+    );
+}
+
+#[test]
+fn started_transient_network_error_has_stream_failure_code() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::TransientNetworkError {
+            kind: TransientNetworkErrorKind::UnfinishedExchange,
+            will_attempt_resume: false,
+            stream_started: true,
+            waiting_for_network: false,
+        }),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::AgentStreamFailure),
+        Some("Debug info: stream completed with an unfinished exchange"),
+    );
+}
+
+#[test]
+fn server_finished_stream_error_has_stream_failure_code() {
+    assert_update(
+        classify_renderable_error(&RenderableAIError::AgentStreamFailure(
+            "The LLM is currently unavailable.".into(),
+        )),
+        AgentTaskState::Error,
+        Some(PlatformErrorCode::AgentStreamFailure),
+        Some("LLM is currently unavailable"),
     );
 }
 

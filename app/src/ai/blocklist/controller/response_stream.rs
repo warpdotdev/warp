@@ -268,6 +268,7 @@ pub struct ResponseStream {
     /// Track whether we've received any client actions
     /// If true, we cannot retry on subsequent errors since actions may have been executed
     has_received_client_actions: bool,
+    init_received: bool,
     /// AI identifiers for telemetry emission
     ai_identifiers: AIIdentifiers,
 
@@ -338,6 +339,7 @@ impl ResponseStream {
             cancellation_tx: Some(cancellation_tx),
             original_error: None,
             has_received_client_actions: false,
+            init_received: false,
             ai_identifiers: AIIdentifiers::default(),
             pending_resume: None,
             stream_finished_received: false,
@@ -370,6 +372,7 @@ impl ResponseStream {
             retries_sent: 0,
             original_error: None,
             has_received_client_actions: false,
+            init_received: false,
             ai_identifiers,
             pending_resume: None,
             stream_finished_received: false,
@@ -382,6 +385,10 @@ impl ResponseStream {
 
     pub fn id(&self) -> &ResponseStreamId {
         &self.id
+    }
+
+    pub(super) fn current_attempt_started(&self) -> bool {
+        self.init_received || self.has_received_client_actions
     }
 
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
@@ -428,16 +435,7 @@ impl ResponseStream {
     fn retry(&mut self, ctx: &mut ModelContext<Self>) {
         self.recovery = self.recovery.next_attempt();
         self.retries_sent += 1;
-        // Reset per-attempt state for the new attempt.
-        self.has_received_client_actions = false;
-        self.stream_finished_received = false;
-        self.error_event_emitted = false;
-        self.deferred_retry_pending = false;
-        // A retry supersedes any resume this stream had scheduled. Unreachable today (the
-        // eventsource closes on its first error, so a `Resume` decision is never followed by
-        // another error on the same stream), but that depends on a transport detail several
-        // crates away, and the retry backoff widens the window it holds in.
-        self.pending_resume = None;
+        self.reset_attempt_state();
 
         let (cancellation_tx, cancellation_rx) = oneshot::channel();
         if let Some(old_cancellation_tx) = self.cancellation_tx.take() {
@@ -454,6 +452,19 @@ impl ResponseStream {
             cancellation_rx,
             ctx,
         );
+    }
+
+    fn reset_attempt_state(&mut self) {
+        self.has_received_client_actions = false;
+        self.init_received = false;
+        self.stream_finished_received = false;
+        self.error_event_emitted = false;
+        self.deferred_retry_pending = false;
+        // A retry supersedes any resume this stream had scheduled. Unreachable today (the
+        // eventsource closes on its first error, so a `Resume` decision is never followed by
+        // another error on the same stream), but that depends on a transport detail several
+        // crates away, and the retry backoff widens the window it holds in.
+        self.pending_resume = None;
     }
 
     /// Decides how to recover from `error` and starts the recovery, or reports the failure
@@ -791,6 +802,7 @@ impl ResponseStream {
                 if let Some(event_type) = &response_event.r#type {
                     match event_type {
                         warp_multi_agent_api::response_event::Type::Init(init_event) => {
+                            self.init_received = true;
                             // Capture server_output_id from StreamInit event
                             self.ai_identifiers.server_output_id =
                                 Some(crate::ai::agent::ServerOutputId::new(

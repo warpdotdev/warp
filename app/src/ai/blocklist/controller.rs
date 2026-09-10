@@ -3000,11 +3000,14 @@ impl BlocklistAIController {
                             warp_multi_agent_api::response_event::Type::Finished(
                                 finished_event,
                             ) => {
+                                let stream_started =
+                                    response_stream.as_ref(ctx).current_attempt_started();
                                 self.handle_response_stream_finished(
                                     &stream_id,
                                     finished_event,
                                     conversation_id,
                                     did_input_contain_user_query,
+                                    stream_started,
                                     ctx,
                                 );
                             }
@@ -3059,6 +3062,11 @@ impl BlocklistAIController {
                             .as_ref(ctx)
                             .should_resume_conversation_after_stream_finished();
                         let mut renderable_error: RenderableAIError = (&e).into();
+                        if let RenderableAIError::TransientNetworkError { stream_started, .. } =
+                            &mut renderable_error
+                        {
+                            *stream_started = response_stream.as_ref(ctx).current_attempt_started();
+                        }
                         if let RenderableAIError::Other {
                             will_attempt_resume,
                             waiting_for_network,
@@ -3324,6 +3332,7 @@ impl BlocklistAIController {
         mut finished_event: warp_multi_agent_api::response_event::StreamFinished,
         conversation_id: AIConversationId,
         did_request_contain_user_query: bool,
+        stream_started: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
@@ -3347,6 +3356,18 @@ impl BlocklistAIController {
         });
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
+        let render_stream_failure = |error_message: String| {
+            if stream_started {
+                RenderableAIError::AgentStreamFailure(error_message)
+            } else {
+                RenderableAIError::Other {
+                    error_message,
+                    will_attempt_resume: false,
+                    waiting_for_network: false,
+                    is_user_error: false,
+                }
+            }
+        };
         match finished_event.reason {
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
                 history_model.update(ctx, |history_model, ctx| {
@@ -3362,12 +3383,7 @@ impl BlocklistAIController {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
+                        render_stream_failure(error_message.to_owned()),
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
@@ -3407,12 +3423,7 @@ impl BlocklistAIController {
                 let error_message = "The LLM is currently unavailable.";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message: error_message.to_owned(),
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
+                        render_stream_failure(error_message.to_owned()),
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
@@ -3475,12 +3486,7 @@ impl BlocklistAIController {
                 );
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::Other {
-                            error_message,
-                            will_attempt_resume: false,
-                            waiting_for_network: false,
-                            is_user_error: false,
-                        },
+                        render_stream_failure(error_message),
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,

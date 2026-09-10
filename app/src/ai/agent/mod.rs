@@ -712,10 +712,12 @@ pub enum RenderableAIError {
     TransientNetworkError {
         kind: TransientNetworkErrorKind,
         will_attempt_resume: bool,
+        stream_started: bool,
         /// When `will_attempt_resume` is true, this indicates whether we're waiting for network
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
     },
+    AgentStreamFailure(String),
     Other {
         error_message: String,
         will_attempt_resume: bool,
@@ -753,6 +755,7 @@ impl RenderableAIError {
         Self::TransientNetworkError {
             kind,
             will_attempt_resume,
+            stream_started: false,
             waiting_for_network,
         }
     }
@@ -918,6 +921,7 @@ impl Display for RenderableAIError {
                     Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }
+            Self::AgentStreamFailure(error_message) => write!(f, "{error_message}"),
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
             Self::AgentExitedShell { command } => write!(
                 f,
