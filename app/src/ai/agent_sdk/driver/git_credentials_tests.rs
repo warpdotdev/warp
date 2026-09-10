@@ -346,7 +346,7 @@ fn global_git_identity_reads_the_actual_global_config() -> Result<()> {
     // TODO: Audit that the environment access only happens in single-threaded code.
     unsafe { std::env::remove_var("GIT_CONFIG_GLOBAL") };
 
-    let result = (|| -> Result<()> {
+    let attempt = || -> Result<()> {
         assert_eq!(
             global_git_identity(),
             None,
@@ -368,7 +368,8 @@ fn global_git_identity_reads_the_actual_global_config() -> Result<()> {
             Some(("Warp".to_string(), "agent@warp.dev".to_string()))
         );
         Ok(())
-    })();
+    };
+    let result = attempt();
 
     match prev_home {
         // TODO: Audit that the environment access only happens in single-threaded code.
@@ -376,10 +377,9 @@ fn global_git_identity_reads_the_actual_global_config() -> Result<()> {
         // TODO: Audit that the environment access only happens in single-threaded code.
         None => unsafe { std::env::remove_var("HOME") },
     }
-    match prev_git_config_global {
+    if let Some(value) = prev_git_config_global {
         // TODO: Audit that the environment access only happens in single-threaded code.
-        Some(value) => unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) },
-        None => {}
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", value) }
     }
     result
 }
