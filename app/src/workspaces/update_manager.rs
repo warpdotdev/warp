@@ -357,10 +357,14 @@ impl TeamUpdateManager {
 
                 let workspaces = response.metadata.workspaces;
                 let joinable_teams = response.metadata.joinable_teams;
+                let factories_launch_modal_cta_url =
+                    response.metadata.factories_launch_modal_cta_url;
                 let user_purchase_policy = response.metadata.user_purchase_policy;
 
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.set_user_purchase_policy(user_purchase_policy);
+                    user_workspaces
+                        .set_factories_launch_modal_cta_url(factories_launch_modal_cta_url);
                     user_workspaces.update_workspaces(workspaces.clone(), ctx);
                     user_workspaces.update_joinable_teams(joinable_teams, ctx);
                 });

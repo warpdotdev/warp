@@ -1496,7 +1496,6 @@ pub fn workspaces_metadata_response_from_gql(
         .experiments
         .and_then(|experiments| convert_to_server_experiment!(experiments));
 
-    let factories_launch_modal_cta_url = Some(gql_user.factories_launch_modal_cta_url.clone());
     // A teamless user's only workspace is the placeholder filtered out
     // above, so the user-level policy is the only place their add-on
     // credits purchase policy — gating and premium pricing alike —
@@ -1512,7 +1511,7 @@ pub fn workspaces_metadata_response_from_gql(
         workspaces,
         joinable_teams,
         experiments,
-        factories_launch_modal_cta_url,
+        factories_launch_modal_cta_url: gql_user.factories_launch_modal_cta_url,
         ai_credit_availability: Some(gql_user.ai_credit_availability.into()),
         user_purchase_policy,
     }
