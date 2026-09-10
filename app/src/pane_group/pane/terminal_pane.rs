@@ -32,7 +32,9 @@ use crate::ai::ambient_agents::task::normalize_orchestrator_agent_name;
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::agent_view::{AgentViewControllerEvent, AgentViewEntryOrigin};
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, StartAgentRequest};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, StartAgentRequest, TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::blocklist::{
     apply_child_agent_model_override, finish_local_oz_child_conversation,
@@ -1532,6 +1534,21 @@ fn dispatch_start_agent_conversation(
     ctx: &mut ViewContext<PaneGroup>,
 ) {
     let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+    if !request.request_team_scope.matches_scope(&team_context) {
+        let _ = create_error_child_agent_conversation(
+            group,
+            ErrorChildAgentConversationRequest {
+                parent_pane_id,
+                name: request.name,
+                parent_conversation_id: request.parent_conversation_id,
+                request_id: Some(request.id),
+                orchestration_harness: None,
+                error_message: TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR.to_string(),
+            },
+            ctx,
+        );
+        return;
+    }
     match request.execution_mode.clone() {
         #[cfg(not(target_family = "wasm"))]
         StartAgentExecutionMode::Local {
@@ -1591,7 +1608,7 @@ fn dispatch_start_agent_conversation(
             runner_id,
             agent_identity_uid,
         } => {
-            let request_team_scope = RequestTeamScope::from_scope(&team_context);
+            let request_team_scope = request.request_team_scope;
             let working_dir = group
                 .terminal_view_from_pane_id(parent_pane_id, ctx)
                 .and_then(|view| view.as_ref(ctx).pwd_if_local(ctx))
@@ -1654,7 +1671,7 @@ fn launch_local_no_harness_child(
     let host_source = group
         .terminal_view_from_pane_id(parent_pane_id, ctx)
         .and_then(|view| host_terminal_shared_session_source_type(&view, ctx));
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    let request_team_scope = request.request_team_scope;
 
     let launch = prepare_local_oz_child_launch(
         &request.name,
@@ -1683,6 +1700,7 @@ fn launch_local_no_harness_child(
                     }),
                     is_shared_session_creator,
                 },
+                &team_context,
                 ctx,
             ) {
                 Some(HiddenChildAgentConversation {
@@ -1795,7 +1813,7 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
-    let request_team_scope = RequestTeamScope::from_scope(&team_context);
+    let request_team_scope = request.request_team_scope;
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1833,6 +1851,7 @@ fn launch_local_harness_child(
                         task_context: None,
                         is_shared_session_creator,
                     },
+                    &team_context,
                     ctx,
                 ) {
                     Some(HiddenChildAgentConversation {

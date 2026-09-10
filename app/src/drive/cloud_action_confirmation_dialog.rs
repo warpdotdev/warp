@@ -25,6 +25,8 @@ const REMOVE_FROM_WORKSPACE_TITLE_TEXT: &str = "Remove from workspace?";
 
 const DELETE_TEAM_BODY_TEXT: &str = "Deleting this team will permanently delete it and all of its related content, including billing information or credits. You will not be able to restore them.";
 const LEAVE_TEAM_BODY_TEXT: &str = "You will need to be reinvited in order to rejoin.";
+const LEAVE_NATIVE_WORKSPACE_TEAM_BODY_TEXT: &str =
+    "Your workspace access and other team memberships won’t change.";
 const LEAVE_TEAM_RELOAD_CREDITS_BODY_TEXT: &str = "If you leave this team, you’ll lose access to any remaining reload credits tied to it. You’ll regain access to any unused, non-expired credits if you rejoin the same team later.";
 const REMOVE_TEAM_MEMBER_RELOAD_CREDITS_BODY_TEXT: &str = "This member will lose access to any remaining reload credits tied to this team. If they rejoin later, they’ll regain access to any unused, non-expired credits.";
 
@@ -49,6 +51,9 @@ pub enum CloudActionConfirmationDialogAction {
 #[derive(Default)]
 pub enum CloudActionConfirmationDialogVariant {
     LeaveTeam,
+    LeaveNativeWorkspaceTeam {
+        team_name: String,
+    },
     DeleteTeam,
     LeaveTeamReloadCredits,
     RemoveTeamMemberReloadCredits,
@@ -95,6 +100,11 @@ impl CloudActionConfirmationDialog {
             | CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
                 LEAVE_TEAM_TITLE_TEXT.to_string()
             }
+            CloudActionConfirmationDialogVariant::LeaveNativeWorkspaceTeam {
+                team_name, ..
+            } => {
+                format!("Leave {team_name}?")
+            }
             CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_TITLE_TEXT.to_string(),
             CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits => {
                 REMOVE_TEAM_MEMBER_TITLE_TEXT.to_string()
@@ -112,6 +122,9 @@ impl CloudActionConfirmationDialog {
     fn body_text(&self) -> String {
         match &self.variant {
             CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_BODY_TEXT.to_string(),
+            CloudActionConfirmationDialogVariant::LeaveNativeWorkspaceTeam { .. } => {
+                LEAVE_NATIVE_WORKSPACE_TEAM_BODY_TEXT.to_string()
+            }
             CloudActionConfirmationDialogVariant::DeleteTeam => DELETE_TEAM_BODY_TEXT.to_string(),
             CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits => {
                 LEAVE_TEAM_RELOAD_CREDITS_BODY_TEXT.to_string()
@@ -138,6 +151,9 @@ impl CloudActionConfirmationDialog {
     fn confirm_button_text(&self) -> String {
         match &self.variant {
             CloudActionConfirmationDialogVariant::LeaveTeam => LEAVE_TEAM_CONFIRM_TEXT.to_string(),
+            CloudActionConfirmationDialogVariant::LeaveNativeWorkspaceTeam { .. } => {
+                LEAVE_TEAM_CONFIRM_TEXT.to_string()
+            }
             CloudActionConfirmationDialogVariant::DeleteTeam => {
                 DELETE_TEAM_CONFIRM_TEXT.to_string()
             }

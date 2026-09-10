@@ -136,6 +136,11 @@ const OFFLINE_TEXT: &str = "You are offline.";
 const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
 
 const MAX_CHIP_WIDTH: f32 = 280.;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TeamFooterAction {
+    Leave,
+    Delete,
+}
 
 lazy_static! {
     static ref DOMAIN_NAME_REGEX: Regex =
@@ -633,11 +638,7 @@ impl TypedActionView for TeamsPageView {
             }
             TeamsPageAction::OpenWarpDrive => ctx.emit(TeamsPageViewEvent::OpenWarpDrive),
             TeamsPageAction::ShowLeaveTeamConfirmationDialog => {
-                let variant = if self.should_show_reload_credits_confirmation(ctx) {
-                    CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
-                } else {
-                    CloudActionConfirmationDialogVariant::LeaveTeam
-                };
+                let variant = self.leave_team_confirmation_variant(ctx);
                 self.show_team_action_confirmation(
                     variant,
                     TeamActionConfirmationTarget::Leave,
@@ -1285,6 +1286,27 @@ impl TeamsPageView {
             Some(CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits)
         } else {
             None
+        }
+    }
+    fn leave_team_confirmation_variant(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> CloudActionConfirmationDialogVariant {
+        let user_workspaces = self.user_workspaces.as_ref(ctx);
+        if let (Some(workspace), Some(team)) = (
+            user_workspaces.current_workspace(),
+            user_workspaces.team_for_view(ctx),
+        ) && workspace.is_native_workspaces_enabled()
+        {
+            return CloudActionConfirmationDialogVariant::LeaveNativeWorkspaceTeam {
+                team_name: team.name.clone(),
+            };
+        }
+
+        if self.should_show_reload_credits_confirmation(ctx) {
+            CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
+        } else {
+            CloudActionConfirmationDialogVariant::LeaveTeam
         }
     }
 
@@ -2741,15 +2763,11 @@ impl TeamsWidget {
 
         // 7) Deleting/leaving teams
         let mut button_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        let is_enterprise_team =
-            team_metadata.billing_metadata.customer_type == CustomerType::Enterprise;
-        // We don't allow users on enterprise teams to leave or delete their team,
-        // since their enterprise agreement is tied to it, and it helps enforce that others
-        // can't join some other team that doesn't have stricter security guarantees
-        if !is_enterprise_team {
+        let footer_action = Self::team_footer_action(team_metadata, workspace, is_owner);
+        if let Some(footer_action) = footer_action {
             button_row.add_child(
                 Container::new(self.render_leave_or_delete_team_button(
-                    is_owner,
+                    footer_action,
                     delete_disabled_reason.is_none(),
                     appearance,
                 ))
@@ -2760,7 +2778,7 @@ impl TeamsWidget {
         // We show some help text if a team can't be deleted...
         if let Some(delete_disabled_reason) = delete_disabled_reason {
             // and if the current user actually has the perms to delete the team
-            if has_admin_permissions && !is_enterprise_team {
+            if has_admin_permissions && footer_action == Some(TeamFooterAction::Delete) {
                 button_row.add_child(
                     Container::new(self.render_delete_disabled_help_text(
                         delete_disabled_reason,
@@ -2800,6 +2818,24 @@ impl TeamsWidget {
                 ctx.dispatch_typed_action(TeamsPageAction::ShowJoinTeamsModal);
             })
             .finish()
+    }
+    fn team_footer_action(
+        team: &Team,
+        workspace: &Workspace,
+        is_team_owner: bool,
+    ) -> Option<TeamFooterAction> {
+        if workspace.is_native_workspaces_enabled() {
+            (!is_team_owner && workspace.teams.len() > 1).then_some(TeamFooterAction::Leave)
+        } else if team.billing_metadata.customer_type == CustomerType::Enterprise {
+            // We don't allow users on enterprise teams to leave or delete their team,
+            // since their enterprise agreement is tied to it, and it helps enforce that others
+            // can't join some other team that doesn't have stricter security guarantees.
+            None
+        } else if is_team_owner {
+            Some(TeamFooterAction::Delete)
+        } else {
+            Some(TeamFooterAction::Leave)
+        }
     }
 
     fn render_header(
@@ -3836,20 +3872,19 @@ impl TeamsWidget {
 
     fn render_leave_or_delete_team_button(
         &self,
-        is_team_owner: bool,
+        footer_action: TeamFooterAction,
         can_team_be_deleted: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let (label, action) = if is_team_owner {
-            (
-                DELETE_TEAM_BUTTON_LABEL,
-                TeamsPageAction::ShowDeleteTeamConfirmationDialog,
-            )
-        } else {
-            (
+        let (label, action) = match footer_action {
+            TeamFooterAction::Leave => (
                 LEAVE_TEAM_BUTTON_LABEL,
                 TeamsPageAction::ShowLeaveTeamConfirmationDialog,
-            )
+            ),
+            TeamFooterAction::Delete => (
+                DELETE_TEAM_BUTTON_LABEL,
+                TeamsPageAction::ShowDeleteTeamConfirmationDialog,
+            ),
         };
 
         let ui_builder = appearance.ui_builder().clone();
@@ -3864,7 +3899,7 @@ impl TeamsWidget {
                     .set_width(LEAVE_TEAM_BUTTON_WIDTH),
             )
             .with_centered_text_label(label.to_owned());
-        let hoverable = if is_team_owner && !can_team_be_deleted {
+        let hoverable = if footer_action == TeamFooterAction::Delete && !can_team_be_deleted {
             button
                 .with_disabled_styles(UiComponentStyles {
                     background: Some(appearance.theme().surface_3().into()),
