@@ -1,3 +1,4 @@
+use pathfinder_color::ColorU;
 use serde::Serialize;
 use warpui::Element;
 use warpui::elements::MouseStateHandle;
@@ -11,13 +12,18 @@ use crate::appearance::Appearance;
 use crate::terminal::session_settings::NotificationsMode;
 use crate::terminal::view::{InlineBannerId, NotificationsTrigger, TerminalAction};
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 pub enum NotificationsDiscoveryBannerAction {
     LearnMore,
     Troubleshoot,
     TurnOn(NotificationsTrigger),
     Configure,
     Close,
+    /// Opens the Notifications pane of System Settings, deep-linked to Warp's own entry when
+    /// possible. Only offered once the user has denied the OS-level permissions request, since
+    /// macOS won't show the request again.
+    #[cfg(target_os = "macos")]
+    OpenSystemSettings,
 }
 
 #[derive(Default)]
@@ -27,6 +33,8 @@ pub struct NotificationsDiscoveryBannerMouseStates {
     pub turn_on: MouseStateHandle,
     pub configure: MouseStateHandle,
     pub close: MouseStateHandle,
+    #[cfg(target_os = "macos")]
+    pub open_system_settings: MouseStateHandle,
 }
 
 /// State necessary to render the (singleton) notifications discovery banner.
@@ -35,15 +43,16 @@ pub struct NotificationsDiscoveryBannerState {
     pub mouse_states: NotificationsDiscoveryBannerMouseStates,
 }
 
-pub fn render_inline_notifications_discovery_banner(
+/// Builds the title and (non-close) buttons offered by the banner for the given mode/outcome.
+/// Extracted from [`render_inline_notifications_discovery_banner`] so tests can assert on
+/// exactly which actions are offered without needing to introspect the rendered `Element` tree.
+fn notifications_discovery_banner_title_and_buttons(
     trigger: NotificationsTrigger,
     request_outcome: Option<RequestPermissionsOutcome>,
     state: &NotificationsDiscoveryBannerState,
     notifications_mode: NotificationsMode,
-    appearance: &Appearance,
-) -> Box<dyn Element> {
-    let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
-
+    active_ui_text_color: ColorU,
+) -> (&'static str, Vec<InlineBannerTextButton>) {
     let learn_more_button = InlineBannerTextButton {
         text: "Learn more".to_string(),
         text_color: active_ui_text_color,
@@ -102,48 +111,86 @@ pub fn render_inline_notifications_discovery_banner(
         NotificationsMode::Enabled => {
             // Determine the messaging based on what the user's response was to the
             // permissions request (if any)
-            let (title, docs_button) = match request_outcome {
+            let (title, mut leading_buttons) = match request_outcome {
                 Some(request_outcome) => match request_outcome {
                     RequestPermissionsOutcome::Accepted => (
                         "Success! You are now ready to receive desktop notifications.",
-                        learn_more_button,
+                        vec![learn_more_button],
                     ),
-                    RequestPermissionsOutcome::PermissionsDenied => (
-                        "Warp was denied permissions to send you notifications.",
-                        troubleshoot_button,
-                    ),
+                    // One push below is macOS-only, so this can't be a single `vec![...]`
+                    // literal on all platforms.
+                    #[allow(clippy::vec_init_then_push)]
+                    RequestPermissionsOutcome::PermissionsDenied => {
+                        let mut buttons = vec![];
+                        // Once macOS has denied the request, it won't show the OS prompt again,
+                        // so offer a direct path to System Settings instead.
+                        #[cfg(target_os = "macos")]
+                        buttons.push(InlineBannerTextButton {
+                            text: "Open System Settings".to_string(),
+                            text_color: active_ui_text_color,
+                            button_state: InlineBannerButtonState {
+                                on_click_event: TerminalAction::NotificationsDiscoveryBanner(
+                                    NotificationsDiscoveryBannerAction::OpenSystemSettings,
+                                ),
+                                mouse_state_handle: state.mouse_states.open_system_settings.clone(),
+                            },
+                            font: Default::default(),
+                            position_id: None,
+                            variant: InlineBannerTextButtonVariant::Primary,
+                        });
+                        buttons.push(troubleshoot_button);
+                        (
+                            "Warp was denied permissions to send you notifications.",
+                            buttons,
+                        )
+                    }
                     RequestPermissionsOutcome::OtherError { .. } => (
                         "Something went wrong while requesting permissions.",
-                        troubleshoot_button,
+                        vec![troubleshoot_button],
                     ),
                 },
                 None => (
                     "Don't forget to 'Allow' the permissions request to finish setting up notifications.",
-                    learn_more_button,
+                    vec![learn_more_button],
                 ),
             };
 
-            (
-                title,
-                vec![
-                    docs_button,
-                    InlineBannerTextButton {
-                        text: "Configure notifications".to_string(),
-                        text_color: active_ui_text_color,
-                        button_state: InlineBannerButtonState {
-                            on_click_event: TerminalAction::NotificationsDiscoveryBanner(
-                                NotificationsDiscoveryBannerAction::Configure,
-                            ),
-                            mouse_state_handle: state.mouse_states.configure.clone(),
-                        },
-                        font: Default::default(),
-                        position_id: None,
-                        variant: InlineBannerTextButtonVariant::Secondary,
-                    },
-                ],
-            )
+            leading_buttons.push(InlineBannerTextButton {
+                text: "Configure notifications".to_string(),
+                text_color: active_ui_text_color,
+                button_state: InlineBannerButtonState {
+                    on_click_event: TerminalAction::NotificationsDiscoveryBanner(
+                        NotificationsDiscoveryBannerAction::Configure,
+                    ),
+                    mouse_state_handle: state.mouse_states.configure.clone(),
+                },
+                font: Default::default(),
+                position_id: None,
+                variant: InlineBannerTextButtonVariant::Secondary,
+            });
+
+            (title, leading_buttons)
         }
     };
+
+    (title, buttons)
+}
+
+pub fn render_inline_notifications_discovery_banner(
+    trigger: NotificationsTrigger,
+    request_outcome: Option<RequestPermissionsOutcome>,
+    state: &NotificationsDiscoveryBannerState,
+    notifications_mode: NotificationsMode,
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    let active_ui_text_color = appearance.theme().active_ui_text_color().into_solid();
+    let (title, buttons) = notifications_discovery_banner_title_and_buttons(
+        trigger,
+        request_outcome,
+        state,
+        notifications_mode,
+        active_ui_text_color,
+    );
 
     let close_button = InlineBannerCloseButton(InlineBannerButtonState {
         on_click_event: TerminalAction::NotificationsDiscoveryBanner(
@@ -163,3 +210,7 @@ pub fn render_inline_notifications_discovery_banner(
         },
     )
 }
+
+#[cfg(test)]
+#[path = "notifications_discovery_tests.rs"]
+mod tests;

@@ -70,6 +70,7 @@ objc2-foundation = { workspace = true, features = [
     "NSURL",
     "NSFileManager",
     "NSBundle",
+    "NSProcessInfo",
 ] }
 tempfile.workspace = true
 
