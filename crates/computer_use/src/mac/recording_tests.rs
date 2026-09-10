@@ -5,15 +5,18 @@
 //! build runs. The live start/stop capture tests live in the crate-level
 //! `recording_tests.rs` and require a Mac runner with a display.
 
-use super::new_ffmpeg_capture_command;
-use crate::{RecordingConfig, Target};
+use super::{CapturePlan, diagnose_start_failure, new_ffmpeg_capture_command};
+use crate::RecordingConfig;
+use crate::recording::window_crop::CaptureCrop;
+
+const DISPLAY_FRAME: (u32, u32) = (1920, 1080);
 
 /// Builds the ffmpeg argv (after the program name) for a 1920x1080 capture.
 ///
 /// Inspecting the command's args (rather than spawning it) keeps the test
 /// hermetic: no display, no ffmpeg process, no temp files.
-fn argv(config: &RecordingConfig) -> Vec<String> {
-    let command = new_ffmpeg_capture_command(config, 1920, 1080);
+fn argv(config: &RecordingConfig, plan: &CapturePlan) -> Vec<String> {
+    let command = new_ffmpeg_capture_command(config, plan);
     command
         .as_std()
         .get_args()
@@ -21,55 +24,39 @@ fn argv(config: &RecordingConfig) -> Vec<String> {
         .collect()
 }
 
+fn screen_plan() -> CapturePlan {
+    CapturePlan {
+        input: DISPLAY_FRAME,
+        crop: None,
+    }
+}
+
+fn window_plan(crop: CaptureCrop) -> CapturePlan {
+    CapturePlan {
+        input: DISPLAY_FRAME,
+        crop: Some(crop),
+    }
+}
+
+/// The macOS master is captured at 1x: there is no live `setpts` speed filter and
+/// no speed-only `-vf`, while `-t` stays an input option before `-i` and the
+/// codec, pixel format, `-fs`, and movflags settings are preserved.
 #[test]
-fn applies_setpts_filter_when_playback_speed_exceeds_one() {
+fn mac_capture_command_captures_at_1x_without_setpts() {
     let config = RecordingConfig {
         playback_speed_multiplier: 4.0,
         ..RecordingConfig::default()
     };
-    let args = argv(&config);
+    let args = argv(&config, &screen_plan());
 
-    // 1.0 / 4.0 = 0.25, formatted to six decimals — matches Linux's setpts format.
-    let setpts = args
-        .iter()
-        .find(|arg| arg.starts_with("setpts="))
-        .expect("argv should contain a setpts filter when multiplier > 1.0");
-    assert_eq!(setpts, "setpts=0.250000*PTS");
-
-    // The filter is passed via the `-vf` output video-filter option.
     assert!(
-        args.iter().any(|arg| arg == "-vf"),
-        "argv should pass setpts via -vf, got {args:?}"
+        !args.iter().any(|arg| arg.starts_with("setpts=")),
+        "argv should not contain a live setpts speed filter, got {args:?}"
     );
-}
-
-#[test]
-fn omits_setpts_filter_when_playback_speed_is_real_time() {
-    for multiplier in [0.0_f32, 1.0] {
-        let config = RecordingConfig {
-            playback_speed_multiplier: multiplier,
-            ..RecordingConfig::default()
-        };
-        let args = argv(&config);
-
-        assert!(
-            !args.iter().any(|arg| arg.starts_with("setpts=")),
-            "argv should omit setpts at multiplier {multiplier}, got {args:?}"
-        );
-        assert!(
-            !args.iter().any(|arg| arg == "-vf"),
-            "argv should omit -vf at multiplier {multiplier}, got {args:?}"
-        );
-    }
-}
-
-#[test]
-fn limits_duration_as_an_input_option_before_i() {
-    // `-t` must precede `-i` so `max_duration` is an input option independent of
-    // the setpts speedup (mirrors Linux). As an output option, a 4x multiplier
-    // would stretch the effective duration to ~40 min.
-    let config = RecordingConfig::default();
-    let args = argv(&config);
+    assert!(
+        !args.iter().any(|arg| arg == "-vf"),
+        "a screen capture needs no output filter at all, got {args:?}"
+    );
 
     let t_index = args
         .iter()
@@ -83,34 +70,119 @@ fn limits_duration_as_an_input_option_before_i() {
         t_index < i_index,
         "-t should precede -i (input option), got {args:?}"
     );
-
-    // The duration value follows `-t` and matches `max_duration` formatted to
-    // three decimals, exactly as the recorder emits it.
-    let expected_duration = format!("{:.3}", config.max_duration.as_secs_f64());
     assert_eq!(
         args.get(t_index + 1),
-        Some(&expected_duration),
-        "duration after -t should be {expected_duration}, got {args:?}"
+        Some(&format!("{:.3}", config.max_duration.as_secs_f64())),
+        "duration after -t should match max_duration, got {args:?}"
+    );
+
+    let fs_index = args
+        .iter()
+        .position(|arg| arg == "-fs")
+        .expect("argv should contain -fs");
+    assert_eq!(
+        args.get(fs_index + 1),
+        Some(&config.max_size_bytes.to_string()),
+        "-fs value should match max_size_bytes, got {args:?}"
+    );
+
+    for [flag, value] in [
+        ["-c:v", "libx264"],
+        ["-pix_fmt", "yuv420p"],
+        ["-movflags", "+faststart"],
+    ] {
+        let index = args
+            .iter()
+            .position(|arg| arg == flag)
+            .unwrap_or_else(|| panic!("argv should contain {flag}, got {args:?}"));
+        assert_eq!(args.get(index + 1), Some(&value.to_string()));
+    }
+}
+
+/// avfoundation must not composite its own cursor or click flashes: the shared
+/// burn-in draws a synthetic cursor and click rings from the recorded pointer
+/// events, and background PID-targeted actions never move the real cursor.
+#[test]
+fn capture_command_disables_native_cursor_compositing() {
+    let config = RecordingConfig::default();
+    let crop = CaptureCrop {
+        x: 100,
+        y: 50,
+        width: 800,
+        height: 600,
+    };
+    for plan in [screen_plan(), window_plan(crop)] {
+        let args = argv(&config, &plan);
+        let i_index = args
+            .iter()
+            .position(|arg| arg == "-i")
+            .expect("argv should contain -i");
+        for flag in ["-capture_cursor", "-capture_mouse_clicks"] {
+            let index = args
+                .iter()
+                .position(|arg| arg == flag)
+                .unwrap_or_else(|| panic!("argv should contain {flag}, got {args:?}"));
+            assert_eq!(args.get(index + 1), Some(&"0".to_string()), "{args:?}");
+            assert!(
+                index < i_index,
+                "{flag} must be an avfoundation input option (before -i), got {args:?}"
+            );
+        }
+    }
+}
+
+/// A window target crops the display capture to the target's rectangle and
+/// reports the cropped dimensions, while a screen target is uncropped.
+#[test]
+fn window_target_crops_the_display_capture() {
+    let config = RecordingConfig::default();
+    let crop = CaptureCrop {
+        x: 200,
+        y: 100,
+        width: 800,
+        height: 600,
+    };
+    let plan = window_plan(crop);
+    assert_eq!(plan.encoded_dimensions(), (800, 600));
+
+    let args = argv(&config, &plan);
+    let vf_index = args
+        .iter()
+        .position(|arg| arg == "-vf")
+        .expect("a window capture should pass a crop filter");
+    assert_eq!(
+        args.get(vf_index + 1),
+        Some(&"crop=800:600:200:100".to_string()),
+        "{args:?}"
+    );
+    // The input still covers the whole display; only the encoded frame is narrowed.
+    let video_size_index = args
+        .iter()
+        .position(|arg| arg == "-video_size")
+        .expect("argv should contain -video_size");
+    assert_eq!(
+        args.get(video_size_index + 1),
+        Some(&"1920x1080".to_string())
+    );
+
+    let screen = screen_plan();
+    assert_eq!(screen.encoded_dimensions(), DISPLAY_FRAME);
+    assert!(
+        !argv(&config, &screen).iter().any(|arg| arg == "-vf"),
+        "a screen capture should not be cropped"
     );
 }
 
+/// A permission-class start failure is annotated with the setting the user has
+/// to change; anything else is left to ffmpeg's own message.
 #[test]
-fn ignores_window_target_until_window_scoped_recording_lands() {
-    // Window-scoped recording is deferred (see the TODO in `Recorder::start`);
-    // a `Window` target must not alter the argv and must still record the whole
-    // main display via avfoundation.
-    let window_config = RecordingConfig {
-        target: Target::Window {
-            window_id: 42,
-            pid: 1234,
-        },
-        ..RecordingConfig::default()
-    };
-    let window_args = argv(&window_config);
-    let screen_args = argv(&RecordingConfig::default());
-
+fn start_diagnosis_flags_a_denied_screen_recording_grant() {
+    assert!(
+        diagnose_start_failure("[AVFoundation indev] Operation not permitted")
+            .is_some_and(|hint| hint.contains("Screen Recording"))
+    );
     assert_eq!(
-        window_args, screen_args,
-        "a Window target must not alter the ffmpeg argv until window-scoped recording is implemented"
+        diagnose_start_failure("[AVFoundation indev] Selected framerate is not supported"),
+        None
     );
 }

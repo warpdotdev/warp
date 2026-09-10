@@ -15,7 +15,8 @@ pub use recording::Recorder;
 use util::{display_scale_factor_for_window, main_display_scale_factor};
 use warpui_core::r#async::Timer;
 
-use crate::{Action, ActionResult, Options, Target, TargetedAction};
+use crate::pointer_capture::{record_positioned_event, record_up};
+use crate::{Action, ActionResult, Options, PointerEventKind, Target, TargetedAction};
 
 pub fn is_supported_on_current_platform() -> bool {
     true
@@ -44,6 +45,20 @@ fn post_target_for(target: Target) -> PostTarget {
     match target {
         Target::Screen => PostTarget::HidTap,
         Target::Window { pid, .. } => PostTarget::Pid(pid as libc::pid_t),
+    }
+}
+
+/// The coordinate an action carries in the caller's own space, before any target remapping.
+/// `None` for actions that carry no coordinate.
+fn action_point(action: &Action) -> Option<Vector2I> {
+    match action {
+        Action::MouseDown { at, .. } | Action::MouseWheel { at, .. } => Some(*at),
+        Action::MouseMove { to } => Some(*to),
+        Action::Wait(_)
+        | Action::MouseUp { .. }
+        | Action::TypeText { .. }
+        | Action::KeyDown { .. }
+        | Action::KeyUp { .. } => None,
     }
 }
 
@@ -147,12 +162,17 @@ impl super::Actor for Actor {
     async fn perform_actions(
         &mut self,
         actions: &[TargetedAction],
-        options: Options,
+        mut options: Options,
     ) -> Result<ActionResult, String> {
         // When background computer use is disabled, force the legacy full-screen path: ignore any
         // window target, deliver events through the HID tap, and treat coordinates as global
         // pixels. This keeps behavior byte-identical to the pre-existing implementation.
         let background = options.background_enabled;
+        // When a recording is live, the sink collects each resolved pointer event (in
+        // capture-space pixels) for the post-stop click/drag burn-in. The sink's
+        // recording-scoped `PointerSession` persists the last resolved point and active button
+        // across calls so a split-call drag's release is recorded at the right coordinate.
+        let pointer_sink = options.pointer_sink.take();
         for targeted in actions {
             let target = if background {
                 targeted.target
@@ -188,9 +208,30 @@ impl super::Actor for Actor {
                 Action::MouseDown { button, at } => {
                     self.mouse.move_to(*at).await?;
                     self.mouse.button_down(button)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        PointerEventKind::Down,
+                        Some(*button),
+                        target,
+                        action_point(&targeted.action).unwrap_or(*at),
+                        *at,
+                    );
                 }
-                Action::MouseUp { button } => self.mouse.button_up(button)?,
-                Action::MouseMove { to } => self.mouse.move_to(*to).await?,
+                Action::MouseUp { button } => {
+                    self.mouse.button_up(button)?;
+                    record_up(pointer_sink.as_ref(), *button);
+                }
+                Action::MouseMove { to } => {
+                    self.mouse.move_to(*to).await?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        PointerEventKind::Move,
+                        None,
+                        target,
+                        action_point(&targeted.action).unwrap_or(*to),
+                        *to,
+                    );
+                }
                 Action::MouseWheel {
                     at,
                     direction,
@@ -198,6 +239,14 @@ impl super::Actor for Actor {
                 } => {
                     self.mouse.move_to(*at).await?;
                     self.mouse.scroll(direction, distance)?;
+                    record_positioned_event(
+                        pointer_sink.as_ref(),
+                        PointerEventKind::Scroll,
+                        None,
+                        target,
+                        action_point(&targeted.action).unwrap_or(*at),
+                        *at,
+                    );
                 }
                 Action::TypeText { text } => {
                     self.keyboard.type_text(text)?;
