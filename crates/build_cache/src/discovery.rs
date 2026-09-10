@@ -135,8 +135,7 @@ fn produce_repository_candidates(
                 Err(error) => {
                     tracing::warn!(
                         target: "build_cache",
-                        error_depth = error.depth(),
-                        io_error_kind = ?error.io_error().map(std::io::Error::kind),
+                        ?error,
                         "build cache root discovery skipped unreadable entry"
                     );
                     continue;
