@@ -48,11 +48,48 @@ fn user_query(text: &str) -> QueuedQuery {
 }
 
 #[test]
-fn startup_queue_claims_only_one_fifo_row_until_dispatch_finishes() {
+fn native_setup_barrier_blocks_dispatch_until_finished() {
     with_model(|mut app, model, _| {
         let id = AIConversationId::new();
-        let (first, second) = model.update(&mut app, |queue, ctx| {
+        model.update(&mut app, |queue, ctx| {
             queue.begin_native_setup(id, ctx);
+            assert!(queue.is_dispatch_blocked(id));
+            assert!(queue.has_pending_native_injections(id));
+
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "first".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            assert!(queue.has_pending_native_injections(id));
+
+            // The barrier -- not `drain_shared_session_injections` itself -- is what gates
+            // when a caller is allowed to drain; the row sits untouched until then.
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.is_dispatch_blocked(id));
+            assert!(queue.has_pending_native_injections(id));
+
+            let drained = queue.drain_shared_session_injections(id, ctx);
+            assert_eq!(drained.len(), 1);
+            assert_eq!(drained[0].text(), "first");
+            assert!(!queue.has_pending_native_injections(id));
+
+            // Idempotent once already released.
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.is_dispatch_blocked(id));
+        });
+    });
+}
+
+#[test]
+fn drain_shared_session_injections_removes_only_shared_session_rows_in_fifo_order() {
+    with_model(|mut app, model, events| {
+        let id = AIConversationId::new();
+        let (first, second, local) = model.update(&mut app, |queue, ctx| {
             let first = queue.append(
                 id,
                 QueuedQuery::new_shared_session_prompt(
@@ -62,6 +99,7 @@ fn startup_queue_claims_only_one_fifo_row_until_dispatch_finishes() {
                 ),
                 ctx,
             );
+            let local = queue.append(id, user_query("local"), ctx);
             let second = queue.append(
                 id,
                 QueuedQuery::new_shared_session_prompt(
@@ -71,86 +109,48 @@ fn startup_queue_claims_only_one_fifo_row_until_dispatch_finishes() {
                 ),
                 ctx,
             );
-            assert!(queue.claim_injection(id, first, ctx).is_none());
-            queue.finish_native_setup(id, ctx);
-            queue.finish_native_initial_turn(id, ctx);
-            assert!(queue.claim_injection(id, second, ctx).is_none());
-            assert!(queue.claim_injection(id, first, ctx).is_some());
-            assert!(queue.claim_injection(id, first, ctx).is_none());
-            assert!(queue.peek_autofire(id).is_none());
-            assert!(queue.remove_by_id(id, first, ctx).is_none());
-            (first, second)
+            (first, second, local)
         });
-        model.update(&mut app, |queue, ctx| {
-            queue.finish_injection_dispatch(id, first, None, ctx);
-            queue.finish_injection_dispatch(id, first, None, ctx);
-            assert_eq!(queue.queue(id).len(), 1);
-            assert_eq!(
-                queue.claim_injection(id, second, ctx).unwrap().text(),
-                "second"
-            );
+        events.borrow_mut().clear();
+
+        let drained = model.update(&mut app, |queue, ctx| {
+            queue.drain_shared_session_injections(id, ctx)
         });
+        assert_eq!(
+            drained.iter().map(QueuedQuery::text).collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert_eq!(drained[0].id(), first);
+        assert_eq!(drained[1].id(), second);
+
+        model.read(&app, |queue, _| {
+            let remaining = queue.queue(id);
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].id(), local);
+        });
+
+        let evts = events.borrow();
+        assert_eq!(evts.len(), 2);
+        assert!(evts.iter().all(|e| matches!(
+            e,
+            QueuedQueryEvent::Removed { conversation_id, .. } if *conversation_id == id
+        )));
     });
 }
 
 #[test]
-fn empty_native_queue_captures_injections_until_initial_turn_finishes() {
-    with_model(|mut app, model, _| {
+fn drain_shared_session_injections_no_ops_when_nothing_queued() {
+    with_model(|mut app, model, events| {
         let id = AIConversationId::new();
-        model.update(&mut app, |queue, ctx| {
-            queue.begin_native_setup(id, ctx);
-            queue.finish_native_initial_turn(id, ctx);
-            assert!(queue.is_dispatch_blocked(id));
-            queue.finish_native_setup(id, ctx);
-            assert!(!queue.has_queue(id));
-            assert!(queue.has_pending_native_injections(id));
-            assert!(queue.is_dispatch_blocked(id));
-            queue.finish_native_initial_turn(id, ctx);
-            assert!(!queue.has_pending_native_injections(id));
-            assert!(!queue.is_dispatch_blocked(id));
-            queue.finish_native_setup(id, ctx);
-            assert!(!queue.has_pending_native_injections(id));
-        });
-    });
-}
+        append_user(&model, &mut app, id, "local only");
+        events.borrow_mut().clear();
 
-#[test]
-fn failed_startup_dispatch_retains_unsent_rows_and_stops_auto_drain() {
-    with_model(|mut app, model, _| {
-        let id = AIConversationId::new();
-        model.update(&mut app, |queue, ctx| {
-            let first = queue.append(
-                id,
-                QueuedQuery::new_shared_session_prompt(
-                    "first".into(),
-                    ParticipantId::new(),
-                    vec![],
-                ),
-                ctx,
-            );
-            queue.append(
-                id,
-                QueuedQuery::new_shared_session_prompt(
-                    "second".into(),
-                    ParticipantId::new(),
-                    vec![],
-                ),
-                ctx,
-            );
-            assert!(queue.claim_injection(id, first, ctx).is_some());
-            queue.finish_injection_dispatch(id, first, Some("download failed".into()), ctx);
-            assert_eq!(
-                queue
-                    .queue(id)
-                    .iter()
-                    .map(QueuedQuery::text)
-                    .collect::<Vec<_>>(),
-                vec!["first", "second"]
-            );
-            assert_eq!(queue.injection_error(id), Some("download failed"));
-            assert!(queue.peek_autofire(id).is_none());
-            assert!(queue.pop_front(id, ctx).is_none());
+        let drained = model.update(&mut app, |queue, ctx| {
+            queue.drain_shared_session_injections(id, ctx)
         });
+        assert!(drained.is_empty());
+        assert!(events.borrow().is_empty());
+        model.read(&app, |queue, _| assert_eq!(queue.queue(id).len(), 1));
     });
 }
 

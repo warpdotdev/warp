@@ -2775,12 +2775,6 @@ impl BlocklistAIController {
         // Remove any locked pending-LRC queries so they don't linger after cancellation.
         QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_pending_lrc_rows(conversation_id, ctx);
-            if matches!(
-                reason.conversation_outcome(),
-                CancellationOutcome::Cancelled
-            ) {
-                model.cancel_injection_dispatch(conversation_id, ctx);
-            }
         });
 
         if !self

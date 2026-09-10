@@ -5622,14 +5622,13 @@ impl TerminalView {
                                 row.id() == query_id && row.shared_session_prompt().is_some()
                             })
                         {
-                            // TODO: Deliver startup injections together when Oz supports non-interrupting
-                            // batch delivery, consistent with third-party harness startup queue draining.
+                            // Native startup injections are normally fully drained the moment
+                            // setup finishes (`BlocklistAIController::drain_native_startup_queue`,
+                            // called from `AgentDriver::execute_run`); reaching a shared-session
+                            // row here means a prior drain was deferred (e.g. an active CLI
+                            // subagent), so retry the same drain-all now that this turn finished.
                             self.ai_controller.update(ctx, |controller, ctx| {
-                                controller.send_queued_shared_session_prompt(
-                                    conversation_id,
-                                    query_id,
-                                    ctx,
-                                );
+                                controller.drain_native_startup_queue(conversation_id, ctx);
                             });
                             return;
                         }

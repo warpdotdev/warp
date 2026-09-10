@@ -1,29 +1,28 @@
 use std::collections::HashMap;
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use session_sharing_protocol::common::{AgentAttachment, ParticipantId, ServerConversationToken};
+use warp_core::features::FeatureFlag;
 use warp_errors::report_error;
-use warp_multi_agent_api::AgentType;
 use warpui::{ModelContext, SingletonEntity};
 
-use super::input_context::{input_context_for_request, parse_context_attachments};
-use super::response_stream::RecoveryBudget;
-use super::{BlocklistAIController, RequestInput};
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
-use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, EntrypointType, RequestMetadata,
-    extract_user_query_mode,
-};
+use super::BlocklistAIController;
+use crate::ai::agent::AIAgentAttachment;
+use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::attachment_utils::{
     DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
 };
-use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQuery, QueuedQueryId, QueuedQueryModel};
+use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::BlockId;
-use crate::workspaces::user_workspaces::ResolvedTeamScope;
 
 impl BlocklistAIController {
-    pub(crate) fn prepare_native_prompt_queue(
+    /// Binds this controller to a native conversation before session sharing can begin
+    /// delivering startup follow-ups, so `route_native_startup_injection` knows which
+    /// conversation to target for the rest of this run. Idempotent: returns the existing
+    /// binding if one is already in place.
+    pub(crate) fn bind_native_prompt_conversation(
         &mut self,
         restored_conversation_id: Option<AIConversationId>,
         ctx: &mut ModelContext<Self>,
@@ -50,23 +49,41 @@ impl BlocklistAIController {
     pub(crate) fn native_prompt_conversation_id(&self) -> Option<AIConversationId> {
         self.native_prompt_conversation_id
     }
-    pub(crate) fn stop_native_prompt_queue(&mut self, ctx: &mut ModelContext<Self>) {
-        if let Some(id) = self.native_prompt_conversation_id.take() {
-            log::info!(
-                "event=native_queue_stopped task_id={:?} terminal_id={:?} conversation_id={id} unsent_count={}",
-                self.ambient_agent_task_id,
-                self.terminal_surface_id,
-                QueuedQueryModel::as_ref(ctx).queue(id).len(),
-            );
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.cancel_injection_dispatch(id, ctx);
-                queue.begin_native_setup(id, ctx);
-            });
-        }
+
+    /// Unbinds this controller from its native conversation, dropping any startup follow-ups
+    /// that never made it out (e.g. the run ended before setup finished).
+    pub(crate) fn unbind_native_prompt_conversation(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(id) = self.native_prompt_conversation_id.take() else {
+            return;
+        };
+        let unsent_count = QueuedQueryModel::as_ref(ctx).queue(id).len();
+        log::info!(
+            "event=native_queue_stopped task_id={:?} terminal_id={:?} conversation_id={id} unsent_count={unsent_count}",
+            self.ambient_agent_task_id,
+            self.terminal_surface_id,
+        );
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.drain_shared_session_injections(id, ctx);
+        });
     }
 
-    pub(super) fn queue_native_startup_injection(
-        &self,
+    /// Routes a shared-session-injected prompt while this controller is bound to a native
+    /// conversation: queues it behind an existing backlog (startup still in progress, or a
+    /// prior injection is still being drained), or -- once there's nothing to hold it behind --
+    /// dispatches it immediately into the bound conversation.
+    ///
+    /// Returns `true` when the caller (`execute_warp_agent_prompt_from_shared_session_injection`
+    /// and friends) must not fall through to legacy conversation resolution for this prompt:
+    /// covers every case where this controller is bound to a native conversation, whether the
+    /// prompt was queued, dispatched immediately, or rejected outright for naming a different
+    /// conversation's token. Returns `false` only when this controller isn't bound to a native
+    /// conversation at all, in which case the caller's own token/selected-conversation
+    /// resolution is the correct behavior. Bypassing to that legacy resolution once bound would
+    /// be wrong: it has no way to find this binding once the conversation already has exchanges
+    /// but hasn't been assigned a server token yet, which is routinely true for every follow-up
+    /// after the first.
+    pub(super) fn route_native_startup_injection(
+        &mut self,
         prompt: &str,
         token: Option<&ServerConversationToken>,
         attachments: &[AgentAttachment],
@@ -82,14 +99,6 @@ impl BlocklistAIController {
             );
             return false;
         };
-        if !QueuedQueryModel::as_ref(ctx).has_pending_native_injections(id) {
-            log::info!(
-                "event=injection_bypassed_queue task_id={:?} terminal_id={:?} conversation_id={id} participant_id={participant_id} reason=no_startup_backlog",
-                self.ambient_agent_task_id,
-                self.terminal_surface_id,
-            );
-            return false;
-        }
         if let Some(token) = token
             && let Some(target) =
                 self.find_existing_conversation_by_server_token(&token.to_string(), ctx)
@@ -101,68 +110,167 @@ impl BlocklistAIController {
             );
             return true;
         }
-        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-            queue.append(
-                id,
-                QueuedQuery::new_shared_session_prompt(
-                    prompt.to_owned(),
-                    participant_id.clone(),
-                    attachments.to_vec(),
-                )
-                .with_shared_session_target(token.cloned()),
-                ctx,
-            );
-        });
+        let row = QueuedQuery::new_shared_session_prompt(
+            prompt.to_owned(),
+            participant_id.clone(),
+            attachments.to_vec(),
+        );
+        if self.should_queue_rather_than_dispatch(id, ctx) {
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.append(id, row, ctx);
+            });
+        } else {
+            self.send_native_startup_injection(id, row, ctx);
+        }
         true
     }
 
-    pub(crate) fn send_queued_shared_session_prompt(
+    /// True when a fresh injection for `conversation_id` must be held rather than dispatched
+    /// immediately: startup hasn't finished, something else is still queued ahead of it, or a
+    /// CLI subagent is currently running (interrupting an in-progress shell command is more
+    /// disruptive than interrupting an LLM turn). `TerminalView::drain_queued_prompts` retries
+    /// the drain on every subsequent turn completion, so a held-back row is not stuck.
+    fn should_queue_rather_than_dispatch(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &ModelContext<Self>,
+    ) -> bool {
+        QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id)
+            || BlocklistAIHistoryModel::as_ref(ctx)
+                .conversation(&conversation_id)
+                .is_some_and(|conversation| conversation.has_active_subagent())
+    }
+
+    /// Sends every prompt queued for `conversation_id` while native setup was in progress, in
+    /// FIFO order, without waiting for any of their turns to complete: each successive send
+    /// interrupts whatever the previous one started, the same way a live follow-up submitted
+    /// while a turn is still streaming does (`send_query`'s cancel-then-resend via
+    /// `cancel_conversation_progress`). No-ops when nothing is queued.
+    ///
+    /// Deferred (leaving the queue untouched) while a CLI subagent is active for
+    /// `conversation_id`; `TerminalView::drain_queued_prompts` re-attempts this drain the next
+    /// time any turn completes, so a deferred backlog still gets flushed promptly.
+    ///
+    /// Must be called after the caller's own send (if any) has fully completed -- in particular,
+    /// after `BlocklistAIHistoryModel::mark_active_conversation_id` has run for it -- since each
+    /// row's cancel-then-resend keys off the terminal surface's *active* conversation, which is
+    /// only set once a send finishes. `AgentDriver::execute_run` is responsible for calling this
+    /// at the right point (right after dispatching the initial prompt, or immediately after
+    /// `finish_native_setup` for a promptless run).
+    pub(crate) fn drain_native_startup_queue(
         &mut self,
         conversation_id: AIConversationId,
-        query_id: QueuedQueryId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let has_active_stream = self.has_active_stream_for_conversation(conversation_id, ctx);
         let has_active_subagent = BlocklistAIHistoryModel::as_ref(ctx)
             .conversation(&conversation_id)
             .is_some_and(|conversation| conversation.has_active_subagent());
-        if has_active_stream || has_active_subagent {
+        if has_active_subagent {
             log::info!(
-                "event=dispatch_deferred conversation_id={conversation_id} query_id={query_id:?} active_stream={has_active_stream} active_subagent={has_active_subagent}",
+                "event=native_queue_drain_deferred conversation_id={conversation_id} reason=active_subagent",
             );
             return;
         }
-        let row = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-            queue.claim_injection(conversation_id, query_id, ctx)
+        let rows = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.drain_shared_session_injections(conversation_id, ctx)
         });
-        let Some(row) = row else { return };
-        let (_, attachments) = row.shared_session_prompt().unwrap();
-        let files: Vec<_> = attachments
-            .iter()
-            .filter_map(|attachment| match attachment {
-                AgentAttachment::FileReference {
-                    attachment_id,
-                    file_name,
-                } => Some((attachment_id.clone(), file_name.clone())),
-                AgentAttachment::PlainText { .. } | AgentAttachment::BlockReference { .. } => None,
-            })
-            .collect();
-        if files.is_empty() {
-            self.finish_queued_injection(conversation_id, row, Ok(HashMap::new()), ctx);
+        if rows.is_empty() {
             return;
         }
         log::info!(
+            "event=native_queue_drain_started task_id={:?} terminal_id={:?} conversation_id={conversation_id} row_count={}",
+            self.ambient_agent_task_id,
+            self.terminal_surface_id,
+            rows.len(),
+        );
+        for row in rows {
+            self.send_native_startup_injection(conversation_id, row, ctx);
+        }
+    }
+
+    /// Resolves `row`'s attachments and sends it into `conversation_id` via the normal
+    /// existing-conversation follow-up path, which cancels any turn already in flight before
+    /// sending. Block and plain-text attachments are staged onto the live context model (the
+    /// same way `execute_warp_agent_prompt_from_shared_session_injection` stages them for a
+    /// live, non-startup injection) so the standard send path picks them up automatically; file
+    /// attachments are downloaded asynchronously first.
+    fn send_native_startup_injection(
+        &mut self,
+        conversation_id: AIConversationId,
+        row: QueuedQuery,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some((participant_id, attachments)) = row.shared_session_prompt() else {
+            report_error!(
+                "Expected a shared-session-injected row to send to a native conversation"
+            );
+            return;
+        };
+        let participant_id = participant_id.clone();
+        let attachments = attachments.to_vec();
+        let query_id = row.id();
+        let text = row.text().to_owned();
+
+        let mut block_ids = Vec::new();
+        let mut selected_text_parts = Vec::new();
+        let mut file_downloads: Vec<(String, String)> = Vec::new();
+        for attachment in attachments {
+            match attachment {
+                AgentAttachment::BlockReference { block_id } => {
+                    block_ids.push(BlockId::from(block_id.to_string()));
+                }
+                AgentAttachment::PlainText { content } => {
+                    selected_text_parts.push(content);
+                }
+                AgentAttachment::FileReference {
+                    attachment_id,
+                    file_name,
+                } => {
+                    file_downloads.push((attachment_id, file_name));
+                }
+            }
+        }
+        self.context_model.update(ctx, |context_model, ctx| {
+            if !block_ids.is_empty() {
+                context_model.set_pending_context_block_ids(block_ids, false, ctx);
+            }
+            if !selected_text_parts.is_empty() {
+                context_model.set_pending_context_selected_text(
+                    Some(selected_text_parts.join("\n")),
+                    false,
+                    ctx,
+                );
+            }
+        });
+
+        if file_downloads.is_empty() {
+            self.dispatch_native_startup_injection(
+                conversation_id,
+                text,
+                participant_id,
+                HashMap::new(),
+                ctx,
+            );
+            return;
+        }
+
+        log::info!(
             "event=queued_attachment_download_started conversation_id={conversation_id} query_id={query_id:?} file_count={}",
-            files.len(),
+            file_downloads.len(),
         );
         let Some((task_id, directory)) = self
             .ambient_agent_task_id
             .zip(self.attachments_download_dir.clone())
         else {
-            self.finish_queued_injection(
+            report_error!(
+                "Missing native attachment download configuration for a queued startup injection",
+                extra: { "conversation_id" => %conversation_id, "query_id" => ?query_id }
+            );
+            self.dispatch_native_startup_injection(
                 conversation_id,
-                row,
-                Err(anyhow!("Missing native attachment download configuration")),
+                text,
+                participant_id,
+                HashMap::new(),
                 ctx,
             );
             return;
@@ -171,11 +279,14 @@ impl BlocklistAIController {
         let api = ServerApiProvider::as_ref(ctx).get();
         ctx.spawn(
             async move {
-                let ids = files.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>();
+                let ids = file_downloads
+                    .iter()
+                    .map(|(id, _)| id.clone())
+                    .collect::<Vec<_>>();
                 let urls = client.download_task_attachments(&task_id, &ids).await?;
                 async_fs::create_dir_all(&directory).await?;
                 let mut downloads = Vec::new();
-                for (id, name) in files {
+                for (id, name) in file_downloads {
                     let url = urls
                         .attachments
                         .iter()
@@ -190,144 +301,53 @@ impl BlocklistAIController {
                         file_path: path.to_string_lossy().into_owned(),
                     });
                 }
-                Ok(build_file_attachment_map(&downloads))
+                anyhow::Ok(build_file_attachment_map(&downloads))
             },
-            move |controller, result, ctx| {
-                controller.finish_queued_injection(conversation_id, row, result, ctx)
+            move |controller, result, ctx| match result {
+                Ok(file_attachments) => controller.dispatch_native_startup_injection(
+                    conversation_id,
+                    text,
+                    participant_id,
+                    file_attachments,
+                    ctx,
+                ),
+                Err(error) => {
+                    report_error!(
+                        error.context("Could not download attachments for a queued startup prompt"),
+                        extra: { "conversation_id" => %conversation_id, "query_id" => ?query_id }
+                    );
+                }
             },
         );
     }
 
-    fn finish_queued_injection(
+    /// Sends the fully-resolved `text`/`file_attachments` into `conversation_id`, via the same
+    /// path used for a live (non-startup) shared-session follow-up targeting an existing
+    /// conversation (`send_warp_agent_prompt_from_shared_session_injection`).
+    fn dispatch_native_startup_injection(
         &mut self,
         conversation_id: AIConversationId,
-        row: QueuedQuery,
-        files: anyhow::Result<HashMap<String, AIAgentAttachment>>,
+        text: String,
+        participant_id: ParticipantId,
+        file_attachments: HashMap<String, AIAgentAttachment>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if !QueuedQueryModel::as_ref(ctx).is_injection_dispatch_current(conversation_id, row.id()) {
-            log::info!(
-                "event=dispatch_abandoned conversation_id={conversation_id} query_id={:?} reason=claim_invalidated",
-                row.id(),
-            );
-            return;
-        }
-        let result = files.and_then(|files| {
-            let request = self.queued_injection_request(conversation_id, &row, files, ctx)?;
-            if let Some(participant_id) = request.shared_session_response_initiator.clone() {
-                self.set_current_response_initiator(participant_id);
-            }
-            self.send_request_input(
-                request,
-                Some(RequestMetadata {
-                    is_autodetected_user_query: false,
-                    entrypoint: EntrypointType::SharedSession,
-                    is_auto_resume_after_error: false,
-                }),
-                RecoveryBudget::fresh(),
-                true,
-                ctx,
-            )
-            .map(|(_, stream_id)| {
-                log::info!(
-                    "event=dispatch_accepted task_id={:?} terminal_id={:?} conversation_id={conversation_id} query_id={:?} stream_id={stream_id:?} queue_len_after={}",
-                    self.ambient_agent_task_id, self.terminal_surface_id, row.id(),
-                    QueuedQueryModel::as_ref(ctx).queue(conversation_id).len().saturating_sub(1),
+        if FeatureFlag::AgentView.is_enabled() {
+            self.context_model.update(ctx, |context_model, ctx| {
+                context_model.set_pending_query_state_for_existing_conversation(
+                    conversation_id,
+                    AgentViewEntryOrigin::SharedSessionSelection,
+                    ctx,
                 );
-            })
-        });
-        let error = result.err().map(|error| {
-            report_error!(
-                error.context("Could not dispatch queued native prompt"),
-                extra: { "conversation_id" => %conversation_id, "query_id" => ?row.id(), "terminal_id" => ?self.terminal_surface_id }
-            );
-            "Could not send a queued prompt. The unsent prompt remains queued.".to_owned()
-        });
-        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-            queue.finish_injection_dispatch(conversation_id, row.id(), error, ctx);
-        });
-    }
-
-    fn queued_injection_request(
-        &self,
-        conversation_id: AIConversationId,
-        row: &QueuedQuery,
-        files: HashMap<String, AIAgentAttachment>,
-        ctx: &ModelContext<Self>,
-    ) -> anyhow::Result<RequestInput> {
-        let conversation = BlocklistAIHistoryModel::as_ref(ctx)
-            .conversation(&conversation_id)
-            .context("Queued native conversation no longer exists")?;
-        if let Some(token) = row.shared_session_target()
-            && conversation
-                .server_conversation_token()
-                .map(|value| value.as_str())
-                != Some(token.to_string().as_str())
-        {
-            return Err(anyhow!(
-                "Queued prompt targets a different server conversation"
-            ));
+            });
         }
-        if matches!(
-            conversation.status(),
-            ConversationStatus::Cancelled | ConversationStatus::Error
-        ) {
-            return Err(anyhow!(
-                "Queued native conversation stopped before dispatch"
-            ));
-        }
-        let task_id = conversation.get_root_task_id().clone();
-        let (participant_id, attachments) = row
-            .shared_session_prompt()
-            .context("Expected an injected prompt")?;
-        let context_model = self.context_model.as_ref(ctx);
-        let mut extra_context = Vec::new();
-        for attachment in attachments {
-            match attachment {
-                AgentAttachment::PlainText { content } => {
-                    extra_context.push(AIAgentContext::SelectedText(content.clone()))
-                }
-                AgentAttachment::BlockReference { block_id } => {
-                    if let Some(context) = context_model
-                        .transform_block_to_context(&BlockId::from(block_id.to_string()), false)
-                    {
-                        extra_context.push(context);
-                    }
-                }
-                AgentAttachment::FileReference { .. } => {}
-            }
-        }
-        let context = input_context_for_request(
-            false,
-            context_model,
-            self.active_session.as_ref(ctx),
-            Some(conversation_id),
-            extra_context,
+        self.send_user_query_in_conversation_with_attachments(
+            text,
+            conversation_id,
+            Some(participant_id),
+            file_attachments,
             ctx,
         );
-        let (query, user_query_mode) = extract_user_query_mode(row.text().to_owned());
-        let mut referenced_attachments = parse_context_attachments(&query, context_model, ctx);
-        referenced_attachments.extend(files);
-        let input = AIAgentInput::UserQuery {
-            query,
-            context,
-            static_query_type: None,
-            referenced_attachments,
-            user_query_mode,
-            running_command: None,
-            intended_agent: Some(AgentType::Primary),
-        };
-        let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
-        Ok(RequestInput::for_task(
-            vec![input],
-            task_id,
-            &self.active_session,
-            Some(participant_id.clone()),
-            conversation_id,
-            self.terminal_surface_id,
-            &scope,
-            ctx,
-        ))
     }
 }
 

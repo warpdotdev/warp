@@ -680,8 +680,10 @@ impl BlocklistAIController {
         participant_id: ParticipantId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Map server token to sharer's local conversation ID
-        if self.queue_native_startup_injection(
+        // Route through the bound native conversation, if any -- see
+        // `route_native_startup_injection`'s doc comment for why this must fully own dispatch
+        // once bound, rather than falling back to token resolution below.
+        if self.route_native_startup_injection(
             &prompt,
             server_conversation_token.as_ref(),
             &attachments,

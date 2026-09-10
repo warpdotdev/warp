@@ -1608,8 +1608,14 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
         let (id, stream) =
             conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
         controller.update(&mut app, |controller, ctx| {
-            controller.prepare_native_prompt_queue(Some(id), ctx);
+            controller.bind_native_prompt_conversation(Some(id), ctx);
         });
+        // The driver's own skip_initial_turn dispatch drains an (empty, at this point) startup
+        // queue for `id` here, so it doesn't disturb the mock stream created above.
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        // A row queued for this conversation after setup has finished keeps the driver from
+        // exiting even once the (unrelated, pre-existing) stream finishes successfully.
         let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
             queue.append(
                 id,
@@ -1621,7 +1627,6 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
                 ctx,
             )
         });
-        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
         complete_mock_stream_successfully(&mut app, &stream);
         OrchestrationEventService::handle(&app).read(&app, |service, _| {
             assert!(!service.is_conversation_exiting(id));
@@ -1636,13 +1641,13 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
 }
 
 #[test]
-fn native_promptless_setup_dispatches_only_the_first_queued_prompt() {
+fn native_promptless_setup_dispatches_every_queued_prompt_at_once() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
         let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
         let id = controller.update(&mut app, |controller, ctx| {
-            let id = controller.prepare_native_prompt_queue(None, ctx);
+            let id = controller.bind_native_prompt_conversation(None, ctx);
             controller.execute_warp_agent_prompt_from_shared_session_injection(
                 "first".into(),
                 None,
@@ -1660,20 +1665,16 @@ fn native_promptless_setup_dispatches_only_the_first_queued_prompt() {
             id
         });
         let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+        // Both queued prompts are sent as soon as setup finishes, without waiting for either
+        // turn to complete: "first" is interrupted by "second" the same way a live follow-up
+        // submitted mid-stream would interrupt it.
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             let conversation = history.conversation(&id).unwrap();
-            assert_eq!(conversation.exchange_count(), 1);
+            assert_eq!(conversation.exchange_count(), 2);
             assert_eq!(conversation.status(), &ConversationStatus::InProgress);
         });
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
-            assert_eq!(
-                queue
-                    .queue(id)
-                    .iter()
-                    .map(QueuedQuery::text)
-                    .collect::<Vec<_>>(),
-                vec!["second"]
-            );
+            assert!(!queue.has_queue(id));
         });
     });
 }

@@ -1137,7 +1137,7 @@ impl AgentDriver {
             let terminal = terminal_driver.as_ref(ctx).terminal_view().clone();
             terminal.update(ctx, |terminal, ctx| {
                 terminal.ai_controller().update(ctx, |controller, ctx| {
-                    controller.prepare_native_prompt_queue(restored_conversation_id, ctx);
+                    controller.bind_native_prompt_conversation(restored_conversation_id, ctx);
                 });
             });
         }
@@ -1294,7 +1294,7 @@ impl AgentDriver {
         let terminal = self.terminal_driver.as_ref(ctx).terminal_view().clone();
         terminal.update(ctx, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller.stop_native_prompt_queue(ctx);
+                controller.unbind_native_prompt_conversation(ctx);
             });
         });
         let Some(conversation_id) = self.run_conversation_id else {
@@ -3582,14 +3582,7 @@ impl AgentDriver {
                     return;
                 }
                 let queue = QueuedQueryModel::as_ref(ctx);
-                if let Some(error) = queue.injection_error(conversation_id) {
-                    queue_run_exit.complete_with_optional_idle(
-                        me.idle_on_fail,
-                        SDKConversationOutputStatus::Error {
-                            error: RenderableAIError::other(error.to_owned(), false),
-                        },
-                    );
-                } else if !queue.has_pending_native_injections(conversation_id)
+                if !queue.has_pending_native_injections(conversation_id)
                     && BlocklistAIHistoryModel::as_ref(ctx)
                         .conversation(&conversation_id)
                         .is_some_and(|conversation| {
@@ -4025,6 +4018,19 @@ impl AgentDriver {
                     }
                 })
             });
+
+            // Flush any startup follow-ups that arrived while the initial prompt was being
+            // prepared. Must run after the update above returns, since `drain_native_startup_queue`
+            // targets this terminal surface's *active* conversation, which the initial send just set.
+            if let Some(conversation_id) = prepared_conversation_id {
+                self.terminal_driver.update(ctx, |td, ctx| {
+                    td.with_terminal_view(ctx, |terminal, ctx| {
+                        terminal.ai_controller().update(ctx, |controller, ctx| {
+                            controller.drain_native_startup_queue(conversation_id, ctx);
+                        });
+                    });
+                });
+            }
         }
 
         if self.skip_initial_turn
@@ -4032,10 +4038,12 @@ impl AgentDriver {
         {
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
                 queue.finish_native_setup(conversation_id, ctx);
-                queue.finish_native_initial_turn(conversation_id, ctx);
             });
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
+                    terminal.ai_controller().update(ctx, |controller, ctx| {
+                        controller.drain_native_startup_queue(conversation_id, ctx);
+                    });
                     terminal.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
                 });
             });
