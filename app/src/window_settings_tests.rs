@@ -79,9 +79,27 @@ fn legacy_true_migrates_to_acrylic_after_initial_load() {
 fn legacy_false_leaves_background_backdrop_unset() {
     App::test((), |mut app| async move {
         let _settings_file = FeatureFlag::SettingsFile.override_enabled(false);
-        app.update(|ctx| initialize_settings(false, None, ctx));
+        app.update(|ctx| initialize_settings(true, None, ctx));
 
         app.update(stage_legacy_background_backdrop);
+        app.read(|ctx| {
+            let backdrop = &WindowSettings::as_ref(ctx).background_backdrop;
+            assert_eq!(backdrop.value(), &WindowBackdrop::Acrylic);
+            assert!(!backdrop.is_value_explicitly_set());
+            assert!(
+                ctx.private_user_preferences()
+                    .read_value(BackgroundBackdrop::storage_key())
+                    .unwrap()
+                    .is_none()
+            );
+        });
+
+        WindowSettings::handle(&app).update(&mut app, |settings, ctx| {
+            settings
+                .legacy_override_blur_texture
+                .set_value_from_cloud_sync(false, ctx)
+                .unwrap();
+        });
         app.update(migrate_legacy_background_backdrop);
 
         app.read(|ctx| {
