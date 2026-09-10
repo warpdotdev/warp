@@ -137,7 +137,7 @@ fn node_to_filesystem_info(
             };
 
             let Some(fragment) = metadata_mapping.iter().find(|fragment| {
-                fragment.absolute_path == *absolute_path
+                fragment.absolute_path.as_ref() == absolute_path.as_ref()
                     && fragment.location.byte_range == *content_range
             }) else {
                 return Err(anyhow::anyhow!(

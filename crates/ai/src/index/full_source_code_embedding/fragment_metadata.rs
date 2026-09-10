@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use string_offset::ByteOffset;
@@ -22,12 +23,22 @@ pub struct FragmentLocation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FragmentMetadata {
     /// File path of the fragment.
-    pub absolute_path: PathBuf,
+    pub absolute_path: Arc<Path>,
     /// Location of the fragment within the file.
     pub location: FragmentLocation,
 }
 
 impl FragmentMetadata {
+    pub(super) fn from_fragment(fragment: &Fragment<'_>, absolute_path: Arc<Path>) -> Self {
+        Self {
+            absolute_path,
+            location: FragmentLocation {
+                start_line: fragment.start_line,
+                end_line: fragment.end_line,
+                byte_range: fragment.start_byte_index..fragment.end_byte_index,
+            },
+        }
+    }
     /// Returns the estimated content size in bytes, derived from the stored byte range.
     pub fn content_byte_size(&self) -> usize {
         self.location
@@ -40,14 +51,7 @@ impl FragmentMetadata {
 
 impl From<&Fragment<'_>> for FragmentMetadata {
     fn from(fragment: &Fragment<'_>) -> Self {
-        FragmentMetadata {
-            absolute_path: PathBuf::from(fragment.file_path),
-            location: FragmentLocation {
-                start_line: fragment.start_line,
-                end_line: fragment.end_line,
-                byte_range: fragment.start_byte_index..fragment.end_byte_index,
-            },
-        }
+        Self::from_fragment(fragment, Arc::from(fragment.file_path))
     }
 }
 
@@ -90,7 +94,7 @@ impl LeafToFragmentMetadata {
                 let Some(mapping_entry) = self.mapping.get_mut(&hash) else {
                     continue;
                 };
-                mapping_entry.retain(|metadata| metadata.absolute_path != path);
+                mapping_entry.retain(|metadata| metadata.absolute_path.as_ref() != path);
                 if mapping_entry.is_empty() {
                     self.mapping.remove(&hash);
                 }

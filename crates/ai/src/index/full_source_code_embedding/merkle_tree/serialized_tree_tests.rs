@@ -1,10 +1,14 @@
 use futures::executor::block_on;
 use serde_json;
+use string_offset::ByteOffset;
 use virtual_fs::VirtualFS;
 
-use super::SerializedCodebaseIndex;
+use super::{
+    SerializedCodebaseIndex, SerializedFilesystemInfo, SerializedFragmentLocation,
+    SerializedMerkleNode, SerializedMerkleTree,
+};
 use crate::index::full_source_code_embedding::merkle_tree::{
-    MerkleTree, construct_test_merkle_tree,
+    MerkleHash, MerkleTree, construct_test_merkle_tree,
 };
 
 #[test]
@@ -40,6 +44,65 @@ fn round_trip_index_serialize_deserialize_json() {
             "Reconstructed metadata should be identical"
         );
     })
+}
+
+#[test]
+fn reconstructed_file_and_fragments_share_their_path() {
+    let file_path = std::path::PathBuf::from("repo").join("lib.rs");
+    let fragment = |content: &[u8], byte_range| SerializedMerkleNode {
+        hash: MerkleHash::from_bytes(content),
+        children: vec![],
+        fs_info: SerializedFilesystemInfo::Fragment {
+            location: SerializedFragmentLocation {
+                start_line: 1,
+                end_line: 1,
+                byte_range,
+            },
+        },
+    };
+    let file = SerializedMerkleNode {
+        hash: MerkleHash::from_bytes(b"file"),
+        children: vec![
+            fragment(b"first", ByteOffset::from(0)..ByteOffset::from(5)),
+            fragment(b"second", ByteOffset::from(5)..ByteOffset::from(11)),
+        ],
+        fs_info: SerializedFilesystemInfo::File {
+            absolute_path: file_path,
+            file_size: 11,
+            fs_modified_time: chrono::DateTime::UNIX_EPOCH,
+            file_contents_hash: "contents".to_string(),
+        },
+    };
+    let serialized_tree = SerializedMerkleTree {
+        root: SerializedMerkleNode {
+            hash: MerkleHash::from_bytes(b"root"),
+            children: vec![file],
+            fs_info: SerializedFilesystemInfo::Directory {
+                absolute_path: std::path::PathBuf::from("repo"),
+            },
+        },
+    };
+
+    let (tree, metadata) =
+        MerkleTree::from_serialized_tree(serialized_tree).expect("Should rebuild Merkle tree");
+    let file = tree.root_node().children().next().unwrap();
+    let fragments = file.children().collect::<Vec<_>>();
+    let metadata_paths = metadata
+        .mapping()
+        .values()
+        .flatten()
+        .map(|metadata| metadata.absolute_path.as_ref())
+        .collect::<Vec<_>>();
+
+    assert_eq!(fragments.len(), 2);
+    assert!(std::ptr::eq(file.path(), fragments[0].path()));
+    assert!(std::ptr::eq(file.path(), fragments[1].path()));
+    assert_eq!(metadata_paths.len(), 2);
+    assert!(
+        metadata_paths
+            .iter()
+            .all(|path| std::ptr::eq(file.path(), *path))
+    );
 }
 
 #[test]
