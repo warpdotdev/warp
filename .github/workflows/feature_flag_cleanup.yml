@@ -26,7 +26,7 @@ jobs:
       artifact_url: ${{ steps.upload_feature_flag_log.outputs.artifact-url }}
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           fetch-depth: 0
 
@@ -156,7 +156,7 @@ jobs:
       contents: read
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           ref: ${{ needs.analyze.outputs.analyzed_sha }}
           fetch-depth: 0
@@ -213,7 +213,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           ref: ${{ needs.analyze.outputs.analyzed_sha }}
           fetch-depth: 0
