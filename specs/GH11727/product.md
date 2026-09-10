@@ -8,7 +8,7 @@ Add Grok Build (SpaceXAI’s `grok` binary) as a first-class third-party CLI cod
 agent in Warp, at parity with Claude Code, Codex, and OpenCode. Users who run
 `grok` in a Warp pane get native agent identity (brand icon and color), the CLI
 agent toolbar, rich input, image attach, skills/bash mode support, and
-notification/session status wiring.
+native notification/session status wiring.
 
 ## Goals / Non-goals
 
@@ -20,11 +20,10 @@ notification/session status wiring.
 - Brand icon and color in the CLI agent footer, vertical tabs, and other agent
   chrome that already uses `CLIAgent` identity.
 - Full CLI agent toolbar / rich input / image paste paths used by other agents.
-- Session listener support, including OSC 9 fallback (Grok Build already notifies
-  Warp via OSC 9) and OSC 777 rich plugin events when the Warp plugin is installed.
-- One-click install/update for the Warp notification plugin (hooks under
-  `~/.grok/hooks` or `$GROK_HOME/hooks`), matching Claude/Codex product language.
-- Unit tests for detection, listener support, and plugin manager wiring.
+- Session listener support, including native OSC 9 notifications and structured
+  OSC 777 events emitted through compatible agent-owned integrations.
+- Unit tests for detection, listener support, and the absence of a Warp-managed
+  plugin flow.
 - Telemetry: a distinct `CLIAgentType` for Grok Build.
 
 **Out of scope**
@@ -36,9 +35,8 @@ notification/session status wiring.
 - Docs site / marketing pages outside this repository (including the public
   “supported third-party CLI agents” list called out on #11727 — follow-up in
   warpdotdev/docs or equivalent).
-- Hosted marketplace package under `~/.grok/installed-plugins/` /
-  `grok plugin install …`; file-based hooks install under `$GROK_HOME/hooks` is
-  the interim until Warp publishes one.
+- Installing or updating Grok plugins from Warp. Any future notification
+  integration should use an agent-owned extension mechanism.
 
 ## Branding
 
@@ -95,19 +93,16 @@ guidance (official package filenames; logomark only):
    Cursor CLI). An alias whose expansion’s first token is `grok` **is** detected
    as Grok Build.
 
-9. Without the Warp notification plugin, the session still provides toolbar, rich
-   input, and images. Status may be limited to command-detect “in progress” plus
-   native OSC 9 turn-complete/approval signals treated like Codex OSC 9 fallback.
+9. The session provides toolbar, rich input, and images without any plugin
+   installation. Native OSC 9 turn-complete/approval signals use the shared
+   fallback listener.
 
-10. With the plugin installed (OSC 777 title `warp://cli-agent` and JSON body
-    `"agent":"grok"`), Warp latches rich plugin status (e.g. prompt titles,
-    blocked/success) the same way it does for Claude/OpenCode plugins.
+10. If Grok or an agent-owned integration emits a compatible OSC 777 event
+    (title `warp://cli-agent` and JSON body `"agent":"grok"`), Warp processes it
+    through the shared listener infrastructure.
 
-11. When a plugin manager is registered for Grok Build, the footer shows the same
-    **Enable Grok Build notifications** chip as other agents (one-click install).
-    That writes the Warp notification plugin into `$GROK_HOME/hooks` (hooks files
-    rather than a marketplace package). Manual setup instructions remain as
-    fallback when auto-install is unavailable (e.g. remote/sandbox).
+11. The Grok footer does not show an enable/update notification chip, and Warp
+    does not write files into Grok’s configuration directories.
 
 12. Telemetry that records CLI agent type uses a distinct Grok value (not
     Unknown) when the session agent is Grok Build.
