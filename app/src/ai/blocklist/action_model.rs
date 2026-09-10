@@ -244,7 +244,8 @@ pub struct BlocklistAIActionModel {
     action_order: HashMap<AIConversationId, HashMap<AIAgentActionId, usize>>,
 
     /// Past actions and their corresponding statuses from previous AI exchanges.
-    past_action_results: HashMap<AIAgentActionId, Arc<AIAgentActionResult>>,
+    past_action_results:
+        HashMap<AIConversationId, HashMap<AIAgentActionId, Arc<AIAgentActionResult>>>,
     recording_spans_by_conversation:
         RefCell<HashMap<AIConversationId, Arc<HashMap<AIAgentActionId, RecordingSpanInfo>>>>,
 
@@ -666,7 +667,11 @@ impl BlocklistAIActionModel {
             .values()
             .flat_map(|results| results.iter())
             .find(|result| &result.id == id)
-            .or_else(|| self.past_action_results.get(id))
+            .or_else(|| {
+                self.past_action_results
+                    .values()
+                    .find_map(|results| results.get(id))
+            })
     }
     pub fn get_action_result_for_conversation(
         &self,
@@ -681,7 +686,11 @@ impl BlocklistAIActionModel {
                     .get(&conversation_id)
                     .and_then(|results| results.get(id))
             })
-            .or_else(|| self.past_action_results.get(id))
+            .or_else(|| {
+                self.past_action_results
+                    .get(&conversation_id)
+                    .and_then(|results| results.get(id))
+            })
     }
 
     pub fn get_action_status_for_conversation(
@@ -824,7 +833,11 @@ impl BlocklistAIActionModel {
     }
 
     /// Bulk restore action results from a list of exchanges (used when loading conversations from tasks)
-    pub fn restore_action_results_from_exchanges(&mut self, exchanges: Vec<&AIAgentExchange>) {
+    pub fn restore_action_results_from_exchanges(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchanges: Vec<&AIAgentExchange>,
+    ) {
         self.recording_spans_by_conversation.get_mut().clear();
         for exchange in exchanges.iter() {
             for input in &exchange.input {
@@ -842,6 +855,8 @@ impl BlocklistAIActionModel {
                         );
                     }
                     self.past_action_results
+                        .entry(conversation_id)
+                        .or_default()
                         .insert(result_id, Arc::new(result_to_insert));
                 }
             }
@@ -1426,6 +1441,8 @@ impl BlocklistAIActionModel {
 
         for result in finished_action_results.iter() {
             self.past_action_results
+                .entry(conversation_id)
+                .or_default()
                 .insert(result.id.clone(), result.clone());
         }
         finished_action_results

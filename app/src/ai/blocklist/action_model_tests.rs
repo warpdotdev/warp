@@ -1,15 +1,19 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
 use ai::agent::action_result::RunAgentsResult;
+use chrono::Local;
 use warpui::r#async::Timer;
 use warpui::{App, SingletonEntity};
 
 use super::*;
-use crate::ai::agent::AIAgentActionResultType;
 use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionResultType, AIAgentExchangeId, AIAgentOutputStatus, FinishedAIAgentOutput, Shared,
+};
+use crate::ai::llms::LLMId;
 use crate::test_util::terminal::{add_window_with_terminal, initialize_app_for_terminal_view};
 
 fn make_action_result(id: &str) -> Arc<AIAgentActionResult> {
@@ -42,6 +46,31 @@ fn run_agents_action(id: &str) -> AIAgentAction {
             harness_auth_secret_name: None,
         }),
         requires_result: true,
+    }
+}
+fn exchange_with_action_result(result: AIAgentActionResult) -> AIAgentExchange {
+    AIAgentExchange {
+        id: AIAgentExchangeId::new(),
+        input: vec![AIAgentInput::ActionResult {
+            result,
+            context: Default::default(),
+        }],
+        output_status: AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success {
+                output: Shared::new(Default::default()),
+            },
+        },
+        added_message_ids: HashSet::new(),
+        start_time: Local::now(),
+        finish_time: None,
+        time_to_first_token_ms: None,
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        request_cost: None,
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        response_initiator: None,
     }
 }
 
@@ -199,7 +228,7 @@ fn server_owned_run_agents_failure_suppresses_preprocessed_action_and_outbound_r
 }
 
 #[test]
-fn shared_session_result_with_same_id_is_scoped_to_conversation() {
+fn restored_result_does_not_suppress_shared_session_result_with_same_id() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
@@ -217,27 +246,33 @@ fn shared_session_result_with_same_id_is_scoped_to_conversation() {
                 (first, second, action_model)
             });
         let action_id = AIAgentActionId::from("shared-conversation-local".to_owned());
+        let restored_exchange =
+            exchange_with_action_result(server_owned_failure("shared-conversation-local"));
 
         action_model.update(&mut app, |model, ctx| {
-            model.apply_server_owned_run_agents_failure(
+            model.restore_action_results_from_exchanges(
                 first_conversation_id,
-                server_owned_failure("shared-conversation-local"),
-                ctx,
+                vec![&restored_exchange],
             );
             assert!(
                 model
                     .get_action_result_for_conversation(second_conversation_id, &action_id)
                     .is_none()
             );
-            model.apply_finished_action_result(
-                second_conversation_id,
-                AIAgentActionResult {
-                    id: action_id.clone(),
-                    task_id: TaskId::new("second-task".to_owned()),
-                    result: AIAgentActionResultType::InitProject,
-                },
-                ctx,
-            );
+            if model
+                .get_action_result_for_conversation(second_conversation_id, &action_id)
+                .is_none()
+            {
+                model.apply_finished_action_result(
+                    second_conversation_id,
+                    AIAgentActionResult {
+                        id: action_id.clone(),
+                        task_id: TaskId::new("second-task".to_owned()),
+                        result: AIAgentActionResultType::InitProject,
+                    },
+                    ctx,
+                );
+            }
         });
 
         action_model.read(&app, |model, _| {
