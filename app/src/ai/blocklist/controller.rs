@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ai::agent::action_result::RunAgentsResult;
 use ai::skills::{ParsedSkill, SkillPathOrigin, SkillReference};
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
@@ -25,6 +26,8 @@ use session_sharing_protocol::common::ParticipantId;
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
+use warp_multi_agent_api::client_action::Action;
+use warp_multi_agent_api::message::Message;
 use warp_multi_agent_api::{Task, ToolType, message};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 use warpui::{
@@ -94,6 +97,43 @@ pub struct SessionContext {
     session_type: Option<SessionType>,
     shell: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
+}
+
+fn server_owned_run_agents_failures(
+    client_actions: &[warp_multi_agent_api::ClientAction],
+) -> Vec<AIAgentActionResult> {
+    client_actions
+        .iter()
+        .filter_map(|client_action| match client_action.action.as_ref() {
+            Some(Action::AddMessagesToTask(add)) => Some(add),
+            _ => None,
+        })
+        .flat_map(|add| {
+            add.messages.iter().filter_map(|message| {
+                let Some(Message::ToolCallResult(tool_call_result)) = message.message.as_ref()
+                else {
+                    return None;
+                };
+                let Some(message::tool_call_result::Result::RunAgentsResult(run_agents_result)) =
+                    tool_call_result.result.as_ref()
+                else {
+                    return None;
+                };
+                let Some(warp_multi_agent_api::run_agents_result::Outcome::Failure(failure)) =
+                    run_agents_result.outcome.as_ref()
+                else {
+                    return None;
+                };
+                Some(AIAgentActionResult {
+                    id: tool_call_result.tool_call_id.clone().into(),
+                    task_id: TaskId::new(add.task_id.clone()),
+                    result: AIAgentActionResultType::RunAgents(RunAgentsResult::Failure {
+                        error: failure.error.clone(),
+                    }),
+                })
+            })
+        })
+        .collect()
 }
 
 impl SessionContext {
@@ -3010,6 +3050,8 @@ impl BlocklistAIController {
                             }
                             warp_multi_agent_api::response_event::Type::ClientActions(actions) => {
                                 let client_actions = actions.actions;
+                                let server_owned_failures =
+                                    server_owned_run_agents_failures(&client_actions);
                                 let skill_path_origin = SessionContext::from_session(
                                     self.active_session.as_ref(ctx),
                                     ctx,
@@ -3032,6 +3074,15 @@ impl BlocklistAIController {
                                             "Failed to apply client actions to conversation"
                                         )
                                     );
+                                }
+                                for result in server_owned_failures {
+                                    self.action_model.update(ctx, |action_model, ctx| {
+                                        action_model.apply_server_owned_run_agents_failure(
+                                            conversation_id,
+                                            result,
+                                            ctx,
+                                        );
+                                    });
                                 }
                             }
                         }

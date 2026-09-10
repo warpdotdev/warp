@@ -926,6 +926,30 @@ impl BlocklistAIActionExecutor {
         }
     }
 
+    pub(super) fn suppress_running_async_action(
+        &mut self,
+        action_id: &AIAgentActionId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let belongs_to_conversation = self
+            .async_executing_actions
+            .get(action_id)
+            .is_some_and(|running| running.conversation_id == conversation_id);
+        if !belongs_to_conversation {
+            return;
+        }
+
+        let Some(running) = self.async_executing_actions.remove(action_id) else {
+            return;
+        };
+        if matches!(running.action.action, AIAgentActionType::RunAgents(..)) {
+            self.run_agents_executor.update(ctx, |executor, ctx| {
+                executor.cancel_execution(&running.action.id, ctx);
+            });
+        }
+    }
+
     /// Drops executor-held per-action state now that the action has reached a
     /// terminal result. Called from the action model's terminal-result choke
     /// point (`handle_action_result`), which every outcome — success, failure,

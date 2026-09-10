@@ -110,11 +110,7 @@ impl RunAgentsExecutor {
         action_id: &AIAgentActionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        if matches!(
-            self.pending.get(action_id),
-            Some(PendingRunAgents::Publishing)
-        ) {
-            self.pending.remove(action_id);
+        if self.pending.remove(action_id).is_some() {
             ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
                 action_id: action_id.clone(),
             });
@@ -335,6 +331,9 @@ impl RunAgentsExecutor {
                 outcomes
             },
             move |me, outcomes, ctx| {
+                if me.pending.remove(&action_id_for_aggr).is_none() {
+                    return;
+                }
                 let agents: Vec<RunAgentsAgentOutcome> = agent_run_configs_for_result
                     .iter()
                     .zip(outcomes)
@@ -368,7 +367,6 @@ impl RunAgentsExecutor {
                     execution_mode: launched_mode,
                     agents,
                 };
-                me.pending.remove(&action_id_for_aggr);
                 ctx.emit(RunAgentsExecutorEvent::SpawningFinished {
                     action_id: action_id_for_aggr,
                 });
