@@ -1739,7 +1739,7 @@ fn repeated_viewer_registration_starts_one_ancestor_seed_fetch() {
         let mut mock = MockAIClient::new();
         mock.expect_list_ambient_agent_tasks()
             .times(1)
-            .returning(|_, _| Err(anyhow::anyhow!("fetch observed")));
+            .returning(|_, _, _| Err(anyhow::anyhow!("fetch observed")));
         let ai_client: Arc<dyn AIClient> = Arc::new(mock);
         let server_api = ServerApiProvider::new_for_test().get();
         let streamer = app.add_singleton_model(|ctx| {
