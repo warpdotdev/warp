@@ -606,7 +606,6 @@ default = [
     "v4a_file_diffs",
     "classic_completions",
     "force_classic_completions",
-    "team_api_keys",
     "named_agents",
     "agent_tips",
     "pluggable_notifications",
@@ -974,7 +973,6 @@ agent_toolbar_editor = ["agent_view"]
 cloud_conversations = []
 agent_view_prompt_chip = ["agent_view"]
 ambient_agents_rtc = []
-team_api_keys = []
 named_agents = []
 classic_completions = []
 native_shell_completions = []
