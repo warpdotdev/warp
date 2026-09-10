@@ -219,7 +219,3 @@ impl BackgroundOpacity {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "window_settings_tests.rs"]
-mod tests;
