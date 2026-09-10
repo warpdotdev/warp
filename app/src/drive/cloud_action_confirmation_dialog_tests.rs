@@ -3,7 +3,7 @@ const MEMBER_EMAIL: &str = "member@example.com";
 const WORKSPACE_NAME: &str = "Acme";
 
 #[test]
-fn native_workspace_team_removal_uses_membership_scope_copy() {
+fn removal_confirmation_copy_matches_membership_scope() {
     let mut dialog = CloudActionConfirmationDialog::new();
     dialog.set_variant(
         CloudActionConfirmationDialogVariant::RemoveNativeWorkspaceTeamMember {
@@ -19,11 +19,7 @@ fn native_workspace_team_removal_uses_membership_scope_copy() {
     );
     assert_eq!(dialog.confirm_button_text(), "Remove from team");
     assert!(!dialog.body_text().contains("credits"));
-}
 
-#[test]
-fn workspace_removal_uses_workspace_eviction_copy() {
-    let mut dialog = CloudActionConfirmationDialog::new();
     dialog.set_variant(
         CloudActionConfirmationDialogVariant::RemoveWorkspaceMember {
             member_email: MEMBER_EMAIL.to_string(),
@@ -37,11 +33,7 @@ fn workspace_removal_uses_workspace_eviction_copy() {
         "Are you sure you want to remove member@example.com from the workspace? This will remove member@example.com from all teams in Acme and from the workspace itself."
     );
     assert_eq!(dialog.confirm_button_text(), "Remove from workspace");
-}
 
-#[test]
-fn non_native_team_removal_retains_reload_credits_copy() {
-    let mut dialog = CloudActionConfirmationDialog::new();
     dialog.set_variant(CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits);
 
     assert_eq!(

@@ -2179,22 +2179,6 @@ impl TeamsPageView {
                     });
                 }
 
-                if workspace.is_native_workspaces_enabled()
-                    && current_user_is_workspace_admin
-                    && member_workspace_role != Some(MembershipRole::Owner)
-                {
-                    actions.push(ItemAction {
-                        icon: Icon::X,
-                        label: "Remove from workspace".to_string(),
-                        action: TeamsPageAction::RemoveUserFromWorkspace {
-                            user_uid: member.uid,
-                            workspace_uid: workspace.uid,
-                            member_email: member.email.clone(),
-                            workspace_name: workspace.name.clone(),
-                        },
-                    });
-                }
-
                 // Admins can promote and demote other admins
                 if team.is_multi_admin_enabled()
                     && current_user_has_admin_permissions
@@ -2232,6 +2216,22 @@ impl TeamsPageView {
                             user_uid: member.uid,
                             team_uid: team.uid,
                             member_email: member.email.clone(),
+                        },
+                    });
+                }
+
+                if workspace.is_native_workspaces_enabled()
+                    && current_user_is_workspace_admin
+                    && member_workspace_role != Some(MembershipRole::Owner)
+                {
+                    actions.push(ItemAction {
+                        icon: Icon::X,
+                        label: "Remove from workspace".to_string(),
+                        action: TeamsPageAction::RemoveUserFromWorkspace {
+                            user_uid: member.uid,
+                            workspace_uid: workspace.uid,
+                            member_email: member.email.clone(),
+                            workspace_name: workspace.name.clone(),
                         },
                     });
                 }

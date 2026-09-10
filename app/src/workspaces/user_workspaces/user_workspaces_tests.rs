@@ -88,7 +88,7 @@ use crate::workspaces::workspace::{
     AdminEnablementSetting, ByoFirstPartyKey, EnforceableSetting, HostEnablementSetting,
     LinkSharingSettings, LlmHostSettings, ManagedByokByoePolicy, MultiAdminPolicy,
     PurchaseAddOnCreditsPolicy, SandboxedAgentSettings, SplitListSetting, TeamByoSettings,
-    TeamLinkSharingSettings, Workspace,
+    TeamLinkSharingSettings, Workspace, WorkspaceMember, WorkspaceMemberUsageInfo,
 };
 
 #[derive(Default)]
@@ -3839,73 +3839,132 @@ fn test_purchase_addon_credits_forwards_team_uid_when_present() {
 }
 
 #[test]
-fn test_remove_user_from_workspace_calls_workspace_client_and_emits_success() {
-    let user_uid = UserUid::new("member-uid");
-    let team = team_for_test();
-    let workspace = workspace_for_test(&team);
-    let workspace_uid = workspace.uid;
-    let updated_workspace = workspace.clone();
+fn test_remove_user_from_workspace_refreshes_state_only_on_success() {
+    for succeeds in [true, false] {
+        let user_uid = UserUid::new("member-uid");
+        let member_email = "member@example.com".to_string();
+        let mut team = team_for_test();
+        team.members.push(TeamMember {
+            uid: user_uid,
+            email: member_email.clone(),
+            role: MembershipRole::User,
+            is_disabled: false,
+        });
+        let mut workspace = workspace_for_test(&team);
+        workspace.members.push(WorkspaceMember {
+            uid: user_uid,
+            email: member_email.clone(),
+            role: MembershipRole::User,
+            is_disabled: false,
+            usage_info: WorkspaceMemberUsageInfo {
+                is_unlimited: true,
+                request_limit: 0,
+                requests_used_since_last_refresh: 0,
+                is_request_limit_prorated: false,
+            },
+        });
+        let workspace_uid = workspace.uid;
+        let mut updated_workspace = workspace.clone();
+        updated_workspace.members.clear();
+        updated_workspace.teams[0].members.clear();
 
-    App::test((), |mut app| async move {
-        let mut workspace_client = MockWorkspaceClient::new();
-        workspace_client
-            .expect_remove_user_from_workspace()
-            .withf(move |actual_user_uid, actual_workspace_uid, entrypoint| {
-                *actual_user_uid == user_uid
-                    && *actual_workspace_uid == workspace_uid
-                    && matches!(entrypoint, CloudObjectEventEntrypoint::TeamSettings)
-            })
-            .times(1)
-            .returning(move |_, _, _| {
-                Ok(WorkspacesMetadataWithPricing {
-                    metadata: WorkspacesMetadataResponse {
-                        workspaces: vec![updated_workspace.clone()],
-                        joinable_teams: vec![],
-                        experiments: None,
-                        ai_credit_availability: None,
-                        user_purchase_policy: None,
-                    },
-                    pricing_info: None,
+        App::test((), move |mut app| async move {
+            let mut workspace_client = MockWorkspaceClient::new();
+            workspace_client
+                .expect_remove_user_from_workspace()
+                .withf(move |actual_user_uid, actual_workspace_uid, entrypoint| {
+                    *actual_user_uid == user_uid
+                        && *actual_workspace_uid == workspace_uid
+                        && matches!(entrypoint, CloudObjectEventEntrypoint::TeamSettings)
                 })
+                .times(1)
+                .returning(move |_, _, _| {
+                    if succeeds {
+                        Ok(WorkspacesMetadataWithPricing {
+                            metadata: WorkspacesMetadataResponse {
+                                workspaces: vec![updated_workspace.clone()],
+                                joinable_teams: vec![],
+                                experiments: None,
+                                ai_credit_availability: None,
+                                user_purchase_policy: None,
+                            },
+                            pricing_info: None,
+                        })
+                    } else {
+                        Err(anyhow::anyhow!("workspace removal rejected"))
+                    }
+                });
+
+            app.add_singleton_model(PrivacySettings::mock);
+            app.add_singleton_model(|ctx| {
+                UserWorkspaces::mock(
+                    Arc::new(MockTeamClient::new()),
+                    Arc::new(workspace_client),
+                    vec![workspace],
+                    ctx,
+                )
             });
 
-        app.add_singleton_model(PrivacySettings::mock);
-        app.add_singleton_model(|ctx| {
-            UserWorkspaces::mock(
-                Arc::new(MockTeamClient::new()),
-                Arc::new(workspace_client),
-                vec![workspace],
-                ctx,
-            )
-        });
+            let user_workspaces_handle = UserWorkspaces::handle(&app);
+            let (sender, receiver) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(
+                    &user_workspaces_handle,
+                    move |_, event: &UserWorkspacesEvent, _| match event {
+                        UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess => {
+                            let _ = sender.try_send(Ok(()));
+                        }
+                        UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err) => {
+                            let _ = sender.try_send(Err(err.to_string()));
+                        }
+                        _ => {}
+                    },
+                );
+            });
 
-        let user_workspaces_handle = UserWorkspaces::handle(&app);
-        let (sender, receiver) = async_channel::unbounded();
-        app.update(|ctx| {
-            ctx.subscribe_to_model(
-                &user_workspaces_handle,
-                move |_, event: &UserWorkspacesEvent, _| {
-                    if matches!(event, UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess) {
-                        let _ = sender.try_send(());
-                    }
-                },
-            );
-        });
+            UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+                user_workspaces.remove_user_from_workspace(
+                    user_uid,
+                    workspace_uid,
+                    CloudObjectEventEntrypoint::TeamSettings,
+                    ctx,
+                );
+            });
 
-        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
-            user_workspaces.remove_user_from_workspace(
-                user_uid,
-                workspace_uid,
-                CloudObjectEventEntrypoint::TeamSettings,
-                ctx,
-            );
-        });
+            let event_result = receiver
+                .recv()
+                .await
+                .expect("expected workspace removal result event");
+            if succeeds {
+                event_result.expect("expected RemoveUserFromWorkspaceSuccess");
+            } else {
+                assert_eq!(
+                    event_result.expect_err("expected RemoveUserFromWorkspaceRejected"),
+                    "workspace removal rejected"
+                );
+            }
 
-        receiver
-            .recv()
-            .await
-            .expect("expected RemoveUserFromWorkspaceSuccess to be emitted");
-    })
+            app.read(|ctx| {
+                let workspace = UserWorkspaces::as_ref(ctx)
+                    .current_workspace()
+                    .expect("workspace should remain available");
+                assert_eq!(
+                    workspace
+                        .members
+                        .iter()
+                        .any(|member| member.uid == user_uid),
+                    !succeeds
+                );
+                assert_eq!(
+                    workspace.teams[0]
+                        .members
+                        .iter()
+                        .any(|member| member.uid == user_uid),
+                    !succeeds
+                );
+            });
+        });
+    }
 }
 
 #[test]
