@@ -287,9 +287,6 @@ pub enum FeatureFlag {
     /// Retry truncated file edit responses from the coding agent.
     RetryTruncatedCodeResponses,
 
-    /// Enables reading images with the `read_files` tool.
-    ReadImageFiles,
-
     UsageBasedPricing,
 
     /// Enables cross-repo codebase context.
