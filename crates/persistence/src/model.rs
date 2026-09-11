@@ -1168,7 +1168,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 // Serializes to `conversation_data` column in `agent_conversations`.
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct AgentConversationData {
     pub server_conversation_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
