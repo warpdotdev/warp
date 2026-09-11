@@ -325,6 +325,39 @@ pub(crate) fn validate_repository_preparation_overrides(
     Ok(())
 }
 
+pub(crate) fn repositories_for_preparation(
+    environment_repos: Vec<SourceRepo>,
+    additional_source_repos: Vec<SourceRepo>,
+    overrides: &[RepositoryPreparationOverride],
+) -> Result<Vec<SourceRepo>, PrepareEnvironmentError> {
+    if overrides
+        .iter()
+        .any(|preparation_override| preparation_override.origin_policy.is_some())
+    {
+        let live_repositories = environment_repos
+            .iter()
+            .chain(additional_source_repos.iter());
+        return Ok(overrides
+            .iter()
+            .map(|preparation_override| {
+                let checkout_ref = live_repositories
+                    .clone()
+                    .find(|repo| {
+                        source_repo_identity(repo)
+                            .is_ok_and(|identity| identity == preparation_override.identity())
+                    })
+                    .and_then(|repo| repo.checkout_ref.clone());
+                SourceRepo::new(
+                    code_forge_for_repository_forge(preparation_override.code_forge),
+                    preparation_override.repo_owner.clone(),
+                    preparation_override.repo_name.clone(),
+                )
+                .with_checkout_ref(checkout_ref)
+            })
+            .collect());
+    }
+    merge_repos_deduped(environment_repos, additional_source_repos)
+}
 /// Prepare a cloud agent environment within a terminal session. This will:
 /// 1. Materialize all repositories, enforcing server-provided HEAD overrides.
 /// 2. Begin codebase indexing for all repositories (Oz harness only).

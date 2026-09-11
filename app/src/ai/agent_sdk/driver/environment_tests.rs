@@ -14,8 +14,8 @@ use super::{
     PrepareEnvironmentError, RepositoryCloneRequest, build_parallel_clone_command,
     build_remove_repository_origins_command, build_resolved_head_command, checkout_command_for,
     checkout_result, environment_snapshot, is_valid_git_object_id, merge_repos_deduped,
-    parse_resolved_head_sha, parse_resolved_head_shas, repository_clone_requests, single_repo_name,
-    validate_repository_preparation_overrides,
+    parse_resolved_head_sha, parse_resolved_head_shas, repositories_for_preparation,
+    repository_clone_requests, single_repo_name, validate_repository_preparation_overrides,
 };
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, SourceRepo};
 use crate::terminal::shell::ShellType;
@@ -305,6 +305,64 @@ fn merge_repos_supports_additional_only_and_empty_inputs() {
     );
 }
 
+#[test]
+fn complete_policy_overrides_are_authoritative_repository_membership() {
+    let live_environment = vec![
+        repo(CodeForge::GitHub, "warpdotdev", "removed-after-dispatch"),
+        repo(CodeForge::GitHub, "warpdotdev", "added-after-dispatch"),
+        repo(CodeForge::GitHub, "warpdotdev", "common-skills")
+            .with_checkout_ref(Some("frozen-branch".to_string())),
+    ];
+    let live_additional = vec![repo(
+        CodeForge::GitHub,
+        "warpdotdev",
+        "additional-after-dispatch",
+    )];
+    let overrides = vec![
+        complete_policy_override(
+            "WarpDotDev",
+            "Warp",
+            Some(RepositoryHeadRef::CommitSha(
+                "0123456789abcdef0123456789abcdef01234567".to_string(),
+            )),
+            Some(("warpdotdev", "warp-for-benchmarks")),
+            RepositoryOriginPolicy::Preserve,
+        ),
+        complete_policy_override(
+            "warpdotdev",
+            "common-skills",
+            None,
+            None,
+            RepositoryOriginPolicy::Remove,
+        ),
+    ];
+
+    assert_eq!(
+        repositories_for_preparation(live_environment, live_additional, &overrides).unwrap(),
+        vec![
+            repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
+            repo(CodeForge::GitHub, "warpdotdev", "common-skills")
+                .with_checkout_ref(Some("frozen-branch".to_string())),
+        ]
+    );
+}
+
+#[test]
+fn legacy_overrides_keep_live_repository_membership() {
+    let environment = vec![repo(CodeForge::GitHub, "warpdotdev", "warp")];
+    let additional = vec![repo(CodeForge::GitHub, "warpdotdev", "common-skills")];
+    let overrides = vec![commit_head_override(
+        RepositoryForge::GitHub,
+        "warpdotdev",
+        "warp",
+        "0123456789abcdef0123456789abcdef01234567",
+    )];
+
+    assert_eq!(
+        repositories_for_preparation(environment.clone(), additional.clone(), &overrides).unwrap(),
+        [environment, additional].concat()
+    );
+}
 #[test]
 fn single_repo_name_returns_none_for_zero_or_many_repos() {
     let no_repos = Vec::<SourceRepo>::new();
