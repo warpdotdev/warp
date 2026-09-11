@@ -4,6 +4,7 @@ use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warp_graphql::platform_error::PlatformErrorInfo;
 
 use super::classify_driver_error;
+use crate::ai::agent::{RenderableAIError, TransientNetworkErrorKind};
 use crate::ai::agent_sdk::driver::AgentDriverError;
 use crate::ai::agent_sdk::driver::terminal::{BootstrapError, ShareSessionError};
 use crate::server::server_api::ai::TaskGitCredentialsError;
@@ -358,6 +359,42 @@ fn share_session_failed_includes_reason() {
 }
 
 // --- Conversation-level outcomes ---
+
+#[test]
+fn conversation_error_classifies_network_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::transient_network_error(
+            false,
+            false,
+            TransientNetworkErrorKind::UnfinishedExchange,
+        ),
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamNetworkError)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
+
+#[test]
+fn conversation_error_classifies_server_stream_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::AgentStreamFailure {
+            error_message: "Response stream finished with an internal error.".into(),
+        },
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamFailure)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
 
 #[test]
 fn conversation_cancelled_is_cancelled() {

@@ -81,6 +81,10 @@ pub enum AgentTaskState {
 /// See platformerrors package for the canonical definitions.
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq)]
 pub enum PlatformErrorCode {
+    #[cynic(rename = "AGENT_STREAM_FAILURE")]
+    AgentStreamFailure,
+    #[cynic(rename = "AGENT_STREAM_NETWORK_ERROR")]
+    AgentStreamNetworkError,
     #[cynic(rename = "AUTHENTICATION_REQUIRED")]
     AuthenticationRequired,
     #[cynic(rename = "BUDGET_EXCEEDED")]
