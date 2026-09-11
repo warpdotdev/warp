@@ -2,7 +2,9 @@ use string_offset::CharOffset;
 use sum_tree::SumTree;
 
 use super::{BufferCursor, BufferSumTree};
-use crate::content::text::{BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir};
+use crate::content::text::{
+    BufferBlockStyle, BufferText, BufferTextStyle, MarkerDir, TEXT_FRAGMENT_SIZE,
+};
 
 /// Helper function to count the number of Text fragments in a SumTree
 fn count_text_fragments(tree: &SumTree<BufferText>) -> usize {
@@ -80,11 +82,52 @@ fn test_append_str() {
     tree.append_str(" long stringggggggggggggg");
     assert_eq!(tree.debug(), "Something long stringggggggggggggg");
 }
+#[test]
+fn append_str_preserves_fragment_invariants_across_multibyte_lines() {
+    let prefix = "x".repeat(TEXT_FRAGMENT_SIZE - 1);
+    let first_line = "é".repeat(TEXT_FRAGMENT_SIZE);
+    let second_line = "🦀".repeat(TEXT_FRAGMENT_SIZE);
+    let mut tree: SumTree<BufferText> = SumTree::new();
+    tree.append_str(&prefix);
+
+    tree.append_str(&format!("{first_line}\r\n{second_line}"));
+
+    let items = tree.items();
+    let fragment_metadata = items
+        .iter()
+        .filter_map(|item| match item {
+            BufferText::Text {
+                fragment,
+                char_count,
+            } => Some((fragment.len(), *char_count)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fragment_metadata,
+        vec![
+            (TEXT_FRAGMENT_SIZE - 1, (TEXT_FRAGMENT_SIZE - 1) as u8),
+            (TEXT_FRAGMENT_SIZE, (TEXT_FRAGMENT_SIZE / 2) as u8),
+            (TEXT_FRAGMENT_SIZE, (TEXT_FRAGMENT_SIZE / 2) as u8),
+            (TEXT_FRAGMENT_SIZE, (TEXT_FRAGMENT_SIZE / 4) as u8),
+            (TEXT_FRAGMENT_SIZE, (TEXT_FRAGMENT_SIZE / 4) as u8),
+            (TEXT_FRAGMENT_SIZE, (TEXT_FRAGMENT_SIZE / 4) as u8),
+            (TEXT_FRAGMENT_SIZE, (TEXT_FRAGMENT_SIZE / 4) as u8),
+        ]
+    );
+    assert_eq!(items[3], BufferText::Newline);
+    assert_eq!(
+        tree.debug(),
+        format!("{prefix}{first_line}\\n{second_line}")
+    );
+    assert_eq!(
+        tree.extent::<CharOffset>(),
+        CharOffset::from(TEXT_FRAGMENT_SIZE * 3)
+    );
+}
 
 #[test]
 fn test_append_str_merges_with_existing_fragment() {
-    // Test the bug fix: is_first should be true when appending to allow merging
-    // with the last text fragment if it has space remaining
     let mut tree: SumTree<BufferText> = SumTree::new();
 
     // Add initial content that creates a text fragment with remaining capacity
@@ -121,8 +164,6 @@ fn test_append_str_merges_with_existing_fragment() {
 
 #[test]
 fn test_append_str_creates_new_fragment_when_full() {
-    use crate::content::text::TEXT_FRAGMENT_SIZE;
-
     let mut tree: SumTree<BufferText> = SumTree::new();
 
     // Create a text fragment that's at the TEXT_FRAGMENT_SIZE limit
