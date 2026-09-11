@@ -1,6 +1,6 @@
 //! A reusable side panel component for displaying conversation metadata.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -37,9 +37,6 @@ use crate::ai::agent::conversation::AIAgentHarness;
 use crate::ai::agent::conversation::{
     AIConversation, AIConversationId, ConversationStatus, StatusColorStyle,
 };
-use crate::ai::agent::request_metadata::{
-    OrphanedRequestSummary, RequestMetadataRecord, summarize_orphaned_records,
-};
 use crate::ai::agent_conversations_model::entry::PrincipalType;
 use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentRunDisplayStatus, TaskFetchError,
@@ -52,7 +49,6 @@ use crate::ai::ambient_agents::task::TaskPrincipalInfo;
 use crate::ai::ambient_agents::{AmbientAgentTaskId, cancel_task_with_toast};
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::ai::blocklist::usage::request_metadata_turn_view::format_dollars;
 use crate::ai::blocklist::view_util::{UsageLabelKind, format_usage, usage_label};
 use crate::ai::cloud_environments::{AmbientAgentEnvironment, CloudAmbientAgentEnvironment};
 use crate::ai::harness_availability::HarnessAvailabilityModel;
@@ -61,7 +57,6 @@ use crate::ai::runner_display::{self, RunnerPlatform};
 use crate::appearance::Appearance;
 use crate::auth::UserUid;
 use crate::cloud_object::CloudObjectLookup as _;
-use crate::features::FeatureFlag;
 use crate::notebooks::NotebookId;
 use crate::persistence::model::ChargedUsageTotals;
 use crate::send_telemetry_from_ctx;
@@ -97,32 +92,6 @@ const LABEL_VALUE_GAP: f32 = 4.0;
 const SECTION_HEADER_GAP: f32 = 8.0;
 const RUN_METADATA_ACCESS_DENIED_TITLE: &str = "Run metadata is not available";
 const RUN_METADATA_ACCESS_DENIED_DESCRIPTION: &str = "You can view this shared session, but run metadata is only visible to users with access to this run.";
-const ORPHANED_TURNS_LABEL: &str = "Turns not received by this client";
-/// `set_conversation_details` runs on every streaming update while the panel is open, and the
-/// orphaned-turns check downloads the whole persisted task tree, so it is re-run at most this
-/// often for the same conversation.
-const ORPHANED_TURNS_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
-
-/// The server-sourced "turns not received by this client" figure, derived by comparing the
-/// server's persisted per-request records against the ones the local conversation holds.
-#[derive(Debug, Clone, PartialEq)]
-enum OrphanedTurnsState {
-    /// No server conversation to compare against, no local conversation to compare with, or the
-    /// pricing-transparency flag is off; the section is hidden.
-    NotApplicable,
-    Loading,
-    Loaded(OrphanedRequestSummary),
-    Failed,
-}
-
-/// Tracks the last server fetch behind [`OrphanedTurnsState`] so repeated
-/// `set_conversation_details` calls do not re-download the task tree.
-#[derive(Debug, Clone)]
-struct OrphanedTurnsFetch {
-    server_conversation_id: String,
-    started_at: Instant,
-    in_flight: bool,
-}
 
 /// Panel rendering mode.
 #[derive(Debug, Clone, PartialEq)]
@@ -763,33 +732,11 @@ pub struct ConversationDetailsPanel {
     /// panel fetches them on demand to report the platform a run executes on.
     runner_platforms: HashMap<String, RunnerPlatform>,
     runners_loading: bool,
-    orphaned_turns: OrphanedTurnsState,
-    orphaned_turns_fetch: Option<OrphanedTurnsFetch>,
 }
 
 fn trimmed_initial_query(source_prompt: &Option<String>) -> Option<&str> {
     let trimmed = source_prompt.as_ref()?.trim();
     (!trimmed.is_empty()).then_some(trimmed)
-}
-
-/// Formats the orphaned-turns figure: how many of the server's records this client never
-/// received and what those turns were charged in total. The all-received case still names the
-/// number of server records so it is clear a comparison actually happened.
-fn format_orphaned_turns_summary(summary: &OrphanedRequestSummary) -> String {
-    let plural = |count: usize| if count == 1 { "" } else { "s" };
-    if summary.count == 0 {
-        return format!(
-            "None (all {} server record{} received)",
-            summary.server_record_count,
-            plural(summary.server_record_count)
-        );
-    }
-    format!(
-        "{} turn{} \u{b7} {} charged",
-        summary.count,
-        plural(summary.count),
-        format_dollars(summary.total_cost_in_cents)
-    )
 }
 
 impl ConversationDetailsPanel {
@@ -849,8 +796,6 @@ impl ConversationDetailsPanel {
             selected_text: Default::default(),
             runner_platforms: HashMap::new(),
             runners_loading: false,
-            orphaned_turns: OrphanedTurnsState::NotApplicable,
-            orphaned_turns_fetch: None,
         }
     }
 
@@ -863,132 +808,7 @@ impl ConversationDetailsPanel {
         self.set_action_buttons(&data, ctx);
         self.data = data;
         self.ensure_runner_platforms(ctx);
-        self.refresh_orphaned_turns(ctx);
         ctx.notify();
-    }
-
-    /// The server conversation this panel is showing, in either mode.
-    fn server_conversation_id(&self) -> Option<&str> {
-        match &self.data.mode {
-            PanelMode::Conversation {
-                server_conversation_id,
-                ..
-            } => server_conversation_id.as_deref(),
-            PanelMode::Task {
-                conversation_id, ..
-            } => conversation_id.as_deref(),
-        }
-    }
-
-    /// The request ids of the per-request records the local copy of this conversation holds,
-    /// or `None` when this client has no local copy to compare the server's against.
-    fn local_request_metadata_ids(&self, app: &AppContext) -> Option<HashSet<String>> {
-        let history_model = BlocklistAIHistoryModel::as_ref(app);
-        let local_conversation_id = match &self.data.mode {
-            PanelMode::Conversation {
-                ai_conversation_id: Some(id),
-                ..
-            } => Some(*id),
-            PanelMode::Conversation { .. } | PanelMode::Task { .. } => None,
-        }
-        .or_else(|| {
-            let token = ServerConversationToken::new(self.server_conversation_id()?.to_string());
-            history_model.find_conversation_id_by_server_token(&token)
-        })?;
-        history_model
-            .conversation(&local_conversation_id)
-            .map(AIConversation::request_metadata_request_ids)
-    }
-
-    /// Re-derives [`Self::orphaned_turns`] from the server's copy of the conversation. The
-    /// only server-side source of the persisted task tree today is the `ListAIConversations`
-    /// GraphQL query behind `AIClient::get_ai_conversation`, which returns the entire
-    /// base64-encoded `ConversationData`; there is no narrower endpoint, so the fetch is
-    /// rate-limited by [`ORPHANED_TURNS_REFRESH_INTERVAL`].
-    fn refresh_orphaned_turns(&mut self, ctx: &mut ViewContext<Self>) {
-        if !FeatureFlag::PricingTransparency.is_enabled() {
-            self.orphaned_turns = OrphanedTurnsState::NotApplicable;
-            return;
-        }
-        let Some(server_conversation_id) = self.server_conversation_id().map(str::to_string) else {
-            self.orphaned_turns = OrphanedTurnsState::NotApplicable;
-            self.orphaned_turns_fetch = None;
-            return;
-        };
-        if self.local_request_metadata_ids(ctx).is_none() {
-            self.orphaned_turns = OrphanedTurnsState::NotApplicable;
-            self.orphaned_turns_fetch = None;
-            return;
-        }
-
-        if let Some(fetch) = &self.orphaned_turns_fetch
-            && fetch.server_conversation_id == server_conversation_id
-            && (fetch.in_flight || fetch.started_at.elapsed() < ORPHANED_TURNS_REFRESH_INTERVAL)
-        {
-            return;
-        }
-
-        if self
-            .orphaned_turns_fetch
-            .as_ref()
-            .map(|fetch| &fetch.server_conversation_id)
-            != Some(&server_conversation_id)
-        {
-            self.orphaned_turns = OrphanedTurnsState::Loading;
-        }
-        self.orphaned_turns_fetch = Some(OrphanedTurnsFetch {
-            server_conversation_id: server_conversation_id.clone(),
-            started_at: Instant::now(),
-            in_flight: true,
-        });
-
-        let client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let token = ServerConversationToken::new(server_conversation_id.clone());
-        ctx.spawn(
-            async move { client.get_ai_conversation(token).await },
-            move |me, result, ctx| {
-                let is_current = me
-                    .orphaned_turns_fetch
-                    .as_ref()
-                    .is_some_and(|fetch| fetch.server_conversation_id == server_conversation_id);
-                if !is_current {
-                    return;
-                }
-                if let Some(fetch) = me.orphaned_turns_fetch.as_mut() {
-                    fetch.in_flight = false;
-                }
-                me.orphaned_turns = match result {
-                    Ok((conversation_data, _metadata)) => {
-                        let server_records =
-                            RequestMetadataRecord::records_in_conversation_data(&conversation_data);
-                        match me.local_request_metadata_ids(ctx) {
-                            Some(local_ids) => OrphanedTurnsState::Loaded(
-                                summarize_orphaned_records(&server_records, &local_ids),
-                            ),
-                            None => OrphanedTurnsState::NotApplicable,
-                        }
-                    }
-                    Err(err) => {
-                        log::warn!(
-                            "Failed to fetch server conversation {server_conversation_id} for the \\
-                             orphaned-turns section: {err}"
-                        );
-                        OrphanedTurnsState::Failed
-                    }
-                };
-                ctx.notify();
-            },
-        );
-    }
-
-    /// The value text for the orphaned-turns field, or `None` when the section is hidden.
-    fn orphaned_turns_value_text(&self) -> Option<String> {
-        match &self.orphaned_turns {
-            OrphanedTurnsState::NotApplicable => None,
-            OrphanedTurnsState::Loading => Some("Checking server\u{2026}".to_string()),
-            OrphanedTurnsState::Failed => Some("Unavailable".to_string()),
-            OrphanedTurnsState::Loaded(summary) => Some(format_orphaned_turns_summary(summary)),
-        }
     }
 
     /// The runner backing this run, by the precedence the server resolves with.
@@ -2516,18 +2336,6 @@ impl View for ConversationDetailsPanel {
                 Container::new(self.render_simple_field(&label, &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
-            );
-        }
-
-        if let Some(orphaned_turns_text) = self.orphaned_turns_value_text() {
-            content.add_child(
-                Container::new(self.render_simple_field(
-                    ORPHANED_TURNS_LABEL,
-                    &orphaned_turns_text,
-                    appearance,
-                ))
-                .with_margin_bottom(FIELD_SPACING)
-                .finish(),
             );
         }
 

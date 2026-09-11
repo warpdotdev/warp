@@ -1,8 +1,6 @@
 //! The client's read-only view of the server-authored `Message.RequestMetadata` records that
 //! ride in the task tree (APP-5720). The client never authors or mutates these; it decodes them
-//! for display and matches them against the server's copy of the conversation.
-
-use std::collections::HashSet;
+//! for display.
 
 use chrono::{DateTime, Local};
 use serde_json::{Value, json};
@@ -268,24 +266,6 @@ impl RequestMetadataRecord {
         })
     }
 
-    /// Every record on `task`, in message order.
-    pub fn records_in_task(task: &api::Task) -> Vec<Self> {
-        task.messages
-            .iter()
-            .filter_map(Self::from_message)
-            .collect()
-    }
-
-    /// Every record in `conversation_data`, root task first, in message order.
-    pub fn records_in_conversation_data(conversation_data: &api::ConversationData) -> Vec<Self> {
-        conversation_data
-            .tasks
-            .iter()
-            .flat_map(|task| task.messages.iter())
-            .filter_map(Self::from_message)
-            .collect()
-    }
-
     pub fn inference_cost_in_cents(&self) -> f32 {
         self.model_charges.iter().map(|c| c.cost_in_cents()).sum()
     }
@@ -490,12 +470,19 @@ impl TurnSummary {
         self.model_charges.iter().map(|c| c.cost_in_cents()).sum()
     }
 
+    pub fn inference_cost_in_credits(&self) -> f32 {
+        self.model_charges.iter().map(|c| c.cost_in_credits()).sum()
+    }
+
     pub fn platform_cost_in_cents(&self) -> f32 {
         self.platform_charges.iter().map(|c| c.cost_in_cents).sum()
     }
 
-    pub fn total_cost_in_cents(&self) -> f32 {
-        self.inference_cost_in_cents() + self.platform_cost_in_cents()
+    pub fn platform_cost_in_credits(&self) -> f32 {
+        self.platform_charges
+            .iter()
+            .map(|c| c.cost_in_credits)
+            .sum()
     }
 
     /// Earliest first token relative to the earliest request start.
@@ -520,19 +507,6 @@ impl TurnSummary {
                 .num_milliseconds()
                 .max(0),
         )
-    }
-
-    /// Total time spent in LLM generation calls across the turn's records.
-    pub fn llm_generation_ms(&self) -> Option<i64> {
-        let mut total = 0i64;
-        let mut any = false;
-        for span in &self.llm_generation_spans {
-            if let Some(ms) = span.duration_ms() {
-                any = true;
-                total += ms;
-            }
-        }
-        any.then_some(total)
     }
 }
 
@@ -631,36 +605,6 @@ pub fn summarize_turn(records: &[RequestMetadataRecord]) -> TurnSummary {
         context_window_usage,
         records: records.to_vec(),
     }
-}
-
-/// The records the server holds for a conversation that the client never received: the number
-/// of such turns and what they were charged in total.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct OrphanedRequestSummary {
-    pub count: usize,
-    pub total_cost_in_cents: f32,
-    /// How many server records were considered in total (orphaned or not).
-    pub server_record_count: usize,
-}
-
-/// Compares the server's records against the request ids the client holds locally. A server
-/// record whose `request_id` has no local counterpart is orphaned.
-pub fn summarize_orphaned_records(
-    server_records: &[RequestMetadataRecord],
-    local_request_ids: &HashSet<String>,
-) -> OrphanedRequestSummary {
-    let mut summary = OrphanedRequestSummary {
-        server_record_count: server_records.len(),
-        ..Default::default()
-    };
-    for record in server_records {
-        if local_request_ids.contains(&record.request_id) {
-            continue;
-        }
-        summary.count += 1;
-        summary.total_cost_in_cents += record.total_cost_in_cents();
-    }
-    summary
 }
 
 #[cfg(test)]

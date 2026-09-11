@@ -1,28 +1,21 @@
-//! The docked, closeable "Turn" panel for one agent turn, backed by the server-authored
-//! `Message.RequestMetadata` record the client received for that turn (APP-5720).
-//!
-//! Same surface as the Turn panel in the turn-usage-stats work (a rich-content item inserted
-//! below the AI block that opened it, dismissed with an "X" in its header, sections laid out in
-//! shared label/value columns), but every number comes from the persisted per-request record
-//! rather than client-side deltas, so what the panel shows after closing and reopening the
-//! conversation is exactly what the server persisted. A turn whose record the client never
-//! received (cancelled or disconnected mid-stream) has no panel; the conversation details
-//! panel reports those turns from the server's copy instead.
+//! A docked panel showing locally received usage and timing metadata for one agent turn.
 
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warpui::elements::{
-    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Flex,
+    Border, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, DropShadow, Empty, Flex,
     Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, Text,
 };
 use warpui::platform::Cursor;
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::render_context_window_usage_icon;
-use crate::ai::agent::request_metadata::{
-    RequestMetadataRecord, RequestOutcome, TurnSummary, summarize_turn,
-};
+use crate::ai::agent::request_metadata::{RequestMetadataRecord, TurnSummary, summarize_turn};
+use crate::ai::blocklist::view_util::{format_credits, format_usage};
 use crate::appearance::Appearance;
+use crate::features::FeatureFlag;
+use crate::settings::UsageDisplayUnit;
+use crate::settings::ai::{AISettings, AISettingsChangedEvent};
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 
@@ -39,7 +32,7 @@ pub enum RequestMetadataTurnViewAction {
     /// The user clicked a model row's label to expand/collapse its token breakdown. Carries
     /// the row's index into [`RequestMetadataRecord::model_charges`].
     ToggleModelExpanded(usize),
-    /// The user clicked the "RAW RECORD" header to show/hide the record as JSON.
+    /// The user clicked the "RAW RECORD" header to show/hide the records as JSON.
     ToggleRawRecord,
 }
 
@@ -70,8 +63,31 @@ pub struct RequestMetadataTurnView {
 }
 
 impl RequestMetadataTurnView {
-    pub fn new(records: Vec<RequestMetadataRecord>) -> Self {
-        let summary = summarize_turn(&records);
+    pub fn new(records: Vec<RequestMetadataRecord>, ctx: &mut ViewContext<Self>) -> Self {
+        // The "Credits" rows' visibility depends on the Credits/Dollars usage-display-unit
+        // setting, so the panel must re-render when the user flips it — otherwise an
+        // already-open panel would show a stale section state until closed and reopened.
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                ctx.notify();
+            }
+        });
+        Self::build(records)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(records: Vec<RequestMetadataRecord>) -> Self {
+        Self::build(records)
+    }
+
+    fn build(records: Vec<RequestMetadataRecord>) -> Self {
+        let mut summary = summarize_turn(&records);
+        // Usage-ranked display order: most tokens first, then model id for stability.
+        summary.model_charges.sort_by(|a, b| {
+            b.tokens()
+                .cmp(&a.tokens())
+                .then_with(|| a.model_id.cmp(&b.model_id))
+        });
         let raw_json = serde_json::to_string_pretty(
             &records
                 .iter()
@@ -223,18 +239,14 @@ impl RequestMetadataTurnView {
         .finish();
 
         let font_family = appearance.ui_font_family();
-        let model_label = if charge.usage_type == "direct_api" {
-            charge.model_id.clone()
-        } else {
-            format!("{} ({})", charge.model_id, charge.usage_type)
-        };
+        let model_id = charge.model_id.clone();
         let chevron_icon = if expanded {
             Icon::ChevronDown
         } else {
             Icon::ChevronRight
         };
         let label = Hoverable::new(row_state.mouse.clone(), move |_state| {
-            let text_element = Text::new(model_label.clone(), font_family, font_size)
+            let text_element = Text::new(model_id.clone(), font_family, font_size)
                 .with_style(warpui::fonts::Properties {
                     weight: warpui::fonts::Weight::Medium,
                     ..Default::default()
@@ -307,6 +319,29 @@ impl RequestMetadataTurnView {
         rows
     }
 
+    /// The per-model rows, plus (in Credits mode) a trailing "Credits" row for the turn's
+    /// inference-only credit total.
+    fn model_usage_rows(
+        &self,
+        appearance: &Appearance,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> Vec<LabelValueRow> {
+        let mut rows: Vec<LabelValueRow> = (0..self.summary.model_charges.len())
+            .flat_map(|index| self.model_row(index, appearance))
+            .collect();
+        if usage_display_unit == UsageDisplayUnit::Credits {
+            rows.push((
+                render_label_text("Credits", appearance),
+                render_value_text(
+                    format_credits(self.summary.inference_cost_in_credits()),
+                    appearance.ui_font_size() + 2.,
+                    appearance,
+                ),
+            ));
+        }
+        rows
+    }
+
     fn inference_usage_header_row(&self, appearance: &Appearance) -> LabelValueRow {
         let header_font_size = appearance.overline_font_size() + 3.;
         let theme = appearance.theme();
@@ -330,41 +365,35 @@ impl RequestMetadataTurnView {
         )
     }
 
-    fn platform_usage_rows(&self, appearance: &Appearance) -> Option<Vec<LabelValueRow>> {
+    /// The "PLATFORM USAGE" section: a header row with the dollar amount in the value column,
+    /// plus (in Credits mode, if any) a trailing "Credits" row for the platform-only credit
+    /// total. `None` when there was no platform charge, to avoid a noisy `$0.00` section.
+    fn platform_usage_rows(
+        &self,
+        appearance: &Appearance,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> Option<Vec<LabelValueRow>> {
         let platform_cents = self.summary.platform_cost_in_cents();
-        let platform_credits: f32 = self
-            .summary
-            .platform_charges
-            .iter()
-            .map(|charge| charge.cost_in_credits)
-            .sum();
-        if platform_cents <= 0.0 && platform_credits <= 0.0 {
+        if platform_cents <= 0.0 {
             return None;
         }
         let header_font_size = appearance.overline_font_size() + 3.;
         let mut rows = vec![(
             Self::render_section_header("PLATFORM USAGE", appearance),
-            render_value_text(
-                format_credits_with_cost(platform_credits, platform_cents),
-                header_font_size,
-                appearance,
-            ),
+            render_value_text(format_dollars(platform_cents), header_font_size, appearance),
         )];
-        let duration_seconds: f64 = self
-            .summary
-            .platform_charges
-            .iter()
-            .map(|charge| charge.duration_seconds)
-            .sum();
-        if duration_seconds > 0.0 {
-            rows.push((
-                render_label_text("Charged duration", appearance),
-                render_value_text(
-                    format_seconds((duration_seconds * 1000.0) as i64),
-                    appearance.ui_font_size() + 2.,
-                    appearance,
-                ),
-            ));
+        if usage_display_unit == UsageDisplayUnit::Credits {
+            let credits = self.summary.platform_cost_in_credits();
+            if credits > 0.0 {
+                rows.push((
+                    render_label_text("Credits", appearance),
+                    render_value_text(
+                        format_credits(credits),
+                        appearance.ui_font_size() + 2.,
+                        appearance,
+                    ),
+                ));
+            }
         }
         Some(rows)
     }
@@ -471,44 +500,30 @@ impl RequestMetadataTurnView {
                 render_value_text(format_seconds(ttft), font_size, appearance),
             ));
         }
-        // The request timespan (server-side processing window) is the headline: the total
-        // agent time, matching the existing usage panel's semantics.
-        if let Some(total) = self.summary.request_duration_ms() {
+        // The agent's own processing time: the sum of the turn's per-request processing
+        // windows, excluding the tool-execution gaps between them. Unknown unless every
+        // record carries its timing.
+        let per_request_total_ms: Option<i64> = self
+            .summary
+            .records
+            .iter()
+            .map(|record| record.request_duration_ms())
+            .sum();
+        if let Some(total) = per_request_total_ms {
             rows.push((
                 render_label_text("Total agent response time", appearance),
                 render_value_text(format_seconds(total), font_size, appearance),
             ));
         }
-        // Per-call LLM timespans as breakdown detail.
-        if let Some(generation) = self.summary.llm_generation_ms() {
-            let call_count = self.summary.llm_generation_spans.len();
+        // Earliest request start to latest request end. Includes tool execution, so it only
+        // adds information (and is only shown) when tools ran between requests.
+        if let Some(wall_ms) = self.summary.request_duration_ms()
+            && per_request_total_ms.is_none_or(|total| wall_ms > total)
+        {
             rows.push((
-                render_indented_label_text("LLM generation", font_size - 1., appearance),
-                render_value_text(
-                    format!(
-                        "{}  /  {generation}",
-                        format_llm_calls(call_count),
-                        generation = format_seconds(generation)
-                    ),
-                    font_size - 1.,
-                    appearance,
-                ),
+                render_label_text("Total time (including tool calls)", appearance),
+                render_value_text(format_seconds(wall_ms), font_size, appearance),
             ));
-            if call_count > 1 {
-                for (index, span) in self.summary.llm_generation_spans.iter().enumerate() {
-                    let Some(ms) = span.duration_ms() else {
-                        continue;
-                    };
-                    rows.push((
-                        render_indented_label_text(
-                            &format!("Call {}", index + 1),
-                            font_size - 2.,
-                            appearance,
-                        ),
-                        render_value_text(format_seconds(ms), font_size - 2., appearance),
-                    ));
-                }
-            }
         }
         (!rows.is_empty()).then_some(rows)
     }
@@ -524,16 +539,16 @@ impl RequestMetadataTurnView {
             ),
         )];
         // A multi-request turn that partially failed says so explicitly, rather than letting the
-        // single worst-outcome badge imply every request failed.
+        // single worst-outcome badge imply every request failed. Name the interrupted count as
+        // such: it is not the worst-outcome count (one Errored + one Canceled is 2 of 2
+        // interrupted, not "2 of 2 Errored").
         if self.summary.interrupted_count > 0 && self.summary.request_count > 1 {
             rows.push((
                 render_label_text("Interrupted", appearance),
                 render_value_text(
                     format!(
-                        "{} of {} {}",
-                        self.summary.interrupted_count,
-                        self.summary.request_count,
-                        self.summary.outcome.label()
+                        "{} of {} requests interrupted",
+                        self.summary.interrupted_count, self.summary.request_count
                     ),
                     font_size,
                     appearance,
@@ -602,7 +617,11 @@ impl RequestMetadataTurnView {
         .finish()
     }
 
-    fn build_label_value_columns(&self, appearance: &Appearance) -> LabelValueColumns {
+    fn build_label_value_columns(
+        &self,
+        appearance: &Appearance,
+        usage_display_unit: UsageDisplayUnit,
+    ) -> LabelValueColumns {
         const ROW_MARGIN_BOTTOM: f32 = 6.;
         const SECTION_END_EXTRA_MARGIN: f32 = 8.;
 
@@ -637,22 +656,12 @@ impl RequestMetadataTurnView {
 
         let (inference_label, inference_value) = self.inference_usage_header_row(appearance);
         push_row(inference_label, inference_value, 8.);
-        let model_rows: Vec<LabelValueRow> = (0..self.summary.model_charges.len())
-            .flat_map(|index| self.model_row(index, appearance))
-            .collect();
-        if model_rows.is_empty() {
-            push_section_rows(
-                vec![(
-                    render_label_text("No inference charged", appearance),
-                    render_value_text("—".to_string(), appearance.ui_font_size() + 2., appearance),
-                )],
-                &mut push_row,
-            );
-        } else {
-            push_section_rows(model_rows, &mut push_row);
-        }
+        push_section_rows(
+            self.model_usage_rows(appearance, usage_display_unit),
+            &mut push_row,
+        );
 
-        if let Some(rows) = self.platform_usage_rows(appearance) {
+        if let Some(rows) = self.platform_usage_rows(appearance, usage_display_unit) {
             push_section_rows(rows, &mut push_row);
         }
 
@@ -713,10 +722,16 @@ impl View for RequestMetadataTurnView {
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        // The panel is a pricing-transparency surface. If the flag turned off while the panel
+        // was open, render nothing until the owning view removes it.
+        if !FeatureFlag::PricingTransparency.is_enabled() {
+            return Empty::new().finish();
+        }
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
+        let usage_display_unit = AISettings::as_ref(app).usage_display_unit;
 
-        let (labels, values) = self.build_label_value_columns(appearance);
+        let (labels, values) = self.build_label_value_columns(appearance, usage_display_unit);
 
         let mut content = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -781,25 +796,33 @@ impl TypedActionView for RequestMetadataTurnView {
     }
 }
 
-/// The trigger icon's hover tooltip: the turn's outcome, total charge across its records, and
-/// how many requests it spans when there are several.
-pub fn turn_panel_tooltip_text(records: &[RequestMetadataRecord]) -> String {
-    let summary = summarize_turn(records);
-    let outcome = match summary.outcome {
-        RequestOutcome::Completed | RequestOutcome::Unspecified { incomplete: false } => {
-            String::new()
+/// The trigger icon's hover tooltip: the turn's charge, honoring the user's credits/dollars
+/// display-unit setting. Stays quiet ("Turn") rather than fabricating a total when neither
+/// figure is known.
+pub(crate) fn turn_panel_tooltip_text(
+    records: &[RequestMetadataRecord],
+    usage_display_unit: UsageDisplayUnit,
+) -> String {
+    let total_cost_in_cents: f32 = records
+        .iter()
+        .map(|record| record.total_cost_in_cents())
+        .sum();
+    let total_credits: f32 = records
+        .iter()
+        .map(|record| record.total_cost_in_credits())
+        .sum();
+    let turn_cost = Some(total_cost_in_cents).filter(|&cost| cost > 0.0);
+    let credits = Some(total_credits).filter(|&credits| credits > 0.0);
+    match (credits, turn_cost) {
+        (Some(credits), _) => format!(
+            "Turn: {}",
+            format_usage(credits, None, turn_cost, usage_display_unit)
+        ),
+        (None, Some(cost)) if usage_display_unit == UsageDisplayUnit::Dollars => {
+            format!("Turn: ${:.2}", cost / 100.0)
         }
-        interrupted => format!(" · {}", interrupted.label()),
-    };
-    let count = if summary.request_count > 1 {
-        format!(" · {} requests", summary.request_count)
-    } else {
-        String::new()
-    };
-    format!(
-        "Turn: {}{outcome}{count}",
-        format_dollars(summary.total_cost_in_cents())
-    )
+        (None, _) => "Turn".to_string(),
+    }
 }
 fn render_label_text(text: &str, appearance: &Appearance) -> Box<dyn Element> {
     render_label_text_sized(text, appearance.ui_font_size() + 2., appearance)
@@ -830,7 +853,6 @@ fn render_value_text(text: String, font_size: f32, appearance: &Appearance) -> B
     let theme = appearance.theme();
     Text::new(text, appearance.ui_font_family(), font_size)
         .with_color(blended_colors::text_main(theme, theme.surface_2()))
-        .with_selectable(true)
         .finish()
 }
 
@@ -846,30 +868,8 @@ fn format_tokens_with_cost(tokens: u64, cost_in_cents: f32) -> String {
     )
 }
 
-/// Formats a credits amount together with its dollar equivalent.
-fn format_credits_with_cost(cost_in_credits: f32, cost_in_cents: f32) -> String {
-    format!(
-        "{}  /  {}",
-        format_credits(cost_in_credits),
-        format_dollars(cost_in_cents)
-    )
-}
-
-pub(crate) fn format_credits(cost_in_credits: f32) -> String {
-    let credits = if cost_in_credits == 0.0 {
-        0.0
-    } else {
-        cost_in_credits
-    };
-    format!("{credits:.2} credits")
-}
-
 pub(crate) fn format_web_searches(count: u32) -> String {
     format!("{count} search{}", if count == 1 { "" } else { "es" })
-}
-
-fn format_llm_calls(count: usize) -> String {
-    format!("{count} call{}", if count == 1 { "" } else { "s" })
 }
 
 /// Formats a US-cent amount as dollars. A non-zero amount that would round to `$0.00` is shown

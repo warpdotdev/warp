@@ -1172,8 +1172,6 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                     .flatten()
                 {
                     output_items.add_child(footer);
-                } else if let Some(footer) = render_turn_panel_only_footer(props, app) {
-                    output_items.add_child(footer);
                 }
 
                 if let Some(request_refunded_count) = props.request_refunded_count {
@@ -3483,10 +3481,11 @@ fn footer_icon_button_styles(app: &AppContext) -> (UiComponentStyles, UiComponen
 
 /// The server-authored per-request records for the user-visible turn this block closes
 /// (APP-5720): every record across the turn's exchanges, from the user's query through the last
-/// tool-result round trip. Empty unless this block is the turn's last exchange (a mid-turn
-/// tool-call block renders no trigger; the turn's total lands on its final block), for a turn the
-/// client cancelled or disconnected from, for a conversation predating the record, or when
-/// pricing transparency is off.
+/// tool-result round trip. Empty unless this block passes [`AIConversation::turn_panel_records`] —
+/// the shared eligibility check (last exchange of the turn, and every request in the turn has
+/// delivered its record) — so a mid-turn tool-call block, a turn the client cancelled or
+/// disconnected from, a conversation predating the record, and pricing transparency off all
+/// render no trigger.
 fn request_metadata_for_block(props: Props, app: &AppContext) -> Vec<RequestMetadataRecord> {
     if !FeatureFlag::PricingTransparency.is_enabled() {
         return Vec::new();
@@ -3497,59 +3496,9 @@ fn request_metadata_for_block(props: Props, app: &AppContext) -> Vec<RequestMeta
     let Some(conversation) = props.model.conversation(app) else {
         return Vec::new();
     };
-    if !conversation.is_last_exchange_in_turn(exchange_id) {
-        return Vec::new();
-    }
-    conversation.request_metadata_records_for_turn(exchange_id)
-}
-
-/// Whether any tool call in this block's output has not finished yet. A finished block that ends
-/// in an unanswered tool call is the tail of an in-progress turn: its follow-up request has not
-/// started, so the turn's controls should not appear on it yet.
-fn has_pending_output_action(props: Props, app: &AppContext) -> bool {
-    let Some(output) = props.model.status(app).output_to_render() else {
-        return false;
-    };
-    let action_model = props.action_model.as_ref(app);
-    output.get().actions().any(|action| {
-        action_model
-            .get_action_status(&action.id)
-            .is_none_or(|status| !status.is_done())
-    })
-}
-
-/// The turn-panel trigger on its own, for blocks whose full response footer is not rendered.
-///
-/// The full footer (ratings, fork, usage) is deliberately shown only on the conversation's
-/// latest visible exchange, but every earlier turn's total must stay reachable on the block
-/// that closes that turn, including after close/reopen. A still-streaming block has no record
-/// yet and renders nothing here.
-fn render_turn_panel_only_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
-    if props.model.status(app).is_streaming()
-        || !props.model.request_type(app).is_active()
-        || has_pending_output_action(props, app)
-    {
-        return None;
-    }
-    let records = request_metadata_for_block(props, app);
-    if records.is_empty() {
-        return None;
-    }
-    let (style_override, style_override_with_background) = footer_icon_button_styles(app);
-    Some(
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(render_turn_panel_button(
-                props,
-                &records,
-                style_override,
-                style_override_with_background,
-                app,
-            ))
-            .finish()
-            .with_content_item_spacing()
-            .finish(),
-    )
+    conversation
+        .turn_panel_records(exchange_id)
+        .unwrap_or_default()
 }
 
 fn render_response_footer(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
@@ -3779,7 +3728,7 @@ fn render_turn_panel_button(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let ui_builder = appearance.ui_builder().clone();
-    let tooltip_text = turn_panel_tooltip_text(records);
+    let tooltip_text = turn_panel_tooltip_text(records, AISettings::as_ref(app).usage_display_unit);
 
     icon_button(
         appearance,
