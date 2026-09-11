@@ -2083,7 +2083,6 @@ where
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::EventsFromAgents(_)
                 | api::message::Message::PassiveSuggestionResult(_)
-                // Appended after the request finishes, so this is not first-output activity.
                 | api::message::Message::RequestMetadata(_) => None,
                 // Anything else is considered agent/stream activity we want to measure
                 api::message::Message::AgentOutput(_)
