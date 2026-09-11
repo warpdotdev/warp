@@ -7,17 +7,19 @@ use ai::api_keys::{
     GeapCredentialsState,
 };
 use chrono::Local;
+use session_sharing_protocol::common::{ParticipantId, ServerConversationToken};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
-use warpui::{App, SingletonEntity, ViewHandle};
+use warpui::{App, SingletonEntity, ViewContext, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, AgentReviewCommentBatch, CancellationReason,
+    EntrypointType, ImageContext, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -568,6 +570,465 @@ fn drop_pending_events_for_exiting_conversation_drops_pending_events() {
     });
 }
 
+fn create_conversation_with_pending_message(
+    terminal: &mut TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) -> (AIConversationId, ServerConversationToken) {
+    let (conversation_id, server_token) = create_in_progress_conversation(terminal, ctx);
+    OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+        service.enqueue_event_batch(
+            conversation_id,
+            vec![PendingEvent {
+                event_id: "event-1".to_string(),
+                source_agent_id: "parent-agent".to_string(),
+                attempt_count: 0,
+                detail: PendingEventDetail::Message {
+                    message_id: "message-1".to_string(),
+                    addresses: vec!["child-agent".to_string()],
+                    subject: "Continue implementation".to_string(),
+                    message_body: "Apply the requested revision.".to_string(),
+                },
+            }],
+            ctx,
+        );
+    });
+    (conversation_id, server_token)
+}
+
+fn create_in_progress_conversation(
+    terminal: &mut TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) -> (AIConversationId, ServerConversationToken) {
+    let server_token = ServerConversationToken::new();
+    let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+        let conversation_id =
+            history.start_new_conversation(terminal.id(), false, false, false, ctx);
+        history.set_server_conversation_token_for_conversation(
+            conversation_id,
+            server_token.to_string(),
+        );
+        history.update_conversation_status(
+            terminal.id(),
+            conversation_id,
+            crate::ai::agent::conversation::ConversationStatus::InProgress,
+            ctx,
+        );
+        conversation_id
+    });
+    (conversation_id, server_token)
+}
+
+fn send_input_with_pending_message(
+    terminal: &mut TerminalView,
+    ai_input: AIAgentInput,
+    ctx: &mut ViewContext<TerminalView>,
+) -> AIConversationId {
+    let (conversation_id, _) = create_conversation_with_pending_message(terminal, ctx);
+    let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&conversation_id)
+        .expect("conversation should exist")
+        .get_root_task_id()
+        .clone();
+    terminal.ai_controller().update(ctx, |controller, ctx| {
+        controller.send_query(
+            super::InputQuery {
+                which_task: super::WhichTask::Task {
+                    conversation_id,
+                    task_id,
+                },
+                input_query: super::InputQueryType::AIInputType { ai_input },
+                additional_attachments: HashMap::new(),
+                queued_query_id: None,
+            },
+            EntrypointType::UserInitiated,
+            None,
+            false,
+            ctx,
+        );
+    });
+    conversation_id
+}
+
+#[test]
+fn code_review_preserves_dedicated_request_and_leaves_agent_message_pending() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+            send_input_with_pending_message(
+                terminal,
+                AIAgentInput::CodeReview {
+                    context: Arc::default(),
+                    review_comments: AgentReviewCommentBatch {
+                        comments: vec![],
+                        diff_set: HashMap::new(),
+                    },
+                },
+                ctx,
+            )
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("code review should create an exchange")
+                .input;
+            assert!(matches!(
+                inputs.as_slice(),
+                [AIAgentInput::CodeReview { .. }]
+            ));
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.has_pending_events(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn code_review_preserves_pending_passive_result_for_the_next_user_query() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+            let (conversation_id, _) = create_in_progress_conversation(terminal, ctx);
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                controller.queue_passive_suggestion_result(
+                    conversation_id,
+                    PassiveSuggestionResultType::Prompt {
+                        prompt: "Apply this suggestion.".to_string(),
+                    },
+                    None,
+                );
+                let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+                    .conversation(&conversation_id)
+                    .expect("conversation should exist")
+                    .get_root_task_id()
+                    .clone();
+                controller.send_query(
+                    super::InputQuery {
+                        which_task: super::WhichTask::Task {
+                            conversation_id,
+                            task_id,
+                        },
+                        input_query: super::InputQueryType::AIInputType {
+                            ai_input: AIAgentInput::CodeReview {
+                                context: Arc::default(),
+                                review_comments: AgentReviewCommentBatch {
+                                    comments: vec![],
+                                    diff_set: HashMap::new(),
+                                },
+                            },
+                        },
+                        additional_attachments: HashMap::new(),
+                        queued_query_id: None,
+                    },
+                    EntrypointType::UserInitiated,
+                    None,
+                    false,
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("code review should create an exchange")
+                .input;
+            assert!(matches!(
+                inputs.as_slice(),
+                [AIAgentInput::CodeReview { .. }]
+            ));
+        });
+        terminal.read(&app, |terminal, ctx| {
+            let pending_results = terminal
+                .ai_controller()
+                .as_ref(ctx)
+                .pending_passive_suggestion_results
+                .get(&conversation_id)
+                .expect("passive result should remain queued");
+            assert_eq!(pending_results.len(), 1);
+        });
+
+        terminal.update(&mut app, |terminal, ctx| {
+            assert!(terminal.ai_controller().update(ctx, |controller, ctx| {
+                controller.send_user_query_in_conversation(
+                    "Continue with the user request.".to_string(),
+                    conversation_id,
+                    None,
+                    ctx,
+                )
+            }));
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("user query should create an exchange")
+                .input;
+            let [
+                AIAgentInput::PassiveSuggestionResult { suggestion, .. },
+                AIAgentInput::UserQuery { query, .. },
+            ] = inputs.as_slice()
+            else {
+                panic!("expected one passive result followed by one user query");
+            };
+            assert_eq!(
+                suggestion,
+                &PassiveSuggestionResultType::Prompt {
+                    prompt: "Apply this suggestion.".to_string(),
+                }
+            );
+            assert_eq!(query, "Continue with the user request.");
+        });
+        terminal.read(&app, |terminal, ctx| {
+            assert!(
+                !terminal
+                    .ai_controller()
+                    .as_ref(ctx)
+                    .pending_passive_suggestion_results
+                    .contains_key(&conversation_id)
+            );
+        });
+    });
+}
+
+#[test]
+fn create_environment_preserves_dedicated_request_and_leaves_agent_message_pending() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+            send_input_with_pending_message(
+                terminal,
+                AIAgentInput::CreateEnvironment {
+                    context: Arc::default(),
+                    display_query: None,
+                    repo_paths: vec!["/workspace/project".to_string()],
+                },
+                ctx,
+            )
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("create environment should create an exchange")
+                .input;
+            let [AIAgentInput::CreateEnvironment { repo_paths, .. }] = inputs.as_slice() else {
+                panic!("expected the dedicated create-environment input");
+            };
+            assert_eq!(repo_paths, &["/workspace/project"]);
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.has_pending_events(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn shared_session_wake_includes_pending_agent_messages_in_the_same_exchange() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let (conversation_id, server_token) =
+                create_conversation_with_pending_message(view, ctx);
+            view.ai_controller().update(ctx, |controller, ctx| {
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "Wake for a new agent message.".to_string(),
+                    Some(server_token),
+                    vec![],
+                    ParticipantId::new(),
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let exchanges = history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .all_exchanges();
+            let inputs = &exchanges
+                .last()
+                .expect("shared-session wake should create an exchange")
+                .input;
+
+            let [
+                AIAgentInput::MessagesReceivedFromAgents { messages },
+                AIAgentInput::UserQuery { query, .. },
+            ] = inputs.as_slice()
+            else {
+                panic!("expected one hydrated message input followed by one wake query");
+            };
+            assert_eq!(query, "Wake for a new agent message.");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id, "message-1");
+            assert_eq!(messages[0].sender_agent_id, "parent-agent");
+            assert_eq!(messages[0].message_body, "Apply the requested revision.");
+        });
+        OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
+            assert!(!service.has_pending_events(conversation_id));
+            assert!(
+                service
+                    .drain_events_for_request(conversation_id, ctx)
+                    .is_none(),
+                "the joined message must not be available for a second delivery"
+            );
+        });
+    });
+}
+
+#[test]
+fn user_query_includes_pending_agent_messages_in_the_same_exchange() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let (conversation_id, _) = create_conversation_with_pending_message(view, ctx);
+            assert!(view.ai_controller().update(ctx, |controller, ctx| {
+                controller.send_user_query_in_conversation(
+                    "Continue with the user request.".to_string(),
+                    conversation_id,
+                    None,
+                    ctx,
+                )
+            }));
+            conversation_id
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("user query should create an exchange")
+                .input;
+            let [
+                AIAgentInput::MessagesReceivedFromAgents { messages },
+                AIAgentInput::UserQuery { query, .. },
+            ] = inputs.as_slice()
+            else {
+                panic!("expected one pending message input followed by one user query");
+            };
+            assert_eq!(query, "Continue with the user request.");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id, "message-1");
+        });
+    });
+}
+
+#[test]
+fn shared_session_wake_splits_root_message_from_active_subagent_query() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, root_task_id, subagent_task_id) =
+            terminal.update(&mut app, |view, ctx| {
+                let (conversation_id, server_token) =
+                    create_conversation_with_pending_message(view, ctx);
+                let controller = view.ai_controller().clone();
+                let block_id = {
+                    let mut terminal_model = controller.as_ref(ctx).terminal_model.lock();
+                    terminal_model.simulate_long_running_block("sleep 60", "");
+                    terminal_model.block_list().active_block().id().clone()
+                };
+                let (root_task_id, subagent_task_id) =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                        let conversation = history
+                            .conversation_mut(&conversation_id)
+                            .expect("conversation should exist");
+                        (
+                            conversation.get_root_task_id().clone(),
+                            conversation.create_optimistic_cli_subagent_task_for_test(&block_id),
+                        )
+                    });
+                controller
+                    .as_ref(ctx)
+                    .terminal_model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_mut()
+                    .set_agent_interaction_mode_for_agent_monitored_command(
+                        &subagent_task_id,
+                        conversation_id,
+                    )
+                    .expect("active block should accept subagent metadata");
+
+                controller.update(ctx, |controller, ctx| {
+                    controller.execute_warp_agent_prompt_from_shared_session_injection(
+                        "Wake for a new agent message.".to_string(),
+                        Some(server_token),
+                        vec![],
+                        ParticipantId::new(),
+                        ctx,
+                    );
+                });
+                (conversation_id, root_task_id, subagent_task_id)
+            });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            let root_inputs = &conversation
+                .get_task(&root_task_id)
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("root message should create an exchange")
+                .input;
+            let [AIAgentInput::MessagesReceivedFromAgents { messages }] = root_inputs.as_slice()
+            else {
+                panic!("expected one pending message input in the root task");
+            };
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id, "message-1");
+
+            let subagent_inputs = &conversation
+                .get_task(&subagent_task_id)
+                .expect("subagent task should exist")
+                .last_exchange()
+                .expect("wake query should create an exchange")
+                .input;
+            let [AIAgentInput::UserQuery { query, .. }] = subagent_inputs.as_slice() else {
+                panic!("expected one wake query in the active subagent task");
+            };
+            assert_eq!(query, "Wake for a new agent message.");
+        });
+        OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
+            assert!(
+                service
+                    .drain_events_for_request(conversation_id, ctx)
+                    .is_none(),
+                "the root message must not be available for a second delivery"
+            );
+        });
+    });
+}
 fn team_for_test(uid: i64, name: &str) -> Team {
     Team {
         uid: uid.into(),
