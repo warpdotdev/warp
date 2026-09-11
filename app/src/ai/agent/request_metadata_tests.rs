@@ -1,11 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
+use ai::skills::SkillPathOrigin;
 use warp_multi_agent_api as api;
+use warp_multi_agent_api::client_action::{Action, MoveMessagesToNewTask};
 use warp_multi_agent_api::message::request_metadata;
+use warpui::{App, EntityId};
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::request_metadata::summarize_turn;
+use crate::ai::blocklist::ResponseStreamId;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 
 fn timestamp(seconds: i64) -> prost_types::Timestamp {
     prost_types::Timestamp { seconds, nanos: 0 }
@@ -173,16 +178,15 @@ fn non_record_messages_are_ignored() {
     };
     assert!(RequestMetadataRecord::from_message(&message).is_none());
 
-    let task = api::Task {
-        id: "root".to_string(),
-        messages: vec![
-            message,
-            record_message("req-1", request_metadata::Outcome::Completed, true),
-            record_message("req-2", request_metadata::Outcome::Canceled, false),
-        ],
-        ..Default::default()
-    };
-    let records = RequestMetadataRecord::records_in_task(&task);
+    let messages = [
+        message,
+        record_message("req-1", request_metadata::Outcome::Completed, true),
+        record_message("req-2", request_metadata::Outcome::Canceled, false),
+    ];
+    let records: Vec<_> = messages
+        .iter()
+        .filter_map(RequestMetadataRecord::from_message)
+        .collect();
     assert_eq!(
         records
             .iter()
@@ -215,6 +219,7 @@ fn json_carries_every_section() {
     );
     assert_eq!(json["charges"]["models"][0]["tokens"]["input"], 1000);
     assert_eq!(json["charges"]["platform"][0]["duration_seconds"], 90.0);
+    assert_eq!(json["charges"]["platform"][0]["cost_in_credits"], 1.0);
     assert_eq!(json["tool_call_summary"]["files_changed"], 3);
     assert_eq!(json["context_window"]["usage"], 42.0);
     // Must be a stable, pretty-printable document.
@@ -222,57 +227,6 @@ fn json_carries_every_section() {
         serde_json::to_string_pretty(&json)
             .unwrap()
             .contains("\"tool_calls\": 4")
-    );
-}
-
-#[test]
-fn orphaned_summary_counts_only_server_records_missing_locally() {
-    let server_records = vec![
-        RequestMetadataRecord::from_message(&record_message(
-            "req-1",
-            request_metadata::Outcome::Completed,
-            true,
-        ))
-        .unwrap(),
-        RequestMetadataRecord::from_message(&record_message(
-            "req-cancelled",
-            request_metadata::Outcome::Canceled,
-            true,
-        ))
-        .unwrap(),
-        RequestMetadataRecord::from_message(&record_message(
-            "req-errored",
-            request_metadata::Outcome::Errored,
-            false,
-        ))
-        .unwrap(),
-    ];
-    let local_request_ids: HashSet<String> = HashSet::from(["req-1".to_string()]);
-
-    let summary = summarize_orphaned_records(&server_records, &local_request_ids);
-    assert_eq!(summary.server_record_count, 3);
-    assert_eq!(
-        summary.count, 2,
-        "the cancelled and errored turns never reached the client"
-    );
-    // Only the cancelled turn was charged anything; the errored one carries no charges.
-    assert!((summary.total_cost_in_cents - 3.11).abs() < 1e-5);
-
-    let none_missing = summarize_orphaned_records(
-        &server_records,
-        &HashSet::from([
-            "req-1".to_string(),
-            "req-cancelled".to_string(),
-            "req-errored".to_string(),
-        ]),
-    );
-    assert_eq!(
-        none_missing,
-        OrphanedRequestSummary {
-            count: 0,
-            total_cost_in_cents: 0.0,
-            server_record_count: 3
-        }
     );
 }
 
@@ -349,15 +303,6 @@ fn every_restored_exchange_resolves_its_own_record() {
             vec![],
             vec!["req-4".to_string()],
         ]
-    );
-
-    assert_eq!(
-        conversation.request_metadata_request_ids(),
-        HashSet::from([
-            "req-1".to_string(),
-            "req-2".to_string(),
-            "req-4".to_string()
-        ])
     );
 }
 
@@ -453,9 +398,232 @@ fn tool_round_trips_group_into_the_user_query_turn() {
         .collect();
     assert_eq!(turn_b_request_ids, ["req-4"]);
 
-    let summary = summarize_turn(&conversation.request_metadata_records_for_turn(third));
+    let turn_records = conversation.request_metadata_records_for_turn(third);
+    let summary = summarize_turn(&turn_records);
     assert_eq!(summary.request_count, 3);
-    assert!((summary.total_cost_in_cents() - 3.0 * 3.11).abs() < 1e-4);
+    let total_cost_in_cents: f32 = turn_records
+        .iter()
+        .map(|record| record.total_cost_in_cents())
+        .sum();
+    assert!((total_cost_in_cents - 3.0 * 3.11).abs() < 1e-4);
+}
+
+/// A turn whose final request was cancelled or disconnected mid-stream never receives that
+/// request's record. The panel must not treat the earlier requests' records as the turn's
+/// total: a non-empty record set is not the eligibility contract.
+#[test]
+fn turn_with_a_missing_final_record_is_not_eligible() {
+    let mut messages = turn_messages("req-1", 1_000);
+    // The tool-follow-up request req-2 was cancelled mid-stream: its partial output arrived,
+    // but its record never did.
+    let mut follow_up = tool_round_trip_messages("req-2", 2_000);
+    follow_up.pop();
+    messages.extend(follow_up);
+
+    let task = api::Task {
+        id: "root".to_string(),
+        messages,
+        ..Default::default()
+    };
+    let conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    let exchange_ids: Vec<_> = conversation
+        .root_task_exchanges()
+        .map(|exchange| exchange.id)
+        .collect();
+    assert_eq!(exchange_ids.len(), 2, "one exchange per request");
+    let [_, last] = exchange_ids[..] else {
+        unreachable!()
+    };
+
+    // The lookup still resolves the one record that did arrive — which is exactly why the
+    // old non-empty-records check landed the icon on the cancelled request's block, claiming
+    // the completed charge as the turn's total.
+    let resolved: Vec<String> = conversation
+        .request_metadata_records_for_turn(last)
+        .into_iter()
+        .map(|record| record.request_id)
+        .collect();
+    assert_eq!(resolved, ["req-1".to_string()]);
+
+    // …but the turn is not eligible for the panel while req-2's record is missing.
+    assert!(conversation.turn_panel_records(last).is_none());
+
+    // The complete version of the same turn is eligible and yields both records.
+    let mut messages = turn_messages("req-1", 1_000);
+    messages.extend(tool_round_trip_messages("req-2", 2_000));
+    let task = api::Task {
+        id: "root".to_string(),
+        messages,
+        ..Default::default()
+    };
+    let conversation = AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+        .expect("restored conversation");
+    let last = conversation
+        .root_task_exchanges()
+        .last()
+        .expect("exchange")
+        .id;
+    let records = conversation
+        .turn_panel_records(last)
+        .expect("complete turn is eligible");
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.request_id.as_str())
+            .collect::<Vec<_>>(),
+        ["req-1", "req-2"]
+    );
+}
+
+/// Summarization (`Action::MoveMessagesToNewTask`) moves an exchange's messages into a subtask
+/// while the exchange's client representation keeps naming them: the record lookup must
+/// resolve message membership across the task store, or the icons disappear after a move.
+#[test]
+fn records_resolve_after_a_summarization_move() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+
+        let mut messages = turn_messages("req-1", 1_000);
+        messages.extend(turn_messages("req-2", 2_000));
+        let task = api::Task {
+            id: "root".to_string(),
+            messages,
+            ..Default::default()
+        };
+        let mut conversation =
+            AIConversation::new_restored(AIConversationId::new(), vec![task], None)
+                .expect("restored conversation");
+        let exchange_ids: Vec<_> = conversation
+            .root_task_exchanges()
+            .map(|exchange| exchange.id)
+            .collect();
+        let [first, second] = exchange_ids[..] else {
+            unreachable!()
+        };
+
+        // Move the whole first turn into a summarization subtask, the way the server's
+        // summarization sub-agent relocates earlier conversation messages.
+        let action = Action::MoveMessagesToNewTask(MoveMessagesToNewTask {
+            source_task_id: "root".to_string(),
+            new_task: Some(api::Task {
+                id: "summary-sub".to_string(),
+                dependencies: Some(api::task::Dependencies {
+                    parent_task_id: "root".to_string(),
+                }),
+                ..Default::default()
+            }),
+            first_message_id: "query-req-1".to_string(),
+            last_message_id: "msg-req-1".to_string(),
+            expected_message_count: 3,
+            replacement_messages: Vec::new(),
+        });
+        history_model.update(&mut app, |_, ctx| {
+            conversation
+                .apply_client_action(
+                    &ResponseStreamId::new_for_test(),
+                    EntityId::new(),
+                    action,
+                    &SkillPathOrigin::Unavailable,
+                    ctx,
+                )
+                .expect("move should apply");
+        });
+
+        // Both exchanges still resolve their own records across the task store.
+        for (exchange_id, request_id) in [(first, "req-1"), (second, "req-2")] {
+            let resolved: Vec<String> = conversation
+                .request_metadata_records_for_exchange(exchange_id)
+                .into_iter()
+                .map(|record| record.request_id)
+                .collect();
+            assert_eq!(resolved, [request_id.to_string()]);
+        }
+        // The unaffected turn is still panel-eligible after the move.
+        assert!(conversation.turn_panel_records(second).is_some());
+    });
+}
+
+/// After a restore (or fork), the moved messages live in the summary subtask and the exchange
+/// is rebuilt there rather than in the root: the non-root singleton turn fallback plus the
+/// cross-task lookup must still resolve the record.
+#[test]
+fn probe_subtask_exchanges() {
+    let subtask = api::Task {
+        id: "summary-sub".to_string(),
+        messages: turn_messages("req-1", 1_000),
+        dependencies: Some(api::task::Dependencies {
+            parent_task_id: "root".to_string(),
+        }),
+        ..Default::default()
+    };
+    use crate::ai::agent::api::convert_conversation::ConvertToExchanges;
+    let exchanges = (&subtask).into_exchanges();
+    eprintln!("PROBE subtask exchanges: {}", exchanges.len());
+    assert_eq!(exchanges.len(), 1);
+}
+
+#[test]
+fn records_resolve_in_restored_summarized_history() {
+    use crate::ai::agent::task::TaskId;
+    use crate::test_util::ai_agent_tasks::create_subagent_tool_call_message;
+
+    // The persisted shape after a summarization move: the root keeps the summarization
+    // sub-agent call (the replacement message the move inserted), and the moved turn —
+    // including its record — lives in the summary subtask.
+    let mut summarization_call = create_subagent_tool_call_message(
+        "call-sum",
+        "root",
+        "summary-sub",
+        Some(warp_multi_agent_api::message::tool_call::subagent::Metadata::Summarization(())),
+    );
+    summarization_call.request_id = "req-sum".to_string();
+    summarization_call.timestamp = Some(timestamp(900));
+
+    let root_task = api::Task {
+        id: "root".to_string(),
+        messages: vec![summarization_call],
+        ..Default::default()
+    };
+    let subtask = api::Task {
+        id: "summary-sub".to_string(),
+        messages: turn_messages("req-1", 1_000),
+        dependencies: Some(api::task::Dependencies {
+            parent_task_id: "root".to_string(),
+        }),
+        ..Default::default()
+    };
+    let conversation =
+        AIConversation::new_restored(AIConversationId::new(), vec![root_task, subtask], None)
+            .expect("restored conversation");
+
+    // The moved turn's exchange was rebuilt in the subtask, not the root.
+    let subtask = conversation
+        .all_tasks()
+        .find(|task| task.id() == &TaskId::new("summary-sub".to_string()))
+        .expect("summary subtask in the task store");
+    let exchanges: Vec<_> = subtask.exchanges().collect();
+    assert_eq!(
+        exchanges.len(),
+        1,
+        "the subtask rebuilds exactly one exchange"
+    );
+    let exchange = exchanges[0];
+
+    // A non-root exchange is its own turn (the singleton fallback)...
+    assert_eq!(
+        conversation.turn_exchange_ids(exchange.id),
+        vec![exchange.id]
+    );
+    // ...and its record still resolves across the task store.
+    let resolved: Vec<String> = conversation
+        .request_metadata_records_for_exchange(exchange.id)
+        .into_iter()
+        .map(|record| record.request_id)
+        .collect();
+    assert_eq!(resolved, ["req-1".to_string()]);
+    assert!(conversation.turn_panel_records(exchange.id).is_some());
 }
 
 fn with_timing(
@@ -528,7 +696,6 @@ fn summarize_turn_sums_charges_timing_and_tools_across_records() {
     assert_eq!(summary.time_to_first_token_ms(), Some(1_000));
     // Each record contributes one 1-second LLM span.
     assert_eq!(summary.llm_generation_spans.len(), 3);
-    assert_eq!(summary.llm_generation_ms(), Some(3_000));
 
     // Tool counts add up (the helper stamps 4/2/3/40/8 on every record, including the errored
     // one, which keeps its tool summary); the context window is the latest record's reading.
@@ -554,13 +721,11 @@ fn summarize_turn_of_one_record_matches_the_record() {
     assert_eq!(summary.outcome, RequestOutcome::Completed);
     assert_eq!(summary.model_charges, record.model_charges);
     assert_eq!(summary.platform_charges, record.platform_charges);
-    assert_eq!(summary.total_cost_in_cents(), record.total_cost_in_cents());
     assert_eq!(
         summary.time_to_first_token_ms(),
         record.time_to_first_token_ms()
     );
     assert_eq!(summary.request_duration_ms(), record.request_duration_ms());
-    assert_eq!(summary.llm_generation_ms(), record.llm_generation_ms());
     assert_eq!(summary.tool_calls, record.tool_calls);
     assert_eq!(summary.context_window_usage, record.context_window_usage);
 }

@@ -7139,12 +7139,6 @@ impl TerminalView {
         ctx.notify();
     }
 
-    /// Handle the opening and closing of the per-turn request-metadata "Turn" panel. Mirrors
-    /// `handle_usage_footer_toggled`, but is a fully independent surface: a separate rich-content
-    /// item, tracked in its own `turn_panel_view_ids` map. The panel is built from the records the
-    /// client holds for the whole user-visible turn the block closes (a turn spans one exchange
-    /// per API request), so a turn without any locally-received record (cancelled or disconnected
-    /// mid-stream) cannot open one.
     fn handle_turn_panel_toggled(
         &mut self,
         source_ai_block_view_id: EntityId,
@@ -7166,21 +7160,28 @@ impl TerminalView {
             return;
         }
 
+        // The panel is a pricing-transparency surface. If the flag turned off while the
+        // trigger was on screen, the block still dispatches the toggle: close-only, no
+        // new panel (the trigger itself disappears on the block's next render).
+        if !FeatureFlag::PricingTransparency.is_enabled() {
+            ctx.notify();
+            return;
+        }
+
         let Some(conversation) =
             BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)
         else {
             report_error!("Could not find conversation for turn panel");
             return;
         };
-        let records = conversation.request_metadata_records_for_turn(exchange_id);
-        if records.is_empty() {
+        let Some(records) = conversation.turn_panel_records(exchange_id) else {
             log::warn!(
-                "No request metadata records for the turn of exchange {exchange_id}; not opening turn panel"
+                "No complete request metadata for the turn of exchange {exchange_id}; not opening turn panel"
             );
             return;
-        }
+        };
 
-        let turn_view = ctx.add_typed_action_view(|_| RequestMetadataTurnView::new(records));
+        let turn_view = ctx.add_typed_action_view(|ctx| RequestMetadataTurnView::new(records, ctx));
 
         // Close the panel when the user clicks its "X" button.
         ctx.subscribe_to_view(&turn_view, move |me, _, event, ctx| match event {

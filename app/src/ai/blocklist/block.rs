@@ -6436,8 +6436,6 @@ pub enum AIBlockAction {
     ToggleIsUsageFooterExpanded,
     /// Toggle the per-turn request-metadata "Turn" panel expansion state.
     ToggleIsTurnPanelExpanded,
-    /// Explicitly set the "Turn" panel's expansion state, for callers that mean "close" (or
-    /// "open") rather than "toggle" and so must not depend on the panel's current state.
     SetIsTurnPanelExpanded(bool),
     CommentExpanded {
         id: CommentId,
