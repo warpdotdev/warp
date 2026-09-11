@@ -549,22 +549,6 @@ fn records_resolve_after_a_summarization_move() {
 /// is rebuilt there rather than in the root: the non-root singleton turn fallback plus the
 /// cross-task lookup must still resolve the record.
 #[test]
-fn probe_subtask_exchanges() {
-    let subtask = api::Task {
-        id: "summary-sub".to_string(),
-        messages: turn_messages("req-1", 1_000),
-        dependencies: Some(api::task::Dependencies {
-            parent_task_id: "root".to_string(),
-        }),
-        ..Default::default()
-    };
-    use crate::ai::agent::api::convert_conversation::ConvertToExchanges;
-    let exchanges = (&subtask).into_exchanges();
-    eprintln!("PROBE subtask exchanges: {}", exchanges.len());
-    assert_eq!(exchanges.len(), 1);
-}
-
-#[test]
 fn records_resolve_in_restored_summarized_history() {
     use crate::ai::agent::task::TaskId;
     use crate::test_util::ai_agent_tasks::create_subagent_tool_call_message;
