@@ -172,6 +172,10 @@ impl RepositoryPreparationOverride {
                 );
             }
         }
+        if self.clone_from.is_some() && !matches!(self.head, Some(RepositoryHeadRef::CommitSha(_)))
+        {
+            return Err("clone_from requires an exact COMMIT_SHA repository head".to_string());
+        }
         Ok(())
     }
 }

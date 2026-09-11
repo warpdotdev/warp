@@ -643,6 +643,48 @@ fn complete_policy_validation_rejects_incomplete_and_conflicting_sets() {
             true,
             "remove-repository-origins",
         ),
+        (
+            "substitution without head",
+            vec![
+                complete_policy_override(
+                    "warpdotdev",
+                    "warp",
+                    None,
+                    Some(("warpdotdev", "warp-for-benchmarks")),
+                    RepositoryOriginPolicy::Preserve,
+                ),
+                complete_policy_override(
+                    "warpdotdev",
+                    "common-skills",
+                    None,
+                    None,
+                    RepositoryOriginPolicy::Remove,
+                ),
+            ],
+            false,
+            "exact COMMIT_SHA",
+        ),
+        (
+            "substitution with branch head",
+            vec![
+                complete_policy_override(
+                    "warpdotdev",
+                    "warp",
+                    Some(RepositoryHeadRef::Branch("main".to_string())),
+                    Some(("warpdotdev", "warp-for-benchmarks")),
+                    RepositoryOriginPolicy::Preserve,
+                ),
+                complete_policy_override(
+                    "warpdotdev",
+                    "common-skills",
+                    None,
+                    None,
+                    RepositoryOriginPolicy::Remove,
+                ),
+            ],
+            false,
+            "exact COMMIT_SHA",
+        ),
     ];
 
     for (name, overrides, remove_origins, expected) in cases {
@@ -662,18 +704,21 @@ fn complete_policy_validation_rejects_target_collisions() {
         repo(CodeForge::GitHub, "warpdotdev", "common-skills"),
     ];
     let shared_target = Some(("warpdotdev", "benchmarks"));
+    let pinned_head = Some(RepositoryHeadRef::CommitSha(
+        "0123456789abcdef0123456789abcdef01234567".to_string(),
+    ));
     let duplicate_target = vec![
         complete_policy_override(
             "warpdotdev",
             "warp",
-            None,
+            pinned_head.clone(),
             shared_target,
             RepositoryOriginPolicy::Preserve,
         ),
         complete_policy_override(
             "warpdotdev",
             "common-skills",
-            None,
+            pinned_head.clone(),
             shared_target,
             RepositoryOriginPolicy::Preserve,
         ),
@@ -686,7 +731,7 @@ fn complete_policy_validation_rejects_target_collisions() {
         complete_policy_override(
             "warpdotdev",
             "warp",
-            None,
+            pinned_head,
             Some(("WARPDOTDEV", "COMMON-SKILLS")),
             RepositoryOriginPolicy::Preserve,
         ),

@@ -280,6 +280,19 @@ pub(crate) fn validate_repository_preparation_overrides(
         }
         let mut effective_remotes = HashSet::new();
         for preparation_override in overrides {
+            if preparation_override.clone_from.is_some()
+                && !matches!(
+                    preparation_override.head,
+                    Some(RepositoryHeadRef::CommitSha(_))
+                )
+            {
+                return Err(
+                    PrepareEnvironmentError::InvalidRepositoryPreparationOverrides {
+                        reason: "clone_from requires an exact COMMIT_SHA repository head"
+                            .to_string(),
+                    },
+                );
+            }
             let effective_identity = preparation_override
                 .clone_from
                 .as_ref()

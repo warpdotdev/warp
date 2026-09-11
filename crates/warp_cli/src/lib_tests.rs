@@ -90,6 +90,8 @@ fn agent_run_rejects_malformed_complete_repository_preparation_payloads() {
         r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
         r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","origin_policy":"KEEP"}"#,
         r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"}}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"BRANCH","value":"main"},"clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
     ] {
         Args::try_parse_from([
             "warp",
