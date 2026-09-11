@@ -261,7 +261,7 @@ pub(crate) fn convert_input_context(context: Option<&api::InputContext>) -> Arc<
             let file_context = FileContext::from(content.clone());
 
             if !file_context.file_name.is_empty() && !file_context.content.is_empty() {
-                result.push(AIAgentContext::File(file_context.clone()));
+                result.push(AIAgentContext::File(file_context));
             }
         }
     }
