@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 async-io.workspace = true
 command.workspace = true
+futures.workspace = true
 futures-lite.workspace = true
 hex.workspace = true
 instant.workspace = true
@@ -21,9 +22,11 @@ serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
 tracing.workspace = true
 warp_core.workspace = true
 warp_errors.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
-futures.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }

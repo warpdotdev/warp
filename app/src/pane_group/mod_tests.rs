@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ai::project_context::model::ProjectContextModel;
 use chrono::Utc;
 use instant::Instant;
+use mockito::Matcher;
 use pathfinder_geometry::rect::RectF;
 use persistence::model::{
     AgentConversation, AgentConversationData, AgentConversationRecord, ConversationUsageMetadata,
@@ -17,6 +19,7 @@ use session_sharing_protocol::common::SessionId;
 use shared_session::permissions_manager::SessionPermissionsManager;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
+use warp_server_client::base_client::TEAM_UID_HEADER;
 use warp_server_client::iap::IapManager;
 use warpui::platform::{WindowBounds, WindowStyle};
 use warpui::windowing::WindowManager;
@@ -32,9 +35,11 @@ use super::child_agent::{
 use super::*;
 use crate::ai::AIRequestUsageModel;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::StartAgentExecutionMode;
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{
-    AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
+    AIAgentHarness, AIConversation, AIConversationId, ConversationStatus,
+    ServerAIConversationMetadata,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
@@ -48,12 +53,15 @@ use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
 use crate::ai::blocklist::orchestration_topology::descendant_conversation_ids_in_spawn_order;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQueryModel};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedQueryModel, StartAgentRequest,
+    TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR,
+};
 use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::document::ai_document_model::AIDocumentModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::harness_availability::HarnessAvailabilityModel;
-use crate::ai::llms::LLMPreferences;
+use crate::ai::llms::{AvailableLLMs, LLMId, LLMInfo, LLMPreferences, ModelsByFeature};
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
 use crate::ai::mcp::{FileBasedMCPManager, FileMCPWatcher};
 use crate::ai::outline::RepoOutlines;
@@ -79,6 +87,7 @@ use crate::server::ids::ServerId;
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use crate::server::sync_queue::SyncQueue;
+use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::settings::PrivacySettings;
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
@@ -96,6 +105,7 @@ use crate::terminal::shared_session::{
     IsSharedSessionCreator, SharedSessionActionSource, SharedSessionScrollbackType,
     SharedSessionSource, SharedSessionStatus,
 };
+use crate::terminal::view::Event as TerminalViewEvent;
 use crate::test_util::assert_eventually;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::undo_close::UndoCloseStack;
@@ -103,10 +113,12 @@ use crate::warp_managed_paths_watcher::WarpManagedPathsWatcher;
 use crate::workflows::local_workflows::LocalWorkflows;
 use crate::workspace::sync_inputs::SyncedInputState;
 use crate::workspace::{ActiveSession, OneTimeModalModel, WorkspaceRegistry};
+use crate::workspaces::team::Team;
 use crate::workspaces::team_tester::TeamTesterStatus;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_profiles::UserProfiles;
 use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::workspace::Workspace;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, experiments,
 };
@@ -184,6 +196,9 @@ fn initialize_app_with_history(app: &mut App, conversations: Vec<AgentConversati
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
+    app.add_singleton_model(
+        crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue::new,
+    );
     app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(crate::ai::blocklist::BlocklistAIPermissions::new);
@@ -289,6 +304,152 @@ fn new_notebook(ctx: &mut ViewContext<PaneGroup>) -> ViewHandle<NotebookView> {
 
 fn new_ambient_agent_task_id() -> AmbientAgentTaskId {
     Uuid::new_v4().to_string().parse().unwrap()
+}
+#[test]
+fn local_child_dispatch_fails_after_window_team_change() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        app.read(|ctx| {
+            ServerApiProvider::as_ref(ctx)
+                .get()
+                .set_ambient_workload_token_for_test("test-workload-token".to_string());
+        });
+        let team_a_uid: ServerId = 7.into();
+        let team_b_uid: ServerId = 8.into();
+        let team_a_default_model_id = "team-a-default";
+        let team_a_profile_model_id = "team-a-profile";
+        let mut team_a =
+            Team::from_local_cache(team_a_uid, "team-a".to_string(), None, None, None, None);
+        team_a.feature_model_choice = ModelsByFeature {
+            agent_mode: AvailableLLMs::new(
+                team_a_default_model_id.into(),
+                vec![
+                    LLMInfo::new_for_test(team_a_default_model_id),
+                    LLMInfo::new_for_test(team_a_profile_model_id),
+                ],
+                None,
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let mut team_b =
+            Team::from_local_cache(team_b_uid, "team-b".to_string(), None, None, None, None);
+        team_b.feature_model_choice = ModelsByFeature {
+            agent_mode: AvailableLLMs::new(
+                "team-b-only".into(),
+                vec![LLMInfo::new_for_test("team-b-only")],
+                None,
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let workspace = Workspace::from_local_cache(
+            "workspace_uid123456789".to_string().into(),
+            "workspace".to_string(),
+            Some(vec![team_a, team_b]),
+            None,
+        );
+        let workspace_uid = workspace.uid;
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.update_workspaces(vec![workspace], ctx);
+            workspaces.set_current_workspace_uid(workspace_uid, ctx);
+        });
+
+        let pane_group = mock_pane_group(&mut app, Default::default());
+        let window_id = app.read(|ctx| pane_group.window_id(ctx));
+        UserWorkspaces::handle(&app).update(&mut app, |workspaces, ctx| {
+            workspaces.set_team_for_window(window_id, team_a_uid, ctx);
+        });
+        let request_team_scope = app.read(|ctx| {
+            RequestTeamScope::from_scope(
+                &UserWorkspaces::as_ref(ctx).team_context_for_window(window_id),
+            )
+        });
+        let (terminal_view, parent_conversation_id) = pane_group.update(&mut app, |panes, ctx| {
+            let parent_pane_id = panes.focused_pane_id(ctx);
+            let terminal_view = panes
+                .terminal_view_from_pane_id(parent_pane_id, ctx)
+                .unwrap();
+            let team_a_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            LLMPreferences::handle(ctx).update(ctx, |preferences, ctx| {
+                assert!(preferences.update_active_profile_base_model(
+                    &LLMId::from(team_a_profile_model_id),
+                    Some(terminal_view.id()),
+                    ctx,
+                ));
+                preferences.set_agent_mode_llm_override(
+                    &team_a_scope,
+                    terminal_view.id(),
+                    LLMId::from(team_a_default_model_id),
+                    ctx,
+                );
+            });
+            (
+                terminal_view,
+                start_parent_conversation(panes, parent_pane_id, ctx),
+            )
+        });
+
+        let team_a_header = team_a_uid.to_string();
+        let request_mock = {
+            let mut server = warp_core::channel::ChannelState::mock_server();
+            server
+                .mock("POST", "/graphql/v2")
+                .match_query(Matcher::UrlEncoded(
+                    "op".to_string(),
+                    "CreateAgentTask".to_string(),
+                ))
+                .match_header(TEAM_UID_HEADER, team_a_header.as_str())
+                .with_status(200)
+                .with_body(
+                    r#"{"data":{"createAgentTask":{"__typename":"CreateAgentTaskOutput","responseContext":{"serverVersion":null},"taskId":"550e8400-e29b-41d4-a716-446655440000"}}}"#,
+                )
+                .expect(0)
+                .create()
+        };
+        app.update(|ctx| {
+            UserWorkspaces::handle(ctx).update(ctx, |workspaces, ctx| {
+                workspaces.switch_window_to_team(window_id, team_b_uid, ctx);
+            });
+        });
+
+        pane_group.update(&mut app, |_, ctx| {
+            terminal_view.update(ctx, |_, ctx| {
+                ctx.emit(TerminalViewEvent::StartAgentConversation(
+                    StartAgentRequest {
+                        id: Default::default(),
+                        name: "local-child".to_string(),
+                        prompt: "work".to_string(),
+                        execution_mode: StartAgentExecutionMode::Local {
+                            harness_type: None,
+                            model_id: None,
+                        },
+                        lifecycle_subscription: None,
+                        parent_conversation_id,
+                        parent_run_id: Some("parent-run".to_string()),
+                        request_team_scope,
+                    },
+                ));
+            });
+        });
+        request_mock.assert();
+        pane_group.read(&app, |_, ctx| {
+            let history = BlocklistAIHistoryModel::as_ref(ctx);
+            let [child_conversation_id] =
+                history.child_conversation_ids_of(&parent_conversation_id)
+            else {
+                panic!("expected one failed child conversation");
+            };
+            let child = history
+                .conversation(child_conversation_id)
+                .expect("failed child conversation should exist");
+            assert_eq!(child.status(), &ConversationStatus::Error);
+            assert_eq!(
+                child.status_error_message().as_deref(),
+                Some(TEAM_CHANGED_DURING_CHILD_LAUNCH_ERROR)
+            );
+        });
+    });
 }
 
 fn ambient_agent_task_for_current_user(task_id: AmbientAgentTaskId) -> AmbientAgentTask {
@@ -824,6 +985,7 @@ fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
             panes.focus_pane(parent_pane_id, true, ctx);
 
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
+            let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
             let child = create_hidden_child_agent_conversation(
                 panes,
                 HiddenChildAgentConversationRequest {
@@ -835,6 +997,7 @@ fn test_swapping_to_child_agent_from_maximized_pane_keeps_maximized_state() {
                     task_context: None,
                     is_shared_session_creator: IsSharedSessionCreator::No,
                 },
+                &team_context,
                 ctx,
             )
             .expect("fresh hidden child conversation should be created");
@@ -892,6 +1055,7 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
             let parent_pane_id = get_newly_created_pane_id(panes, &[]);
             let parent_conversation_id = start_parent_conversation(panes, parent_pane_id, ctx);
             let task_id = new_ambient_agent_task_id();
+            let team_context = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
 
             let child = create_hidden_child_agent_conversation(
                 panes,
@@ -907,6 +1071,7 @@ fn test_hidden_child_creation_applies_ambient_task_id_to_controller() {
                     }),
                     is_shared_session_creator: IsSharedSessionCreator::No,
                 },
+                &team_context,
                 ctx,
             )
             .expect("fresh hidden child conversation should be created");

@@ -21,13 +21,27 @@ use anyhow::{Context, Result, bail};
 // Use the project's allowed Command wrapper (not std::process::Command, which is
 // disallowed by clippy rules because it flashes a terminal window on Windows).
 use command::blocking::Command as BlockingCommand;
+use warp_isolation_platform::IsolationPlatformError;
 
-use crate::server::server_api::ai::{AIClient, GitCredential, TaskGitCredentialsResponse};
+use crate::server::retry_strategies::with_retry;
+use crate::server::server_api::ai::{
+    AIClient, GitCredential, TaskGitCredentialsError, TaskGitCredentialsResponse,
+};
 use crate::util::path::resolve_executable;
 
 /// How long to wait between credential refresh attempts (~50 minutes, staying
 /// well ahead of the shortest-lived one-hour token expiry).
 pub(crate) const GIT_CREDENTIALS_REFRESH_INTERVAL: Duration = Duration::from_secs(50 * 60);
+pub(crate) const GIT_CREDENTIALS_BOOTSTRAP_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+];
+const GIT_CREDENTIALS_REFRESH_BACKOFF: [Duration; 3] = [
+    Duration::from_secs(60),
+    Duration::from_secs(2 * 60),
+    Duration::from_secs(4 * 60),
+];
 
 const DEFAULT_GIT_NAME: &str = "Warp";
 const DEFAULT_GIT_EMAIL: &str = "agent@warp.dev";
@@ -40,6 +54,37 @@ const AZURE_DEVOPS_AUTH_DIR: &str = "azure-devops";
 const AZURE_DEVOPS_TOKEN_FILENAME: &str = "entra-token";
 const AZURE_DEVOPS_BIN_DIR: &str = "bin";
 const AZURE_CLI_FILENAME: &str = "az";
+
+/// Whether a `TaskGitCredentialsError` is worth retrying. Platform errors
+/// defer to the server's `retryable` flag; request-layer errors are retried
+/// unless they indicate the sandbox has no isolation platform at all, since
+/// retrying can never succeed in that case.
+pub(crate) fn is_retryable(error: &TaskGitCredentialsError) -> bool {
+    match error {
+        TaskGitCredentialsError::Platform { info, .. } => info.retryable,
+        TaskGitCredentialsError::Request(error) => !error
+            .downcast_ref::<IsolationPlatformError>()
+            .is_some_and(|error| {
+                matches!(error, IsolationPlatformError::NoIsolationPlatformDetected)
+            }),
+        TaskGitCredentialsError::Unstructured { .. } => false,
+    }
+}
+
+/// Fails fast with `NoIsolationPlatformDetected` when no workload token can
+/// plausibly be issued, instead of waiting for the request to fail
+/// asynchronously. This accepts both a detected platform with its own
+/// issuance mechanism and a platform-agnostic token configured via
+/// `WARP_WORKLOAD_TOKEN`, matching `issue_workload_token`'s own resolution,
+/// so it only short-circuits attempts that are guaranteed to fail.
+pub(crate) fn ensure_workload_token_available() -> Result<(), TaskGitCredentialsError> {
+    if !warp_isolation_platform::workload_token_available() {
+        return Err(TaskGitCredentialsError::Request(
+            IsolationPlatformError::NoIsolationPlatformDetected.into(),
+        ));
+    }
+    Ok(())
+}
 
 fn home_dir() -> Result<PathBuf> {
     dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))
@@ -701,28 +746,39 @@ fn apply_refreshed_credentials(response: TaskGitCredentialsResponse) -> Result<b
     Ok(response.failed_hosts.is_empty())
 }
 
-/// Perform one git credentials refresh attempt.
+/// Perform one git credentials refresh attempt: fetch fresh credentials from
+/// the server and overwrite the local credential files.
 ///
-/// Returns `Ok(true)` when every applicable forge refreshed, and `Ok(false)`
-/// when some refreshed and others failed. Returns `Err` when the workload-token
-/// issuance, the server call, or the local credential write fails.
+/// Returns `Ok(())` on success (including when the server returns no
+/// credentials, in which case the on-disk files are left untouched). Returns
+/// `Err` when the workload-token issuance, the server API call, or the
+/// credential-file write fails — these are transient failures worth retrying.
 #[tracing::instrument(name = "git_credentials::try_refresh", skip_all, err, fields(
     tags.cloud_agent = true,
     task_id,
 ))]
-async fn try_refresh(task_id: &str, ai_client: &Arc<dyn AIClient>) -> Result<bool> {
+async fn try_refresh(
+    task_id: &str,
+    ai_client: &Arc<dyn AIClient>,
+) -> Result<(), TaskGitCredentialsError> {
+    ensure_workload_token_available()?;
     let workload_token =
         warp_isolation_platform::issue_workload_token(Some(Duration::from_secs(5 * 60)))
             .await
-            .context("Failed to issue workload token for git credentials refresh")?
+            .map_err(|error| TaskGitCredentialsError::Request(error.into()))?
             .token;
 
     let response = ai_client
         .get_task_git_credentials(task_id.to_string(), workload_token, true)
-        .await
-        .context("Failed to fetch git credentials from server")?;
+        .await?;
 
-    apply_refreshed_credentials(response)
+    if apply_refreshed_credentials(response).map_err(TaskGitCredentialsError::Request)? {
+        Ok(())
+    } else {
+        Err(TaskGitCredentialsError::Request(anyhow::anyhow!(
+            "Git credentials remained stale for some forges"
+        )))
+    }
 }
 
 /// Infinite async loop that refreshes git credentials every
@@ -749,53 +805,22 @@ pub(crate) async fn refresh_loop(task_id: String, ai_client: Arc<dyn AIClient>) 
 
         log::info!("Refreshing git credentials for task {task_id}");
 
-        let backoff_delays = [
-            Duration::from_secs(60),
-            Duration::from_secs(2 * 60),
-            Duration::from_secs(4 * 60),
-        ];
-        let mut attempt = 0usize;
-        loop {
-            match try_refresh(&task_id, &ai_client).await {
-                Ok(true) => break,
-                Ok(false) if attempt < backoff_delays.len() => {
-                    let delay = backoff_delays[attempt];
-                    log::warn!(
-                        "Git credentials refreshed for some forges but not others (attempt {}); \
-                         retrying the remaining ones in {}s",
-                        attempt + 1,
-                        delay.as_secs()
-                    );
-                    warpui::r#async::Timer::after(delay).await;
-                    attempt += 1;
-                }
-                Ok(false) => {
-                    log::warn!(
-                        "Git credentials still stale for some forges after {} attempts; \
-                         those forges may lose access before the next refresh cycle",
-                        attempt + 1
-                    );
-                    break;
-                }
-                Err(e) if attempt < backoff_delays.len() => {
-                    let delay = backoff_delays[attempt];
-                    log::warn!(
-                        "Git credentials refresh failed (attempt {}): {e:#}; retrying in {}s",
-                        attempt + 1,
-                        delay.as_secs()
-                    );
-                    warpui::r#async::Timer::after(delay).await;
-                    attempt += 1;
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Git credentials refresh failed after {} attempts: {e:#}; \
-                         credentials may expire before next refresh cycle",
-                        attempt + 1
-                    );
-                    break;
-                }
-            }
+        if with_retry(
+            "Git credentials refresh",
+            || try_refresh(&task_id, &ai_client),
+            is_retryable,
+            |delay| async move {
+                warpui::r#async::Timer::after(delay).await;
+            },
+            |attempts_made| GIT_CREDENTIALS_REFRESH_BACKOFF.get(attempts_made).copied(),
+        )
+        .await
+        .is_err()
+        {
+            log::warn!(
+                "Git credentials refresh stopped after a non-retryable error or exhausted \
+                 retries; credentials may expire before the next refresh cycle"
+            );
         }
     }
 }

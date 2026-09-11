@@ -270,6 +270,30 @@ pub(crate) fn mock_workspace(app: &mut App) -> ViewHandle<Workspace> {
     workspace
 }
 
+#[test]
+fn test_team_navigation_mode() {
+    assert_eq!(
+        team_navigation_mode(true, true, true, false),
+        TeamNavigationMode::TeamSwitcher
+    );
+    assert_eq!(
+        team_navigation_mode(true, true, false, true),
+        TeamNavigationMode::TeamSwitcher
+    );
+    assert_eq!(
+        team_navigation_mode(true, true, false, false),
+        TeamNavigationMode::Hidden
+    );
+    assert_eq!(
+        team_navigation_mode(false, false, false, true),
+        TeamNavigationMode::BrowseTeams
+    );
+    assert_eq!(
+        team_navigation_mode(false, false, false, false),
+        TeamNavigationMode::Hidden
+    );
+}
+
 #[cfg(not(target_family = "wasm"))]
 #[test]
 fn test_open_new_window_for_team_reuses_existing_team_window() {
@@ -5470,4 +5494,53 @@ mod simplified_wasm_tab_bar {
         });
         });
     }
+}
+
+/// Regression test for #14241.
+///
+/// Creating a tab group opens the inline name editor and also spawns a terminal. About
+/// a second later that terminal's bootstrap block becomes visible and takes focus, which
+/// blurs the editor while the user is still typing. Blur used to be treated as
+/// confirmation, so whatever fragment had been typed became the group's name — and was
+/// persisted.
+///
+/// A rename the user never finished must not be committed.
+#[test]
+fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
+    let _grouped_tabs_guard = FeatureFlag::GroupedTabs.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            workspace.handle_action(
+                &WorkspaceAction::SelectNewSessionMenuItem(NewSessionMenuItem::CreateNewTabGroup),
+                ctx,
+            );
+            let group_id = workspace.tabs[0]
+                .group_id
+                .expect("active tab should be assigned to the new group");
+            assert_eq!(workspace.tab_groups[&group_id].name, None);
+
+            workspace.rename_tab_group(group_id, ctx);
+
+            // The user gets three characters in before the terminal is ready.
+            workspace
+                .tab_group_rename_editor
+                .update(ctx, |editor, ctx| {
+                    editor.clear_buffer_and_reset_undo_stack(ctx);
+                    editor.user_insert("Bui", ctx);
+                });
+
+            // The auto-created terminal takes focus; the editor blurs with no user intent
+            // to finish.
+            workspace.handle_tab_group_rename_editor_event(&EditorEvent::Blurred, ctx);
+
+            assert_eq!(
+                workspace.tab_groups[&group_id].name, None,
+                "a rename interrupted by the terminal stealing focus must not be committed"
+            );
+        });
+    });
 }

@@ -36,6 +36,7 @@ use warpui::{
 
 use super::SettingsSection;
 use super::admin_actions::AdminActions;
+use super::join_teams_modal::{JoinTeamsModal, JoinTeamsModalEvent};
 use super::settings_page::{
     MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, render_banner,
     render_cta_banner, render_customer_type_badge, render_separator, render_sub_header,
@@ -79,7 +80,7 @@ use crate::workspaces::team::{DiscoverableTeam, MembershipRole, Team, TeamDelete
 use crate::workspaces::update_manager::{TeamUpdateManager, TeamUpdateManagerEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 use crate::workspaces::workspace::{
-    BillingMetadata, CustomerType, DelinquencyStatus, Workspace, WorkspaceSizePolicy,
+    BillingMetadata, CustomerType, DelinquencyStatus, Workspace, WorkspaceSizePolicy, WorkspaceUid,
 };
 
 const TEAM_MEMBERS_HEADER_POSITION_ID: &str = "team_settings:team_members_header";
@@ -90,6 +91,7 @@ const CREATE_TEAM_DESCRIPTION: &str = "When you create a team, you can collabora
 
 const OR_JOIN_TEAM_HEADER: &str = "Or, join an existing team within your company";
 const JOIN_TEAM_HEADER: &str = "Join an existing team within your company";
+const BROWSE_TEAMS_BUTTON_LABEL: &str = "Browse teams";
 const NO_JOINABLE_TEAMS_HEADER: &str = "There are currently no joinable teams.";
 const NO_TEAMS_TO_JOIN_DESCRIPTION: &str =
     "Contact an admin to join a team to gain access to more features.";
@@ -134,6 +136,11 @@ const OFFLINE_TEXT: &str = "You are offline.";
 const DISABLED_MEMBER_TOOLTIP_TEXT: &str = "This user's account is disabled";
 
 const MAX_CHIP_WIDTH: f32 = 280.;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TeamFooterAction {
+    Leave,
+    Delete,
+}
 
 lazy_static! {
     static ref DOMAIN_NAME_REGEX: Regex =
@@ -183,6 +190,13 @@ pub enum TeamsPageAction {
     RemoveUserFromTeam {
         user_uid: UserUid,
         team_uid: ServerId,
+        member_email: String,
+    },
+    RemoveUserFromWorkspace {
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        member_email: String,
+        workspace_name: String,
     },
     ToggleIsInviteLinkEnabled {
         team_uid: ServerId,
@@ -224,6 +238,7 @@ pub enum TeamsPageAction {
     JoinTeamWithTeamDiscovery {
         team_uid: ServerId,
     },
+    ShowJoinTeamsModal,
     ShowTransferOwnershipModal {
         new_owner_email: String,
         new_owner_uid: UserUid,
@@ -251,6 +266,7 @@ impl TeamsPageAction {
                 | CreateTeam
                 | DeletePendingEmailInvitation { .. }
                 | RemoveUserFromTeam { .. }
+                | RemoveUserFromWorkspace { .. }
                 | AddDomainRestrictions { .. }
                 | DeleteDomainRestriction { .. }
                 | SendEmailInvites { .. }
@@ -276,6 +292,7 @@ impl From<&TeamsPageAction> for LoginGatedFeature {
             CreateTeam => "Create Team",
             DeletePendingEmailInvitation { .. } => "Delete Pending Email Invitation",
             RemoveUserFromTeam { .. } => "Remove User From Team",
+            RemoveUserFromWorkspace { .. } => "Remove User From Workspace",
             AddDomainRestrictions { .. } => "Add Domain Restrictions",
             DeleteDomainRestriction { .. } => "Delete Domain Restriction",
             SendEmailInvites { .. } => "Send Email Invites",
@@ -345,6 +362,7 @@ struct TeamsWidgetMouseHandles {
     team_members_count_tooltip: MouseStateHandle,
     outgrow_upgrade_link: MouseStateHandle,
     workspace_admin_panel_link: HighlightedHyperlink,
+    browse_teams_button: MouseStateHandle,
 }
 
 /// TeamsInviteOption is whether the user is looking at invite-by-link or invite-by-email.
@@ -507,6 +525,10 @@ enum TeamActionConfirmationTarget {
         user_uid: UserUid,
         team_uid: ServerId,
     },
+    RemoveUserFromWorkspace {
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+    },
 }
 
 pub struct TeamsPageView {
@@ -531,8 +553,10 @@ pub struct TeamsPageView {
     show_team_action_confirmation_dialog: bool,
     pending_team_action_confirmation: Option<TeamActionConfirmationTarget>,
     transfer_ownership_modal_state: ModalViewState<Modal<TransferOwnershipConfirmationModal>>,
+    join_teams_modal_state: ModalViewState<Modal<JoinTeamsModal>>,
     clipped_scroll_state: ClippedScrollStateHandle,
     discoverable_teams_states: Vec<DiscoverableTeamState>,
+    open_team_states: Vec<DiscoverableTeamState>,
     rename_team_editor: ViewHandle<ClickableTextInput>,
     checkbox_value: bool,
     member_actions_menu: ViewHandle<Menu<TeamsPageAction>>,
@@ -567,10 +591,16 @@ impl TypedActionView for TeamsPageView {
             TeamsPageAction::CopyLink(link) => self.copy_invite_link(link, ctx),
             TeamsPageAction::LeaveTeam => self.leave_team(ctx),
             TeamsPageAction::CreateTeam => self.create_team(ctx),
-            TeamsPageAction::RemoveUserFromTeam { user_uid, team_uid } => {
-                if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
+            TeamsPageAction::RemoveUserFromTeam {
+                user_uid,
+                team_uid,
+                member_email,
+            } => {
+                if let Some(variant) =
+                    self.remove_team_member_confirmation_variant(member_email, ctx)
+                {
                     self.show_team_action_confirmation(
-                        CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits,
+                        variant,
                         TeamActionConfirmationTarget::RemoveUser {
                             user_uid: *user_uid,
                             team_uid: *team_uid,
@@ -581,6 +611,24 @@ impl TypedActionView for TeamsPageView {
                     self.remove_user_from_team(*user_uid, *team_uid, ctx);
                 }
             }
+            TeamsPageAction::RemoveUserFromWorkspace {
+                user_uid,
+                workspace_uid,
+                member_email,
+                workspace_name,
+            } => {
+                self.show_team_action_confirmation(
+                    CloudActionConfirmationDialogVariant::RemoveWorkspaceMember {
+                        member_email: member_email.clone(),
+                        workspace_name: workspace_name.clone(),
+                    },
+                    TeamActionConfirmationTarget::RemoveUserFromWorkspace {
+                        user_uid: *user_uid,
+                        workspace_uid: *workspace_uid,
+                    },
+                    ctx,
+                );
+            }
             TeamsPageAction::ChangeInviteViewOption(view_option) => {
                 self.change_invite_view_option(view_option, ctx);
             }
@@ -590,11 +638,7 @@ impl TypedActionView for TeamsPageView {
             }
             TeamsPageAction::OpenWarpDrive => ctx.emit(TeamsPageViewEvent::OpenWarpDrive),
             TeamsPageAction::ShowLeaveTeamConfirmationDialog => {
-                let variant = if self.should_show_reload_credits_confirmation(ctx) {
-                    CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
-                } else {
-                    CloudActionConfirmationDialogVariant::LeaveTeam
-                };
+                let variant = self.leave_team_confirmation_variant(ctx);
                 self.show_team_action_confirmation(
                     variant,
                     TeamActionConfirmationTarget::Leave,
@@ -663,6 +707,7 @@ impl TypedActionView for TeamsPageView {
                 self.join_team_with_team_discovery(*team_uid, ctx);
                 ctx.notify();
             }
+            TeamsPageAction::ShowJoinTeamsModal => self.show_join_teams_modal(ctx),
             TeamsPageAction::ShowTransferOwnershipModal {
                 new_owner_email,
                 new_owner_uid,
@@ -838,6 +883,8 @@ impl TeamsPageView {
         let team_name = current_user_team
             .map_or_else(|| "", |team| &team.name)
             .to_string();
+        let open_team_states =
+            Self::open_team_states_for_workspace(user_workspaces.as_ref(ctx).current_workspace());
         let rename_team_editor = ctx.add_typed_action_view(|ctx| {
             let mut input = ClickableTextInput::new(team_name, ctx);
             input.set_placeholder_text("Your new team name", ctx);
@@ -886,6 +933,36 @@ impl TeamsPageView {
             me.handle_transfer_ownership_modal_close_event(event, ctx);
         });
 
+        let join_teams_modal_body = ctx.add_typed_action_view(|_| JoinTeamsModal::new());
+        ctx.subscribe_to_view(&join_teams_modal_body, |me, _, event, ctx| {
+            me.handle_join_teams_modal_event(event, ctx);
+        });
+        let join_teams_modal = ctx.add_typed_action_view(|ctx| {
+            Modal::new(
+                Some(BROWSE_TEAMS_BUTTON_LABEL.to_string()),
+                join_teams_modal_body,
+                ctx,
+            )
+            .with_modal_style(UiComponentStyles {
+                width: Some(360.),
+                height: Some(424.),
+                ..Default::default()
+            })
+            .with_header_style(UiComponentStyles {
+                height: Some(64.),
+                padding: Some(Coords::uniform(24.).top(18.).bottom(12.)),
+                ..Default::default()
+            })
+            .with_body_style(UiComponentStyles {
+                height: Some(360.),
+                padding: Some(Coords::uniform(24.).top(8.)),
+                ..Default::default()
+            })
+        });
+        ctx.subscribe_to_view(&join_teams_modal, |me, _, event, ctx| {
+            me.handle_join_teams_modal_close_event(event, ctx);
+        });
+
         let member_actions_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
         ctx.subscribe_to_view(&member_actions_menu, |me, _, event, ctx| {
             if let menu::Event::Close { .. } = event {
@@ -924,7 +1001,9 @@ impl TeamsPageView {
             show_team_action_confirmation_dialog: false,
             pending_team_action_confirmation: None,
             transfer_ownership_modal_state: ModalViewState::new(transfer_ownership_modal),
+            join_teams_modal_state: ModalViewState::new(join_teams_modal),
             discoverable_teams_states: Vec::new(),
+            open_team_states,
             rename_team_editor,
             checkbox_value: true,
             member_actions_menu,
@@ -992,6 +1071,7 @@ impl TeamsPageView {
             UserWorkspacesEvent::TeamsChanged => {
                 self.update_team_members_state(ctx);
                 self.update_approved_domains_state(ctx);
+                self.update_open_team_states(ctx);
 
                 AIRequestUsageModel::handle(ctx).update(ctx, |usage_model, ctx| {
                     usage_model.refresh_request_usage_async(ctx);
@@ -1083,6 +1163,31 @@ impl TeamsPageView {
             UserWorkspacesEvent::JoinTeamWithTeamDiscoveryRejected(err) => {
                 self.show_error("Failed to join team", Some(err), ctx);
             }
+            UserWorkspacesEvent::JoinTeamInWorkspaceSuccess { team_uid } => {
+                UpdateManager::handle(ctx).update(ctx, move |update_manager, ctx| {
+                    update_manager.refresh_updated_objects(ctx);
+                });
+                let team_name = self
+                    .user_workspaces
+                    .as_ref(ctx)
+                    .team_from_uid(*team_uid)
+                    .map(|team| team.name.clone())
+                    .unwrap_or_else(|| "team".to_string());
+                self.close_join_teams_modal(ctx);
+                self.show_success(format!("Successfully joined {team_name}"), ctx);
+                #[cfg(not(target_family = "wasm"))]
+                ctx.dispatch_typed_action(&WorkspaceAction::OpenNewWindowForTeam {
+                    team_uid: *team_uid,
+                });
+            }
+            UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err) => {
+                self.join_teams_modal_state.view.update(ctx, |modal, ctx| {
+                    modal.body().update(ctx, |body, ctx| {
+                        body.set_joining_team(None, ctx);
+                    });
+                });
+                self.show_error("Failed to join team", Some(err), ctx);
+            }
             UserWorkspacesEvent::FetchDiscoverableTeamsSuccess(teams) => {
                 self.discoverable_teams_states = teams
                     .iter()
@@ -1115,6 +1220,17 @@ impl TeamsPageView {
             UserWorkspacesEvent::RemoveUserFromTeamRejected(err) => {
                 self.show_error(
                     format!("Failed to remove team member: {err}"),
+                    Some(err),
+                    ctx,
+                );
+            }
+            UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess => {
+                self.update_team_members_state(ctx);
+                self.show_success("Removed workspace member", ctx);
+            }
+            UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err) => {
+                self.show_error(
+                    format!("Failed to remove workspace member: {err}"),
                     Some(err),
                     ctx,
                 );
@@ -1153,6 +1269,47 @@ impl TeamsPageView {
                 > 0
     }
 
+    fn remove_team_member_confirmation_variant(
+        &self,
+        member_email: &str,
+        ctx: &AppContext,
+    ) -> Option<CloudActionConfirmationDialogVariant> {
+        let workspace = self.user_workspaces.as_ref(ctx).current_workspace()?;
+        if workspace.is_native_workspaces_enabled() {
+            Some(
+                CloudActionConfirmationDialogVariant::RemoveNativeWorkspaceTeamMember {
+                    member_email: member_email.to_string(),
+                    workspace_name: workspace.name.clone(),
+                },
+            )
+        } else if FeatureFlag::BillingAndUsagePageV2.is_enabled() {
+            Some(CloudActionConfirmationDialogVariant::RemoveTeamMemberReloadCredits)
+        } else {
+            None
+        }
+    }
+    fn leave_team_confirmation_variant(
+        &self,
+        ctx: &ViewContext<Self>,
+    ) -> CloudActionConfirmationDialogVariant {
+        let user_workspaces = self.user_workspaces.as_ref(ctx);
+        if let (Some(workspace), Some(team)) = (
+            user_workspaces.current_workspace(),
+            user_workspaces.team_for_view(ctx),
+        ) && workspace.is_native_workspaces_enabled()
+        {
+            return CloudActionConfirmationDialogVariant::LeaveNativeWorkspaceTeam {
+                team_name: team.name.clone(),
+            };
+        }
+
+        if self.should_show_reload_credits_confirmation(ctx) {
+            CloudActionConfirmationDialogVariant::LeaveTeamReloadCredits
+        } else {
+            CloudActionConfirmationDialogVariant::LeaveTeam
+        }
+    }
+
     fn show_team_action_confirmation(
         &mut self,
         variant: CloudActionConfirmationDialogVariant,
@@ -1162,6 +1319,7 @@ impl TeamsPageView {
         // Only one modal renders (see `get_modal_content`), so opening one must clear the other
         // rather than leave it queued behind for a target the user has moved on from.
         self.clear_transfer_ownership_modal(ctx);
+        self.clear_join_teams_modal(ctx);
         self.pending_team_action_confirmation = Some(target);
         self.open_member_actions_menu_index = None;
         self.team_action_confirmation_dialog
@@ -1202,6 +1360,12 @@ impl TeamsPageView {
             TeamActionConfirmationTarget::RemoveUser { user_uid, team_uid } => {
                 self.remove_user_from_team(user_uid, team_uid, ctx);
             }
+            TeamActionConfirmationTarget::RemoveUserFromWorkspace {
+                user_uid,
+                workspace_uid,
+            } => {
+                self.remove_user_from_workspace(user_uid, workspace_uid, ctx);
+            }
         }
         ctx.notify();
     }
@@ -1210,7 +1374,9 @@ impl TeamsPageView {
     /// by the page itself. The page's own stack is the full-height scrolling content, so an overlay
     /// centered on it lands wherever the scroll offset happens to put it.
     pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
-        if self.transfer_ownership_modal_state.is_open() {
+        if self.join_teams_modal_state.is_open() {
+            Some(self.join_teams_modal_state.render())
+        } else if self.transfer_ownership_modal_state.is_open() {
             Some(self.transfer_ownership_modal_state.render())
         } else if self.show_team_action_confirmation_dialog {
             Some(ChildView::new(&self.team_action_confirmation_dialog).finish())
@@ -1306,6 +1472,61 @@ impl TeamsPageView {
         }
     }
 
+    fn handle_join_teams_modal_event(
+        &mut self,
+        event: &JoinTeamsModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            JoinTeamsModalEvent::Join { team_uid } => {
+                self.user_workspaces
+                    .update(ctx, move |user_workspaces, ctx| {
+                        user_workspaces.join_team_in_workspace(*team_uid, ctx);
+                    });
+            }
+        }
+    }
+
+    fn handle_join_teams_modal_close_event(
+        &mut self,
+        event: &ModalEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ModalEvent::Close => self.close_join_teams_modal(ctx),
+        }
+    }
+
+    fn clear_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.join_teams_modal_state.close();
+        ctx.focus_self();
+    }
+
+    fn close_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_join_teams_modal(ctx);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
+    fn show_join_teams_modal(&mut self, ctx: &mut ViewContext<Self>) {
+        self.clear_team_action_confirmation();
+        self.clear_transfer_ownership_modal(ctx);
+        let teams = self
+            .open_team_states
+            .iter()
+            .map(|state| state.team.clone())
+            .collect();
+        self.join_teams_modal_state.view.update(ctx, |modal, ctx| {
+            modal.body().update(ctx, |body, ctx| {
+                body.set_teams(teams, ctx);
+            });
+        });
+        self.join_teams_modal_state.open();
+        ctx.focus(&self.join_teams_modal_state.view);
+        ctx.emit(TeamsPageViewEvent::ModalVisibilityChanged);
+        ctx.notify();
+    }
+
     /// Closes the transfer-ownership modal and takes back the focus it was given on open, so
     /// Escape stops dispatching into a view that is no longer rendered. Announcing the change is
     /// the caller's job, as it is for [`Self::clear_team_action_confirmation`].
@@ -1328,6 +1549,7 @@ impl TeamsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         self.clear_team_action_confirmation();
+        self.clear_join_teams_modal(ctx);
         self.transfer_ownership_modal_state
             .view
             .update(ctx, |modal, ctx| {
@@ -1576,6 +1798,23 @@ impl TeamsPageView {
             });
     }
 
+    fn remove_user_from_workspace(
+        &mut self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.user_workspaces
+            .update(ctx, move |user_workspaces, ctx| {
+                user_workspaces.remove_user_from_workspace(
+                    user_uid,
+                    workspace_uid,
+                    CloudObjectEventEntrypoint::TeamSettings,
+                    ctx,
+                );
+            });
+    }
+
     fn leave_team(&mut self, ctx: &mut ViewContext<Self>) {
         let team_uid = self
             .user_workspaces
@@ -1741,6 +1980,34 @@ impl TeamsPageView {
             });
     }
 
+    #[cfg(target_family = "wasm")]
+    fn open_team_states_for_workspace(
+        _workspace: Option<&Workspace>,
+    ) -> Vec<DiscoverableTeamState> {
+        Vec::new()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn open_team_states_for_workspace(workspace: Option<&Workspace>) -> Vec<DiscoverableTeamState> {
+        let Some(workspace) =
+            workspace.filter(|workspace| workspace.is_native_workspaces_enabled())
+        else {
+            return Vec::new();
+        };
+
+        workspace
+            .joinable_teams()
+            .cloned()
+            .map(DiscoverableTeamState::new)
+            .collect()
+    }
+
+    fn update_open_team_states(&mut self, ctx: &AppContext) {
+        self.open_team_states = Self::open_team_states_for_workspace(
+            self.user_workspaces.as_ref(ctx).current_workspace(),
+        );
+    }
+
     fn delete_team_invite(
         &mut self,
         team_uid: ServerId,
@@ -1840,9 +2107,10 @@ impl TeamsPageView {
         workspace: &Workspace,
     ) -> Vec<Item> {
         let mut combined = Vec::new();
-        let current_user_has_admin_permissions = team.has_admin_permissions(current_user_email)
-            || workspace.is_workspace_admin(current_user_email);
+        let current_user_has_admin_permissions =
+            Self::has_admin_permissions(team, workspace, current_user_email);
         let current_user_has_owner_permissions = team.has_owner_permissions(current_user_email);
+        let current_user_is_workspace_admin = workspace.is_workspace_admin(current_user_email);
 
         // pending email invites
         team.pending_email_invites.iter().for_each(|email_invite| {
@@ -1947,6 +2215,23 @@ impl TeamsPageView {
                         action: TeamsPageAction::RemoveUserFromTeam {
                             user_uid: member.uid,
                             team_uid: team.uid,
+                            member_email: member.email.clone(),
+                        },
+                    });
+                }
+
+                if workspace.is_native_workspaces_enabled()
+                    && current_user_is_workspace_admin
+                    && member_workspace_role != Some(MembershipRole::Owner)
+                {
+                    actions.push(ItemAction {
+                        icon: Icon::X,
+                        label: "Remove from workspace".to_string(),
+                        action: TeamsPageAction::RemoveUserFromWorkspace {
+                            user_uid: member.uid,
+                            workspace_uid: workspace.uid,
+                            member_email: member.email.clone(),
+                            workspace_name: workspace.name.clone(),
                         },
                     });
                 }
@@ -1961,6 +2246,11 @@ impl TeamsPageView {
         });
 
         combined
+    }
+
+    fn has_admin_permissions(team: &Team, workspace: &Workspace, current_user_email: &str) -> bool {
+        team.has_admin_permissions(current_user_email)
+            || workspace.is_workspace_admin(current_user_email)
     }
 }
 
@@ -1983,7 +2273,12 @@ impl SettingsPageMeta for TeamsPageView {
         );
         self.update_team_members_state(ctx);
         self.update_approved_domains_state(ctx);
-        if NetworkStatus::as_ref(ctx).is_online() {
+        let is_teamless = self
+            .user_workspaces
+            .as_ref(ctx)
+            .team_for_view(ctx)
+            .is_none();
+        if NetworkStatus::as_ref(ctx).is_online() && is_teamless {
             self.user_workspaces
                 .update(ctx, move |user_workspaces, ctx| {
                     user_workspaces.fetch_discoverable_teams(ctx);
@@ -2362,7 +2657,8 @@ impl TeamsWidget {
         let cloud_model = view.cloud_model.as_ref(app);
         let ai_request_usage_model = view.ai_request_usage_model.as_ref(app);
         let current_user_email = view.auth_state.user_email().unwrap_or_default();
-        let has_admin_permissions = team_metadata.has_admin_permissions(&current_user_email);
+        let has_admin_permissions =
+            TeamsPageView::has_admin_permissions(team_metadata, workspace, &current_user_email);
         let is_owner = team_metadata.has_owner_permissions(&current_user_email);
         let remaining_workspace_and_team_credits =
             ai_request_usage_model.total_current_workspace_and_team_bonus_credits_remaining(app);
@@ -2467,15 +2763,11 @@ impl TeamsWidget {
 
         // 7) Deleting/leaving teams
         let mut button_row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        let is_enterprise_team =
-            team_metadata.billing_metadata.customer_type == CustomerType::Enterprise;
-        // We don't allow users on enterprise teams to leave or delete their team,
-        // since their enterprise agreement is tied to it, and it helps enforce that others
-        // can't join some other team that doesn't have stricter security guarantees
-        if !is_enterprise_team {
+        let footer_action = Self::team_footer_action(team_metadata, workspace, is_owner);
+        if let Some(footer_action) = footer_action {
             button_row.add_child(
                 Container::new(self.render_leave_or_delete_team_button(
-                    is_owner,
+                    footer_action,
                     delete_disabled_reason.is_none(),
                     appearance,
                 ))
@@ -2486,7 +2778,7 @@ impl TeamsWidget {
         // We show some help text if a team can't be deleted...
         if let Some(delete_disabled_reason) = delete_disabled_reason {
             // and if the current user actually has the perms to delete the team
-            if has_admin_permissions && !is_enterprise_team {
+            if has_admin_permissions && footer_action == Some(TeamFooterAction::Delete) {
                 button_row.add_child(
                     Container::new(self.render_delete_disabled_help_text(
                         delete_disabled_reason,
@@ -2500,6 +2792,50 @@ impl TeamsWidget {
         }
         main_content.add_child(button_row.finish());
         main_content.finish()
+    }
+
+    fn render_browse_teams_button(&self, appearance: &Appearance) -> Box<dyn Element> {
+        appearance
+            .ui_builder()
+            .button(
+                ButtonVariant::Link,
+                self.mouse_state_handles.browse_teams_button.clone(),
+            )
+            .with_text_and_icon_label(
+                TextAndIcon::new(
+                    TextAndIconAlignment::IconFirst,
+                    BROWSE_TEAMS_BUTTON_LABEL,
+                    Icon::Search.to_warpui_icon(appearance.theme().accent()),
+                    MainAxisSize::Min,
+                    MainAxisAlignment::Center,
+                    vec2f(14., 14.),
+                )
+                .with_inner_padding(4.),
+            )
+            .build()
+            .with_cursor(Cursor::PointingHand)
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(TeamsPageAction::ShowJoinTeamsModal);
+            })
+            .finish()
+    }
+    fn team_footer_action(
+        team: &Team,
+        workspace: &Workspace,
+        is_team_owner: bool,
+    ) -> Option<TeamFooterAction> {
+        if workspace.is_native_workspaces_enabled() {
+            (!is_team_owner && workspace.teams.len() > 1).then_some(TeamFooterAction::Leave)
+        } else if team.billing_metadata.customer_type == CustomerType::Enterprise {
+            // We don't allow users on enterprise teams to leave or delete their team,
+            // since their enterprise agreement is tied to it, and it helps enforce that others
+            // can't join some other team that doesn't have stricter security guarantees.
+            None
+        } else if is_team_owner {
+            Some(TeamFooterAction::Delete)
+        } else {
+            Some(TeamFooterAction::Leave)
+        }
     }
 
     fn render_header(
@@ -2570,14 +2906,28 @@ impl TeamsWidget {
         }
 
         team_name_header.add_child(left_side.finish());
-
-        // Upgrade / billing links
+        let has_joinable_teams = !view.open_team_states.is_empty();
+        let mut right_side = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_main_axis_size(MainAxisSize::Min);
+        if has_joinable_teams {
+            right_side.add_child(self.render_browse_teams_button(appearance));
+        }
         if has_admin_permissions {
-            team_name_header.add_child(self.render_billing_links(
-                team,
-                use_workspace_admin_panel,
-                appearance,
-            ));
+            let billing_links =
+                self.render_billing_links(team, use_workspace_admin_panel, appearance);
+            right_side.add_child(if has_joinable_teams {
+                Container::new(billing_links)
+                    .with_border(Border::left(1.).with_border_fill(appearance.theme().outline()))
+                    .with_margin_left(12.)
+                    .finish()
+            } else {
+                billing_links
+            });
+        }
+        if has_joinable_teams || has_admin_permissions {
+            team_name_header.add_child(right_side.finish());
         }
 
         team_name_header.finish()
@@ -3522,20 +3872,19 @@ impl TeamsWidget {
 
     fn render_leave_or_delete_team_button(
         &self,
-        is_team_owner: bool,
+        footer_action: TeamFooterAction,
         can_team_be_deleted: bool,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let (label, action) = if is_team_owner {
-            (
-                DELETE_TEAM_BUTTON_LABEL,
-                TeamsPageAction::ShowDeleteTeamConfirmationDialog,
-            )
-        } else {
-            (
+        let (label, action) = match footer_action {
+            TeamFooterAction::Leave => (
                 LEAVE_TEAM_BUTTON_LABEL,
                 TeamsPageAction::ShowLeaveTeamConfirmationDialog,
-            )
+            ),
+            TeamFooterAction::Delete => (
+                DELETE_TEAM_BUTTON_LABEL,
+                TeamsPageAction::ShowDeleteTeamConfirmationDialog,
+            ),
         };
 
         let ui_builder = appearance.ui_builder().clone();
@@ -3550,7 +3899,7 @@ impl TeamsWidget {
                     .set_width(LEAVE_TEAM_BUTTON_WIDTH),
             )
             .with_centered_text_label(label.to_owned());
-        let hoverable = if is_team_owner && !can_team_be_deleted {
+        let hoverable = if footer_action == TeamFooterAction::Delete && !can_team_be_deleted {
             button
                 .with_disabled_styles(UiComponentStyles {
                     background: Some(appearance.theme().surface_3().into()),
@@ -4293,7 +4642,11 @@ impl TeamsWidget {
                     );
                 }
                 TeamsPageSection::JoinTeams { header } => {
-                    page.add_child(self.render_join_teams_section(view, appearance, header));
+                    page.add_child(self.render_join_teams_section(
+                        &view.discoverable_teams_states,
+                        appearance,
+                        header,
+                    ));
                 }
                 TeamsPageSection::NoTeamsToJoin => {
                     let theme = appearance.theme();
@@ -4326,13 +4679,13 @@ impl TeamsWidget {
 
     fn render_join_teams_section(
         &self,
-        view: &TeamsPageView,
+        team_states: &[DiscoverableTeamState],
         appearance: &Appearance,
         header: &str,
     ) -> Box<dyn Element> {
         Flex::column()
             .with_child(self.render_sub_header_with_subtext_color(appearance, header.to_string()))
-            .with_child(self.render_team_discovery_section(view, appearance))
+            .with_child(self.render_team_discovery_section(team_states, appearance))
             .finish()
     }
 
@@ -4432,12 +4785,12 @@ impl TeamsWidget {
 
     fn render_team_discovery_section(
         &self,
-        view: &TeamsPageView,
+        team_states: &[DiscoverableTeamState],
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let mut team_discovery = Flex::column();
         // Sort teams so teams accepting invites with most teammates appear on top
-        let mut sorted_teams = view.discoverable_teams_states.clone();
+        let mut sorted_teams = team_states.to_vec();
         sorted_teams.sort_by_key(|team_state| {
             (
                 !team_state.team.team_accepting_invites,

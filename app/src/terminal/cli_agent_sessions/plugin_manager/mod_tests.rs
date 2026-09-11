@@ -31,6 +31,7 @@ fn returns_manager_for_gemini() {
 
 #[test]
 fn returns_none_for_unsupported_agents() {
+    assert!(plugin_manager_for(CLIAgent::Grok).is_none());
     assert!(plugin_manager_for(CLIAgent::Amp).is_none());
     assert!(plugin_manager_for(CLIAgent::Droid).is_none());
     assert!(plugin_manager_for(CLIAgent::Copilot).is_none());

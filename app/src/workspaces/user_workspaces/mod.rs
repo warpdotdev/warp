@@ -47,6 +47,7 @@ use crate::workspaces::workspace::{
 };
 pub(crate) mod billing_workspace_settings;
 pub(crate) mod team_workspace_settings;
+pub(crate) use team_workspace_settings::TeamContextForOperationResolver;
 #[cfg(test)]
 pub(crate) use team_workspace_settings::TeamlessScopeForTest;
 #[cfg(not(target_family = "wasm"))]
@@ -79,6 +80,10 @@ pub enum UserWorkspacesEvent {
     ToggleTeamDiscoverabilityRejected(anyhow::Error),
     JoinTeamWithTeamDiscoverySuccess,
     JoinTeamWithTeamDiscoveryRejected(anyhow::Error),
+    JoinTeamInWorkspaceSuccess {
+        team_uid: ServerId,
+    },
+    JoinTeamInWorkspaceRejected(anyhow::Error),
     FetchDiscoverableTeamsSuccess(Vec<DiscoverableTeam>),
     FetchDiscoverableTeamsRejected(anyhow::Error),
     TransferTeamOwnershipSuccess,
@@ -87,6 +92,8 @@ pub enum UserWorkspacesEvent {
     SetTeamMemberRoleRejected(anyhow::Error),
     RemoveUserFromTeamSuccess,
     RemoveUserFromTeamRejected(anyhow::Error),
+    RemoveUserFromWorkspaceSuccess,
+    RemoveUserFromWorkspaceRejected(anyhow::Error),
     UpdateWorkspaceSettingsSuccess,
     UpdateWorkspaceSettingsRejected(anyhow::Error),
     AiOveragesUpdated,
@@ -940,6 +947,39 @@ impl UserWorkspaces {
         );
     }
 
+    fn on_remove_user_from_workspace(
+        &mut self,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::RemoveUserFromWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                ctx.emit(UserWorkspacesEvent::RemoveUserFromWorkspaceSuccess);
+            }
+        };
+        ctx.notify();
+    }
+
+    pub fn remove_user_from_workspace(
+        &mut self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        entrypoint: CloudObjectEventEntrypoint,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let workspace_client = self.workspace_client.clone();
+        let _ = ctx.spawn(
+            async move {
+                workspace_client
+                    .remove_user_from_workspace(user_uid, workspace_uid, entrypoint)
+                    .await
+            },
+            Self::on_remove_user_from_workspace,
+        );
+    }
+
     fn on_add_invite_link_domain_restrictions(
         &mut self,
         result: Result<WorkspacesMetadataWithPricing>,
@@ -1147,6 +1187,38 @@ impl UserWorkspaces {
         let _ = ctx.spawn(
             async move { team_client.join_team_with_team_discovery(team_uid).await },
             Self::on_join_team_with_team_discovery,
+        );
+    }
+
+    fn on_join_team_in_workspace(
+        &mut self,
+        team_uid: ServerId,
+        result: Result<WorkspacesMetadataWithPricing>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match result {
+            Err(err) => ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(err)),
+            Ok(result) => {
+                self.on_workspaces_updated(Ok(result), ctx);
+                if self.is_member_of_team(team_uid) {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceSuccess { team_uid });
+                } else {
+                    ctx.emit(UserWorkspacesEvent::JoinTeamInWorkspaceRejected(
+                        anyhow::anyhow!("joined team missing from refreshed workspace metadata"),
+                    ));
+                }
+            }
+        }
+        ctx.notify();
+    }
+
+    pub fn join_team_in_workspace(&mut self, team_uid: ServerId, ctx: &mut ModelContext<Self>) {
+        let team_client = self.team_client.clone();
+        let _ = ctx.spawn(
+            async move { team_client.join_team_in_workspace(team_uid).await },
+            move |me, result, ctx| {
+                me.on_join_team_in_workspace(team_uid, result, ctx);
+            },
         );
     }
 
@@ -1639,6 +1711,7 @@ impl UserWorkspaces {
                 has_billing_history: false,
                 visibility: TeamVisibility::Open,
             }],
+            open_teams: vec![],
             members: vec![WorkspaceMember {
                 uid: owner_uid,
                 email: "test@example.com".to_string(),

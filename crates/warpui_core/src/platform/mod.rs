@@ -53,6 +53,24 @@ lazy_static! {
     pub static ref KEYS_TO_IGNORE: HashSet<Keystroke> =
         HashSet::from([Keystroke::parse("cmdorctrl-v").unwrap()]);
 }
+/// The system backdrop material applied behind a window's transparent content.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "schema_gen", derive(schemars::JsonSchema))]
+pub enum WindowBackdrop {
+    #[default]
+    None,
+    Mica,
+    Acrylic,
+    MicaAlt,
+}
+
+impl WindowBackdrop {
+    pub const ALL: [Self; 4] = [Self::None, Self::Mica, Self::Acrylic, Self::MicaAlt];
+}
+
+#[cfg(feature = "settings_value")]
+impl settings_value::SettingsValue for WindowBackdrop {}
 
 /// Type of the callback function that provides the result of requesting
 /// desktop notification permissions.
@@ -94,7 +112,7 @@ pub struct WindowOptions {
     pub title: Option<String>,
     pub style: WindowStyle,
     pub background_blur_radius_pixels: Option<u8>,
-    pub background_blur_texture: bool,
+    pub background_backdrop: WindowBackdrop,
     pub gpu_power_preference: GPUPowerPreference,
     pub backend_preference: Option<GraphicsBackend>,
     pub on_gpu_device_info_reported: Box<OnGPUDeviceSelected>,
@@ -116,7 +134,7 @@ impl std::fmt::Debug for WindowOptions {
                 "background_blur_radius_pixels",
                 &self.background_blur_radius_pixels,
             )
-            .field("background_blur_texture", &self.background_blur_texture)
+            .field("background_backdrop", &self.background_backdrop)
             .field("gpu_power_preference", &self.gpu_power_preference)
             .field("backend_preference", &self.backend_preference)
             .field("window_instance", &self.window_instance)
@@ -448,6 +466,7 @@ pub trait Window: 'static + WindowContext + std::any::Any {
     fn toggle_maximized(&self);
     fn toggle_fullscreen(&self);
     fn fullscreen_state(&self) -> FullscreenState;
+    fn set_background_backdrop(&self, _backdrop: WindowBackdrop) {}
     /// Whether the window has the native OS window frame (title bar and buttons).
     fn uses_native_window_decorations(&self) -> bool;
     fn set_titlebar_height(&self, height: f64);
@@ -601,9 +620,6 @@ pub trait WindowManager {
 
     /// Sets the background blur radius for all windows to the given `blur_radius_pixels` value.
     fn set_all_windows_background_blur_radius(&self, blur_radius_pixels: u8);
-
-    /// [Windows only] Sets the background blur texture (Acrylic) for all windows.
-    fn set_all_windows_background_blur_texture(&self, use_blur_texture: bool);
 
     fn set_window_title(&self, window_id: WindowId, title: &str);
 

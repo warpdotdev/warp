@@ -95,6 +95,33 @@ fn limits_duration_as_an_input_option_before_i() {
 }
 
 #[test]
+fn sets_output_frame_rate_to_capture_rate() {
+    let config = RecordingConfig {
+        frame_rate: 15,
+        ..RecordingConfig::default()
+    };
+    let args = argv(&config);
+
+    let input_index = args
+        .iter()
+        .position(|arg| arg == "-i")
+        .expect("argv should contain -i");
+    let output_rate_index = args
+        .iter()
+        .position(|arg| arg == "-r")
+        .expect("argv should contain an output frame-rate option");
+
+    assert!(
+        output_rate_index > input_index,
+        "output frame rate should follow -i, got {args:?}"
+    );
+    assert_eq!(
+        args.get(output_rate_index + 1),
+        Some(&config.frame_rate.to_string()),
+        "output frame rate should match capture rate, got {args:?}"
+    );
+}
+#[test]
 fn ignores_window_target_until_window_scoped_recording_lands() {
     // Window-scoped recording is deferred (see the TODO in `Recorder::start`);
     // a `Window` target must not alter the argv and must still record the whole

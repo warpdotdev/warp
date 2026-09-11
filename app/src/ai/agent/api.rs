@@ -92,6 +92,12 @@ impl ServerConversationToken {
     }
 }
 
+impl std::fmt::Display for ServerConversationToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 #[cfg(test)]
 #[path = "api_tests.rs"]
 mod tests;

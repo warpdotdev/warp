@@ -6,6 +6,7 @@ use std::sync::Arc;
 use ai::api_keys::ApiKeyManager;
 use ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use chrono::{Duration, Local};
+use warp_cli::agent::Harness;
 use warp_core::SessionId;
 use warp_core::execution_mode::{AppExecutionMode, ExecutionMode};
 use warpui::{AppContext, ModelContext, ModelHandle, SingletonEntity as _};
@@ -19,11 +20,12 @@ use crate::ai::blocklist::history_model::AIQueryHistoryOutputStatus;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
 use crate::ai::blocklist::orchestration_event_streamer::OrchestrationEventStreamer;
 use crate::ai::blocklist::orchestration_events::OrchestrationEventService;
+use crate::ai::blocklist::pending_cli_harness_prompt_queue::PendingCliHarnessPromptQueue;
 use crate::ai::blocklist::{
     BlocklistAIActionModel, BlocklistAIHistoryModel, BlocklistAIPermissions, PersistedAIInput,
     PersistedAIInputType, QueuedQueryModel,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::cloud_environments::CloudEnvironmentCatalog;
 use crate::ai::connected_self_hosted_workers::ConnectedSelfHostedWorkersModel;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -65,7 +67,7 @@ use crate::user_config::WarpConfig;
 #[cfg(feature = "voice_input")]
 use crate::voice::transcriber::VoiceTranscriber;
 use crate::workspaces::team::{MembershipRole, Team, TeamMember};
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{TeamScope, UserWorkspaces};
 use crate::workspaces::workspace::Workspace;
 
 /// Builds a history model with persisted AI queries for TUI tests.
@@ -309,6 +311,22 @@ pub fn set_tui_workspace_teams_for_test(teams: Vec<(ServerId, String)>, ctx: &mu
         workspaces.set_current_workspace_uid(workspace_uid, ctx);
     });
 }
+pub fn set_tui_auth_secret_preference_for_test<S: TeamScope + ?Sized>(
+    team_scope: &S,
+    harness: Harness,
+    name: String,
+    ctx: &mut AppContext,
+) {
+    CloudAgentSettings::handle(ctx).update(ctx, |settings, ctx| {
+        settings.persist_auth_secret_preference(
+            team_scope,
+            harness,
+            Some(AuthSecretPreference::Named(name)),
+            ctx,
+        );
+    });
+}
+
 /// Queues an action as the active confirmation request for a TUI view test.
 pub fn queue_tui_permission_action(
     action_model: &mut BlocklistAIActionModel,
@@ -385,6 +403,7 @@ pub fn register_tui_session_view_test_singletons(app: &mut warpui::App) {
     app.add_singleton_model(|_| CLIAgentSessionsModel::new());
     app.add_singleton_model(OrchestrationEventService::new);
     app.add_singleton_model(LocalAgentTaskSyncModel::new);
+    app.add_singleton_model(PendingCliHarnessPromptQueue::new);
     app.add_singleton_model(OrchestrationEventStreamer::new);
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(|_| GitRepoModels::new());

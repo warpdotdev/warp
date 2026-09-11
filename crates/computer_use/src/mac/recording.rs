@@ -220,7 +220,8 @@ fn new_ffmpeg_capture_command(config: &RecordingConfig, width: u32, height: u32)
         .args(["-i", AVFOUNDATION_INPUT])
         .args(["-c:v", "libx264"])
         .args(["-preset", "ultrafast"])
-        .args(["-pix_fmt", "yuv420p"]);
+        .args(["-pix_fmt", "yuv420p"])
+        .args(["-r", &config.frame_rate.to_string()]);
     // Apply playback speed: rescale presentation timestamps so the video
     // plays faster than real time. A multiplier of 4 makes a 4-minute
     // recording play in 1 minute. Values <= 1 are skipped (real-time).

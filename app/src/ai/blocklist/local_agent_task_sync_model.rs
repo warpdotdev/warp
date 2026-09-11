@@ -57,6 +57,7 @@ pub struct LocalAgentTaskSyncModel {
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
+
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
 /// which server field.
@@ -187,7 +188,7 @@ impl LocalAgentTaskSyncModel {
     /// `terminal_view_id → task_id` mapping, without enqueuing the
     /// IN_PROGRESS report that `register_cli_session` sends via the real
     /// `AIClient`. Use this in tests that only need
-    /// `task_id_for_terminal_view` to resolve (e.g. exercising
+    /// `cli_harness_task_id_for_terminal_view` to resolve (e.g. exercising
     /// `TerminalView::conversation_id_for_cli_status_updates`).
     #[cfg(test)]
     pub(crate) fn register_cli_session_for_test(
@@ -207,7 +208,7 @@ impl LocalAgentTaskSyncModel {
     /// unrelated to its CLI-harness session (e.g. an earlier native Agent
     /// Mode conversation). Returns `None` for a purely interactive CLI agent
     /// session with no ambient task behind it.
-    pub fn task_id_for_terminal_view(
+    pub fn cli_harness_task_id_for_terminal_view(
         &self,
         terminal_view_id: EntityId,
     ) -> Option<AmbientAgentTaskId> {

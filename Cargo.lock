@@ -2475,7 +2475,9 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "tracing",
+ "walkdir",
  "warp_core",
  "warp_errors",
 ]
@@ -15790,6 +15792,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "serial_test",
  "thiserror 2.0.17",
  "warp_core",
 ]
