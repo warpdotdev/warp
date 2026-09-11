@@ -627,8 +627,9 @@ pub trait HarnessSupportClient: 'static + Send + Sync {
 
 impl ServerApi {
     /// Publish without retries; the ordered save owns retry identity and its deadline.
-    pub async fn report_harness_usage(
+    pub async fn report_harness_usage_for_task(
         &self,
+        task_id: &AmbientAgentTaskId,
         report: &HarnessUsageReport,
     ) -> Result<HarnessUsagePublication, HarnessUsageError> {
         let body = report.encode()?;
@@ -651,7 +652,7 @@ impl ServerApi {
             request = request.bearer_auth(token);
         }
         for (name, value) in self
-            .ambient_agent_headers()
+            .ambient_agent_headers_for_task(task_id)
             .await
             .map_err(HarnessUsageError::from_auth_error)?
         {

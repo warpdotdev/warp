@@ -16,6 +16,9 @@ use super::{
     ResolvedHarnessPrompt, ServerApi, UsageHarness, parse_harness_usage_retry_after,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+fn task_id() -> AmbientAgentTaskId {
+    "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
+}
 
 fn report() -> HarnessUsageReport {
     HarnessUsageReport {
@@ -131,7 +134,9 @@ fn invalid_reports_are_rejected_before_auth_or_network(
     let mut report = report();
     invalidate(&mut report);
 
-    let error = block_on(ServerApi::new_for_test().report_harness_usage(&report)).unwrap_err();
+    let error =
+        block_on(ServerApi::new_for_test().report_harness_usage_for_task(&task_id(), &report))
+            .unwrap_err();
 
     assert_eq!(error.kind, HarnessUsageErrorKind::InvalidReport);
     assert_eq!(error.status, None);
@@ -141,15 +146,13 @@ fn invalid_reports_are_rejected_before_auth_or_network(
 #[case("accepted", HarnessUsagePublicationStatus::Accepted, 41, 7)]
 #[case("idempotent", HarnessUsagePublicationStatus::Idempotent, 41, 7)]
 #[case("stale", HarnessUsagePublicationStatus::Stale, 42, 1)]
-fn publication_reuses_task_and_workload_auth(
+fn publication_reuses_workload_auth_but_not_an_unrelated_ambient_task(
     #[case] status: &str,
     #[case] expected_status: HarnessUsagePublicationStatus,
     #[case] execution_id: i64,
     #[case] capture_sequence: i64,
 ) {
-    let task_id = "550e8400-e29b-41d4-a716-446655440000"
-        .parse::<AmbientAgentTaskId>()
-        .unwrap();
+    let task_id = task_id();
     let report = report();
     let request = {
         let mut server = ChannelState::mock_server();
@@ -164,12 +167,14 @@ fn publication_reuses_task_and_workload_auth(
             .create()
     };
     let server = ServerApi::new_for_test();
-    server.set_ambient_agent_task_id(Some(task_id));
+    server.set_ambient_agent_task_id(Some(
+        "123e4567-e89b-12d3-a456-426614174000".parse().unwrap(),
+    ));
     server
         .base_client
         .set_ambient_workload_token_for_test("synthetic-workload-token".into());
 
-    let publication = block_on(server.report_harness_usage(&report)).unwrap();
+    let publication = block_on(server.report_harness_usage_for_task(&task_id, &report)).unwrap();
 
     assert_eq!(publication.status, expected_status);
     assert_eq!(report.execution_id, 41);
@@ -211,7 +216,7 @@ fn publication_preserves_http_failure_classification(
     };
     let server = ServerApi::new_for_test();
 
-    let error = block_on(server.report_harness_usage(&report())).unwrap_err();
+    let error = block_on(server.report_harness_usage_for_task(&task_id(), &report())).unwrap_err();
 
     assert_eq!(error.kind, expected_kind);
     assert_eq!(
