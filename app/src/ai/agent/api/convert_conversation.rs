@@ -35,13 +35,15 @@ use crate::ai::agent::{
     CallMCPToolResult, CancellationReason, CloneRepositoryURL, CreateDocumentsResult,
     DocumentContext, EditDocumentsResult, FileContext, FileGlobResult, FileGlobV2Match,
     FileGlobV2Result, FinishedAIAgentOutput, GrepFileMatch, GrepLineMatch, GrepResult,
-    ImageContext, InsertReviewCommentsResult, OutputModelInfo, PassiveCodeDiffEntry,
-    PassiveSuggestionResultType, PassiveSuggestionTrigger, ReadDocumentsResult,
-    ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult, ReadShellCommandOutputResult,
-    RequestCommandOutputResult, RequestFileEditsResult, SearchCodebaseFailureReason,
-    SearchCodebaseResult, ServerOutputId, Shared, ShellCommandCompletedTrigger, ShellCommandError,
-    SuggestNewConversationResult, SuggestPromptResult, TransferShellCommandControlToUserResult,
-    UpdatedFileContext, UploadArtifactResult, UserQueryMode, WriteToLongRunningShellCommandResult,
+    ImageContext, InsertReviewCommentsResult, InvokeSkillUserQuery, OutputModelInfo,
+    PassiveCodeDiffEntry, PassiveSuggestionResultType, PassiveSuggestionTrigger,
+    ReadDocumentsResult, ReadFilesFailedFile, ReadFilesResult, ReadMCPResourceResult,
+    ReadShellCommandOutputResult, RequestCommandOutputResult, RequestFileEditsResult,
+    SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId, Shared,
+    ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
+    SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
+    UploadArtifactResult, UserQueryAttribution, UserQueryMode,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -393,6 +395,7 @@ impl ConvertToExchanges for &api::Task {
                         user_query_mode: convert_user_query_mode(user_query.mode.as_ref()),
                         running_command: None,
                         intended_agent: Some(user_query.intended_agent()),
+                        attribution: UserQueryAttribution::from_message(user_query),
                     });
                     true
                 }
@@ -411,6 +414,7 @@ impl ConvertToExchanges for &api::Task {
                                 user_query_mode: UserQueryMode::default(), // SystemQuery doesn't have mode field
                                 running_command: None,
                                 intended_agent: None,
+                                attribution: None,
                             });
                             true
                         }
@@ -472,7 +476,8 @@ impl ConvertToExchanges for &api::Task {
                             let user_query = invoke_skill
                                 .user_query
                                 .clone()
-                                .map(|user_query| crate::ai::agent::InvokeSkillUserQuery {
+                                .map(|user_query| InvokeSkillUserQuery {
+                                    attribution: UserQueryAttribution::from_message(&user_query),
                                     query: user_query.query,
                                     // Restored conversations currently do not hydrate invoke-skill
                                     // inline attachments back into client-side attachment structs.
@@ -519,6 +524,7 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::ArtifactEvent(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::ModelUsed(_)
+                | api::message::Message::RequestMetadata(_)
                 | api::message::Message::OrchestrationConfigSnapshot(_) => false,
             };
 
@@ -2074,14 +2080,15 @@ where
         .filter_map(|message| {
             let msg = message.message.as_ref()?;
             match msg {
-                // Messages treated as inputs in create_exchange_from_messages
+                // Inputs and request bookkeeping do not mark the first output.
                 api::message::Message::UserQuery(_)
                 | api::message::Message::SystemQuery(_)
                 | api::message::Message::ToolCallResult(_)
                 | api::message::Message::UpdateTodos(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
                 | api::message::Message::EventsFromAgents(_)
-                | api::message::Message::PassiveSuggestionResult(_) => None,
+                | api::message::Message::PassiveSuggestionResult(_)
+                | api::message::Message::RequestMetadata(_) => None,
                 // Anything else is considered agent/stream activity we want to measure
                 api::message::Message::AgentOutput(_)
                 | api::message::Message::AgentReasoning(_)

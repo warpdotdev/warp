@@ -244,6 +244,9 @@ fn create_user_query_message(
                 referenced_attachments: HashMap::new(),
                 mode: None,
                 intended_agent: Default::default(),
+                origin: None,
+                author: None,
+                source_message: None,
             },
         )),
         request_id: request_id.to_string(),
@@ -305,6 +308,7 @@ fn create_exchange_with_query(
             user_query_mode: UserQueryMode::default(),
             running_command: None,
             intended_agent: None,
+            attribution: None,
         }],
         output_status: AIAgentOutputStatus::Finished {
             finished_output: FinishedAIAgentOutput::Success {

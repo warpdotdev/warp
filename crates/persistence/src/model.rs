@@ -1669,17 +1669,25 @@ impl ChargedUsageTotals {
     /// Total tokens across every category (input + output + cache-read + cache-write).
     pub fn total_tokens(&self) -> u32 {
         self.input_tokens
-            + self.output_tokens
-            + self.input_cache_read_tokens
-            + self.input_cache_write_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.input_cache_read_tokens)
+            .saturating_add(self.input_cache_write_tokens)
     }
 
-    fn add_inference_usage(&mut self, usage: &stream_finished::InferenceUsage) {
+    fn add_inference_usage(&mut self, usage: &api::InferenceUsage) {
         if let Some(token_count) = usage.token_count.as_ref() {
-            self.input_tokens += token_count.input;
-            self.output_tokens += token_count.output;
-            self.input_cache_read_tokens += token_count.input_cache_read;
-            self.input_cache_write_tokens += token_count.input_cache_write;
+            self.input_tokens = self
+                .input_tokens
+                .saturating_add(u32::try_from(token_count.input).unwrap_or(u32::MAX));
+            self.output_tokens = self
+                .output_tokens
+                .saturating_add(u32::try_from(token_count.output).unwrap_or(u32::MAX));
+            self.input_cache_read_tokens = self
+                .input_cache_read_tokens
+                .saturating_add(u32::try_from(token_count.input_cache_read).unwrap_or(u32::MAX));
+            self.input_cache_write_tokens = self
+                .input_cache_write_tokens
+                .saturating_add(u32::try_from(token_count.input_cache_write).unwrap_or(u32::MAX));
         }
         if let Some(token_cost) = usage.token_cost.as_ref() {
             self.input_cost_in_cents += token_cost.input_cost_in_cents;
@@ -1699,22 +1707,26 @@ impl std::ops::AddAssign for ChargedUsageTotals {
         self.input_cache_read_cost_in_cents += rhs.input_cache_read_cost_in_cents;
         self.input_cache_write_cost_in_cents += rhs.input_cache_write_cost_in_cents;
         self.platform_cost_in_cents += rhs.platform_cost_in_cents;
-        self.input_tokens += rhs.input_tokens;
-        self.output_tokens += rhs.output_tokens;
-        self.input_cache_read_tokens += rhs.input_cache_read_tokens;
-        self.input_cache_write_tokens += rhs.input_cache_write_tokens;
+        self.input_tokens = self.input_tokens.saturating_add(rhs.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(rhs.output_tokens);
+        self.input_cache_read_tokens = self
+            .input_cache_read_tokens
+            .saturating_add(rhs.input_cache_read_tokens);
+        self.input_cache_write_tokens = self
+            .input_cache_write_tokens
+            .saturating_add(rhs.input_cache_write_tokens);
         self.web_search_count += rhs.web_search_count;
         self.web_search_cost_in_cents += rhs.web_search_cost_in_cents;
     }
 }
 
-impl From<&stream_finished::RequestCharges> for ChargedUsageTotals {
+impl From<&api::RequestCharges> for ChargedUsageTotals {
     /// Sums a category-keyed `RequestCharges` map (per-turn or cumulative)
     /// into a single flat breakdown, mirroring the Go `SumChargedUsage`
     /// helper. Categories and models are summed together; per-category/
     /// per-model detail is discarded, matching the single
     /// pricing-breakdown-section display convention (`warp` PR #15015).
-    fn from(charges: &stream_finished::RequestCharges) -> Self {
+    fn from(charges: &api::RequestCharges) -> Self {
         let mut totals = Self::default();
         for usage in charges.usage_by_category.values() {
             for inference_usage in usage

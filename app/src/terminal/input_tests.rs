@@ -2635,6 +2635,7 @@ fn seed_in_progress_conversation(
                 user_query_mode: UserQueryMode::Normal,
                 running_command: None,
                 intended_agent: None,
+                attribution: None,
             }],
             output_status: AIAgentOutputStatus::Streaming { output: None },
             added_message_ids: HashSet::new(),
