@@ -7,6 +7,7 @@ pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
 pub(crate) mod redaction;
+pub(crate) mod request_metadata;
 pub(crate) mod task;
 mod task_store;
 pub(super) mod telemetry;

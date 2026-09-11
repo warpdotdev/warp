@@ -94,13 +94,13 @@ use crate::ai::agent::redaction::redact_secrets;
 use crate::ai::agent::telemetry::ForTelemetry as _;
 use crate::ai::agent::{
     AIAgentAction, AIAgentActionId, AIAgentActionResultType, AIAgentActionType, AIAgentAttachment,
-    AIAgentCitation, AIAgentContext, AIAgentInput, AIAgentOutput, AIAgentOutputMessage,
-    AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers, CancellationReason,
-    CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate, EditDocumentsResult,
-    MessageId, PassiveSuggestionTrigger, ProgrammingLanguage, RenderableAIError,
-    RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource, SearchCodebaseResult,
-    ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest, SuggestPromptResult,
-    SuggestedLoggingId, SummarizationType, TodoOperation,
+    AIAgentCitation, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
+    AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentTextSection, AIIdentifiers,
+    CancellationReason, CreateDocumentsRequest, CreateDocumentsResult, DocumentToCreate,
+    EditDocumentsResult, MessageId, PassiveSuggestionTrigger, ProgrammingLanguage,
+    RenderableAIError, RequestCommandOutputResult, RequestFileEditsResult, ScreenshotSource,
+    SearchCodebaseResult, ServerOutputId, SubagentCall, SubagentType, SuggestPromptRequest,
+    SuggestPromptResult, SuggestedLoggingId, SummarizationType, TodoOperation,
 };
 use crate::ai::agent_conversations_model::{AgentConversationsModel, AgentConversationsModelEvent};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -455,6 +455,9 @@ pub(super) struct AIBlockStateHandles {
 
     /// Mouse state handle for the usage button
     usage_button_handle: MouseStateHandle,
+
+    /// Mouse state handle for the per-turn request-metadata "Turn" panel trigger
+    turn_panel_button_handle: MouseStateHandle,
 
     /// Mouse state handles per citation.
     /// A given citation should only appear once per block.
@@ -1078,6 +1081,10 @@ pub struct AIBlock {
     /// Whether the usage summary footer is expanded.
     is_usage_footer_expanded: bool,
 
+    /// Whether the per-turn request-metadata "Turn" panel is expanded. Independent of
+    /// `is_usage_footer_expanded`: the two panels are separate surfaces.
+    is_turn_panel_expanded: bool,
+
     /// Controller for reading/modifying `AgentView` state for this terminal pane (e.g. if there is
     /// an active agent view or not, which affects whether or not this block should be hidden).
     ///
@@ -1565,6 +1572,7 @@ impl AIBlock {
             has_recording_related_actions: false,
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
+            is_turn_panel_expanded: false,
             agent_view_controller,
             ambient_agent_view_model,
             aws_bedrock_credentials_error_view: None,
@@ -6095,6 +6103,18 @@ fn set_imported_comment_button_disabled(
     });
 }
 
+impl AIBlock {
+    /// Notifies the terminal view of the turn panel's current expansion state, using this
+    /// block's own conversation/exchange ids.
+    fn emit_turn_panel_toggled(&self, ctx: &mut ViewContext<Self>) {
+        ctx.emit(AIBlockEvent::TurnPanelToggled {
+            conversation_id: self.client_ids.conversation_id,
+            exchange_id: self.client_ids.client_exchange_id,
+            is_expanded: self.is_turn_panel_expanded,
+        });
+    }
+}
+
 fn num_attached_context_blocks(inputs: &[AIAgentInput]) -> usize {
     inputs.iter().fold(0, |count, input| {
         if let Some(context) = input.context() {
@@ -6166,6 +6186,15 @@ pub enum AIBlockEvent {
     /// Emitted when we want to show or hide the usage footer.
     UsageFooterToggled {
         conversation_id: AIConversationId,
+        is_expanded: bool,
+    },
+
+    /// Emitted when we want to show or hide the per-turn request-metadata "Turn" panel.
+    TurnPanelToggled {
+        conversation_id: AIConversationId,
+        /// The exchange this block renders, used to look up that turn's record rather than
+        /// whatever the conversation's latest turn happens to be.
+        exchange_id: AIAgentExchangeId,
         is_expanded: bool,
     },
 
@@ -6405,6 +6434,11 @@ pub enum AIBlockAction {
     OpenFeedbackDocs,
     /// Toggle the usage summary footer expansion state
     ToggleIsUsageFooterExpanded,
+    /// Toggle the per-turn request-metadata "Turn" panel expansion state.
+    ToggleIsTurnPanelExpanded,
+    /// Explicitly set the "Turn" panel's expansion state, for callers that mean "close" (or
+    /// "open") rather than "toggle" and so must not depend on the panel's current state.
+    SetIsTurnPanelExpanded(bool),
     CommentExpanded {
         id: CommentId,
     },
@@ -6698,6 +6732,14 @@ impl TypedActionView for AIBlock {
                     conversation_id: self.client_ids.conversation_id,
                     is_expanded: self.is_usage_footer_expanded,
                 });
+            }
+            AIBlockAction::ToggleIsTurnPanelExpanded => {
+                self.is_turn_panel_expanded = !self.is_turn_panel_expanded;
+                self.emit_turn_panel_toggled(ctx);
+            }
+            AIBlockAction::SetIsTurnPanelExpanded(is_expanded) => {
+                self.is_turn_panel_expanded = *is_expanded;
+                self.emit_turn_panel_toggled(ctx);
             }
             AIBlockAction::CommentExpanded { id } => {
                 let Some(comment) = self.comment_states.get_mut(id) else {

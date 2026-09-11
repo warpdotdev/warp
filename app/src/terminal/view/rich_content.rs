@@ -153,6 +153,10 @@ impl RichContent {
         matches!(self.metadata, Some(RichContentMetadata::UsageFooter))
     }
 
+    pub fn is_turn_panel(&self) -> bool {
+        matches!(self.metadata, Some(RichContentMetadata::TurnPanel))
+    }
+
     pub fn is_telemetry_banner(&self) -> bool {
         matches!(
             self.metadata,
@@ -230,6 +234,9 @@ pub enum RichContentMetadata {
         exchange_id: AIAgentExchangeId,
     },
     UsageFooter,
+    /// A docked, closeable per-turn "Turn" panel backed by the turn's persisted request-metadata
+    /// record. See `RequestMetadataTurnView`.
+    TurnPanel,
     InitStep {
         step_kind: InitStepKind,
         block_handle: ViewHandle<InitStepBlock>,
