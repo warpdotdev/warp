@@ -7,6 +7,8 @@ use ai::api_keys::{
     GeapCredentialsState,
 };
 use chrono::Local;
+#[cfg(not(target_family = "wasm"))]
+use computer_use::RecordingHandle;
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
@@ -20,6 +22,8 @@ use crate::ai::agent::{
     PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::blocklist::RecordingController;
 use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
@@ -241,6 +245,53 @@ fn cancelling_conversation_aborts_pending_auto_resume() {
                         .contains_key(&conversation_id)
                 );
             });
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn keep_in_progress_action_cleanup_preserves_active_recording() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        app.add_singleton_model(|_| RecordingController::new());
+        let terminal = add_window_with_terminal(&mut app, None);
+        let conversation_id = AIConversationId::new();
+
+        app.update(|ctx| {
+            RecordingController::handle(ctx).update(ctx, |controller, _| {
+                controller.try_begin_start(conversation_id).unwrap();
+                let (handle, _) = RecordingHandle::new_test(1, 1);
+                controller.finish_start(
+                    "recording".to_owned(),
+                    conversation_id,
+                    handle,
+                    15,
+                    None,
+                    None,
+                    computer_use::Target::Screen,
+                );
+            });
+        });
+
+        terminal.update(&mut app, |terminal, ctx| {
+            let action_model = terminal.ai_controller().as_ref(ctx).action_model.clone();
+            action_model.update(ctx, |action_model, ctx| {
+                action_model.cancel_all_pending_actions(
+                    conversation_id,
+                    Some(CancellationReason::FollowUpSubmitted {
+                        is_for_same_conversation: true,
+                    }),
+                    ctx,
+                );
+            });
+        });
+
+        app.update(|ctx| {
+            assert_eq!(
+                RecordingController::as_ref(ctx).active_recording_id(),
+                Some("recording")
+            );
         });
     });
 }

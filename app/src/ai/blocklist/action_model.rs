@@ -1170,24 +1170,28 @@ impl BlocklistAIActionModel {
         });
         #[cfg(not(target_family = "wasm"))]
         {
-            // Cancelling a conversation kills the running ffmpeg process
-            // without uploading the partial recording, so pass
-            // `should_upload = false`.
-            if let Some(finalization) = finalize_recording_for_conversation(
-                conversation_id,
-                FinalizeReason::RunCancelled,
-                false,
-                ctx,
-            ) {
-                ctx.spawn(
-                    async move { finalization.resolve().await },
-                    |_model, (result, actual_reason), _ctx| {
-                        log::info!(
-                            "Recording finalization after conversation cancellation completed \
-                             (reason={actual_reason:?}): {result:?}"
-                        );
-                    },
-                );
+            // KeepInProgress supersedes current actions without ending the conversation, so its
+            // recording remains owned by the continuing conversation.
+            if should_finalize_recording_after_action_cancellation(reason) {
+                // Cancelling a conversation kills the running ffmpeg process
+                // without uploading the partial recording, so pass
+                // `should_upload = false`.
+                if let Some(finalization) = finalize_recording_for_conversation(
+                    conversation_id,
+                    FinalizeReason::RunCancelled,
+                    false,
+                    ctx,
+                ) {
+                    ctx.spawn(
+                        async move { finalization.resolve().await },
+                        |_model, (result, actual_reason), _ctx| {
+                            log::info!(
+                                "Recording finalization after conversation cancellation completed \
+                                 (reason={actual_reason:?}): {result:?}"
+                            );
+                        },
+                    );
+                }
             }
         }
 
@@ -1531,6 +1535,15 @@ impl BlocklistAIActionModel {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn should_finalize_recording_after_action_cancellation(reason: Option<CancellationReason>) -> bool {
+    reason.is_none_or(|reason| {
+        !matches!(
+            reason.conversation_outcome(),
+            CancellationOutcome::KeepInProgress
+        )
+    })
+}
 #[derive(Debug, Clone)]
 pub enum BlocklistAIActionEvent {
     /// Emitted when the action with the given ID is enqueued for execution.
