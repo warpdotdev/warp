@@ -840,13 +840,15 @@ impl BlocklistAIController {
             }
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
+        let can_piggyback_events = api::is_composable_user_input(&ai_input);
 
         let mut has_piggybacked_events = false;
         let mut other_task_event_inputs = None;
-        if let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
-            .update(ctx, |service, ctx| {
-                service.drain_events_for_request(conversation_id, ctx)
-            })
+        if can_piggyback_events
+            && let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
+                .update(ctx, |service, ctx| {
+                    service.drain_events_for_request(conversation_id, ctx)
+                })
         {
             has_piggybacked_events = true;
             if event_task_id == task_id {
@@ -858,9 +860,13 @@ impl BlocklistAIController {
         inputs.push(ai_input);
 
         // Piggyback any pending orchestration config updates for this conversation.
-        let taken_dirty_events = AIDocumentModel::handle(ctx).update(ctx, |model, _| {
-            model.take_dirty_orchestration_events(&conversation_id)
-        });
+        let taken_dirty_events = if can_piggyback_events {
+            AIDocumentModel::handle(ctx).update(ctx, |model, _| {
+                model.take_dirty_orchestration_events(&conversation_id)
+            })
+        } else {
+            vec![]
+        };
         for dirty_event in &taken_dirty_events {
             inputs.push(AIAgentInput::OrchestrationConfigUpdate {
                 plan_id: dirty_event.plan_id.clone(),

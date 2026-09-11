@@ -17,8 +17,8 @@ use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
-    AIAgentAttachment, AIAgentContext, AIAgentInput, CancellationReason, ImageContext,
-    PassiveSuggestionTrigger, UserQueryMode,
+    AIAgentAttachment, AIAgentContext, AIAgentInput, AgentReviewCommentBatch, CancellationReason,
+    EntrypointType, ImageContext, PassiveSuggestionTrigger, UserQueryMode,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::orchestration_events::{
@@ -607,6 +607,113 @@ fn create_conversation_with_pending_message(
         );
     });
     (conversation_id, server_token)
+}
+
+fn send_input_with_pending_message(
+    terminal: &mut TerminalView,
+    ai_input: AIAgentInput,
+    ctx: &mut ViewContext<TerminalView>,
+) -> AIConversationId {
+    let (conversation_id, _) = create_conversation_with_pending_message(terminal, ctx);
+    let task_id = BlocklistAIHistoryModel::as_ref(ctx)
+        .conversation(&conversation_id)
+        .expect("conversation should exist")
+        .get_root_task_id()
+        .clone();
+    terminal.ai_controller().update(ctx, |controller, ctx| {
+        controller.send_query(
+            super::InputQuery {
+                which_task: super::WhichTask::Task {
+                    conversation_id,
+                    task_id,
+                },
+                input_query: super::InputQueryType::AIInputType { ai_input },
+                additional_attachments: HashMap::new(),
+                queued_query_id: None,
+            },
+            EntrypointType::UserInitiated,
+            None,
+            false,
+            ctx,
+        );
+    });
+    conversation_id
+}
+
+#[test]
+fn code_review_preserves_dedicated_request_and_leaves_agent_message_pending() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+            send_input_with_pending_message(
+                terminal,
+                AIAgentInput::CodeReview {
+                    context: Arc::default(),
+                    review_comments: AgentReviewCommentBatch {
+                        comments: vec![],
+                        diff_set: HashMap::new(),
+                    },
+                },
+                ctx,
+            )
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("code review should create an exchange")
+                .input;
+            assert!(matches!(
+                inputs.as_slice(),
+                [AIAgentInput::CodeReview { .. }]
+            ));
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.has_pending_events(conversation_id));
+        });
+    });
+}
+
+#[test]
+fn create_environment_preserves_dedicated_request_and_leaves_agent_message_pending() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let conversation_id = terminal.update(&mut app, |terminal, ctx| {
+            send_input_with_pending_message(
+                terminal,
+                AIAgentInput::CreateEnvironment {
+                    context: Arc::default(),
+                    display_query: None,
+                    repo_paths: vec!["/workspace/project".to_string()],
+                },
+                ctx,
+            )
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("create environment should create an exchange")
+                .input;
+            let [AIAgentInput::CreateEnvironment { repo_paths, .. }] = inputs.as_slice() else {
+                panic!("expected the dedicated create-environment input");
+            };
+            assert_eq!(repo_paths, &["/workspace/project"]);
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.has_pending_events(conversation_id));
+        });
+    });
 }
 
 #[test]

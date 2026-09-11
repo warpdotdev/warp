@@ -51,6 +51,19 @@ impl TryFrom<StaticQueryType> for api::request::input::query_with_canned_respons
     }
 }
 
+pub(crate) fn is_composable_user_input(input: &AIAgentInput) -> bool {
+    matches!(
+        input,
+        AIAgentInput::UserQuery {
+            static_query_type: None,
+            ..
+        } | AIAgentInput::ActionResult { .. }
+            | AIAgentInput::MessagesReceivedFromAgents { .. }
+            | AIAgentInput::EventsFromAgents { .. }
+            | AIAgentInput::PassiveSuggestionResult { .. }
+            | AIAgentInput::OrchestrationConfigUpdate { .. }
+    )
+}
 pub(super) fn convert_input(
     mut inputs: Vec<AIAgentInput>,
 ) -> Result<api::request::Input, ConvertToAPITypeError> {
@@ -62,6 +75,9 @@ pub(super) fn convert_input(
         .rev()
         .find_map(AIAgentInput::context)
         .map(convert_context);
+    if inputs.len() > 1 && inputs.iter().any(|input| !is_composable_user_input(input)) {
+        return Err(anyhow!("Attempted to compose a dedicated request input").into());
+    }
 
     let mut api_inputs = vec![];
     if inputs.len() == 1 {
