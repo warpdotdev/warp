@@ -270,10 +270,10 @@ pub trait Actor: Send + Sync + 'static {
 
 /// Returns a recorder that can capture a video of the computer-use display.
 ///
-/// A real recorder is available on Linux (X11) and macOS (avfoundation); every
-/// other platform, and any `test-util` build, gets a no-op recorder that reports
-/// recording as unsupported. On macOS, setting `WARP_MOCK_RECORDER` opts into a
-/// mock recorder for UI testing (see `mock`).
+/// Real recorders are available on Linux (X11), macOS (avfoundation), and
+/// Windows (gdigrab). Other platforms and any `test-util` build get a no-op
+/// recorder. On macOS, setting `WARP_MOCK_RECORDER` opts into a mock recorder
+/// for UI testing (see `mock`).
 pub fn create_recorder() -> Box<dyn Recorder> {
     #[cfg(macos)]
     if std::env::var_os("WARP_MOCK_RECORDER").is_some() {
@@ -494,10 +494,24 @@ impl RecordingHandle {
 impl Drop for RecordingHandle {
     fn drop(&mut self) {
         // A handle can be abandoned without reaching `Recorder::stop`, notably
-        // when a start action finishes after cancellation. The child process's
-        // kill-on-drop handles ffmpeg; this removes its partial output. A
-        // successful stop disables cleanup and transfers file ownership.
+        // when a start action finishes after cancellation. Windows must reap the
+        // child first because open files cannot be unlinked there. A successful
+        // stop disables cleanup and transfers file ownership.
         if self.cleanup_on_drop {
+            #[cfg(windows)]
+            if let Some(mut process) = self.process.take() {
+                let _ = process.start_kill();
+                let deadline = std::time::Instant::now() + Duration::from_secs(15);
+                loop {
+                    match process.try_wait() {
+                        Ok(Some(_)) | Err(_) => break,
+                        Ok(None) if std::time::Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Ok(None) => break,
+                    }
+                }
+            }
             let _ = std::fs::remove_file(&self.path);
             let _ = std::fs::remove_file(self.path.with_extension("log"));
         }
