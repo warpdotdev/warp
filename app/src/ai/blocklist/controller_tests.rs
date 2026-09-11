@@ -11,7 +11,7 @@ use session_sharing_protocol::common::{ParticipantId, ServerConversationToken};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
-use warpui::{App, SingletonEntity, ViewHandle};
+use warpui::{App, SingletonEntity, ViewContext, ViewHandle};
 
 use super::response_stream::{PendingResume, RecoveryBudget};
 use crate::ai::agent::conversation::AIConversationId;
@@ -569,47 +569,55 @@ fn drop_pending_events_for_exiting_conversation_drops_pending_events() {
     });
 }
 
+fn create_conversation_with_pending_message(
+    terminal: &mut TerminalView,
+    ctx: &mut ViewContext<TerminalView>,
+) -> (AIConversationId, ServerConversationToken) {
+    let server_token = ServerConversationToken::new();
+    let conversation_id = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+        let conversation_id =
+            history.start_new_conversation(terminal.id(), false, false, false, ctx);
+        history.set_server_conversation_token_for_conversation(
+            conversation_id,
+            server_token.to_string(),
+        );
+        history.update_conversation_status(
+            terminal.id(),
+            conversation_id,
+            crate::ai::agent::conversation::ConversationStatus::InProgress,
+            ctx,
+        );
+        conversation_id
+    });
+    OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+        service.enqueue_event_batch(
+            conversation_id,
+            vec![PendingEvent {
+                event_id: "event-1".to_string(),
+                source_agent_id: "parent-agent".to_string(),
+                attempt_count: 0,
+                detail: PendingEventDetail::Message {
+                    message_id: "message-1".to_string(),
+                    addresses: vec!["child-agent".to_string()],
+                    subject: "Continue implementation".to_string(),
+                    message_body: "Apply the requested revision.".to_string(),
+                },
+            }],
+            ctx,
+        );
+    });
+    (conversation_id, server_token)
+}
+
 #[test]
 fn shared_session_wake_includes_pending_agent_messages_in_the_same_exchange() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
-        let server_token = ServerConversationToken::new();
 
         let conversation_id = terminal.update(&mut app, |view, ctx| {
-            let conversation_id =
-                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                    let conversation_id =
-                        history.start_new_conversation(view.id(), false, false, false, ctx);
-                    history.set_server_conversation_token_for_conversation(
-                        conversation_id,
-                        server_token.to_string(),
-                    );
-                    history.update_conversation_status(
-                        view.id(),
-                        conversation_id,
-                        crate::ai::agent::conversation::ConversationStatus::InProgress,
-                        ctx,
-                    );
-                    conversation_id
-                });
-            OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
-                service.enqueue_event_batch(
-                    conversation_id,
-                    vec![PendingEvent {
-                        event_id: "event-1".to_string(),
-                        source_agent_id: "parent-agent".to_string(),
-                        attempt_count: 0,
-                        detail: PendingEventDetail::Message {
-                            message_id: "message-1".to_string(),
-                            addresses: vec!["child-agent".to_string()],
-                            subject: "Continue implementation".to_string(),
-                            message_body: "Apply the requested revision.".to_string(),
-                        },
-                    }],
-                    ctx,
-                );
-            });
+            let (conversation_id, server_token) =
+                create_conversation_with_pending_message(view, ctx);
             view.ai_controller().update(ctx, |controller, ctx| {
                 controller.execute_warp_agent_prompt_from_shared_session_injection(
                     "Wake for a new agent message.".to_string(),
@@ -652,6 +660,137 @@ fn shared_session_wake_includes_pending_agent_messages_in_the_same_exchange() {
                     .drain_events_for_request(conversation_id, ctx)
                     .is_none(),
                 "the joined message must not be available for a second delivery"
+            );
+        });
+    });
+}
+
+#[test]
+fn user_query_includes_pending_agent_messages_in_the_same_exchange() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let (conversation_id, _) = create_conversation_with_pending_message(view, ctx);
+            assert!(view.ai_controller().update(ctx, |controller, ctx| {
+                controller.send_user_query_in_conversation(
+                    "Continue with the user request.".to_string(),
+                    conversation_id,
+                    None,
+                    ctx,
+                )
+            }));
+            conversation_id
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let inputs = &history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task()
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("user query should create an exchange")
+                .input;
+            let [
+                AIAgentInput::MessagesReceivedFromAgents { messages },
+                AIAgentInput::UserQuery { query, .. },
+            ] = inputs.as_slice()
+            else {
+                panic!("expected one pending message input followed by one user query");
+            };
+            assert_eq!(query, "Continue with the user request.");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id, "message-1");
+        });
+    });
+}
+
+#[test]
+fn shared_session_wake_splits_root_message_from_active_subagent_query() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (conversation_id, root_task_id, subagent_task_id) =
+            terminal.update(&mut app, |view, ctx| {
+                let (conversation_id, server_token) =
+                    create_conversation_with_pending_message(view, ctx);
+                let controller = view.ai_controller().clone();
+                let block_id = {
+                    let mut terminal_model = controller.as_ref(ctx).terminal_model.lock();
+                    terminal_model.simulate_long_running_block("sleep 60", "");
+                    terminal_model.block_list().active_block().id().clone()
+                };
+                let (root_task_id, subagent_task_id) =
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _| {
+                        let conversation = history
+                            .conversation_mut(&conversation_id)
+                            .expect("conversation should exist");
+                        (
+                            conversation.get_root_task_id().clone(),
+                            conversation.create_optimistic_cli_subagent_task_for_test(&block_id),
+                        )
+                    });
+                controller
+                    .as_ref(ctx)
+                    .terminal_model
+                    .lock()
+                    .block_list_mut()
+                    .active_block_mut()
+                    .set_agent_interaction_mode_for_agent_monitored_command(
+                        &subagent_task_id,
+                        conversation_id,
+                    )
+                    .expect("active block should accept subagent metadata");
+
+                controller.update(ctx, |controller, ctx| {
+                    controller.execute_warp_agent_prompt_from_shared_session_injection(
+                        "Wake for a new agent message.".to_string(),
+                        Some(server_token),
+                        vec![],
+                        ParticipantId::new(),
+                        ctx,
+                    );
+                });
+                (conversation_id, root_task_id, subagent_task_id)
+            });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history
+                .conversation(&conversation_id)
+                .expect("conversation should exist");
+            let root_inputs = &conversation
+                .get_task(&root_task_id)
+                .expect("root task should exist")
+                .last_exchange()
+                .expect("root message should create an exchange")
+                .input;
+            let [AIAgentInput::MessagesReceivedFromAgents { messages }] = root_inputs.as_slice()
+            else {
+                panic!("expected one pending message input in the root task");
+            };
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id, "message-1");
+
+            let subagent_inputs = &conversation
+                .get_task(&subagent_task_id)
+                .expect("subagent task should exist")
+                .last_exchange()
+                .expect("wake query should create an exchange")
+                .input;
+            let [AIAgentInput::UserQuery { query, .. }] = subagent_inputs.as_slice() else {
+                panic!("expected one wake query in the active subagent task");
+            };
+            assert_eq!(query, "Wake for a new agent message.");
+        });
+        OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
+            assert!(
+                service
+                    .drain_events_for_request(conversation_id, ctx)
+                    .is_none(),
+                "the root message must not be available for a second delivery"
             );
         });
     });

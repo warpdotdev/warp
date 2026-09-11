@@ -843,11 +843,10 @@ impl BlocklistAIController {
 
         let mut has_piggybacked_events = false;
         let mut other_task_event_inputs = None;
-        if matches!(&entrypoint_type, EntrypointType::SharedSession)
-            && let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
-                .update(ctx, |service, ctx| {
-                    service.drain_events_for_request(conversation_id, ctx)
-                })
+        if let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
+            .update(ctx, |service, ctx| {
+                service.drain_events_for_request(conversation_id, ctx)
+            })
         {
             has_piggybacked_events = true;
             if event_task_id == task_id {
@@ -1178,8 +1177,8 @@ impl BlocklistAIController {
         );
     }
 
-    /// Sends a shared-session query to the AI model, with additional referenced attachments.
-    fn send_shared_session_query_in_conversation_with_attachments(
+    /// Sends the given user query to the AI model, with additional referenced attachments.
+    pub fn send_user_query_in_conversation_with_attachments(
         &mut self,
         query: String,
         conversation_id: AIConversationId,
@@ -1193,7 +1192,7 @@ impl BlocklistAIController {
             participant_id,
             false, // skip_running_command_detection
             additional_attachments,
-            EntrypointType::SharedSession,
+            EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             ctx,
