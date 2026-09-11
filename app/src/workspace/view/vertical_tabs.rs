@@ -1205,13 +1205,6 @@ impl VerticalTabsPanelState {
                         )
                     }
                     VerticalTabsResolvedMode::Panes | VerticalTabsResolvedMode::FocusedSession => {
-                        // In `Tabs`-granularity modes the tab's custom title
-                        // rides along as the row's `title_override`, so it
-                        // already participates in matching. In Panes mode the
-                        // same title is rendered as the group header instead —
-                        // never on a pane row — so it must be matched
-                        // separately, or a renamed tab becomes unfindable by
-                        // its visible name (#9666).
                         let title_override = (!uses_outer_group_container(display_granularity))
                             .then(|| pane_group.custom_title(app))
                             .flatten();
@@ -1826,12 +1819,6 @@ fn render_groups(
                         let title_override = (!uses_outer_group_container)
                             .then(|| pane_group.custom_title(app))
                             .flatten();
-                        // Panes mode renders the tab's custom title as the
-                        // group header — never on a pane row — so it cannot
-                        // ride along in the per-pane search fragments. Match
-                        // it separately (#9666): a tab whose visible header
-                        // name matches keeps all of its display panes, while
-                        // pane rows continue matching by their own text.
                         let tab_custom_title_matches = custom_tab_title_matches_query(
                             pane_group.custom_title(app).as_deref(),
                             uses_outer_group_container,
