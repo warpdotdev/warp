@@ -23,6 +23,7 @@ use super::claude_transcript::{
     read_envelope, rehydrate_claude_transcript,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
+use super::save_coordinator::{SaveCoordinator, save_transcript_and_block};
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, cli_agent_session_status, write_temp_file,
@@ -244,6 +245,7 @@ struct ClaudeHarnessRunner {
     server_api: Arc<ServerApi>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<ClaudeRunnerState>,
+    saves: SaveCoordinator,
     session_id: Uuid,
     harness_working_dir: PathBuf,
     parent_bridge: Option<MessageBridge>,
@@ -327,6 +329,7 @@ impl ClaudeHarnessRunner {
             server_api,
             terminal_driver,
             state: Mutex::new(ClaudeRunnerState::Preexec),
+            saves: SaveCoordinator::default(),
             session_id,
             harness_working_dir: harness_working_dir.to_path_buf(),
             parent_bridge,
@@ -551,6 +554,9 @@ impl HarnessRunner for ClaudeHarnessRunner {
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         self.handle_parent_bridge_session_update().await
     }
+    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
+        Some(&self.saves)
+    }
 
     async fn save_conversation(
         &self,
@@ -582,14 +588,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
         let harness_working_dir = &self.harness_working_dir;
         let require_main_transcript = matches!(save_point, SavePoint::Final);
 
-        futures::try_join!(
-            super::upload_current_block_snapshot(
-                foreground,
-                &self.terminal_driver,
-                client,
-                &conversation_id,
-                block_id,
-            ),
+        save_transcript_and_block(
             upload_transcript(
                 client,
                 &conversation_id,
@@ -598,9 +597,15 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 claude_version,
                 require_main_transcript,
             ),
-        )?;
-
-        Ok(())
+            super::upload_current_block_snapshot(
+                foreground,
+                &self.terminal_driver,
+                client,
+                &conversation_id,
+                block_id,
+            ),
+        )
+        .await
     }
     async fn cleanup(
         &self,
