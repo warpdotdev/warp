@@ -1565,8 +1565,7 @@ impl TuiTerminalSessionView {
                 &model_events,
                 get_relevant_files_controller,
                 terminal_surface_id,
-                team_context_resolver,
-                team_context_for_operation_resolver,
+                (team_context_resolver, team_context_for_operation_resolver),
                 ctx,
             )
         });

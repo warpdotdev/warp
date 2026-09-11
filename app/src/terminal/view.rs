@@ -3592,8 +3592,10 @@ impl TerminalView {
                 &model_events_handle,
                 get_relevant_files_controller.clone(),
                 terminal_view_id,
-                ai_action_team_context_resolver,
-                ai_action_team_context_for_operation_resolver,
+                (
+                    ai_action_team_context_resolver,
+                    ai_action_team_context_for_operation_resolver,
+                ),
                 ctx,
             )
         });

@@ -295,10 +295,10 @@ impl BlocklistAIActionExecutor {
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
         terminal_view_id: EntityId,
-        team_context_resolver: TeamContextResolver,
-        team_context_for_operation_resolver: TeamContextForOperationResolver,
+        team_context_resolvers: (TeamContextResolver, TeamContextForOperationResolver),
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let (team_context_resolver, team_context_for_operation_resolver) = team_context_resolvers;
         let read_files_executor =
             ctx.add_model(|_| ReadFilesExecutor::new(active_session.clone(), terminal_view_id));
         let upload_artifact_executor = ctx
