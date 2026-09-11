@@ -33,10 +33,17 @@ pub trait Service: Send + Sync + 'static {
 pub trait ServiceImpl: 'static + Send + Sync + Clone {
     type Service: Service;
 
+    /// Handles a request, returning either a response or the reason the service refused it.
+    ///
+    /// A refusal travels in the protocol envelope as a [`crate::protocol::Response::Failure`], not
+    /// in the service's own response type. Callers therefore surface it as a [`ClientError`]
+    /// without deserializing a response, which keeps refusal expressible without spending a
+    /// response payload on it - and keeps a caller built against a different version of the
+    /// service from misreading that payload.
     async fn handle_request(
         &self,
         request: <<Self as ServiceImpl>::Service as Service>::Request,
-    ) -> <<Self as ServiceImpl>::Service as Service>::Response;
+    ) -> Result<<<Self as ServiceImpl>::Service as Service>::Response, String>;
 }
 
 /// Provides an typed interface to call an underlying `Service`.

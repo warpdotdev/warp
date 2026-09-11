@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::sync::Arc;
 
 use futures::channel::oneshot;
@@ -39,6 +40,35 @@ pub enum ClientError {
         "The channel for transmitting pending request info to the inbound message task is closed."
     )]
     PendingRequestInfoChannelClosed,
+}
+
+impl ClientError {
+    /// Whether a failed [`Client::connect`] is worth another attempt.
+    ///
+    /// A transport that does not exist yet, or that has no free connection slot yet, is a timing
+    /// artifact of racing the server's startup, and a later attempt can succeed. Anything else -
+    /// a rejected connection, a protocol mismatch - fails again identically, so retrying only
+    /// delays the caller's own error handling.
+    pub fn is_transient_connect_failure(&self) -> bool {
+        match self {
+            Self::Initialization(InitializationError::Io(err)) => matches!(
+                err.kind(),
+                ErrorKind::NotFound
+                    | ErrorKind::ConnectionRefused
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::ResourceBusy
+                    | ErrorKind::Interrupted
+                    | ErrorKind::WouldBlock
+                    | ErrorKind::TimedOut
+            ),
+            Self::Initialization(InitializationError::UnsupportedPlatform)
+            | Self::Disconnected
+            | Self::InternalProtocol(_)
+            | Self::ResponseChannelClosed
+            | Self::PendingRequestInfoChannelClosed => false,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
@@ -290,3 +320,7 @@ impl Client {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

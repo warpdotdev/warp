@@ -23,13 +23,16 @@ impl CallJsFunctionServiceImpl {
 impl ipc::ServiceImpl for CallJsFunctionServiceImpl {
     type Service = CallJsFunctionService;
 
-    async fn handle_request(&self, request: CallJsFunctionRequest) -> CallJsFunctionResponse {
+    async fn handle_request(
+        &self,
+        request: CallJsFunctionRequest,
+    ) -> Result<CallJsFunctionResponse, String> {
         let CallJsFunctionRequest {
             id,
             serialized_input,
         } = request;
 
-        match self
+        let response = match self
             .plugin_caller
             .send_message(PluginRequest::CallJsFunction {
                 id,
@@ -46,6 +49,7 @@ impl ipc::ServiceImpl for CallJsFunctionServiceImpl {
                     message: format!("Failed with error: {e:?}"),
                 }
             }
-        }
+        };
+        Ok(response)
     }
 }
