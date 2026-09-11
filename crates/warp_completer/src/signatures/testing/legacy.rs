@@ -100,6 +100,7 @@ pub fn git_signature() -> Signature {
                 options: None,
                 priority: Priority::default(),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "checkout".to_string(),
@@ -121,6 +122,7 @@ pub fn git_signature() -> Signature {
                 options: None,
                 priority: Priority::default(),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "clone".to_string(),
@@ -131,6 +133,7 @@ pub fn git_signature() -> Signature {
                 options: None,
                 priority: Priority::default(),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "branch".to_string(),
@@ -192,6 +195,7 @@ pub fn git_signature() -> Signature {
                 ]),
                 priority: Priority::default(),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
         ]),
         options: Some(vec![
@@ -233,6 +237,7 @@ pub fn git_signature() -> Signature {
         ]),
         priority: Priority::default(),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -282,6 +287,7 @@ pub fn java_signature() -> Signature {
         ]),
         priority: Priority::default(),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -304,6 +310,7 @@ pub fn signature_with_empty_positional() -> Signature {
         options: None,
         priority: Priority::default(),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -348,6 +355,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Global(Importance::More(Order(100))),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "two".to_string(),
@@ -377,6 +385,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Global(Importance::Less(Order(50))),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "three".to_string(),
@@ -415,6 +424,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Global(Importance::Less(Order(1))),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "four".to_string(),
@@ -444,6 +454,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::default(),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "five".to_string(),
@@ -465,6 +476,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::default(),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "six".to_owned(),
@@ -489,6 +501,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "seven".to_owned(),
@@ -510,6 +523,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "eight".to_owned(),
@@ -524,6 +538,7 @@ pub fn test_signature() -> Signature {
                     options: None,
                     priority: Default::default(),
                     parser_directives: Default::default(),
+                    load_spec: None,
                 }]),
                 arguments: Some(vec![
                     Argument {
@@ -554,6 +569,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "nine".to_owned(),
@@ -575,6 +591,7 @@ pub fn test_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
         ]),
         options: Some(vec![
@@ -745,6 +762,7 @@ pub fn test_signature() -> Signature {
         ]),
         priority: Priority::default(),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -764,6 +782,7 @@ pub fn fuzzy_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "prefix2".to_string(),
@@ -774,6 +793,7 @@ pub fn fuzzy_signature() -> Signature {
                 options: None,
                 priority: Priority::Global(Importance::More(Order(100))),
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "suffix-pre-fix".to_string(),
@@ -784,6 +804,7 @@ pub fn fuzzy_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
         ]),
         options: Some(vec![Opt {
@@ -795,6 +816,7 @@ pub fn fuzzy_signature() -> Signature {
         }]),
         priority: Priority::default(),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -822,6 +844,7 @@ pub fn cd_signature() -> Signature {
         subcommands: None,
         options: None,
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -850,6 +873,7 @@ pub fn npm_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
             Signature {
                 name: "run".to_string(),
@@ -868,10 +892,12 @@ pub fn npm_signature() -> Signature {
                 options: None,
                 priority: Priority::Default,
                 parser_directives: Default::default(),
+                load_spec: None,
             },
         ]),
         options: None,
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -942,6 +968,7 @@ pub fn ls_signature() -> Signature {
             },
         ]),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -990,6 +1017,7 @@ pub fn enum_then_path_option_signature() -> Signature {
             priority: Priority::Default,
         }]),
         parser_directives: Default::default(),
+        load_spec: None,
     }
 }
 
@@ -1076,6 +1104,7 @@ pub fn add_content_signature() -> Signature {
             flags_match_unique_prefix: true,
             always_case_insensitive: true,
         },
+        load_spec: None,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Contains the legacy implementation of flag suggestion generation that depends on the legacy
 //! command signature struct (`warp_command_signatures::Signature`).
 use itertools::Itertools;
-use warp_command_signatures::{FlagStyle, Signature as SpecSignature};
+use warp_command_signatures::FlagStyle;
 
 use crate::completer::describe::OptionCaseSensitivity;
 use crate::completer::engine::LocationType;
@@ -15,10 +15,10 @@ use crate::parsers::SignatureAtTokenIndex;
 /// for the most recent one (i.e. with `-abc`, we would omit `-a` and `-b` but include
 /// `-c`), which is used for the Describe API.
 fn short_hand_flag_suggestions(
-    signature: &SpecSignature,
+    found_signature: &SignatureAtTokenIndex<'_>,
     partial_without_dashes: &str,
 ) -> impl Iterator<Item = MatchedSuggestion> + use<> {
-    signature
+    found_signature
         .short_hand_flags()
         .filter_map(|flag| {
             // Since short hand flags can be written one after the other
@@ -46,11 +46,12 @@ fn short_hand_flag_suggestions(
                     format!("-{}{}", partial_without_dashes, flag.name)
                 };
 
-                let case_sensitivity = if signature.parser_directives.always_case_insensitive {
-                    OptionCaseSensitivity::CaseInsensitive
-                } else {
-                    OptionCaseSensitivity::CaseSensitive
-                };
+                let case_sensitivity =
+                    if found_signature.parser_directives().always_case_insensitive {
+                        OptionCaseSensitivity::CaseInsensitive
+                    } else {
+                        OptionCaseSensitivity::CaseSensitive
+                    };
 
                 let suggestion = Suggestion::new(
                     format!("-{}", flag.name),
@@ -77,15 +78,15 @@ fn short_hand_flag_suggestions(
 /// If set, `style` filters long flags by their style - for example,
 /// `Some(FlagStyle::SingleDash)` if suggesting for `-<partial_without_dashes>`.
 fn long_hand_flag_suggestions(
-    signature: &SpecSignature,
+    found_signature: &SignatureAtTokenIndex<'_>,
     matcher: MatchStrategy,
     partial_without_dashes: &str,
     style: Option<FlagStyle>,
 ) -> impl Iterator<Item = MatchedSuggestion> + use<> {
-    signature
+    found_signature
         .long_hand_flags()
         .filter(|flag| style.is_none_or(|style| flag.style == style))
-        .filter_map(|flag| {
+        .filter_map(move |flag| {
             matcher
                 .get_match_type(partial_without_dashes, flag.name)
                 .map(|match_type| {
@@ -94,18 +95,21 @@ fn long_hand_flag_suggestions(
                         FlagStyle::DoubleDash => format!("--{}", flag.name),
                     };
 
-                    let match_requirement = if signature.parser_directives.flags_match_unique_prefix
+                    let match_requirement = if found_signature
+                        .parser_directives()
+                        .flags_match_unique_prefix
                     {
                         MatchRequirement::UniquePrefixOnly
                     } else {
                         MatchRequirement::EntireName
                     };
 
-                    let case_sensitivity = if signature.parser_directives.always_case_insensitive {
-                        OptionCaseSensitivity::CaseInsensitive
-                    } else {
-                        OptionCaseSensitivity::CaseSensitive
-                    };
+                    let case_sensitivity =
+                        if found_signature.parser_directives().always_case_insensitive {
+                            OptionCaseSensitivity::CaseInsensitive
+                        } else {
+                            OptionCaseSensitivity::CaseSensitive
+                        };
 
                     let suggestion = Suggestion::with_same_display_and_replacement(
                         name,
@@ -136,29 +140,27 @@ pub fn complete(
         return match name {
             // Case 1: if we are completing on '--<partial>', we surface long hand flags that begin with partial
             Some(long) if long.starts_with("--") => long_hand_flag_suggestions(
-                found_signature.signature,
+                &found_signature,
                 matcher,
                 &long[2..],
                 Some(FlagStyle::DoubleDash),
             )
             .collect(),
             // Case 2: if we are completing on a single '-', we surface all short hand flags followed by all long hand flags
-            Some(short) if short == "-" => {
-                short_hand_flag_suggestions(found_signature.signature, "")
-                    .chain(long_hand_flag_suggestions(
-                        found_signature.signature,
-                        matcher,
-                        "",
-                        None,
-                    ))
-                    .collect()
-            }
+            Some(short) if short == "-" => short_hand_flag_suggestions(&found_signature, "")
+                .chain(long_hand_flag_suggestions(
+                    &found_signature,
+                    matcher,
+                    "",
+                    None,
+                ))
+                .collect(),
             // Case 3: if we are completing on '-<partial>', we surface short hand flags that begin with partial,
             // followed by long hand flags that begin with partial.
             Some(short) if short.starts_with('-') => {
-                short_hand_flag_suggestions(found_signature.signature, &short[1..])
+                short_hand_flag_suggestions(&found_signature, &short[1..])
                     .chain(long_hand_flag_suggestions(
-                        found_signature.signature,
+                        &found_signature,
                         matcher,
                         &short[1..],
                         Some(FlagStyle::SingleDash),
@@ -167,8 +169,8 @@ pub fn complete(
             }
             // Case 4: if we are completing on whitespace (i.e. no prefix), we surface subcommands,
             // followed by all long hand flags, followed by all short hand flags
-            None => long_hand_flag_suggestions(found_signature.signature, matcher, "", None)
-                .chain(short_hand_flag_suggestions(found_signature.signature, ""))
+            None => long_hand_flag_suggestions(&found_signature, matcher, "", None)
+                .chain(short_hand_flag_suggestions(&found_signature, ""))
                 .collect(),
             _ => {
                 log::info!("Reached option completion branch that should be unreachable");

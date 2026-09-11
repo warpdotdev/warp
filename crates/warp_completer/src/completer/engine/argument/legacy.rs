@@ -60,8 +60,7 @@ pub async fn complete(
                     &classified_command.env_vars,
                     session_env_vars,
                     &location.span,
-                    found_signature.signature,
-                    found_signature.dynamic_completion_data,
+                    found_signature,
                     line,
                     options,
                     ctx,
@@ -78,8 +77,7 @@ pub async fn complete(
                     &classified_command.env_vars,
                     session_env_vars,
                     &location.span,
-                    found_signature.signature,
-                    found_signature.dynamic_completion_data,
+                    found_signature,
                     options,
                     ctx,
                 )
@@ -133,8 +131,7 @@ async fn suggestions_for_parse_error(
     command_env_vars: &[String],
     session_env_vars: Option<&HashMap<String, String>>,
     cursor: &Span,
-    signature: &Signature,
-    dynamic_completion_data: Option<&DynamicCompletionData>,
+    found_signature: SignatureAtTokenIndex<'_>,
     line: &str,
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
@@ -155,11 +152,10 @@ async fn suggestions_for_parse_error(
             if shell_command.args.ending_whitespace.is_some() {
                 let mut arg_has_spec = false;
 
-                let argument = signature
+                let option = found_signature
                     .options()
-                    .iter()
-                    .find(|opt| opt.has_name(name.as_str()))
-                    .and_then(|opt| opt.arguments().get(missing_arg_index));
+                    .find(|opt| opt.has_name(name.as_str()));
+                let argument = option.and_then(|opt| opt.arguments().get(missing_arg_index));
 
                 let results = match argument {
                     None => Default::default(),
@@ -174,7 +170,7 @@ async fn suggestions_for_parse_error(
                             command_env_vars,
                             session_env_vars,
                             line.ends_with(char::is_whitespace),
-                            dynamic_completion_data,
+                            option.and_then(|opt| found_signature.completion_data_for_option(opt)),
                             options,
                             ctx,
                         )
@@ -191,8 +187,7 @@ async fn suggestions_for_parse_error(
                     command_env_vars,
                     session_env_vars,
                     cursor,
-                    signature,
-                    dynamic_completion_data,
+                    found_signature,
                     options,
                     ctx,
                 )
@@ -213,7 +208,7 @@ async fn suggestions_for_parse_error(
             // treat this as successful parse so that we can parse out the positional correctly.
             if shell_command.args.ending_whitespace.is_some() {
                 add_extra_positional(shell_command, cursor);
-                let argument = signature
+                let argument = found_signature
                     .arguments()
                     .get(positional_index)
                     .expect("argument should exist based on error from parser");
@@ -224,7 +219,7 @@ async fn suggestions_for_parse_error(
                     command_env_vars,
                     session_env_vars,
                     line.ends_with(char::is_whitespace),
-                    dynamic_completion_data,
+                    found_signature.completion_data_for_arguments(),
                     options,
                     ctx,
                 )
@@ -238,8 +233,7 @@ async fn suggestions_for_parse_error(
                     command_env_vars,
                     session_env_vars,
                     cursor,
-                    signature,
-                    dynamic_completion_data,
+                    found_signature,
                     options,
                     ctx,
                 )
@@ -253,7 +247,7 @@ async fn suggestions_for_parse_error(
             if arg.span.end() == line.len() {
                 // The unexpected argument could be a prefix for a subcommand.
                 let prefix = arg.item.as_str();
-                let results = (signature.subcommands().iter().filter_map(|subcmd| {
+                let results = (found_signature.subcommands().filter_map(|subcmd| {
                     options
                         .match_strategy
                         .get_match_type(prefix, subcmd.name())
@@ -288,8 +282,7 @@ async fn suggestions_for_last_argument(
     command_env_vars: &[String],
     session_env_vars: Option<&HashMap<String, String>>,
     cursor: &Span,
-    signature: &Signature,
-    dynamic_completion_data: Option<&DynamicCompletionData>,
+    found_signature: SignatureAtTokenIndex<'_>,
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
 ) -> (Vec<MatchedSuggestion>, bool) {
@@ -323,14 +316,21 @@ async fn suggestions_for_last_argument(
                 let option_with_arguments = if is_eq_delimited {
                     None
                 } else {
-                    signature
+                    found_signature
                         .options()
-                        .iter()
                         .find(|opt| opt.has_name(flag_name))
                         .filter(|opt| opt.arguments().iter().any(|arg| arg.is_variadic))
                 };
-                let arguments =
-                    option_with_arguments.map_or(signature.arguments(), |opt| opt.arguments());
+                let (arguments, argument_dcd) = match option_with_arguments {
+                    Some(opt) => (
+                        opt.arguments(),
+                        found_signature.completion_data_for_option(opt),
+                    ),
+                    None => (
+                        found_signature.arguments(),
+                        found_signature.completion_data_for_arguments(),
+                    ),
+                };
 
                 complete_positional(
                     &shell_command,
@@ -339,8 +339,8 @@ async fn suggestions_for_last_argument(
                     command_env_vars,
                     session_env_vars,
                     arguments,
-                    signature.subcommands(),
-                    dynamic_completion_data,
+                    found_signature.subcommands(),
+                    argument_dcd,
                     last_positional.item,
                     options,
                     ctx,
@@ -348,8 +348,7 @@ async fn suggestions_for_last_argument(
                 .await
             } else {
                 complete_option(
-                    signature,
-                    dynamic_completion_data,
+                    found_signature,
                     tokens_from_command,
                     has_trailing_whitespace,
                     command_env_vars,
@@ -370,9 +369,9 @@ async fn suggestions_for_last_argument(
                 has_trailing_whitespace,
                 command_env_vars,
                 session_env_vars,
-                signature.arguments(),
-                signature.subcommands(),
-                dynamic_completion_data,
+                found_signature.arguments(),
+                found_signature.subcommands(),
+                found_signature.completion_data_for_arguments(),
                 last_positional.item,
                 options,
                 ctx,
@@ -381,8 +380,7 @@ async fn suggestions_for_last_argument(
         }
         (None, Some(last_named_arg)) => {
             complete_option(
-                signature,
-                dynamic_completion_data,
+                found_signature,
                 tokens_from_command,
                 has_trailing_whitespace,
                 command_env_vars,
@@ -427,8 +425,7 @@ fn option_value_index(shell_command: &ShellCommand, completed: &Spanned<NamedArg
 
 #[allow(clippy::too_many_arguments)]
 async fn complete_option(
-    signature: &Signature,
-    dynamic_completion_data: Option<&DynamicCompletionData>,
+    found_signature: SignatureAtTokenIndex<'_>,
     tokens_from_command: &[&str],
     has_trailing_whitespace: bool,
     command_env_vars: &[String],
@@ -439,21 +436,20 @@ async fn complete_option(
     options: &CompleterOptions,
     ctx: &dyn CompletionContext,
 ) -> Vec<MatchedSuggestion> {
-    let argument = signature
+    let option = found_signature
         .options()
-        .iter()
-        .find(|opt| opt.has_name(option_name))
-        .and_then(|opt| {
-            let arguments = opt.arguments();
-            match arguments
-                .iter()
-                .enumerate()
-                .find(|(idx, arg)| *idx <= value_index && arg.is_variadic())
-            {
-                Some((_, arg)) => Some(arg),
-                None => arguments.get(value_index),
-            }
-        });
+        .find(|opt| opt.has_name(option_name));
+    let argument = option.and_then(|opt| {
+        let arguments = opt.arguments();
+        match arguments
+            .iter()
+            .enumerate()
+            .find(|(idx, arg)| *idx <= value_index && arg.is_variadic())
+        {
+            Some((_, arg)) => Some(arg),
+            None => arguments.get(value_index),
+        }
+    });
 
     match argument {
         None => Default::default(),
@@ -465,7 +461,7 @@ async fn complete_option(
                 command_env_vars,
                 session_env_vars,
                 has_trailing_whitespace,
-                dynamic_completion_data,
+                option.and_then(|opt| found_signature.completion_data_for_option(opt)),
                 options,
                 ctx,
             )
@@ -475,14 +471,14 @@ async fn complete_option(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn complete_positional(
+async fn complete_positional<'a>(
     shell_command: &&mut ShellCommand,
     tokens_from_command: &[&str],
     has_trailing_whitespace: bool,
     command_env_vars: &[String],
     session_env_vars: Option<&HashMap<String, String>>,
     arguments: &[Argument],
-    subcommands: &[Signature],
+    subcommands: impl IntoIterator<Item = &'a Signature>,
     dynamic_completion_data: Option<&DynamicCompletionData>,
     parsed_token: &ParsedToken,
     options: &CompleterOptions,
@@ -535,7 +531,7 @@ async fn complete_positional(
     if suggest_subcommands {
         suggestions.extend(
             subcommands
-                .iter()
+                .into_iter()
                 .filter_map(|subcmd| {
                     options
                         .match_strategy

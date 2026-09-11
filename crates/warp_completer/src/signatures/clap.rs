@@ -28,6 +28,7 @@ fn convert_command(cmd: &ClapCommand, name: String) -> Signature {
         options,
         priority: Priority::default(),
         parser_directives: ParserDirectives::default(),
+        load_spec: None,
     }
 }
 
