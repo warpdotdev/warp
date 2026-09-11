@@ -129,6 +129,14 @@ fn stream_init_event(request_id: &str) -> warp_multi_agent_api::ResponseEvent {
     }
 }
 
+fn stream_client_actions_event() -> warp_multi_agent_api::ResponseEvent {
+    warp_multi_agent_api::ResponseEvent {
+        r#type: Some(response_event::Type::ClientActions(
+            response_event::ClientActions { actions: vec![] },
+        )),
+    }
+}
+
 fn assert_terminal_stream_task_update(
     app: &App,
     conversation_id: AIConversationId,
@@ -148,6 +156,40 @@ fn assert_terminal_stream_task_update(
             .expect("terminal stream error must include structured platform error data");
         assert_eq!(platform_error.code, expected_code);
         assert!(!platform_error.retryable);
+    });
+}
+
+#[test]
+fn transport_failure_classification_is_independent_of_stream_start() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (started_conversation_id, started_stream) =
+            register_mock_response_stream(&terminal, &mut app);
+        started_stream.update(&mut app, |stream, ctx| {
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_response_event_for_test(stream_client_actions_event(), ctx);
+            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
+        });
+        assert_terminal_stream_task_update(
+            &app,
+            started_conversation_id,
+            PlatformErrorCode::AgentStreamNetworkError,
+        );
+
+        let (retried_conversation_id, retried_stream) =
+            register_mock_response_stream(&terminal, &mut app);
+        retried_stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(stream_init_event("previous-attempt"), ctx);
+            stream.exhaust_recovery_budget_for_test(ctx);
+            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
+        });
+        assert_terminal_stream_task_update(
+            &app,
+            retried_conversation_id,
+            PlatformErrorCode::AgentStreamNetworkError,
+        );
     });
 }
 
@@ -391,35 +433,35 @@ fn mock_response_stream_updates_history_through_controller() {
 }
 
 #[test]
-fn stream_attempt_start_controls_terminal_task_error_classification_after_retries() {
+fn explicit_stream_finished_failure_is_classified_without_init() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
-
-        let (started_conversation_id, started_stream) =
-            register_mock_response_stream(&terminal, &mut app);
-        started_stream.update(&mut app, |stream, ctx| {
-            stream.exhaust_recovery_budget_for_test(ctx);
-            stream.emit_response_event_for_test(stream_init_event("started-attempt"), ctx);
-            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
+        let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+        stream.update(&mut app, |stream, ctx| {
+            stream.emit_response_event_for_test(
+                warp_multi_agent_api::ResponseEvent {
+                    r#type: Some(response_event::Type::Finished(
+                        response_event::StreamFinished {
+                            reason: Some(response_event::stream_finished::Reason::Other(
+                                Default::default(),
+                            )),
+                            conversation_usage_metadata: None,
+                            token_usage: vec![],
+                            should_refresh_model_config: false,
+                            #[allow(deprecated)]
+                            request_cost: None,
+                            request_charges: None,
+                        },
+                    )),
+                },
+                ctx,
+            );
         });
         assert_terminal_stream_task_update(
             &app,
-            started_conversation_id,
+            conversation_id,
             PlatformErrorCode::AgentStreamFailure,
-        );
-
-        let (retried_conversation_id, retried_stream) =
-            register_mock_response_stream(&terminal, &mut app);
-        retried_stream.update(&mut app, |stream, ctx| {
-            stream.emit_response_event_for_test(stream_init_event("previous-attempt"), ctx);
-            stream.exhaust_recovery_budget_for_test(ctx);
-            stream.emit_error_event_for_test(Arc::new(AIApiError::UnexpectedEof), ctx);
-        });
-        assert_terminal_stream_task_update(
-            &app,
-            retried_conversation_id,
-            PlatformErrorCode::AgentStreamNetworkError,
         );
     });
 }

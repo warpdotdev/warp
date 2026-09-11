@@ -550,6 +550,7 @@ pub(crate) fn map_conversation_status_for_test(
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     map_conversation_status(conversation)
 }
+
 /// Maps a conversation-level error to a terminal task update. In-flight recoveries
 /// surface as `TransientError`, so an `Error` status is always terminal here — the
 /// `will_attempt_resume` rendering hint is deliberately ignored.
@@ -630,20 +631,13 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),
-        RenderableAIError::TransientNetworkError { stream_started, .. } => {
-            let error_code = if *stream_started {
-                PlatformErrorCode::AgentStreamFailure
-            } else {
-                PlatformErrorCode::AgentStreamNetworkError
-            };
-            (
-                AgentTaskState::Error,
-                Some(TaskStatusUpdate::with_error_code(
-                    error.to_string(),
-                    error_code,
-                )),
-            )
-        }
+        RenderableAIError::TransientNetworkError { .. } => (
+            AgentTaskState::Error,
+            Some(TaskStatusUpdate::with_error_code(
+                error.to_string(),
+                PlatformErrorCode::AgentStreamNetworkError,
+            )),
+        ),
         RenderableAIError::AgentStreamFailure(error_message) => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(

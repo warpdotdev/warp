@@ -361,7 +361,7 @@ fn share_session_failed_includes_reason() {
 // --- Conversation-level outcomes ---
 
 #[test]
-fn conversation_error_classifies_never_started_network_failure() {
+fn conversation_error_classifies_network_failure() {
     let error = AgentDriverError::ConversationError {
         error: RenderableAIError::transient_network_error(
             false,
@@ -380,7 +380,7 @@ fn conversation_error_classifies_never_started_network_failure() {
 }
 
 #[test]
-fn conversation_error_classifies_started_stream_failure() {
+fn conversation_error_classifies_started_network_failure() {
     let error = AgentDriverError::ConversationError {
         error: RenderableAIError::TransientNetworkError {
             kind: TransientNetworkErrorKind::UnfinishedExchange,
@@ -388,6 +388,23 @@ fn conversation_error_classifies_started_stream_failure() {
             stream_started: true,
             waiting_for_network: false,
         },
+    };
+
+    let (state, update) = classify_driver_error(&error);
+    assert_eq!(state, AgentTaskState::Error);
+    assert_eq!(
+        update.error_code,
+        Some(PlatformErrorCode::AgentStreamNetworkError)
+    );
+    assert!(!update.platform_error.unwrap().retryable);
+}
+
+#[test]
+fn conversation_error_classifies_server_stream_failure() {
+    let error = AgentDriverError::ConversationError {
+        error: RenderableAIError::AgentStreamFailure(
+            "Response stream finished with an internal error.".into(),
+        ),
     };
 
     let (state, update) = classify_driver_error(&error);

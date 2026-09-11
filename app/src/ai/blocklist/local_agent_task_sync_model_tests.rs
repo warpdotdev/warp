@@ -170,7 +170,7 @@ fn other_user_error_is_failed_with_invalid_request() {
 }
 
 #[test]
-fn never_started_transient_network_error_has_network_error_code() {
+fn transient_network_error_has_network_error_code() {
     assert_update(
         classify_renderable_error(&RenderableAIError::transient_network_error(
             false,
@@ -184,7 +184,7 @@ fn never_started_transient_network_error_has_network_error_code() {
 }
 
 #[test]
-fn started_transient_network_error_has_stream_failure_code() {
+fn started_transient_network_error_has_network_error_code() {
     assert_update(
         classify_renderable_error(&RenderableAIError::TransientNetworkError {
             kind: TransientNetworkErrorKind::UnfinishedExchange,
@@ -193,7 +193,7 @@ fn started_transient_network_error_has_stream_failure_code() {
             waiting_for_network: false,
         }),
         AgentTaskState::Error,
-        Some(PlatformErrorCode::AgentStreamFailure),
+        Some(PlatformErrorCode::AgentStreamNetworkError),
         Some("Debug info: stream completed with an unfinished exchange"),
     );
 }

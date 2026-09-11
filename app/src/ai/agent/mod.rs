@@ -717,6 +717,7 @@ pub enum RenderableAIError {
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
     },
+    /// An explicit terminal failure reported by the MAA server in a `StreamFinished` event.
     AgentStreamFailure(String),
     Other {
         error_message: String,
