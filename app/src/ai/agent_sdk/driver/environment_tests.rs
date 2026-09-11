@@ -337,14 +337,22 @@ fn complete_policy_overrides_are_authoritative_repository_membership() {
         ),
     ];
 
+    let repositories =
+        repositories_for_preparation(live_environment, live_additional, &overrides).unwrap();
     assert_eq!(
-        repositories_for_preparation(live_environment, live_additional, &overrides).unwrap(),
+        repositories,
         vec![
             repo(CodeForge::GitHub, "WarpDotDev", "Warp"),
             repo(CodeForge::GitHub, "warpdotdev", "common-skills")
                 .with_checkout_ref(Some("frozen-branch".to_string())),
         ]
     );
+    let requests = repository_clone_requests(&repositories, &overrides, false).unwrap();
+    assert_eq!(requests[0].checkout_name, "Warp");
+    let command = build_parallel_clone_command(&requests, ShellType::Bash);
+    assert!(command.contains("https://github.com/warpdotdev/warp-for-benchmarks.git"));
+    assert!(!command.contains("added-after-dispatch"));
+    assert!(!command.contains("additional-after-dispatch"));
 }
 
 #[test]

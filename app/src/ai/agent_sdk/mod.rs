@@ -59,7 +59,9 @@ use crate::ai::ambient_agents::task::{HarnessConfig, TaskScope};
 use crate::ai::attachment_utils::attachments_download_dir;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
+use crate::ai::cloud_environments::{
+    AmbientAgentEnvironment, CloudAmbientAgentEnvironment, SourceRepo,
+};
 use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     ResolveSkillError, ResolvedSkill, clone_repo_for_skill, resolve_skill_spec,
@@ -129,6 +131,26 @@ fn maybe_warn_team_api_key(ctx: &AppContext) {
         "\x1b[33mWarning: Free cloud credits apply to personal runs only but this run uses \
          a team API key. If you want to use free cloud credits, consider using a personal API key instead.\x1b[0m"
     );
+}
+
+fn validated_driver_repositories_for_preparation(
+    options: &AgentDriverOptions,
+) -> Result<Vec<SourceRepo>, driver::environment::PrepareEnvironmentError> {
+    let source_repos = driver::environment::repositories_for_preparation(
+        options
+            .environment
+            .as_ref()
+            .map(AmbientAgentEnvironment::effective_repos)
+            .unwrap_or_default(),
+        options.additional_source_repos.clone(),
+        &options.repository_preparation_overrides,
+    )?;
+    driver::environment::validate_repository_preparation_overrides(
+        &source_repos,
+        &options.repository_preparation_overrides,
+        options.remove_repository_origins,
+    )?;
+    Ok(source_repos)
 }
 
 /// Run a Warp CLI command.
@@ -1239,18 +1261,7 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
-        driver::environment::validate_repository_preparation_overrides(
-            &driver::environment::merge_repos_deduped(
-                driver_options
-                    .environment
-                    .as_ref()
-                    .map(crate::ai::cloud_environments::AmbientAgentEnvironment::effective_repos)
-                    .unwrap_or_default(),
-                driver_options.additional_source_repos.clone(),
-            )?,
-            &driver_options.repository_preparation_overrides,
-            driver_options.remove_repository_origins,
-        )?;
+        validated_driver_repositories_for_preparation(&driver_options)?;
 
         Ok((driver_options, task, task_conversation_id))
     }
