@@ -187,31 +187,61 @@ def factory_tree(**files: str):
         shutil.rmtree(root, ignore_errors=True)
 
 
-def assert_submits_only_resource_files() -> None:
-    """Only canonical resource paths are uploaded.
+def assert_submits_resource_files() -> None:
+    """Canonical resources and invalid benchmark YAML paths are uploaded.
 
     Skills can hold anything a repository wants to give an agent, and unrelated
-    files are none of the server's business, so neither is sent.
+    files are none of the server's business, so neither is sent. Invalid
+    benchmark YAML must reach the server so it can report the unsupported path.
     """
     with factory_tree(
         **{
             "automations/nightly/automation.md": "---\nagent: main\n---\nrun\n",
             "runners/linux.yaml": "platform:\n  linux:\n    dockerImage: ubuntu:24.04\n",
             "scorers/tests/scorer.md": "---\nagents: [main]\n---\nRubric.\n",
+            "benchmarks/terminal-bench/suite.yaml": "name: Terminal Bench\nagent: main\n",
+            "benchmarks/terminal-bench/tasks/build.yaml": (
+                "title: Build\nprompt: Build it.\nsuccessCriteria: It builds.\n"
+            ),
             "webhooks/ci.yaml": "authMode: token\nsecretName: CI_TOKEN\n",
             "skills/helper/SKILL.md": "---\nname: helper\n---\nhelp\n",
             "agents/main/skills/inner/SKILL.md": "---\nname: inner\n---\nhelp\n",
             "README.md": "unrelated",
             "agents/main/notes.txt": "unrelated",
+            "benchmarks/README.md": "unrelated",
+            "benchmarks/terminal-bench/tasks/paused.yaml.disabled": "unrelated",
+            "benchmarks/terminal-bench/notes.yaml": "unsupported benchmark resource path",
+            "benchmarks/terminal-bench/tasks/CON.yaml": "invalid benchmark task slug",
+            "benchmarks/terminal-bench/tasks/wrong.yml": "unsupported benchmark extension",
+            "benchmarks/terminal-bench/tasks/nested/inner.yaml": (
+                "unsupported benchmark resource path"
+            ),
             # Not a canonical webhook path: the server would not classify a
             # nested file as a source, so submitting it would be noise.
             "webhooks/nested/inner.yaml": "authMode: token\n",
         }
     ) as root:
-        with fake_server(CLEAN_RESPONSE) as server:
+        response = {
+            "schema_version": "v1alpha1",
+            "valid": False,
+            "diagnostics": [
+                {
+                    "path": "benchmarks/terminal-bench/notes.yaml",
+                    "line": 1,
+                    "column": 1,
+                    "code": "FF_UNSUPPORTED_PATH",
+                    "message": "unsupported Factory resource path",
+                }
+            ],
+        }
+        with fake_server(response) as server:
             result = run_validator(root, server.url)
-        if result.returncode != EXIT_VALID:
-            raise RuntimeError(f"expected a clean pass, got: {result.stdout}{result.stderr}")
+        if result.returncode != EXIT_DIAGNOSTICS:
+            raise RuntimeError(
+                f"expected an unsupported-path diagnostic, got: {result.stdout}{result.stderr}"
+            )
+        if "FF_UNSUPPORTED_PATH" not in result.stderr:
+            raise RuntimeError(f"the server diagnostic was not relayed: {result.stderr}")
         submitted = {entry["path"] for entry in server.submitted_files()}
         expected = {
             "factory.yaml",
@@ -219,6 +249,12 @@ def assert_submits_only_resource_files() -> None:
             "automations/nightly/automation.md",
             "runners/linux.yaml",
             "scorers/tests/scorer.md",
+            "benchmarks/terminal-bench/suite.yaml",
+            "benchmarks/terminal-bench/tasks/build.yaml",
+            "benchmarks/terminal-bench/notes.yaml",
+            "benchmarks/terminal-bench/tasks/CON.yaml",
+            "benchmarks/terminal-bench/tasks/wrong.yml",
+            "benchmarks/terminal-bench/tasks/nested/inner.yaml",
             "webhooks/ci.yaml",
         }
         if submitted != expected:
@@ -596,7 +632,7 @@ def assert_packaged_skill_matches() -> None:
 
 
 CHECKS = (
-    ("only resource files are submitted", assert_submits_only_resource_files),
+    ("resource files are submitted", assert_submits_resource_files),
     ("the server's verdict is relayed verbatim", assert_reports_the_servers_verdict),
     ("deferred resolutions are surfaced", assert_surfaces_deferred_resolutions),
     ("an unreached verdict is never a pass", assert_unreached_verdicts_are_never_a_pass),

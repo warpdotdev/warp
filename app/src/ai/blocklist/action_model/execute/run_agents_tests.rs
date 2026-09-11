@@ -5,6 +5,7 @@ use ai::agent::orchestration_config::{
     OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
 };
 use settings::Setting;
+use warp_cli::agent::Harness;
 use warp_core::execution_mode::ExecutionMode;
 use warp_core::features::FeatureFlag;
 use warpui::{App, Entity, EntityId, ModelHandle};
@@ -15,7 +16,7 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::blocklist::{
     BlocklistAIHistoryModel, BlocklistAIPermissions, StartAgentExecutorEvent, StartAgentRequest,
 };
-use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::cloud_agent_settings::{AuthSecretPreference, CloudAgentSettings};
 use crate::ai::document::ai_document_model::{AIDocumentModel, AIDocumentSaveStatus};
 use crate::ai::execution_profiles::RunAgentsPermission;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -26,13 +27,15 @@ use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::network::NetworkStatus;
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::ids::SyncId;
+use crate::server::ids::{ServerId, SyncId};
 use crate::server::sync_queue::SyncQueue;
 use crate::settings::PrivacySettings;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::test_util::settings::initialize_settings_for_tests_with_mode;
 use crate::workspaces::team_tester::TeamTesterStatus;
-use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::workspaces::user_workspaces::{
+    TeamContextForOperation, TeamScope, TeamlessScopeForTest, UserWorkspaces,
+};
 use crate::{
     AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
 };
@@ -90,6 +93,72 @@ fn persist_plan_config_with_harness(
                 },
                 status,
             );
+    });
+}
+
+fn team_scope_for_team(team_uid: i64) -> TeamContextForOperation {
+    TeamContextForOperation::new_for_test(ServerId::from(team_uid))
+}
+
+fn persist_scoped_default_auth_secret<S: TeamScope + ?Sized>(
+    app: &mut App,
+    team_scope: &S,
+    harness: Harness,
+    secret_name: &str,
+) {
+    CloudAgentSettings::handle(app).update(app, |settings, ctx| {
+        settings.persist_auth_secret_preference(
+            team_scope,
+            harness,
+            Some(AuthSecretPreference::Named(secret_name.to_string())),
+            ctx,
+        );
+    });
+}
+
+#[test]
+fn scoped_auth_secret_default_overrides_legacy_fallback_for_its_team() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let team_a_scope = team_scope_for_team(7);
+        let team_b_scope = team_scope_for_team(8);
+        persist_default_auth_secret(&mut app, "claude", "legacy-personal-key");
+        persist_scoped_default_auth_secret(
+            &mut app,
+            &team_a_scope,
+            Harness::Claude,
+            "team-a-anthropic-key",
+        );
+        let AIAgentActionType::RunAgents(mut team_b_request) =
+            remote_run_agents_action("claude").action
+        else {
+            panic!("expected run_agents action");
+        };
+        let mut team_a_request = team_b_request.clone();
+        let mut personal_request = team_b_request.clone();
+
+        state.executor.update(&mut app, |_, ctx| {
+            populate_default_auth_secret_for_execution(&mut team_b_request, &team_b_scope, ctx);
+            populate_default_auth_secret_for_execution(&mut team_a_request, &team_a_scope, ctx);
+            populate_default_auth_secret_for_execution(
+                &mut personal_request,
+                &TeamlessScopeForTest,
+                ctx,
+            );
+        });
+
+        assert_eq!(
+            team_b_request.harness_auth_secret_name.as_deref(),
+            Some("legacy-personal-key")
+        );
+        assert_eq!(
+            team_a_request.harness_auth_secret_name.as_deref(),
+            Some("team-a-anthropic-key")
+        );
+        assert_eq!(
+            personal_request.harness_auth_secret_name.as_deref(),
+            Some("legacy-personal-key")
+        );
     });
 }
 
@@ -195,8 +264,13 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
         history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
     });
     let start_agent_executor = app.add_model(StartAgentExecutor::new);
-    let executor =
-        app.add_model(|_| RunAgentsExecutor::new(start_agent_executor.clone(), terminal_view_id));
+    let executor = app.add_model(|_| {
+        RunAgentsExecutor::new(
+            start_agent_executor.clone(),
+            terminal_view_id,
+            UserWorkspaces::teamless_context_resolver_for_test(),
+        )
+    });
 
     RunAgentsTestState {
         conversation_id,
@@ -864,7 +938,7 @@ fn populate_default_auth_secret_for_autoexecute_uses_persisted_secret() {
         };
 
         state.executor.update(&mut app, |_, ctx| {
-            populate_default_auth_secret_for_execution(&mut request, ctx);
+            populate_default_auth_secret_for_execution(&mut request, &TeamlessScopeForTest, ctx);
         });
 
         assert_eq!(

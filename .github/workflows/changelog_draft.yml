@@ -37,7 +37,7 @@ jobs:
     runs-on: namespace-profile-ubuntu-small
     steps:
       - name: Check out code
-        uses: namespacelabs/nscloud-checkout-action@445c25d7009680597d73eb03c4e1cd5be522ed73 # v9.0.0
+        uses: namespacelabs/nscloud-checkout-action@66f2dc6f6c42a8ac6c4e53473c4840006822831e # v9.0.1
         with:
           # Check out the default branch (not the release tag) so the skill
           # files and scripts are always available — older release tags may
@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 0
 
       - name: Generate changelog draft
-        uses: warpdotdev/oz-agent-action@ce1621abf6a8ed8afdd4e4cc994545ede8fe1c6f # main
+        uses: warpdotdev/oz-agent-action@d5c5a5c9eddb2abd3f7e9e171c6118ca401dd0b5 # main
         with:
           prompt: |
             Generate a changelog draft for the ${{ inputs.channel }} channel, release tag ${{ inputs.release_tag }}.

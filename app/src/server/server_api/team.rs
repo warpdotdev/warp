@@ -17,6 +17,10 @@ use warp_graphql::mutations::delete_invite_link_domain_restriction::{
 use warp_graphql::mutations::delete_team_invite::{
     DeleteTeamInvite, DeleteTeamInviteInput, DeleteTeamInviteResult, DeleteTeamInviteVariables,
 };
+use warp_graphql::mutations::join_team_in_workspace::{
+    JoinTeamInWorkspace, JoinTeamInWorkspaceInput, JoinTeamInWorkspaceResult,
+    JoinTeamInWorkspaceVariables,
+};
 use warp_graphql::mutations::join_team_with_team_discovery::{
     JoinTeamWithTeamDiscovery, JoinTeamWithTeamDiscoveryInput, JoinTeamWithTeamDiscoveryResult,
     JoinTeamWithTeamDiscoveryVariables, TeamDiscoveryEntrypoint,
@@ -112,6 +116,10 @@ pub trait TeamClient: 'static + Send + Sync {
     ) -> Result<WorkspacesMetadataWithPricing>;
 
     async fn join_team_with_team_discovery(
+        &self,
+        team_uid: ServerId,
+    ) -> Result<WorkspacesMetadataWithPricing>;
+    async fn join_team_in_workspace(
         &self,
         team_uid: ServerId,
     ) -> Result<WorkspacesMetadataWithPricing>;
@@ -420,6 +428,37 @@ impl TeamClient for ServerApi {
             JoinTeamWithTeamDiscoveryResult::Unknown => {
                 Err(anyhow!("unknown error while joining team"))
             }
+        }
+    }
+
+    async fn join_team_in_workspace(
+        &self,
+        team_uid: ServerId,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = JoinTeamInWorkspaceVariables {
+            input: JoinTeamInWorkspaceInput {
+                team_uid: team_uid.into(),
+            },
+            request_context: get_request_context(),
+        };
+
+        let operation = JoinTeamInWorkspace::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .join_team_in_workspace;
+
+        match result {
+            JoinTeamInWorkspaceResult::JoinTeamInWorkspaceOutput(output) => {
+                if !output.success {
+                    return Err(anyhow!("failed to join team"));
+                }
+                self.workspaces_metadata().await
+            }
+            JoinTeamInWorkspaceResult::UserFacingError(user_facing_error) => {
+                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+            }
+            JoinTeamInWorkspaceResult::Unknown => Err(anyhow!("unknown error while joining team")),
         }
     }
 

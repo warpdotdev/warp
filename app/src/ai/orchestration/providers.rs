@@ -281,7 +281,11 @@ fn requires_default_auth_secret_for_execution(request: &RunAgentsRequest) -> boo
 /// Whether the request can execute as-is: either it doesn't need a
 /// managed auth secret, already carries one, or a persisted default
 /// exists for the harness.
-pub(crate) fn can_execute_with_auth_secret(request: &RunAgentsRequest, ctx: &AppContext) -> bool {
+pub(crate) fn can_execute_with_auth_secret<S: TeamScope + ?Sized>(
+    request: &RunAgentsRequest,
+    team_scope: &S,
+    ctx: &AppContext,
+) -> bool {
     if !requires_default_auth_secret_for_execution(request) {
         return true;
     }
@@ -292,11 +296,12 @@ pub(crate) fn can_execute_with_auth_secret(request: &RunAgentsRequest, ctx: &App
     {
         return true;
     }
-    default_auth_secret_name_for_harness(&request.harness_type, ctx).is_some()
+    default_auth_secret_name_for_harness(team_scope, &request.harness_type, ctx).is_some()
 }
 
 /// Returns the persisted default managed-secret name for a harness, if any.
-pub(crate) fn default_auth_secret_name_for_harness(
+pub(crate) fn default_auth_secret_name_for_harness<S: TeamScope + ?Sized>(
+    team_scope: &S,
     harness_type: &str,
     ctx: &AppContext,
 ) -> Option<String> {
@@ -304,18 +309,17 @@ pub(crate) fn default_auth_secret_name_for_harness(
     if harness == Harness::Oz {
         return None;
     }
-    CloudAgentSettings::as_ref(ctx)
-        .last_selected_auth_secret
-        .value()
-        .get(harness.config_name())
-        .cloned()
-        .filter(|name| !name.trim().is_empty())
+    match CloudAgentSettings::as_ref(ctx).auth_secret_preference(team_scope, harness) {
+        Some(AuthSecretPreference::Named(name)) if !name.trim().is_empty() => Some(name),
+        Some(AuthSecretPreference::Named(_)) | Some(AuthSecretPreference::Inherit) | None => None,
+    }
 }
 
-/// Fills `harness_auth_secret_name` from the persisted per-harness default
+/// Fills `harness_auth_secret_name` from the persisted scoped harness default
 /// when the request needs one and doesn't already carry a name.
-pub(crate) fn populate_default_auth_secret_for_execution(
+pub(crate) fn populate_default_auth_secret_for_execution<S: TeamScope + ?Sized>(
     request: &mut RunAgentsRequest,
+    team_scope: &S,
     ctx: &AppContext,
 ) {
     if !requires_default_auth_secret_for_execution(request)
@@ -327,5 +331,5 @@ pub(crate) fn populate_default_auth_secret_for_execution(
         return;
     }
     request.harness_auth_secret_name =
-        default_auth_secret_name_for_harness(&request.harness_type, ctx);
+        default_auth_secret_name_for_harness(team_scope, &request.harness_type, ctx);
 }

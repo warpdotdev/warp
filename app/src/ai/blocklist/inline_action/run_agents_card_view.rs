@@ -556,6 +556,9 @@ impl RunAgentsCardView {
             if !affects_this_window {
                 return;
             }
+            me.orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection = AuthSecretSelection::Unset;
             let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
             ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
                 model.refresh(&scope, ctx);
@@ -565,6 +568,7 @@ impl RunAgentsCardView {
                 &me.handles.pickers,
                 ctx,
             );
+            me.refresh_accept_button_state(ctx);
             ctx.notify();
         });
         // When auto_launched is true, execution is deferred to the

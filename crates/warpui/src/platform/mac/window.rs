@@ -148,10 +148,6 @@ impl platform::WindowManager for WindowManager {
         Window::set_all_windows_background_blur_radius(blur_radius_pixels)
     }
 
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
-        // no-op on MacOS. This is only available on Windows.
-    }
-
     fn set_window_title(&self, window_id: WindowId, title: &str) {
         Window::set_window_title(window_id, title)
     }
@@ -332,10 +328,6 @@ impl platform::WindowManager for IntegrationTestWindowManager {
     }
 
     fn set_all_windows_background_blur_radius(&self, _blur_radius_pixels: u8) {
-        // no-op for tests
-    }
-
-    fn set_all_windows_background_blur_texture(&self, _use_blur_texture: bool) {
         // no-op for tests
     }
 

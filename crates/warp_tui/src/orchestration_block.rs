@@ -22,7 +22,7 @@ use warp::tui_export::{
     OrchestrationEditState, OrchestrationEnteredEvent, OrchestrationEntrySource, ResolvedTeamScope,
     RunAgentsCardDecision, RunAgentsExecutionMode, RunAgentsExecutor, RunAgentsExecutorEvent,
     RunAgentsRequest, RunAgentsSpawningSnapshot, TeamContextResolver, UserWorkspaces,
-    persist_host_selection, resolve_auth_secret_selection_for_harness,
+    UserWorkspacesEvent, persist_host_selection, resolve_auth_secret_selection_for_harness,
     resolve_default_environment_id, resolve_default_host_slug, run_agents_card_decision_event,
     should_show_auth_secret_picker,
 };
@@ -274,6 +274,18 @@ impl TuiOrchestrationBlock {
             }
         });
 
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if affects_window {
+                me.handle_team_scope_change(ctx);
+            }
+        });
+
         // Connected worker changes alter the remote host choices shown on
         // the active page.
         ctx.subscribe_to_model(
@@ -410,6 +422,28 @@ impl TuiOrchestrationBlock {
             state.auth_secret_selection =
                 resolve_auth_secret_selection_for_harness(&team_context, &state.harness_type, ctx);
         }
+    }
+
+    fn handle_team_scope_change(&mut self, ctx: &mut ViewContext<Self>) {
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+        let state = &mut self.orchestration_edit_state.orchestration_config_state;
+        state.auth_secret_selection = AuthSecretSelection::Unset;
+        state.revalidate_after_catalog_change(&team_scope, ctx);
+
+        if self.accept_error.is_some() {
+            self.accept_error = self.controller.accept_disabled_reason(state, ctx);
+        }
+        if matches!(
+            self.mode,
+            CardMode::Configuring {
+                page: ConfigPage::ApiKey
+            }
+        ) {
+            self.ensure_auth_secrets_fetched(ctx);
+        }
+        self.refresh_active_page(ctx);
+        ctx.emit(TuiOrchestrationBlockEvent::LayoutInvalidated);
+        ctx.notify();
     }
 
     /// Re-syncs edit state from the latest streaming request chunk
