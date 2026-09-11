@@ -268,7 +268,6 @@ pub struct ResponseStream {
     /// Track whether we've received any client actions
     /// If true, we cannot retry on subsequent errors since actions may have been executed
     has_received_client_actions: bool,
-    init_received: bool,
     /// AI identifiers for telemetry emission
     ai_identifiers: AIIdentifiers,
 
@@ -361,7 +360,6 @@ impl ResponseStream {
             cancellation_tx: Some(cancellation_tx),
             original_error: None,
             has_received_client_actions: false,
-            init_received: false,
             ai_identifiers: AIIdentifiers::default(),
             pending_resume: None,
             stream_finished_received: false,
@@ -395,7 +393,6 @@ impl ResponseStream {
             retries_sent: 0,
             original_error: None,
             has_received_client_actions: false,
-            init_received: false,
             ai_identifiers,
             pending_resume: None,
             stream_finished_received: false,
@@ -481,7 +478,6 @@ impl ResponseStream {
 
     fn reset_attempt_state(&mut self) {
         self.has_received_client_actions = false;
-        self.init_received = false;
         self.stream_finished_received = false;
         self.error_event_emitted = false;
         self.deferred_retry_pending = false;
@@ -827,7 +823,6 @@ impl ResponseStream {
                 if let Some(event_type) = &response_event.r#type {
                     match event_type {
                         warp_multi_agent_api::response_event::Type::Init(init_event) => {
-                            self.init_received = true;
                             // Capture server_output_id from StreamInit event
                             self.ai_identifiers.server_output_id =
                                 Some(crate::ai::agent::ServerOutputId::new(
