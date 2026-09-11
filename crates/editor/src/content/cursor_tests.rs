@@ -20,6 +20,18 @@ fn count_text_fragments(tree: &SumTree<BufferText>) -> usize {
     count
 }
 
+#[track_caller]
+fn assert_appended_text(input: &str, expected_debug: &str, expected_char_extent: usize) {
+    let mut tree: SumTree<BufferText> = SumTree::new();
+
+    tree.append_str(input);
+
+    assert_eq!(tree.debug(), expected_debug);
+    assert_eq!(
+        tree.extent::<CharOffset>(),
+        CharOffset::from(expected_char_extent)
+    );
+}
 #[test]
 fn test_plain_text_before_markers() {
     let mut tree: SumTree<BufferText> = SumTree::new();
@@ -81,6 +93,17 @@ fn test_append_str() {
     tree.append_str("ething");
     tree.append_str(" long stringggggggggggggg");
     assert_eq!(tree.debug(), "Something long stringggggggggggggg");
+}
+
+#[test]
+fn append_str_preserves_empty_line_and_trailing_newline_behavior() {
+    assert_appended_text("", "", 0);
+    assert_appended_text("\n", "\\n", 1);
+    assert_appended_text("\n\n", "\\n\\n", 2);
+    assert_appended_text("a\n", "a\\n", 2);
+    assert_appended_text("a\n\n", "a\\n\\n", 3);
+    assert_appended_text("\na", "\\na", 2);
+    assert_appended_text("\r\n", "\\n", 1);
 }
 #[test]
 fn append_str_preserves_fragment_invariants_across_multibyte_lines() {
