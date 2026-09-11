@@ -1626,11 +1626,12 @@ impl From<&ContextWindowSegment> for stream_finished::ContextWindowSegment {
 }
 
 /// A flat breakdown of charged usage — input/output/cache-read/cache-write
-/// inference cost plus platform cost, and the matching token counts — summed
-/// across every usage category and model. Mirrors the Go `SumChargedUsage`
-/// helper (`warp-server` `logic/ai/multi_agent/usage`); computed client-side
-/// from the wire's category/model-keyed `RequestCharges` map so downstream
-/// displays don't need to walk the map themselves.
+/// inference cost (in US cents) plus platform cost, and the matching token
+/// counts — summed across every usage category and model. Mirrors the Go
+/// `SumChargedUsage` helper (`warp-server` `logic/ai/multi_agent/usage`);
+/// computed client-side from the wire's category/model-keyed
+/// `RequestCharges` map so downstream displays don't need to walk the map
+/// themselves.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
 pub struct ChargedUsageTotals {
     pub input_cost_in_cents: f32,
