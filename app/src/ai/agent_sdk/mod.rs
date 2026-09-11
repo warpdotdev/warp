@@ -1165,7 +1165,7 @@ impl AgentDriverRunner {
                     cloud_providers: Vec::new(),
                     environment: None,
                     additional_source_repos: Vec::new(),
-                    repository_head_overrides: args.repository_head_overrides.clone(),
+                    repository_preparation_overrides: args.repository_preparation_overrides.clone(),
                     remove_repository_origins: args.remove_repository_origins,
                     selected_harness: args.harness,
                     third_party_harness_model_config,
@@ -1239,7 +1239,7 @@ impl AgentDriverRunner {
                 Self::resolve_environment(foreground, environment_id, &mut driver_options),
             )
             .await?;
-        driver::environment::validate_repository_head_overrides(
+        driver::environment::validate_repository_preparation_overrides(
             &driver::environment::merge_repos_deduped(
                 driver_options
                     .environment
@@ -1248,7 +1248,8 @@ impl AgentDriverRunner {
                     .unwrap_or_default(),
                 driver_options.additional_source_repos.clone(),
             )?,
-            &driver_options.repository_head_overrides,
+            &driver_options.repository_preparation_overrides,
+            driver_options.remove_repository_origins,
         )?;
 
         Ok((driver_options, task, task_conversation_id))

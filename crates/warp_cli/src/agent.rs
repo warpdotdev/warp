@@ -67,34 +67,80 @@ impl RepositoryHeadRef {
     }
 }
 
-/// Server-supplied override for an environment repository's initial HEAD.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Canonical repository identity used by server-owned preparation instructions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RepositoryHeadOverride {
+pub struct RepositoryIdentity {
     pub code_forge: RepositoryForge,
     pub repo_owner: String,
     pub repo_name: String,
-    pub head: RepositoryHeadRef,
 }
 
-impl RepositoryHeadOverride {
-    pub fn identity(&self) -> (RepositoryForge, &str, &str) {
+impl RepositoryIdentity {
+    pub fn identity(&self) -> (RepositoryForge, String, String) {
         (
             self.code_forge,
-            self.repo_owner.as_str(),
-            self.repo_name.as_str(),
+            self.repo_owner.to_lowercase(),
+            self.repo_name.to_lowercase(),
         )
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.repo_owner.is_empty() {
-            return Err("repo_owner must not be empty".to_string());
+        if self.repo_owner.is_empty() || self.repo_owner.trim() != self.repo_owner {
+            return Err(
+                "repo_owner must not be empty or contain surrounding whitespace".to_string(),
+            );
         }
-        if self.repo_name.is_empty() {
-            return Err("repo_name must not be empty".to_string());
+        if self.repo_name.is_empty() || self.repo_name.trim() != self.repo_name {
+            return Err(
+                "repo_name must not be empty or contain surrounding whitespace".to_string(),
+            );
         }
-        match &self.head {
-            RepositoryHeadRef::CommitSha(commit_sha) => {
+        Ok(())
+    }
+}
+
+/// Origin handling for a prepared repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RepositoryOriginPolicy {
+    Remove,
+    Preserve,
+}
+
+/// Server-supplied repository preparation override.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryPreparationOverride {
+    pub code_forge: RepositoryForge,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub head: Option<RepositoryHeadRef>,
+    pub clone_from: Option<RepositoryIdentity>,
+    pub origin_policy: Option<RepositoryOriginPolicy>,
+}
+
+impl RepositoryPreparationOverride {
+    pub fn identity(&self) -> (RepositoryForge, String, String) {
+        (
+            self.code_forge,
+            self.repo_owner.to_lowercase(),
+            self.repo_name.to_lowercase(),
+        )
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        RepositoryIdentity {
+            code_forge: self.code_forge,
+            repo_owner: self.repo_owner.clone(),
+            repo_name: self.repo_name.clone(),
+        }
+        .validate()?;
+        if let Some(clone_from) = &self.clone_from {
+            clone_from.validate()?;
+        }
+        match self.head.as_ref() {
+            Some(RepositoryHeadRef::CommitSha(commit_sha)) => {
                 if commit_sha.len() != 40
                     || !commit_sha
                         .bytes()
@@ -106,26 +152,38 @@ impl RepositoryHeadOverride {
                     );
                 }
             }
-            RepositoryHeadRef::Branch(branch) => {
+            Some(RepositoryHeadRef::Branch(branch)) => {
                 if branch.is_empty() || branch.trim() != branch {
                     return Err(
                         "branch must not be empty or contain surrounding whitespace".to_string()
                     );
                 }
             }
+            None => {}
+        }
+        if self.origin_policy.is_none() {
+            if self.head.is_none() {
+                return Err("legacy repository overrides require head".to_string());
+            }
+            if self.clone_from.is_some() {
+                return Err(
+                    "clone_from requires an explicit origin_policy for complete-policy mode"
+                        .to_string(),
+                );
+            }
         }
         Ok(())
     }
 }
 
-impl FromStr for RepositoryHeadOverride {
+impl FromStr for RepositoryPreparationOverride {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let head_override = serde_json::from_str::<Self>(value)
-            .map_err(|error| format!("invalid repository head override JSON: {error}"))?;
-        head_override.validate()?;
-        Ok(head_override)
+        let preparation_override = serde_json::from_str::<Self>(value)
+            .map_err(|error| format!("invalid repository preparation override JSON: {error}"))?;
+        preparation_override.validate()?;
+        Ok(preparation_override)
     }
 }
 
@@ -585,7 +643,7 @@ pub struct RunAgentArgs {
     #[arg(long = "configure-git-credentials-with-github", hide = true, requires_all = ["task_id"])]
     pub configure_git_credentials_with_github: bool,
 
-    /// Repository HEAD override supplied by the server for this task.
+    /// Repository preparation override supplied by the server for this task.
     #[arg(
         long = "repository-head-override-json",
         value_name = "JSON",
@@ -593,7 +651,7 @@ pub struct RunAgentArgs {
         requires = "task_id",
         hide = true
     )]
-    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
 
     /// Remove the origin remote from environment repositories after setup.
     #[arg(long = "remove-repository-origins", requires = "task_id", hide = true)]

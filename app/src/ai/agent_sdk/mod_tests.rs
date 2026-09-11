@@ -94,7 +94,7 @@ fn agent_driver_options() -> AgentDriverOptions {
         cloud_providers: vec![],
         environment: None,
         additional_source_repos: vec![],
-        repository_head_overrides: vec![],
+        repository_preparation_overrides: vec![],
         remove_repository_origins: false,
         selected_harness: Harness::Oz,
         third_party_harness_model_config: None,

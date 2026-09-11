@@ -3,7 +3,9 @@ use std::ffi::OsString;
 use clap::Parser;
 
 use super::*;
-use crate::agent::{AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef};
+use crate::agent::{
+    AgentCommand, Harness, OutputFormat, RepositoryForge, RepositoryHeadRef, RepositoryOriginPolicy,
+};
 use crate::artifact::ArtifactCommand;
 use crate::environment::{EnvironmentCommand, ImageCommand};
 use crate::harness_support::{HarnessSupportCommand, TaskStatus};
@@ -40,6 +42,66 @@ fn runner_list_accepts_team_uid() {
         args.team_selection.requested_team_uid(),
         Some("team_uid00000000000123")
     );
+}
+#[test]
+fn agent_run_parses_complete_repository_preparation_policies() {
+    let args = Args::try_parse_from([
+        "warp",
+        "agent",
+        "run",
+        "--task-id",
+        "550e8400-e29b-41d4-a716-446655440000",
+        "--repository-head-override-json",
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","head":{"type":"COMMIT_SHA","value":"0123456789abcdef0123456789abcdef01234567"},"clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp-for-benchmarks"},"origin_policy":"PRESERVE"}"#,
+        "--repository-head-override-json",
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"common-skills","head":null,"clone_from":null,"origin_policy":"REMOVE"}"#,
+    ])
+    .unwrap();
+
+    let Some(Command::CommandLine(boxed_cmd)) = args.command else {
+        panic!("Expected `warp agent run` command");
+    };
+    let CliCommand::Agent(AgentCommand::Run(run_args)) = boxed_cmd.as_ref() else {
+        panic!("Expected `warp agent run` command");
+    };
+
+    let mapped = &run_args.repository_preparation_overrides[0];
+    assert_eq!(
+        mapped
+            .clone_from
+            .as_ref()
+            .map(|identity| identity.repo_name.as_str()),
+        Some("warp-for-benchmarks")
+    );
+    assert_eq!(mapped.origin_policy, Some(RepositoryOriginPolicy::Preserve));
+    let unchanged = &run_args.repository_preparation_overrides[1];
+    assert_eq!(unchanged.head, None);
+    assert_eq!(unchanged.clone_from, None);
+    assert_eq!(
+        unchanged.origin_policy,
+        Some(RepositoryOriginPolicy::Remove)
+    );
+}
+
+#[test]
+fn agent_run_rejects_malformed_complete_repository_preparation_payloads() {
+    for invalid_override in [
+        r#"{"code_forge":"GITHUB","repo_owner":"","repo_name":"warp","origin_policy":"REMOVE"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"","repo_name":"target"},"origin_policy":"PRESERVE"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","origin_policy":"KEEP"}"#,
+        r#"{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"warp","clone_from":{"code_forge":"GITHUB","repo_owner":"warpdotdev","repo_name":"target"}}"#,
+    ] {
+        Args::try_parse_from([
+            "warp",
+            "agent",
+            "run",
+            "--task-id",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--repository-head-override-json",
+            invalid_override,
+        ])
+        .expect_err("invalid repository preparation payload must fail parsing");
+    }
 }
 
 #[test]
@@ -425,26 +487,28 @@ fn agent_run_parses_repeated_repository_head_override_json() {
         panic!("Expected `warp agent run` command");
     };
 
-    assert_eq!(run_args.repository_head_overrides.len(), 2);
+    assert_eq!(run_args.repository_preparation_overrides.len(), 2);
     assert_eq!(
-        run_args.repository_head_overrides[0].code_forge,
+        run_args.repository_preparation_overrides[0].code_forge,
         RepositoryForge::GitHub
     );
     assert_eq!(
-        run_args.repository_head_overrides[0].head,
-        RepositoryHeadRef::CommitSha("0123456789abcdef0123456789abcdef01234567".to_string())
+        run_args.repository_preparation_overrides[0].head,
+        Some(RepositoryHeadRef::CommitSha(
+            "0123456789abcdef0123456789abcdef01234567".to_string()
+        ))
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].code_forge,
+        run_args.repository_preparation_overrides[1].code_forge,
         RepositoryForge::GitLab
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].repo_owner,
+        run_args.repository_preparation_overrides[1].repo_owner,
         "platform/backend"
     );
     assert_eq!(
-        run_args.repository_head_overrides[1].head,
-        RepositoryHeadRef::Branch("develop".to_string())
+        run_args.repository_preparation_overrides[1].head,
+        Some(RepositoryHeadRef::Branch("develop".to_string()))
     );
 }
 

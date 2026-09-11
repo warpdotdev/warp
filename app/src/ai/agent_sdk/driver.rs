@@ -26,7 +26,7 @@ use repo_metadata::{RepoMetadataModel, RepositoryIdentifier};
 use session_sharing_protocol::sharer::SessionRetentionReason;
 use tracing::Instrument as _;
 use uuid::Uuid;
-use warp_cli::agent::{Harness, OutputFormat, RepositoryHeadOverride};
+use warp_cli::agent::{Harness, OutputFormat, RepositoryPreparationOverride};
 use warp_cli::mcp::MCPSpec;
 use warp_cli::share::ShareRequest;
 use warp_cli::skill::SkillSpec;
@@ -606,8 +606,8 @@ pub struct AgentDriverOptions {
     /// Additional per-task repositories supplied by the server, such as a webhook's
     /// originating repository. Empty for local runs.
     pub additional_source_repos: Vec<SourceRepo>,
-    /// Overrides for repository HEADs in the agent's session.
-    pub repository_head_overrides: Vec<RepositoryHeadOverride>,
+    /// Server-owned repository preparation overrides for the agent's session.
+    pub repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
     /// Whether origin remotes should be removed from environment repositories.
     pub remove_repository_origins: bool,
     /// Selected execution harness for this run.
@@ -699,7 +699,7 @@ pub struct AgentDriver {
     environment: Option<AmbientAgentEnvironment>,
     /// Additional per-task repositories supplied by the server.
     additional_source_repos: Vec<SourceRepo>,
-    repository_head_overrides: Vec<RepositoryHeadOverride>,
+    repository_preparation_overrides: Vec<RepositoryPreparationOverride>,
     remove_repository_origins: bool,
 
     // End-of-run snapshot upload controls.
@@ -1034,7 +1034,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
-            repository_head_overrides,
+            repository_preparation_overrides,
             remove_repository_origins,
             selected_harness,
             third_party_harness_model_config,
@@ -1206,7 +1206,7 @@ impl AgentDriver {
             cloud_providers,
             environment,
             additional_source_repos,
-            repository_head_overrides,
+            repository_preparation_overrides,
             remove_repository_origins,
             snapshot_disabled: snapshot_disabled_value,
             snapshot_upload_timeout: snapshot_upload_timeout
@@ -1258,7 +1258,7 @@ impl AgentDriver {
             cloud_providers: Vec::new(),
             environment: None,
             additional_source_repos: Vec::new(),
-            repository_head_overrides: Vec::new(),
+            repository_preparation_overrides: Vec::new(),
             remove_repository_origins: false,
             snapshot_disabled: false,
             snapshot_upload_timeout: snapshot::DEFAULT_SNAPSHOT_UPLOAD_TIMEOUT,
@@ -2198,14 +2198,14 @@ impl AgentDriver {
                 let (
                     environment_opt,
                     additional_source_repos,
-                    repository_head_overrides,
+                    repository_preparation_overrides,
                     remove_repository_origins,
                 ) = foreground
                     .spawn(|me, _| {
                         (
                             me.environment.clone(),
                             me.additional_source_repos.clone(),
-                            me.repository_head_overrides.clone(),
+                            me.repository_preparation_overrides.clone(),
                             me.remove_repository_origins,
                         )
                     })
@@ -2274,7 +2274,7 @@ impl AgentDriver {
                                     environment::RepositoryPreparationOptions::new(
                                         source_repos_for_prepare,
                                         setup_commands,
-                                        repository_head_overrides,
+                                        repository_preparation_overrides,
                                         remove_repository_origins,
                                     ),
                                     setup_events_for_environment,
