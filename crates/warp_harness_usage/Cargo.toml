@@ -1,0 +1,10 @@
+[package]
+name = "warp_harness_usage"
+edition = "2024"
+description = "Native usage accounting for captured third-party harness histories"
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
