@@ -286,6 +286,7 @@ impl RequestParams {
                     name: server.name().to_string(),
                     description: server.description().unwrap_or_default().to_string(),
                     id: server.installation_id().to_string(),
+                    warp_id: server.warp_id().unwrap_or_default().to_string(),
                     resources: server.resources().to_vec(),
                     tools: server.tools().to_vec(),
                 })

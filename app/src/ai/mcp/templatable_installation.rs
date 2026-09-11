@@ -31,6 +31,14 @@ pub struct TemplatableMCPServerInstallation {
     uuid: Uuid,
     templatable_mcp_server: TemplatableMCPServer,
     variable_values: HashMap<String, VariableValue>,
+    /// Warp-side identity of the server this installation was resolved from:
+    /// a managed MCP server uid or a well-known integration id (e.g. `linear`),
+    /// with the same semantics as `MCPServerConfig.warp_id` in the public API.
+    /// `None` for local and ad-hoc installations. Sent to warp-server in the
+    /// request's `MCPContext` so transcripts can name the server behind the
+    /// opaque installation `uuid`.
+    #[serde(default)]
+    warp_id: Option<String>,
 }
 
 impl TemplatableMCPServerInstallation {
@@ -43,7 +51,20 @@ impl TemplatableMCPServerInstallation {
             uuid,
             templatable_mcp_server,
             variable_values,
+            warp_id: None,
         }
+    }
+
+    /// Records the Warp-side id (managed uid or well-known integration id) this
+    /// installation was resolved from. See [`Self::warp_id`].
+    pub fn with_warp_id(mut self, warp_id: Option<String>) -> Self {
+        self.warp_id = warp_id;
+        self
+    }
+
+    /// The Warp-side id this installation was resolved from, if any.
+    pub fn warp_id(&self) -> Option<&str> {
+        self.warp_id.as_deref()
     }
 
     /// Returns a consistent hash for the installation based on the MCP server's name, JsonTemplate, and variable values.

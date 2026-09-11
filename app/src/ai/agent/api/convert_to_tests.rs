@@ -203,3 +203,60 @@ fn transfer_control_finished_result_converts_to_tool_call_result_input() {
         other => panic!("Expected tool-call-result input, got {other:?}"),
     }
 }
+
+#[test]
+fn mcp_context_servers_carry_their_identity_alongside_the_installation_id() {
+    use crate::ai::agent::{MCPContext, MCPServer};
+
+    let server = |id: &str, name: &str, warp_id: &str| MCPServer {
+        id: id.to_string(),
+        name: name.to_string(),
+        description: String::new(),
+        warp_id: warp_id.to_string(),
+        resources: vec![],
+        tools: vec![],
+    };
+    #[allow(deprecated)]
+    let context = MCPContext {
+        resources: vec![],
+        tools: vec![],
+        servers: vec![
+            server("3f6f2c1e-8b1a-4c2d-9e3f-0a1b2c3d4e5f", "linear", "linear"),
+            server(
+                "7c9e2d4a-0000-4000-8000-000000000001",
+                "Team Sentry",
+                "db4d553f-8172-4cad-8f48-bc53ba6f736a",
+            ),
+            server("7c9e2d4a-0000-4000-8000-000000000002", "local server", ""),
+            server(
+                "7c9e2d4a-0000-4000-8000-000000000003",
+                "future integration",
+                "not_yet_in_this_build",
+            ),
+        ],
+    };
+
+    let proto: api::request::McpContext = context.into();
+    assert_eq!(proto.servers.len(), 4);
+
+    // A well-known id becomes the enum; the installation id stays the key and
+    // the display name is left to `name`.
+    assert_eq!(proto.servers[0].id, "3f6f2c1e-8b1a-4c2d-9e3f-0a1b2c3d4e5f");
+    let linear = proto.servers[0].identity.as_ref().expect("identity");
+    assert_eq!(linear.integration(), api::McpIntegration::Linear);
+    assert_eq!(linear.managed_server_uid, "");
+    assert_eq!(linear.display_name, "");
+
+    // A managed server uid goes in its own field.
+    let sentry = proto.servers[1].identity.as_ref().expect("identity");
+    assert_eq!(sentry.integration(), api::McpIntegration::Unspecified);
+    assert_eq!(
+        sentry.managed_server_uid,
+        "db4d553f-8172-4cad-8f48-bc53ba6f736a"
+    );
+
+    // Local servers and ids this build does not know send no identity.
+    for server in &proto.servers[2..] {
+        assert!(server.identity.is_none(), "{}", server.name);
+    }
+}
