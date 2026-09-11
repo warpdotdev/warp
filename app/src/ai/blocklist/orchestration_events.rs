@@ -64,6 +64,10 @@ pub struct PendingEvent {
     pub detail: PendingEventDetail,
 }
 
+pub(crate) struct EventDeliveryReceipt {
+    event_ids: HashSet<String>,
+}
+
 pub enum OrchestrationEventServiceEvent {
     /// Signals that a conversation may have pending orchestration events
     /// ready to drain.
@@ -315,6 +319,29 @@ impl OrchestrationEventService {
             .is_some_and(|events| !events.is_empty())
     }
 
+    #[cfg(test)]
+    pub fn pending_event_attempts_for_test(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Vec<(String, i32)> {
+        self.pending_events
+            .get(&conversation_id)
+            .into_iter()
+            .flatten()
+            .map(|event| (event.event_id.clone(), event.attempt_count))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub fn awaiting_event_ids_for_test(&self, conversation_id: AIConversationId) -> Vec<String> {
+        self.awaiting_server_echo_events
+            .get(&conversation_id)
+            .into_iter()
+            .flatten()
+            .map(|event| event.event_id.clone())
+            .collect()
+    }
+
     /// Drain and return all pending events for a conversation.
     fn drain_pending_events(&mut self, conversation_id: &AIConversationId) -> Vec<PendingEvent> {
         self.pending_events
@@ -331,7 +358,16 @@ impl OrchestrationEventService {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) -> Option<(Vec<AIAgentInput>, TaskId)> {
-        let inputs = self.drain_and_convert_events(conversation_id);
+        self.drain_events_for_request_with_receipt(conversation_id, ctx)
+            .map(|(inputs, task_id, _)| (inputs, task_id))
+    }
+
+    pub fn drain_events_for_request_with_receipt(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<(Vec<AIAgentInput>, TaskId, EventDeliveryReceipt)> {
+        let (inputs, receipt) = self.drain_and_convert_events(conversation_id);
         if inputs.is_empty() {
             return None;
         }
@@ -341,17 +377,31 @@ impl OrchestrationEventService {
             self.requeue_awaiting_events(conversation_id, ctx);
             return None;
         };
-        Some((inputs, conversation.get_root_task_id().clone()))
+        Some((inputs, conversation.get_root_task_id().clone(), receipt))
     }
 
     /// Drains pending events for a conversation and converts them to
     /// AIAgentInput variants ready for injection. Moves the drained events
     /// to awaiting_server_echo_events for delivery confirmation.
-    fn drain_and_convert_events(&mut self, conversation_id: AIConversationId) -> Vec<AIAgentInput> {
+    fn drain_and_convert_events(
+        &mut self,
+        conversation_id: AIConversationId,
+    ) -> (Vec<AIAgentInput>, EventDeliveryReceipt) {
         let deliverable = self.drain_pending_events(&conversation_id);
         if deliverable.is_empty() {
-            return vec![];
+            return (
+                vec![],
+                EventDeliveryReceipt {
+                    event_ids: HashSet::new(),
+                },
+            );
         }
+        let receipt = EventDeliveryReceipt {
+            event_ids: deliverable
+                .iter()
+                .map(|event| event.event_id.clone())
+                .collect(),
+        };
 
         let mut messages = Vec::new();
         let mut lifecycle_events = Vec::new();
@@ -388,7 +438,7 @@ impl OrchestrationEventService {
                 events: lifecycle_events,
             });
         }
-        inputs
+        (inputs, receipt)
     }
 
     /// Moves all awaiting events back to pending for retry after a failed
@@ -406,7 +456,41 @@ impl OrchestrationEventService {
         if events.is_empty() {
             return;
         }
+        self.requeue_events(conversation_id, events, ctx);
+    }
 
+    pub fn requeue_event_batch(
+        &mut self,
+        conversation_id: AIConversationId,
+        receipt: EventDeliveryReceipt,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let (events, remove_awaiting_entry) = {
+            let Some(awaiting) = self.awaiting_server_echo_events.get_mut(&conversation_id) else {
+                return;
+            };
+            let (events, retained) = std::mem::take(awaiting)
+                .into_iter()
+                .partition(|event| receipt.event_ids.contains(&event.event_id));
+            *awaiting = retained;
+            (events, awaiting.is_empty())
+        };
+        if remove_awaiting_entry {
+            self.awaiting_server_echo_events.remove(&conversation_id);
+        }
+        if events.is_empty() {
+            return;
+        }
+
+        self.requeue_events(conversation_id, events, ctx);
+    }
+
+    fn requeue_events(
+        &mut self,
+        conversation_id: AIConversationId,
+        events: Vec<PendingEvent>,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let (retryable, exhausted) =
             increment_attempt_and_partition_by_retry_limit(events, MAX_RETRY_ATTEMPTS);
 

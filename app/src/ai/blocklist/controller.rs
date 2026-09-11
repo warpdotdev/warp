@@ -841,15 +841,15 @@ impl BlocklistAIController {
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
 
-        let mut has_piggybacked_events = false;
+        let mut event_delivery_receipt = None;
         let mut other_task_event_inputs = None;
         if matches!(&entrypoint_type, EntrypointType::SharedSession)
-            && let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
-                .update(ctx, |service, ctx| {
-                    service.drain_events_for_request(conversation_id, ctx)
+            && let Some((mut event_inputs, event_task_id, receipt)) =
+                OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+                    service.drain_events_for_request_with_receipt(conversation_id, ctx)
                 })
         {
-            has_piggybacked_events = true;
+            event_delivery_receipt = Some(receipt);
             if event_task_id == task_id {
                 inputs.append(&mut event_inputs);
             } else {
@@ -909,9 +909,9 @@ impl BlocklistAIController {
                     model.set_dirty_orchestration_events(conversation_id, taken_dirty_events);
                 });
             }
-            if has_piggybacked_events {
+            if let Some(receipt) = event_delivery_receipt {
                 OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
-                    service.requeue_awaiting_events(conversation_id, ctx);
+                    service.requeue_event_batch(conversation_id, receipt, ctx);
                 });
             }
         }
@@ -2527,6 +2527,9 @@ impl BlocklistAIController {
             .in_flight_response_streams
             .has_active_stream_for_conversation(conversation_id, ctx)
         {
+            let is_shared_session_request = query_metadata.as_ref().is_some_and(|metadata| {
+                matches!(&metadata.entrypoint, EntrypointType::SharedSession)
+            });
             send_telemetry_from_ctx!(
                 TelemetryEvent::AIInputNotSent {
                     entrypoint: query_metadata.map(|metadata| metadata.entrypoint),
@@ -2542,7 +2545,9 @@ impl BlocklistAIController {
             );
             const AI_INPUT_NOT_SENT_ERROR_STR: &str =
                 "Not sending AI input because there is an in-flight request";
-            safe_assert!(false, "{}", AI_INPUT_NOT_SENT_ERROR_STR);
+            if !is_shared_session_request {
+                safe_assert!(false, "{}", AI_INPUT_NOT_SENT_ERROR_STR);
+            }
             return Err(anyhow::anyhow!(AI_INPUT_NOT_SENT_ERROR_STR));
         }
 
