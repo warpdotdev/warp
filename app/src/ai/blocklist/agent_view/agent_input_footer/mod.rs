@@ -705,8 +705,6 @@ impl AgentInputFooter {
         });
 
         let usage_button = ctx.add_typed_action_view(|_ctx| {
-            // Tooltip text is set by `update_usage_button`, which runs during
-            // construction and on every usage update.
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::PieChart)
                 .with_size(button_size)
@@ -900,6 +898,10 @@ impl AgentInputFooter {
                         me.retarget_usage_popover_if_open(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
+                    }
+                    BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated { .. }
+                    | BlocklistAIHistoryEvent::UpdatedConversationMetadata { .. } => {
+                        me.update_usage_button(ctx);
                     }
                     BlocklistAIHistoryEvent::UpdatedTodoList { .. }
                     | BlocklistAIHistoryEvent::UpdatedConversationStatus { .. }
@@ -2487,6 +2489,14 @@ impl AgentInputFooter {
     #[cfg(test)]
     pub fn live_session_indicator_id(&self) -> EntityId {
         self.live_session_indicator.id()
+    }
+
+    #[cfg(test)]
+    pub fn usage_tooltip_for_test(&self, app: &AppContext) -> Option<String> {
+        self.usage_button
+            .as_ref(app)
+            .tooltip_for_test()
+            .map(str::to_string)
     }
 
     #[cfg(test)]

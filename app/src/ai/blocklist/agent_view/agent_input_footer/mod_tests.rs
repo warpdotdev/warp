@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
-use persistence::model::ConversationUsageMetadata;
+use persistence::model::{ConversationUsageMetadata, PRIMARY_AGENT_CATEGORY};
+use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
 
 use super::*;
@@ -238,6 +241,94 @@ fn cli_footer_shows_new_vm_indicator_for_disconnected_third_party_cloud_session(
                 "CLI footer should not embed the live-session indicator, got {child_ids:?}"
             );
         });
+    });
+}
+
+fn charged_usage_metadata()
+-> warp_multi_agent_api::response_event::stream_finished::ConversationUsageMetadata {
+    use warp_multi_agent_api::response_event::stream_finished;
+
+    stream_finished::ConversationUsageMetadata {
+        credits_spent: 4.5,
+        total_charges: Some(api::RequestCharges {
+            usage_by_category: HashMap::from([(
+                PRIMARY_AGENT_CATEGORY.to_string(),
+                api::ChargedUsage {
+                    direct_api_inference_usage: HashMap::from([(
+                        "gpt-5.5".to_string(),
+                        api::InferenceUsage {
+                            token_count: Some(api::TokenCount {
+                                input: 1000,
+                                ..Default::default()
+                            }),
+                            token_cost: Some(api::TokenCost {
+                                input_cost_in_cents: 45.0,
+                                input_cost_in_credits: 4.5,
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                    )]),
+                    ..Default::default()
+                },
+            )]),
+        }),
+        ..Default::default()
+    }
+}
+
+/// The footer's usage tooltip must track real usage events: the
+/// server-seeded provider cost makes the conversation count as having usage
+/// (so the popover can open), and a later usage event carrying charged usage
+/// moves the tooltip's figure.
+#[test]
+fn agent_footer_usage_tooltip_updates_on_usage_events() {
+    App::test((), |mut app| async move {
+        let _flag = FeatureFlag::PricingTransparency.override_enabled(true);
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        // Events flush when the outermost update finishes, so the usage events
+        // are driven at the app level and asserted afterwards.
+        let conversation_id = app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                let conversation_id =
+                    model.start_new_conversation(terminal.id(), false, false, false, ctx);
+                model.set_active_conversation_id(conversation_id, terminal.id(), ctx);
+                let mut metadata = claude_conversation_metadata(ambient_task_id(1));
+                metadata.usage.total_provider_cost_in_cents = Some(250.0);
+                model.set_server_metadata_for_conversation(conversation_id, metadata, ctx);
+                conversation_id
+            })
+        });
+
+        // Credits mode: a seeded provider cost alone is not a charged-usage
+        // figure, so the total is unknown rather than zero.
+        let tooltip = terminal.update(&mut app, |view, ctx| {
+            let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
+            footer.usage_tooltip_for_test(ctx)
+        });
+        assert_eq!(tooltip.as_deref(), Some("Conversation usage: \u{2014}"));
+
+        app.update(|ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |model, ctx| {
+                model.update_conversation_cost_and_usage_for_request(
+                    conversation_id,
+                    None,
+                    None,
+                    vec![],
+                    Some(charged_usage_metadata()),
+                    false,
+                    ctx,
+                );
+            });
+        });
+
+        let tooltip = terminal.update(&mut app, |view, ctx| {
+            let footer = view.input().as_ref(ctx).agent_input_footer().as_ref(ctx);
+            footer.usage_tooltip_for_test(ctx)
+        });
+        assert_eq!(tooltip.as_deref(), Some("Conversation usage: 4.5 credits"));
     });
 }
 
