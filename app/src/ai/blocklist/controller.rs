@@ -792,16 +792,6 @@ impl BlocklistAIController {
             vec![]
         };
 
-        // Append any queued passive suggestion results that were drained
-        // earlier (before cancel_conversation_progress).
-        for (suggestion, trigger) in pending_passive_results {
-            inputs.push(AIAgentInput::PassiveSuggestionResult {
-                trigger,
-                suggestion,
-                context: context.clone(),
-            });
-        }
-
         let additional_attachments = input_query.additional_attachments;
         let queued_query_id = input_query.queued_query_id;
         let ai_input = match input_query.input_query {
@@ -840,11 +830,25 @@ impl BlocklistAIController {
             }
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
-        let can_piggyback_events = api::is_composable_user_input(&ai_input);
+        let can_compose_user_inputs = api::is_composable_user_input(&ai_input);
 
+        if can_compose_user_inputs {
+            for (suggestion, trigger) in pending_passive_results {
+                inputs.push(AIAgentInput::PassiveSuggestionResult {
+                    trigger,
+                    suggestion,
+                    context: context.clone(),
+                });
+            }
+        } else if !pending_passive_results.is_empty() {
+            self.pending_passive_suggestion_results
+                .entry(conversation_id)
+                .or_default()
+                .extend(pending_passive_results);
+        }
         let mut has_piggybacked_events = false;
         let mut other_task_event_inputs = None;
-        if can_piggyback_events
+        if can_compose_user_inputs
             && let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
                 .update(ctx, |service, ctx| {
                     service.drain_events_for_request(conversation_id, ctx)
@@ -860,7 +864,7 @@ impl BlocklistAIController {
         inputs.push(ai_input);
 
         // Piggyback any pending orchestration config updates for this conversation.
-        let taken_dirty_events = if can_piggyback_events {
+        let taken_dirty_events = if can_compose_user_inputs {
             AIDocumentModel::handle(ctx).update(ctx, |model, _| {
                 model.take_dirty_orchestration_events(&conversation_id)
             })
