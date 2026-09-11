@@ -1,12 +1,4 @@
 //! The "Conversation" usage popover, anchored to the footer's usage icon.
-//!
-//! Two invariants hold across every figure shown here, since users add these
-//! columns up:
-//! * A section's summary equals the sum of the rows beneath it.
-//! * A model row's value equals the sum of its expanded breakdown rows.
-//!
-//! Both are maintained by deriving section summaries from the same row list
-//! that gets rendered, rather than from a separately-sourced aggregate.
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -29,6 +21,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
+use crate::ai::blocklist::history_model::BlocklistAIHistoryEvent;
 use crate::ai::blocklist::usage::colors::chart_color;
 use crate::ai::blocklist::view_util::format_credits;
 use crate::ai::llms::LLMPreferences;
@@ -110,11 +103,9 @@ fn space_between_row() -> Flex {
         .with_main_axis_size(MainAxisSize::Max)
 }
 
-/// Floating "Conversation" usage popover. Holds only section-expand UI
-/// state; all usage data is read live from [`BlocklistAIHistoryModel`] at
-/// render time. The footer owns a single long-lived instance and calls
-/// [`Self::reset_for_conversation`] each time the popover opens, so
-/// section-collapse state resets to its default on reopen.
+/// Floating "Conversation" usage popover. The footer owns a single
+/// long-lived instance and calls [`Self::reset_for_conversation`] each time
+/// the popover opens.
 pub struct UsagePopoverView {
     /// `None` until the footer first opens the popover and points it at the
     /// active conversation.
@@ -145,6 +136,29 @@ impl UsagePopoverView {
                 ctx.notify();
             }
         });
+        // Usage updates notify the history model's subscribers; the footer
+        // re-renders itself but not this child view, so the open popover must
+        // listen for its own conversation's usage changes.
+        ctx.subscribe_to_model(
+            &BlocklistAIHistoryModel::handle(ctx),
+            |me, _, event, ctx| {
+                let touched_conversation_id = match event {
+                    BlocklistAIHistoryEvent::ConversationUsageMetadataUpdated {
+                        conversation_id,
+                    }
+                    | BlocklistAIHistoryEvent::RemoveConversation {
+                        conversation_id, ..
+                    }
+                    | BlocklistAIHistoryEvent::DeletedConversation {
+                        conversation_id, ..
+                    } => Some(*conversation_id),
+                    _ => None,
+                };
+                if touched_conversation_id.is_some_and(|id| Some(id) == me.conversation_id) {
+                    ctx.notify();
+                }
+            },
+        );
         Self {
             conversation_id,
             model_usage_section_expanded: true,
@@ -159,14 +173,26 @@ impl UsagePopoverView {
         }
     }
 
+    /// The conversation this popover is currently pointed at.
+    pub fn conversation_id(&self) -> Option<AIConversationId> {
+        self.conversation_id
+    }
+
     /// Points this (reused) popover at `conversation_id` and resets all
-    /// section-collapse state back to [`Self::new`]'s defaults.
+    /// section-collapse state back to [`Self::new`]'s defaults. Subscriptions
+    /// are deliberately not re-registered: they are bound to the view's
+    /// identity, which outlives any single conversation.
     pub fn reset_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
-        *self = Self::new(Some(conversation_id), ctx);
+        self.conversation_id = Some(conversation_id);
+        self.model_usage_section_expanded = true;
+        self.tool_call_summary_section_expanded = true;
+        self.response_time_section_expanded = true;
+        self.expanded_model_ids.clear();
+        self.hover_states.borrow_mut().clear();
         ctx.notify();
     }
 
@@ -355,11 +381,16 @@ impl UsagePopoverView {
     fn render_usage_breakdown_section(
         &self,
         conversation: &AIConversation,
-        charged_usage_by_model: &HashMap<String, ModelChargedUsage>,
+        charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
+        custom_endpoint_label: impl Fn(&str) -> String,
         usage_display_unit: UsageDisplayUnit,
         appearance: &Appearance,
     ) -> Option<Box<dyn Element>> {
-        let rows = model_usage_rows(conversation.token_usage(), charged_usage_by_model);
+        let rows = model_usage_rows(
+            conversation.token_usage(),
+            charged_usage_by_key,
+            custom_endpoint_label,
+        );
         if rows.is_empty() {
             return None;
         }
@@ -899,10 +930,10 @@ impl View for UsagePopoverView {
             return Empty::new().finish();
         };
         let llm_preferences = LLMPreferences::as_ref(app);
-        let charged_usage_by_model = sum_charged_usage_by_model(
-            conversation.all_tasks().flat_map(|task| task.messages()),
-            |config_key| llm_preferences.custom_endpoint_usage_display_label(config_key),
-        );
+        let custom_endpoint_label =
+            |config_key: &str| llm_preferences.custom_endpoint_usage_display_label(config_key);
+        let charged_usage_by_key =
+            sum_charged_usage_by_key(conversation.all_tasks().flat_map(|task| task.messages()));
 
         // Absent sections are skipped rather than rendered empty, so they don't
         // leave the column's inter-section spacing behind as a stray gap.
@@ -910,7 +941,8 @@ impl View for UsagePopoverView {
             Some(self.render_header(conversation, usage_display_unit, appearance)),
             self.render_usage_breakdown_section(
                 conversation,
-                &charged_usage_by_model,
+                &charged_usage_by_key,
+                custom_endpoint_label,
                 usage_display_unit,
                 appearance,
             ),
@@ -1107,6 +1139,12 @@ impl ModelChargedUsage {
         cost
     }
 
+    /// Whether any charge this aggregates would be invisible as a zero-token,
+    /// zero-cost row.
+    fn has_activity(&self) -> bool {
+        self.tokens() > 0 || self.web_search_count > 0 || self.cost() != CostValue::new(0., 0.)
+    }
+
     fn add(&mut self, usage: &api::InferenceUsage) {
         if let Some(token_count) = usage.token_count.as_ref() {
             self.input_tokens = self.input_tokens.saturating_add(token_count.input);
@@ -1134,16 +1172,33 @@ impl ModelChargedUsage {
     }
 }
 
+/// Identity of a charge source, deliberately distinct from the display label:
+/// a custom endpoint's display label can collide with a standard model's id,
+/// and merging them would double-count the charges on both rows.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ModelChargeKey {
+    /// Warp API-key and BYOK usage, keyed by the server-known model id.
+    Standard(String),
+    /// Custom-endpoint usage, keyed by the upstream `config_key`.
+    CustomEndpoint(String),
+}
+
+impl ModelChargeKey {
+    fn display_label(&self, custom_endpoint_label: impl Fn(&str) -> String) -> String {
+        match self {
+            Self::Standard(model_id) => model_id.clone(),
+            Self::CustomEndpoint(config_key) => custom_endpoint_label(config_key),
+        }
+    }
+}
+
 /// Folds every persisted `Message.RequestMetadata` record's nested
-/// per-category, per-model charges into one `ModelChargedUsage` per model.
-/// Custom-endpoint charges are keyed by their upstream `config_key` and are
-/// relabeled through `custom_endpoint_label` to match the display labels used
-/// by the conversation's token-usage rows.
-fn sum_charged_usage_by_model<'a>(
+/// per-category, per-model charges into one `ModelChargedUsage` per charge
+/// identity.
+fn sum_charged_usage_by_key<'a>(
     messages: impl Iterator<Item = &'a api::Message>,
-    custom_endpoint_label: impl Fn(&str) -> String,
-) -> HashMap<String, ModelChargedUsage> {
-    let mut by_model: HashMap<String, ModelChargedUsage> = HashMap::new();
+) -> HashMap<ModelChargeKey, ModelChargedUsage> {
+    let mut by_key: HashMap<ModelChargeKey, ModelChargedUsage> = HashMap::new();
     for message in messages {
         let Some(api::message::Message::RequestMetadata(metadata)) = message.message.as_ref()
         else {
@@ -1153,21 +1208,25 @@ fn sum_charged_usage_by_model<'a>(
             continue;
         };
         for charged in charges.usage_by_category.values() {
-            for (model_id, usage) in &charged.direct_api_inference_usage {
-                by_model.entry(model_id.clone()).or_default().add(usage);
-            }
-            for (model_id, usage) in &charged.byok_inference_usage {
-                by_model.entry(model_id.clone()).or_default().add(usage);
+            for (model_id, usage) in charged
+                .direct_api_inference_usage
+                .iter()
+                .chain(charged.byok_inference_usage.iter())
+            {
+                by_key
+                    .entry(ModelChargeKey::Standard(model_id.clone()))
+                    .or_default()
+                    .add(usage);
             }
             for (config_key, usage) in &charged.custom_endpoint_inference_usage {
-                by_model
-                    .entry(custom_endpoint_label(config_key))
+                by_key
+                    .entry(ModelChargeKey::CustomEndpoint(config_key.clone()))
                     .or_default()
                     .add(usage);
             }
         }
     }
-    by_model
+    by_key
 }
 
 /// Tokens and cost for a set of rendered rows.
@@ -1199,25 +1258,73 @@ impl RowTotals {
     }
 }
 
+/// Joins a standard token row with its charged usage, keyed by the server
+/// model id, marking the charge consumed so it can never attach to a second
+/// row.
+fn charged_usage_for_standard_row(
+    model_id: &str,
+    charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
+    consumed_keys: &mut HashSet<ModelChargeKey>,
+) -> Option<ModelChargedUsage> {
+    let key = ModelChargeKey::Standard(model_id.to_string());
+    charged_usage_by_key.get(&key).map(|charged_usage| {
+        consumed_keys.insert(key);
+        *charged_usage
+    })
+}
+
+/// Joins a custom-endpoint token row with its charged usage. Both are labeled
+/// through the same display-label lookup, so the join is by label; the first
+/// unconsumed matching charge wins, so each charge attaches to at most one
+/// row even when labels collide.
+fn charged_usage_for_custom_row(
+    label: &str,
+    charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
+    custom_endpoint_label: impl Fn(&str) -> String,
+    consumed_keys: &mut HashSet<ModelChargeKey>,
+) -> Option<ModelChargedUsage> {
+    charged_usage_by_key
+        .iter()
+        .find(|(key, _)| match key {
+            ModelChargeKey::CustomEndpoint(config_key) => {
+                !consumed_keys.contains(key) && custom_endpoint_label(config_key) == label
+            }
+            ModelChargeKey::Standard(_) => false,
+        })
+        .map(|(key, charged_usage)| {
+            consumed_keys.insert(key.clone());
+            *charged_usage
+        })
+}
+
 /// Builds the sorted per-model row list. Rows are ordered primary-agent-first,
 /// then alphabetically by model id.
-///
-/// Tokens and cost come from the conversation's charged-usage breakdown when
-/// the server attributed charges to this model, so the row total matches the
-/// breakdown rows shown when it's expanded. Models without attributed charges
-/// fall back to the raw token counts and render "No detailed breakdown
-/// available" when expanded, so there's nothing to disagree with.
 fn model_usage_rows(
     models: &[ModelTokenUsage],
-    charged_usage_by_model: &HashMap<String, ModelChargedUsage>,
+    charged_usage_by_key: &HashMap<ModelChargeKey, ModelChargedUsage>,
+    custom_endpoint_label: impl Fn(&str) -> String,
 ) -> Vec<ModelUsageRow> {
+    let mut consumed_keys: HashSet<ModelChargeKey> = HashSet::new();
     let mut rows: Vec<ModelUsageRow> = models
         .iter()
         .filter_map(|model| {
             let reported_tokens = model.warp_tokens as u64
                 + model.byok_tokens as u64
                 + model.custom_endpoint_tokens as u64;
-            let charged_usage = charged_usage_by_model.get(&model.model_id).copied();
+            let charged_usage = if model.custom_endpoint_tokens > 0 {
+                charged_usage_for_custom_row(
+                    &model.model_id,
+                    charged_usage_by_key,
+                    &custom_endpoint_label,
+                    &mut consumed_keys,
+                )
+            } else {
+                charged_usage_for_standard_row(
+                    &model.model_id,
+                    charged_usage_by_key,
+                    &mut consumed_keys,
+                )
+            };
             if reported_tokens == 0 && charged_usage.is_none() {
                 return None;
             }
@@ -1233,15 +1340,14 @@ fn model_usage_rows(
             })
         })
         .collect();
-    for (model_id, charged_usage) in charged_usage_by_model {
-        if rows.iter().any(|row| &row.model_id == model_id) {
-            continue;
-        }
-        if charged_usage.tokens() == 0 {
+    // Charges without a token row to join (e.g. a restore that dropped token
+    // metadata) still rendered, as long as they would not be invisible zeros.
+    for (key, charged_usage) in charged_usage_by_key {
+        if consumed_keys.contains(key) || !charged_usage.has_activity() {
             continue;
         }
         rows.push(ModelUsageRow {
-            model_id: model_id.clone(),
+            model_id: key.display_label(&custom_endpoint_label),
             role: None,
             tokens: charged_usage.tokens(),
             cost: Some(charged_usage.cost()),
@@ -1366,11 +1472,9 @@ fn render_tooltip_box(text: String, appearance: &Appearance) -> Box<dyn Element>
     .finish()
 }
 
-/// The conversation-level total shown in the popover's header (and in the
-/// footer usage button's tooltip): the preferred source is the cumulative
-/// charged usage that travels with the conversation's usage metadata; the
-/// server-seeded provider cost backs figures up when only it is known.
-/// A legacy conversation with neither renders an em dash rather than a fake
+/// The conversation-level total from the usage metadata: cumulative charged
+/// usage in credits mode, the server-seeded provider cost in dollars mode.
+/// A conversation with no cost data renders an em dash rather than a fake
 /// zero.
 pub(crate) fn conversation_total_text(
     conversation: &AIConversation,
@@ -1384,9 +1488,7 @@ pub(crate) fn conversation_total_text(
             .unwrap_or_else(|| EM_DASH.to_string()),
         UsageDisplayUnit::Credits => usage_totals
             .charged_usage
-            .map(|charged_usage| charged_usage.total_cost_in_credits())
-            .or(usage_totals.has_usage.then_some(usage_totals.credits_spent))
-            .map(format_credits)
+            .map(|charged_usage| format_credits(charged_usage.total_cost_in_credits()))
             .unwrap_or_else(|| EM_DASH.to_string()),
     }
 }

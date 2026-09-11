@@ -716,9 +716,6 @@ impl AgentInputFooter {
                 })
         });
 
-        // Constructed up front, mirroring `agent_todos_popup` and every other lazily-shown
-        // footer popup. Pointed at a conversation via `reset_for_conversation` each time the
-        // popover opens; until then it renders empty.
         let usage_popover = ctx.add_typed_action_view(|ctx| UsagePopoverView::new(None, ctx));
         ctx.subscribe_to_view(&usage_popover, |me, _, event, ctx| match event {
             UsagePopoverEvent::Close => {
@@ -818,8 +815,11 @@ impl AgentInputFooter {
         ctx.subscribe_to_model(&AIRequestUsageModel::handle(ctx), |_, _, _, ctx| {
             ctx.notify()
         });
-        ctx.subscribe_to_model(&AISettings::handle(ctx), |_, _, event, ctx| {
-            if matches!(
+        ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| {
+            if matches!(event, AISettingsChangedEvent::UsageDisplayUnit { .. }) {
+                me.update_usage_button(ctx);
+                ctx.notify()
+            } else if matches!(
                 event,
                 AISettingsChangedEvent::AIAutoDetectionEnabled { .. }
                     | AISettingsChangedEvent::ShouldForceDisableCloudHandoff { .. }
@@ -897,6 +897,7 @@ impl AgentInputFooter {
                         me.sync_fast_forward_button(ctx);
                         me.update_context_window_button(ctx);
                         me.update_usage_button(ctx);
+                        me.retarget_usage_popover_if_open(ctx);
                         me.model_selector.update(ctx, |_, ctx| ctx.notify());
                         ctx.notify();
                     }
@@ -2192,6 +2193,27 @@ impl AgentInputFooter {
             });
 
             self.reschedule_prompt_cache_expiry_timer(expiry, ctx);
+        }
+    }
+
+    /// Retargets (or closes) an open usage popover when the active
+    /// conversation changes, so it never shows the previous conversation's
+    /// figures.
+    fn retarget_usage_popover_if_open(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.usage_popover_open {
+            return;
+        }
+        let active_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .active_conversation(self.terminal_view_id)
+            .map(|conversation| conversation.id());
+        if self.usage_popover.as_ref(ctx).conversation_id() == active_conversation_id {
+            return;
+        }
+        match active_conversation_id {
+            Some(conversation_id) => self.usage_popover.update(ctx, |popover, ctx| {
+                popover.reset_for_conversation(conversation_id, ctx);
+            }),
+            None => self.usage_popover_open = false,
         }
     }
 
