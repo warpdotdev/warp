@@ -236,6 +236,14 @@ fn execute_denies_duplicate_launched_agent() {
 }
 
 fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTestState {
+    initialize_run_agents_test_with_team_scope(app, mode, None)
+}
+
+fn initialize_run_agents_test_with_team_scope(
+    app: &mut App,
+    mode: ExecutionMode,
+    team_uid: Option<ServerId>,
+) -> RunAgentsTestState {
     initialize_settings_for_tests_with_mode(app, mode, false);
     app.update(warp_core::telemetry::testing::MockTelemetryContextProvider::register);
     let global_resource_handles = GlobalResourceHandles::mock(app);
@@ -268,7 +276,7 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
         RunAgentsExecutor::new(
             start_agent_executor.clone(),
             terminal_view_id,
-            UserWorkspaces::teamless_context_resolver_for_test(),
+            UserWorkspaces::team_context_for_operation_resolver_for_test(team_uid),
         )
     });
 
@@ -277,6 +285,56 @@ fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTe
         executor,
         start_agent_executor,
     }
+}
+
+#[test]
+fn execute_captures_operation_team_scope_for_child_launches() {
+    App::test((), |mut app| async move {
+        let team_uid = ServerId::from(8);
+        let state = initialize_run_agents_test_with_team_scope(
+            &mut app,
+            ExecutionMode::Sdk,
+            Some(team_uid),
+        );
+        BlocklistAIHistoryModel::handle(&app).update(&mut app, |model, ctx| {
+            model.assign_run_id_for_conversation(
+                state.conversation_id,
+                "00000000-0000-0000-0000-000000000001".to_string(),
+                None,
+                EntityId::new(),
+                ctx,
+            );
+        });
+        let captured = subscribe_to_start_agent_requests(&mut app, &state.start_agent_executor);
+        let action = remote_run_agents_action("oz");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+        for _ in 0..3 {
+            futures_lite::future::yield_now().await;
+        }
+        captured.read(&app, |captured, _ctx| {
+            let [request] = captured.0.as_slice() else {
+                panic!("expected one child launch request");
+            };
+            assert!(
+                request
+                    .request_team_scope
+                    .matches_scope(&team_scope_for_team(8))
+            );
+        });
+    });
 }
 
 fn subscribe_to_start_agent_requests(

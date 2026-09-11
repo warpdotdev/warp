@@ -132,6 +132,7 @@ pub(crate) fn add_test_action_model_and_events(
             get_relevant_files,
             terminal_surface_id,
             UserWorkspaces::teamless_context_resolver_for_test(),
+            UserWorkspaces::team_context_for_operation_resolver_for_test(None),
             ctx,
         )
     });

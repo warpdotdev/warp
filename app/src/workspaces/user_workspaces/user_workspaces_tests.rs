@@ -2292,6 +2292,36 @@ fn test_disjoint_admin_allowlists_are_an_override_that_permits_nothing() {
     })
 }
 
+#[test]
+fn operation_scope_resolver_preserves_a_window_team_missing_from_workspace_metadata() {
+    let cached_team = team_for_test();
+    let task_team_uid = ServerId::from(8);
+    let workspace = workspace_for_test(&cached_team);
+
+    App::test((), |mut app| async move {
+        initialize_window_team_test_app(&mut app, vec![workspace]);
+        let (window_id, view) = create_test_window(&mut app);
+        UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
+            user_workspaces.set_team_for_window(window_id, task_team_uid, ctx);
+        });
+        let view = view.downgrade();
+        let display_scope = UserWorkspaces::team_context_resolver(view.clone());
+        let operation_scope = UserWorkspaces::team_context_for_operation_resolver(view);
+
+        app.read(|ctx| {
+            assert_eq!(
+                display_scope(ctx).team_uid(),
+                None,
+                "stale workspace metadata cannot resolve the task-owned team for display"
+            );
+            assert_eq!(
+                operation_scope(ctx).team_uid(),
+                Some(task_team_uid),
+                "operation scope must preserve the raw task-owned window assignment"
+            );
+        });
+    })
+}
 /// The tier policy is the interim fallback for a team whose admins enforce nothing, and it
 /// is billing entitlement, so it is read from the workspace rather than per team.
 fn workspace_without_autonomy_entitlement(teams: Vec<Team>) -> Workspace {

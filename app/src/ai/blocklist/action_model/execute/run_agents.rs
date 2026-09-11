@@ -42,8 +42,7 @@ use crate::ai::orchestration::{
 use crate::features::FeatureFlag;
 use crate::server::team_scope::RequestTeamScope;
 use crate::workspaces::user_workspaces::{
-    TeamContextForOperation, TeamContextForOperationResolver, TeamContextResolver, TeamScope,
-    UserWorkspaces,
+    TeamContextForOperation, TeamContextForOperationResolver, TeamScope,
 };
 
 /// Per-child spawn timeout. If a child agent doesn't report back within
@@ -97,16 +96,14 @@ impl RunAgentsExecutor {
     pub fn new(
         start_agent_executor: ModelHandle<StartAgentExecutor>,
         terminal_view_id: EntityId,
-        team_context_resolver: TeamContextResolver,
+        team_context_resolver: TeamContextForOperationResolver,
     ) -> Self {
         Self {
             pending: HashMap::new(),
             launched_agents: HashMap::new(),
             start_agent_executor,
             terminal_view_id,
-            team_context_resolver: UserWorkspaces::team_context_for_operation_resolver(
-                team_context_resolver,
-            ),
+            team_context_resolver,
         }
     }
 

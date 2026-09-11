@@ -152,8 +152,8 @@ impl TeamScope for TeamlessScopeForTest {
 /// Resolves a [`TeamContext`] on demand from a view captured up front. See
 /// [`UserWorkspaces::team_context_resolver`].
 pub type TeamContextResolver = Rc<dyn for<'a> Fn(&'a AppContext) -> TeamContext<'a>>;
-pub(crate) type TeamContextForOperationResolver =
-    Rc<dyn Fn(&AppContext) -> TeamContextForOperation>;
+/// Resolves a [`TeamContextForOperation`] on demand from a view captured up front.
+pub type TeamContextForOperationResolver = Rc<dyn Fn(&AppContext) -> TeamContextForOperation>;
 
 #[cfg(not(target_family = "wasm"))]
 #[derive(Debug, thiserror::Error)]
@@ -269,12 +269,15 @@ impl UserWorkspaces {
     pub fn team_context_resolver<T: Entity>(view: WeakViewHandle<T>) -> TeamContextResolver {
         Rc::new(move |app| Self::as_ref(app).team_context(&view, app))
     }
+    /// Captures the raw team assignment for `view` when an operation starts.
 
-    pub(crate) fn team_context_for_operation_resolver(
-        resolver: TeamContextResolver,
+    pub fn team_context_for_operation_resolver<T: Entity>(
+        view: WeakViewHandle<T>,
     ) -> TeamContextForOperationResolver {
         Rc::new(move |app| TeamContextForOperation {
-            team_uid: resolver(app).team_uid(),
+            team_uid: view
+                .window_id(app)
+                .and_then(|window_id| Self::as_ref(app).team_uid_for_window(window_id)),
         })
     }
 
@@ -286,6 +289,12 @@ impl UserWorkspaces {
     #[cfg(any(test, feature = "test-util"))]
     pub fn teamless_context_for_operation_for_test() -> TeamContextForOperation {
         TeamContextForOperation { team_uid: None }
+    }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn team_context_for_operation_resolver_for_test(
+        team_uid: Option<ServerId>,
+    ) -> TeamContextForOperationResolver {
+        Rc::new(move |_| TeamContextForOperation { team_uid })
     }
 
     fn team_context_for_window_id(&self, window_id: WindowId) -> TeamContext<'_> {

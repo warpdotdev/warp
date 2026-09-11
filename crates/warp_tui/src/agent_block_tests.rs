@@ -2411,6 +2411,7 @@ fn test_agent_block_with_registered_singletons(
             get_relevant_files,
             EntityId::new(),
             UserWorkspaces::teamless_context_resolver_for_test(),
+            UserWorkspaces::team_context_for_operation_resolver_for_test(None),
             ctx,
         )
     });
