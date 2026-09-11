@@ -46,6 +46,7 @@ pub(crate) mod exit_escalation;
 mod gemini;
 mod json_utils;
 pub(crate) mod process_control;
+mod save_coordinator;
 mod skill_dirs_publish;
 mod telemetry;
 pub(crate) use claude_code::ClaudeHarness;
@@ -53,6 +54,7 @@ use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
+use save_coordinator::{SaveCoordinator, final_save_budget};
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
@@ -484,6 +486,7 @@ pub(crate) fn harness_model_env_vars(
 /// Indicates when the harness conversation is being saved.
 /// Implementations may use this to customize the saved data, such as
 /// recording additional metadata on completion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SavePoint {
     /// A periodic auto-save to minimize data loss.
     Periodic,
@@ -508,14 +511,13 @@ pub(crate) enum HarnessCleanupDisposition {
 /// Stateful per-run representation of an external harness produced
 /// by [`ThirdPartyHarness::build_runner`].
 ///
-/// All `HarnessRunner` methods take `&self` as a parameter, but may mutate internal
-/// state. There are no `&mut self` methods, as this would require that the `AgentDriver`
-/// store the runner in a mutex and lock it across `await` points.
+/// Methods share runner ownership but may mutate internal state. There are no `&mut self` methods,
+/// as this would require that the `AgentDriver` store the runner in a mutex across `await` points.
 ///
 /// The driver uses this to manage the lifecycle of a particular third-party harness.
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
 #[cfg_attr(target_family = "wasm", async_trait(?Send))]
-pub(crate) trait HarnessRunner: Send + Sync {
+pub(crate) trait HarnessRunner: Send + Sync + 'static {
     fn harness_name(&self) -> &str;
 
     /// Create the external conversation on the server and start the harness
@@ -536,6 +538,61 @@ pub(crate) trait HarnessRunner: Send + Sync {
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()>;
+    fn save_coordinator(&self) -> Option<&SaveCoordinator> {
+        None
+    }
+
+    async fn request_save(
+        self: Arc<Self>,
+        save_point: SavePoint,
+        foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        let Some(coordinator) = self.save_coordinator() else {
+            if matches!(save_point, SavePoint::PostTurn)
+                && self.handle_session_update(foreground).await.is_err()
+            {
+                log::warn!("Harness session update before save failed");
+            }
+            return self.save_conversation(save_point, foreground).await;
+        };
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        let runner = self.clone();
+        let foreground = foreground.clone();
+        coordinator.request(
+            save_point,
+            Arc::new(move |save_point| {
+                let runner = runner.clone();
+                let foreground = foreground.clone();
+                Box::pin(async move {
+                    if matches!(save_point, SavePoint::PostTurn)
+                        && runner.handle_session_update(&foreground).await.is_err()
+                    {
+                        log::warn!("Harness session update before save failed");
+                    }
+                    runner.save_conversation(save_point, &foreground).await
+                })
+            }),
+            &background,
+        );
+        Ok(())
+    }
+
+    async fn finish_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+        let Some(coordinator) = self.save_coordinator() else {
+            return self.save_conversation(SavePoint::Final, foreground).await;
+        };
+        coordinator
+            .finish(
+                async {
+                    if self.handle_session_update(foreground).await.is_err() {
+                        log::warn!("Harness session update before final save failed");
+                    }
+                    self.save_conversation(SavePoint::Final, foreground).await
+                },
+                final_save_budget(),
+            )
+            .await
+    }
 
     /// Gracefully ask the harness to exit.
     async fn exit(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()>;
