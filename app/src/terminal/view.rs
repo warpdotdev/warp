@@ -5548,6 +5548,7 @@ impl TerminalView {
         let id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx)
         });
+        self.maybe_dispatch_steering_prompt_now(conversation_id, ctx);
         Some(id)
     }
 
@@ -5582,12 +5583,37 @@ impl TerminalView {
                     ctx,
                 );
             });
+            self.maybe_dispatch_steering_prompt_now(conversation_id, ctx);
         } else {
             self.send_user_query_after_next_conversation_finished(
                 prompt, /* show_close_button */ true, /* show_send_now_button */ false,
                 ctx,
             );
         }
+    }
+
+    /// If `conversation_id`'s queue is in `Steering` mode and nothing is currently streaming for
+    /// it, attempts to dispatch the just-queued row immediately rather than waiting for a future
+    /// turn-completion event that may never come (e.g. the conversation has nothing else in
+    /// flight right now). No-ops when a stream is already active for the conversation --
+    /// `Steering`'s piggyback-on-next-request and idle-drain mechanisms pick the row up once
+    /// that stream's turn produces a natural boundary, so firing here too would interrupt it.
+    fn maybe_dispatch_steering_prompt_now(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !QueuedQueryModel::as_ref(ctx).is_steering(conversation_id) {
+            return;
+        }
+        if self
+            .ai_controller
+            .as_ref(ctx)
+            .has_active_stream_for_conversation(conversation_id, ctx)
+        {
+            return;
+        }
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
     }
 
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
@@ -5622,13 +5648,13 @@ impl TerminalView {
                                 row.id() == query_id && row.shared_session_prompt().is_some()
                             })
                         {
-                            // Native startup injections are normally fully drained the moment
-                            // setup finishes (`BlocklistAIController::drain_native_startup_queue`,
-                            // called from `AgentDriver::execute_run`); reaching a shared-session
-                            // row here means a prior drain was deferred (e.g. an active CLI
-                            // subagent), so retry the same drain-all now that this turn finished.
+                            // Shared-session injections are normally dispatched via `Steering`'s
+                            // piggyback-on-next-request mechanism, or immediately when queued
+                            // while idle; reaching one here means neither applied (e.g. a prior
+                            // dispatch was deferred because a CLI subagent was active), so try
+                            // dispatching the head row now that this turn finished.
                             self.ai_controller.update(ctx, |controller, ctx| {
-                                controller.drain_native_startup_queue(conversation_id, ctx);
+                                controller.dispatch_next_shared_session_row(conversation_id, ctx);
                             });
                             return;
                         }

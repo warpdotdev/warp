@@ -22,7 +22,7 @@ use input_context::{input_context_for_request, parse_context_attachments};
 use itertools::Itertools;
 use parking_lot::FairMutex;
 use pending_response_streams::PendingResponseStreams;
-use session_sharing_protocol::common::ParticipantId;
+use session_sharing_protocol::common::{AgentAttachment, ParticipantId};
 pub use slash_command::*;
 use warp_core::assertions::safe_assert;
 use warp_errors::report_error;
@@ -41,7 +41,7 @@ use super::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
 use super::orchestration_events::{OrchestrationEventService, OrchestrationEventServiceEvent};
-use super::queued_query::{QueuedQueryId, QueuedQueryModel};
+use super::queued_query::{AutofireAction, QueuedQueryId, QueuedQueryModel};
 use super::{BlocklistAIInputModel, ResponseStreamId};
 use crate::ai::AIRequestUsageModel;
 use crate::ai::agent::api::{self, ServerConversationToken};
@@ -1601,6 +1601,117 @@ impl BlocklistAIController {
             .push((suggestion, trigger));
     }
 
+    /// If `conversation_id`'s queue is in `Steering` mode and has an eligible head row queued,
+    /// pops that row and returns it built as a fresh `AIAgentInput::UserQuery`, ready to append
+    /// to whichever request the caller is about to send for this conversation (a tool-result
+    /// follow-up, an orchestration-event injection, or a direct send). Also updates the current
+    /// response initiator when the row came from a shared-session participant -- callers must
+    /// invoke this *before* reading [`Self::get_current_response_initiator`] to build their own
+    /// `RequestInput`, so the exchange is attributed correctly.
+    ///
+    /// Only pops a plain, unlocked, non-edited prompt row (`AutofireAction::Submit`); a shell
+    /// command, a row being edited, or a shared-session row carrying a file attachment that
+    /// still needs downloading are left queued for `TerminalView::drain_queued_prompts` (or, for
+    /// a shared-session row, `Self::dispatch_next_shared_session_row`) to handle once the
+    /// conversation goes idle, since none of those can be folded synchronously into an
+    /// already-in-flight request.
+    fn steer_head_prompt_for_request(
+        &mut self,
+        conversation_id: AIConversationId,
+        task_id: &TaskId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Option<AIAgentInput> {
+        if !QueuedQueryModel::as_ref(ctx).is_steering(conversation_id)
+            || QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
+        {
+            return None;
+        }
+        let Some(AutofireAction::Submit { query_id, .. }) =
+            QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id)
+        else {
+            return None;
+        };
+        let row = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .find(|row| row.id() == query_id)?
+            .clone();
+
+        let (participant_id, prompt_attachments) =
+            if let Some((participant_id, attachments)) = row.shared_session_prompt() {
+                if attachments
+                    .iter()
+                    .any(|attachment| matches!(attachment, AgentAttachment::FileReference { .. }))
+                {
+                    // Needs an async download before it can be turned into a `UserQuery`;
+                    // leave it queued for the idle-triggered dispatch instead.
+                    return None;
+                }
+                let mut block_ids = Vec::new();
+                let mut selected_text_parts = Vec::new();
+                for attachment in attachments {
+                    match attachment {
+                        AgentAttachment::BlockReference { block_id } => {
+                            block_ids.push(BlockId::from(block_id.to_string()));
+                        }
+                        AgentAttachment::PlainText { content } => {
+                            selected_text_parts.push(content.clone());
+                        }
+                        AgentAttachment::FileReference { .. } => {
+                            unreachable!("file attachments were already excluded above")
+                        }
+                    }
+                }
+                self.context_model.update(ctx, |context_model, ctx| {
+                    if !block_ids.is_empty() {
+                        context_model.set_pending_context_block_ids(block_ids, false, ctx);
+                    }
+                    if !selected_text_parts.is_empty() {
+                        context_model.set_pending_context_selected_text(
+                            Some(selected_text_parts.join("\n")),
+                            false,
+                            ctx,
+                        );
+                    }
+                });
+                (Some(participant_id.clone()), Vec::new())
+            } else {
+                (
+                    None,
+                    QueuedQueryModel::as_ref(ctx)
+                        .attachments_for(conversation_id, query_id)
+                        .to_vec(),
+                )
+            };
+
+        if let Some(participant_id) = participant_id {
+            self.set_current_response_initiator(participant_id);
+        }
+
+        let input = input_for_query(
+            row.text().to_owned(),
+            task_id,
+            conversation_id,
+            None,
+            UserQueryMode::Normal,
+            None,
+            HashMap::new(),
+            prompt_attachments,
+            self.context_model.as_ref(ctx),
+            self.active_session.as_ref(ctx),
+            ctx,
+        );
+
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.remove_fired_row(conversation_id, query_id, ctx);
+        });
+        log::info!(
+            "event=steered_prompt_included conversation_id={conversation_id} query_id={query_id:?}"
+        );
+
+        Some(input)
+    }
+
     fn send_follow_up_for_conversation(
         &mut self,
         conversation_id: AIConversationId,
@@ -1620,7 +1731,13 @@ impl BlocklistAIController {
         let finished_results = self.action_model.update(ctx, |action_model, _| {
             action_model.drain_finished_action_results(conversation_id)
         });
-        if finished_results.is_empty() {
+        let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .map(|conversation| conversation.get_root_task_id().clone());
+        let steered_input = root_task_id
+            .as_ref()
+            .and_then(|task_id| self.steer_head_prompt_for_request(conversation_id, task_id, ctx));
+        if finished_results.is_empty() && steered_input.is_none() {
             return;
         }
 
@@ -1654,6 +1771,14 @@ impl BlocklistAIController {
             &scope,
             ctx,
         );
+
+        if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
+            request_input
+                .input_messages
+                .entry(root_task_id)
+                .or_default()
+                .push(steered_input);
+        }
 
         // Include any pending orchestration events in this follow-up rather
         // than waiting for a separate idle injection turn. Skip when a server
@@ -1949,19 +2074,34 @@ impl BlocklistAIController {
             action_model.cancel_wait_for_events_for_conversation(conversation_id, ctx);
         });
 
+        let root_task_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .map(|conversation| conversation.get_root_task_id().clone());
+        let steered_input = root_task_id.as_ref().and_then(|root_task_id| {
+            self.steer_head_prompt_for_request(conversation_id, root_task_id, ctx)
+        });
+
         let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        let mut request_input = RequestInput::for_task(
+            inputs,
+            task_id,
+            &self.active_session,
+            self.get_current_response_initiator(),
+            conversation_id,
+            self.terminal_surface_id,
+            &scope,
+            ctx,
+        );
+        if let (Some(steered_input), Some(root_task_id)) = (steered_input, root_task_id) {
+            request_input
+                .input_messages
+                .entry(root_task_id)
+                .or_default()
+                .push(steered_input);
+        }
         if self
             .send_request_input(
-                RequestInput::for_task(
-                    inputs,
-                    task_id,
-                    &self.active_session,
-                    self.get_current_response_initiator(),
-                    conversation_id,
-                    self.terminal_surface_id,
-                    &scope,
-                    ctx,
-                ),
+                request_input,
                 None,
                 RecoveryBudget::fresh(),
                 /*is_queued_prompt*/ false,

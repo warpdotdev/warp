@@ -190,6 +190,25 @@ pub enum AutofireAction {
     },
 }
 
+/// How queued prompts for a conversation are delivered to the agent. Selected per-conversation;
+/// not user-facing yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum QueuedPromptDeliveryMode {
+    /// The next queued row is sent only once the conversation fully finishes on its own
+    /// (`FinishedReceivingOutput` with a genuine finish reason). Used for local queueing
+    /// surfaces (`/queue`, the auto-queue toggle, LRC auto-queue).
+    #[default]
+    Queueing,
+    /// A queued row is sent on the next request made for the conversation -- a natural
+    /// continuation (e.g. a tool-result follow-up or an orchestration-event injection) if one
+    /// occurs first, otherwise the conversation going fully idle -- rather than always waiting
+    /// for the whole turn to finish. Each row is still sent as its own individual
+    /// request/exchange, never combined with another queued row. Set automatically for
+    /// conversations bound to an ambient/Oz-driven native run
+    /// (`BlocklistAIController::bind_native_prompt_conversation`).
+    Steering,
+}
+
 /// Per-conversation queue / edit / toggle state.
 /// Lives inside [`QueuedQueryModel::queues`]; a missing key means empty queue, no edit in
 /// progress, and no explicit auto-queue override (so the cached default from
@@ -199,10 +218,11 @@ struct ConversationQueueState {
     queue: Vec<QueuedQuery>,
     /// True from when this conversation is bound for native startup injections until its
     /// initial prompt is actually sent. Sharing can deliver startup follow-ups during this
-    /// window; they are held in `queue` and flushed all at once, in FIFO order, the moment this
-    /// flag clears (see `BlocklistAIController::drain_native_startup_queue`) rather than being
-    /// drained one at a time as turns complete.
+    /// window; they are held in `queue` until setup finishes, at which point normal dispatch
+    /// (steering or idle-drain, depending on `delivery_mode`) takes over.
     native_setup_pending: bool,
+    /// How queued rows for this conversation are delivered. See [`QueuedPromptDeliveryMode`].
+    delivery_mode: QueuedPromptDeliveryMode,
     editing: Option<QueuedQueryId>,
     /// Explicit per-conversation override. `None` defers to the model's cached
     /// `default_mode`; `Some` means the user has toggled this conversation
@@ -300,10 +320,10 @@ impl QueuedQueryModel {
     }
 
     /// Clears the native setup barrier once the initial prompt has actually been sent. Does
-    /// *not* drain any prompts that arrived in the meantime -- the caller
-    /// (`BlocklistAIController::drain_native_startup_queue`) does that immediately afterward,
-    /// once it's safe to do so (see that method's doc comment for why the two can't be combined
-    /// into one step here).
+    /// *not* dispatch any prompt that arrived in the meantime -- the caller
+    /// (`BlocklistAIController::dispatch_next_shared_session_row`) does that immediately
+    /// afterward, once it's safe to do so (see that method's doc comment for why the two can't
+    /// be combined into one step here).
     pub(crate) fn finish_native_setup(
         &mut self,
         conversation_id: AIConversationId,
@@ -329,6 +349,35 @@ impl QueuedQueryModel {
             .is_some_and(|state| state.native_setup_pending)
     }
 
+    /// Sets the delivery mode for `conversation_id`'s queue. See [`QueuedPromptDeliveryMode`].
+    pub(crate) fn set_delivery_mode(
+        &mut self,
+        conversation_id: AIConversationId,
+        mode: QueuedPromptDeliveryMode,
+    ) {
+        self.queues
+            .entry(conversation_id)
+            .or_default()
+            .delivery_mode = mode;
+    }
+
+    /// Returns the delivery mode for `conversation_id`'s queue, defaulting to `Queueing` when no
+    /// mode has been explicitly set. See [`QueuedPromptDeliveryMode`].
+    pub(crate) fn delivery_mode(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> QueuedPromptDeliveryMode {
+        self.queues
+            .get(&conversation_id)
+            .map(|state| state.delivery_mode)
+            .unwrap_or_default()
+    }
+
+    /// True when `conversation_id`'s queue is in `Steering` mode.
+    pub(crate) fn is_steering(&self, conversation_id: AIConversationId) -> bool {
+        self.delivery_mode(conversation_id) == QueuedPromptDeliveryMode::Steering
+    }
+
     /// True when `conversation_id` still has native startup work outstanding: either setup
     /// hasn't finished yet, or one or more shared-session follow-ups are still queued waiting
     /// to be drained (e.g. a drain was deferred because a CLI subagent was active). Used by the
@@ -345,9 +394,8 @@ impl QueuedQueryModel {
 
     /// Removes and returns every shared-session-injected row queued for `conversation_id`, in
     /// FIFO order, emitting a `Removed` event for each. Used by
-    /// `BlocklistAIController::drain_native_startup_queue` to atomically claim the whole
-    /// startup backlog before dispatching it, so a row can never be edited, reordered, or
-    /// double-dispatched once its send is underway.
+    /// `BlocklistAIController::unbind_native_prompt_conversation` to drop any startup follow-ups
+    /// that never made it out when the run ends.
     pub(crate) fn drain_shared_session_injections(
         &mut self,
         conversation_id: AIConversationId,
@@ -417,11 +465,12 @@ impl QueuedQueryModel {
     ) {
         match event {
             BlocklistAIHistoryEvent::UpdatedConversationStatus { .. } => {
-                // Native startup follow-ups no longer wait on turn completion here: they're
-                // flushed all at once as soon as setup finishes (see
-                // `BlocklistAIController::drain_native_startup_queue`). `TerminalView`'s own
-                // turn-completion drain (`drain_queued_prompts`) re-attempts that drain as a
-                // fallback for the rare case where it was deferred (an active CLI subagent).
+                // Steering-mode conversations don't rely on this event to deliver queued rows:
+                // they're dispatched one at a time as soon as a natural request boundary occurs
+                // (see `BlocklistAIController::steer_head_prompt_for_request` and
+                // `dispatch_next_shared_session_row`). `TerminalView`'s own turn-completion
+                // drain (`drain_queued_prompts`) remains the fallback for both modes once a
+                // turn genuinely finishes.
             }
             BlocklistAIHistoryEvent::RemoveConversation {
                 conversation_id, ..

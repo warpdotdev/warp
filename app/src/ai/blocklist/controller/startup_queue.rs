@@ -13,7 +13,9 @@ use crate::ai::attachment_utils::{
     DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
 };
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
-use crate::ai::blocklist::{BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel};
+use crate::ai::blocklist::{
+    BlocklistAIHistoryModel, QueuedPromptDeliveryMode, QueuedQuery, QueuedQueryModel,
+};
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::BlockId;
 
@@ -42,7 +44,10 @@ impl BlocklistAIController {
             self.terminal_surface_id,
             restored_conversation_id.is_some(),
         );
-        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| queue.begin_native_setup(id, ctx));
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.begin_native_setup(id, ctx);
+            queue.set_delivery_mode(id, QueuedPromptDeliveryMode::Steering);
+        });
         id
     }
 
@@ -68,9 +73,13 @@ impl BlocklistAIController {
     }
 
     /// Routes a shared-session-injected prompt while this controller is bound to a native
-    /// conversation: queues it behind an existing backlog (startup still in progress, or a
-    /// prior injection is still being drained), or -- once there's nothing to hold it behind --
-    /// dispatches it immediately into the bound conversation.
+    /// conversation: always queues it (preserving FIFO order with anything already queued),
+    /// then immediately attempts to dispatch the queue's head via
+    /// [`Self::dispatch_next_shared_session_row`] when nothing is currently streaming for the
+    /// conversation. When a stream *is* active, the row is left queued for the `Steering`
+    /// dispatch mechanism to pick up at the next natural request boundary (or the existing
+    /// idle-triggered drain once the turn finishes) -- dispatching immediately in that case
+    /// would interrupt whatever's already in flight, dropping it before it produces any output.
     ///
     /// Returns `true` when the caller (`execute_warp_agent_prompt_from_shared_session_injection`
     /// and friends) must not fall through to legacy conversation resolution for this prompt:
@@ -115,49 +124,34 @@ impl BlocklistAIController {
             participant_id.clone(),
             attachments.to_vec(),
         );
-        if self.should_queue_rather_than_dispatch(id, ctx) {
-            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-                queue.append(id, row, ctx);
-            });
-        } else {
-            self.send_native_startup_injection(id, row, ctx);
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.append(id, row, ctx);
+        });
+        if !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id)
+            && !self.has_active_stream_for_conversation(id, ctx)
+        {
+            self.dispatch_next_shared_session_row(id, ctx);
         }
         true
     }
 
-    /// True when a fresh injection for `conversation_id` must be held rather than dispatched
-    /// immediately: startup hasn't finished, something else is still queued ahead of it, or a
-    /// CLI subagent is currently running (interrupting an in-progress shell command is more
-    /// disruptive than interrupting an LLM turn). `TerminalView::drain_queued_prompts` retries
-    /// the drain on every subsequent turn completion, so a held-back row is not stuck.
-    fn should_queue_rather_than_dispatch(
-        &self,
-        conversation_id: AIConversationId,
-        ctx: &ModelContext<Self>,
-    ) -> bool {
-        QueuedQueryModel::as_ref(ctx).has_pending_native_injections(conversation_id)
-            || BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(&conversation_id)
-                .is_some_and(|conversation| conversation.has_active_subagent())
-    }
-
-    /// Sends every prompt queued for `conversation_id` while native setup was in progress, in
-    /// FIFO order, without waiting for any of their turns to complete: each successive send
-    /// interrupts whatever the previous one started, the same way a live follow-up submitted
-    /// while a turn is still streaming does (`send_query`'s cancel-then-resend via
-    /// `cancel_conversation_progress`). No-ops when nothing is queued.
+    /// Dispatches the head shared-session-injected row queued for `conversation_id`, if any --
+    /// used at points already known to be safe (native setup just finished, no stream currently
+    /// active for the conversation, or an explicit "Send now" override) so a queued injection
+    /// isn't left waiting behind `Steering`'s piggyback opportunities, which only fire while a
+    /// turn is actually in flight producing tool results or orchestration events. No-ops when
+    /// the head row isn't a shared-session injection.
     ///
-    /// Deferred (leaving the queue untouched) while a CLI subagent is active for
-    /// `conversation_id`; `TerminalView::drain_queued_prompts` re-attempts this drain the next
-    /// time any turn completes, so a deferred backlog still gets flushed promptly.
+    /// Deferred (leaving the row queued) while a CLI subagent is active for `conversation_id`
+    /// (interrupting an in-progress shell command is more disruptive than interrupting an LLM
+    /// turn); `TerminalView::drain_queued_prompts` re-attempts this the next time any turn
+    /// completes, so a deferred row is not stuck.
     ///
-    /// Must be called after the caller's own send (if any) has fully completed -- in particular,
-    /// after `BlocklistAIHistoryModel::mark_active_conversation_id` has run for it -- since each
-    /// row's cancel-then-resend keys off the terminal surface's *active* conversation, which is
-    /// only set once a send finishes. `AgentDriver::execute_run` is responsible for calling this
-    /// at the right point (right after dispatching the initial prompt, or immediately after
-    /// `finish_native_setup` for a promptless run).
-    pub(crate) fn drain_native_startup_queue(
+    /// Only ever dispatches **one** row: callers that want every currently-queued row flushed
+    /// (e.g. an explicit "Send now") must call this again once the previous row's send settles,
+    /// not loop over it synchronously -- looping would cancel each row's request before the
+    /// previous one produced any output, silently dropping every row but the last.
+    pub(crate) fn dispatch_next_shared_session_row(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -171,21 +165,24 @@ impl BlocklistAIController {
             );
             return;
         }
-        let rows = QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-            queue.drain_shared_session_injections(conversation_id, ctx)
-        });
-        if rows.is_empty() {
+        let Some(row) = QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .first()
+            .filter(|row| row.shared_session_prompt().is_some())
+            .cloned()
+        else {
             return;
-        }
+        };
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+            queue.remove_fired_row(conversation_id, row.id(), ctx);
+        });
         log::info!(
-            "event=native_queue_drain_started task_id={:?} terminal_id={:?} conversation_id={conversation_id} row_count={}",
+            "event=native_queue_row_dispatched task_id={:?} terminal_id={:?} conversation_id={conversation_id} query_id={:?}",
             self.ambient_agent_task_id,
             self.terminal_surface_id,
-            rows.len(),
+            row.id(),
         );
-        for row in rows {
-            self.send_native_startup_injection(conversation_id, row, ctx);
-        }
+        self.send_native_startup_injection(conversation_id, row, ctx);
     }
 
     /// Resolves `row`'s attachments and sends it into `conversation_id` via the normal

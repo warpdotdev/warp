@@ -22,7 +22,7 @@ fn user_queries_in_order(history: &BlocklistAIHistoryModel, id: AIConversationId
 }
 
 #[test]
-fn startup_injections_queued_before_the_initial_prompt_are_all_sent_once_it_goes_out() {
+fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_time() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -60,22 +60,30 @@ fn startup_injections_queued_before_the_initial_prompt_are_all_sent_once_it_goes
             terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
         });
 
-        // Mirrors what `AgentDriver::execute_run` does: send the initial prompt, then drain.
+        // Mirrors what `AgentDriver::execute_run` does: send the initial prompt, then dispatch
+        // the head of the backlog.
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
-            controller.drain_native_startup_queue(id, ctx);
+            controller.dispatch_next_shared_session_row(id, ctx);
         });
 
-        QueuedQueryModel::handle(&app).read(&app, |queue, _| assert!(!queue.has_queue(id)));
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["prompt3"],
+                "only the head row (prompt2) should have been dispatched; prompt3 waits for the \
+                 next natural boundary or the conversation going idle again"
+            );
+        });
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             assert_eq!(
                 user_queries_in_order(history, id),
-                vec![
-                    "prompt1".to_owned(),
-                    "prompt2".to_owned(),
-                    "prompt3".to_owned()
-                ],
-                "all three should be sent, in order, without waiting for any turn to complete"
+                vec!["prompt1".to_owned(), "prompt2".to_owned()],
+                "prompt1 and prompt2 should both have been sent, each as its own exchange"
             );
         });
         controller.read(&app, |controller, ctx| {
@@ -85,15 +93,15 @@ fn startup_injections_queued_before_the_initial_prompt_are_all_sent_once_it_goes
             assert_eq!(
                 streams.len(),
                 1,
-                "only the last prompt's turn should still be active; the earlier two were \
-                 interrupted the same way a rapid live follow-up interrupts a prior turn"
+                "prompt2's turn should be active; prompt1's was interrupted the same way a \
+                 rapid live follow-up interrupts a prior turn"
             );
         });
     });
 }
 
 #[test]
-fn live_injection_after_setup_bypasses_the_queue_and_interrupts_the_active_turn() {
+fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
@@ -107,7 +115,7 @@ fn live_injection_after_setup_bypasses_the_queue_and_interrupts_the_active_turn(
         });
         let initial_streams = controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
-            controller.drain_native_startup_queue(id, ctx);
+            controller.dispatch_next_shared_session_row(id, ctx);
             assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
             controller
                 .in_flight_response_streams
@@ -115,8 +123,9 @@ fn live_injection_after_setup_bypasses_the_queue_and_interrupts_the_active_turn(
         });
         assert_eq!(initial_streams.len(), 1);
 
-        // Nothing is queued ahead of it and setup already finished, so this must bypass the
-        // queue entirely and interrupt the active turn -- the same way a live follow-up would.
+        // A stream is already active for the conversation, so this must be queued rather than
+        // dispatched immediately -- dispatching now would interrupt prompt1's turn before it
+        // produced any output, silently dropping it.
         controller.update(&mut app, |controller, ctx| {
             controller.execute_warp_agent_prompt_from_shared_session_injection(
                 "prompt2".into(),
@@ -127,20 +136,28 @@ fn live_injection_after_setup_bypasses_the_queue_and_interrupts_the_active_turn(
             );
         });
         controller.read(&app, |controller, ctx| {
-            assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
+            assert_eq!(
+                QueuedQueryModel::as_ref(ctx)
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["prompt2"],
+                "prompt2 should be queued, not dispatched, while prompt1's turn is active"
+            );
             let after_streams = controller
                 .in_flight_response_streams
                 .stream_ids_for_conversation(id, ctx);
-            assert_eq!(after_streams.len(), 1);
-            assert_ne!(
+            assert_eq!(
                 after_streams, initial_streams,
-                "prompt2 should have interrupted prompt1's stream with its own"
+                "prompt1's stream should be untouched"
             );
         });
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             assert_eq!(
                 user_queries_in_order(history, id),
-                vec!["prompt1".to_owned(), "prompt2".to_owned()]
+                vec!["prompt1".to_owned()],
+                "prompt2 should not have been sent yet"
             );
         });
     });
@@ -215,7 +232,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
         });
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
-            controller.drain_native_startup_queue(id, ctx);
+            controller.dispatch_next_shared_session_row(id, ctx);
         });
 
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {

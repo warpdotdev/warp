@@ -4326,11 +4326,11 @@ impl Input {
             .iter()
             .any(|row| row.id() == query_id && row.shared_session_prompt().is_some())
         {
-            // "Send now" on a shared-session-injected row flushes the whole startup backlog
-            // together, consistent with how it's otherwise drained
-            // (`BlocklistAIController::drain_native_startup_queue`).
+            // "Send now" on a shared-session-injected row dispatches it immediately, the same
+            // way `BlocklistAIController::dispatch_next_shared_session_row` otherwise dispatches
+            // the head row once it's safe to do so.
             self.ai_controller.update(ctx, |controller, ctx| {
-                controller.drain_native_startup_queue(conversation_id, ctx);
+                controller.dispatch_next_shared_session_row(conversation_id, ctx);
             });
             return;
         }
