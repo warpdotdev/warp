@@ -3603,13 +3603,15 @@ impl AIConversation {
 
     /// The single eligibility check for the Turn panel, shared by the response footer and the
     /// panel opener: the turn's per-request records when the turn closes at `exchange_id` (see
-    /// [`Self::is_last_exchange_in_turn`]) and its metadata is complete — every request in the
-    /// turn has delivered its `Message.RequestMetadata` record to this client.
+    /// [`Self::is_last_exchange_in_turn`]) and its metadata is complete — every exchange in the
+    /// turn has request ids, and all of them have delivered their `Message.RequestMetadata`
+    /// record to this client.
     ///
-    /// Request membership is resolved from the exchanges' messages, not from the records: a
-    /// turn whose final request was canceled or disconnected mid-stream never receives that
-    /// request's record, and the non-empty record set of its earlier requests must not be
-    /// presented as the turn's total.
+    /// Request membership is resolved from the exchanges' messages, not from the records, and
+    /// every exchange must contribute some: a request cancelled or failed before the server's
+    /// input echo lands (or disconnected mid-stream) leaves its exchange without messages or
+    /// record, and the non-empty record set of its earlier requests must not be presented as
+    /// the turn's total.
     pub fn turn_panel_records(
         &self,
         exchange_id: AIAgentExchangeId,
@@ -3617,17 +3619,19 @@ impl AIConversation {
         if !self.is_last_exchange_in_turn(exchange_id) {
             return None;
         }
-        let turn_request_ids: HashSet<String> = self
-            .turn_exchange_ids(exchange_id)
-            .iter()
-            .flat_map(|id| self.exchange_request_ids(*id))
-            .collect();
         let records = self.request_metadata_records_for_turn(exchange_id);
         let covered_request_ids: HashSet<String> = records
             .iter()
             .map(|record| record.request_id.clone())
             .collect();
-        (!turn_request_ids.is_empty() && covered_request_ids == turn_request_ids).then_some(records)
+        let complete = self.turn_exchange_ids(exchange_id).into_iter().all(|id| {
+            let request_ids = self.exchange_request_ids(id);
+            !request_ids.is_empty()
+                && request_ids
+                    .iter()
+                    .all(|request_id| covered_request_ids.contains(request_id))
+        });
+        complete.then_some(records)
     }
 
     /// Optimistically creates a subtask for the CLISubagent task when a user query is sent while

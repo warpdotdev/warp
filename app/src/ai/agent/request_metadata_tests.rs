@@ -1,16 +1,27 @@
 use std::collections::HashMap;
 
 use ai::skills::SkillPathOrigin;
+use chrono::Local;
 use warp_multi_agent_api as api;
-use warp_multi_agent_api::client_action::{Action, MoveMessagesToNewTask};
+use warp_multi_agent_api::client_action::{
+    Action, AddMessagesToTask, CreateTask, MoveMessagesToNewTask,
+};
 use warp_multi_agent_api::message::request_metadata;
 use warpui::{App, EntityId};
 
 use super::*;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::request_metadata::summarize_turn;
-use crate::ai::blocklist::ResponseStreamId;
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionId, AIAgentActionResult, AIAgentActionResultType, AIAgentInput,
+    CancellationReason, UserQueryMode,
+};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
+use crate::ai::blocklist::{RequestInput, ResponseStreamId};
+use crate::ai::llms::LLMId;
+use crate::test_util::ai_agent_tasks::create_api_task;
+use crate::test_util::settings::initialize_history_persistence_for_tests;
 
 fn timestamp(seconds: i64) -> prost_types::Timestamp {
     prost_types::Timestamp { seconds, nanos: 0 }
@@ -474,6 +485,174 @@ fn turn_with_a_missing_final_record_is_not_eligible() {
             .collect::<Vec<_>>(),
         ["req-1", "req-2"]
     );
+}
+
+/// Builds a `RequestInput` the way the live send path does: one task's inputs plus the
+/// request bookkeeping fields.
+fn live_request_input(
+    conversation_id: AIConversationId,
+    task_id: TaskId,
+    input: AIAgentInput,
+) -> RequestInput {
+    RequestInput {
+        conversation_id,
+        input_messages: HashMap::from([(task_id, vec![input])]),
+        working_directory: None,
+        model_id: LLMId::from("test-model"),
+        coding_model_id: LLMId::from("test-coding-model"),
+        cli_agent_model_id: LLMId::from("test-cli-agent-model"),
+        computer_use_model_id: LLMId::from("test-computer-use-model"),
+        shared_session_response_initiator: None,
+        request_start_ts: Local::now(),
+        supported_tools_override: None,
+    }
+}
+
+/// A live request that is cancelled before the server's input echo lands leaves its exchange
+/// with no messages at all (`update_for_new_request_input` starts `added_message_ids` empty,
+/// and the cancel path never fills it). Such an exchange contributes no request ids, so the
+/// turn must be treated as incomplete rather than rendering its earlier requests' records as
+/// the total.
+#[test]
+fn exchange_without_any_request_messages_is_not_eligible() {
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], vec![], &[]));
+        let terminal_surface_id = EntityId::new();
+
+        let mut conversation = AIConversation::new(false, false);
+        let optimistic_task_id = conversation.get_root_task_id().clone();
+
+        // The turn's initiating request, sent the live way: its exchange starts with no
+        // messages until the server echoes the input back.
+        let stream_id = ResponseStreamId::new_for_test();
+        let query_input = AIAgentInput::UserQuery {
+            query: "plan the migration".to_string(),
+            context: Default::default(),
+            static_query_type: None,
+            referenced_attachments: Default::default(),
+            user_query_mode: UserQueryMode::Normal,
+            running_command: None,
+            intended_agent: None,
+        };
+        history_model.update(&mut app, |_, ctx| {
+            conversation
+                .update_for_new_request_input(
+                    live_request_input(conversation.id(), optimistic_task_id, query_input),
+                    stream_id.clone(),
+                    terminal_surface_id,
+                    ctx,
+                )
+                .expect("new request input should apply");
+        });
+
+        // The server upgrades the optimistic root, echoes the input, and streams the response
+        // and its record; the request completes.
+        history_model.update(&mut app, |_, ctx| {
+            conversation
+                .initialize_output_for_response_stream(
+                    &stream_id,
+                    api::response_event::StreamInit {
+                        request_id: "req-1".to_string(),
+                        conversation_id: "server-conversation".to_string(),
+                        run_id: String::new(),
+                    },
+                    terminal_surface_id,
+                    ctx,
+                )
+                .expect("stream init should apply");
+            conversation
+                .apply_client_action(
+                    &stream_id,
+                    terminal_surface_id,
+                    Action::CreateTask(CreateTask {
+                        task: Some(create_api_task("root", vec![])),
+                    }),
+                    &SkillPathOrigin::Unavailable,
+                    ctx,
+                )
+                .expect("create task should apply");
+            conversation
+                .apply_client_action(
+                    &stream_id,
+                    terminal_surface_id,
+                    Action::AddMessagesToTask(AddMessagesToTask {
+                        task_id: "root".to_string(),
+                        messages: turn_messages("req-1", 1_000),
+                    }),
+                    &SkillPathOrigin::Unavailable,
+                    ctx,
+                )
+                .expect("add messages should apply");
+            conversation
+                .mark_request_completed(&stream_id, terminal_surface_id, ctx)
+                .expect("request should complete");
+        });
+
+        let query_exchange_id = conversation
+            .root_task_exchanges()
+            .last()
+            .expect("query exchange exists")
+            .id;
+        let resolved: Vec<String> = conversation
+            .request_metadata_records_for_exchange(query_exchange_id)
+            .into_iter()
+            .map(|record| record.request_id)
+            .collect();
+        assert_eq!(resolved, ["req-1".to_string()]);
+
+        // A tool-result round trip is requested, but the stream is cancelled before the
+        // server's input echo lands: the new exchange exists and closes the turn, yet holds
+        // no messages.
+        let follow_up_stream_id = ResponseStreamId::new_for_test();
+        let follow_up_input = AIAgentInput::ActionResult {
+            result: AIAgentActionResult {
+                id: AIAgentActionId::from("action-1".to_string()),
+                task_id: TaskId::new("root".to_string()),
+                result: AIAgentActionResultType::OpenCodeReview,
+            },
+            context: Default::default(),
+        };
+        history_model.update(&mut app, |_, ctx| {
+            conversation
+                .update_for_new_request_input(
+                    live_request_input(
+                        conversation.id(),
+                        TaskId::new("root".to_string()),
+                        follow_up_input,
+                    ),
+                    follow_up_stream_id.clone(),
+                    terminal_surface_id,
+                    ctx,
+                )
+                .expect("follow-up request input should apply");
+            conversation
+                .mark_request_cancelled(
+                    &follow_up_stream_id,
+                    terminal_surface_id,
+                    CancellationReason::ManuallyCancelled,
+                    ctx,
+                )
+                .expect("cancellation should apply");
+        });
+
+        let follow_up_exchange_id = conversation
+            .root_task_exchanges()
+            .last()
+            .expect("follow-up exchange exists")
+            .id;
+        assert!(conversation.is_last_exchange_in_turn(follow_up_exchange_id));
+
+        // The turn's records cover only the query request — which is exactly what the panel
+        // must not present as the turn's total: the message-less follow-up exchange makes the
+        // turn ineligible.
+        assert!(
+            conversation
+                .turn_panel_records(follow_up_exchange_id)
+                .is_none()
+        );
+    });
 }
 
 /// Summarization (`Action::MoveMessagesToNewTask`) moves an exchange's messages into a subtask
