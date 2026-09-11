@@ -188,6 +188,7 @@ pub async fn spawn_server(
     server_name: String,
     description: Option<String>,
     uuid: Uuid,
+    warp_id: Option<String>,
     transport_type: TransportType,
     logger: SimpleLogger,
     auth_context: Option<crate::oauth::AuthContext>,
@@ -417,6 +418,7 @@ pub async fn spawn_server(
         resources,
         tools,
         installation_id: uuid,
+        warp_id,
         description,
         is_authenticated_transport,
     })
