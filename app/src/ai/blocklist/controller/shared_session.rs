@@ -916,7 +916,7 @@ impl BlocklistAIController {
                     );
                 });
             }
-            self.send_user_query_in_conversation_with_attachments(
+            self.send_shared_session_query_in_conversation_with_attachments(
                 prompt,
                 conversation_id,
                 Some(participant_id),
@@ -982,7 +982,7 @@ impl BlocklistAIController {
                     self.tag_conversation_as_setup_failure_debug_bootstrap(conversation_id, ctx);
                 }
 
-                self.send_user_query_in_conversation_with_attachments(
+                self.send_shared_session_query_in_conversation_with_attachments(
                     prompt,
                     conversation_id,
                     Some(participant_id),

@@ -7,6 +7,7 @@ use ai::api_keys::{
     GeapCredentialsState,
 };
 use chrono::Local;
+use session_sharing_protocol::common::{ParticipantId, ServerConversationToken};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api::response_event;
@@ -568,6 +569,93 @@ fn drop_pending_events_for_exiting_conversation_drops_pending_events() {
     });
 }
 
+#[test]
+fn shared_session_wake_includes_pending_agent_messages_in_the_same_exchange() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let server_token = ServerConversationToken::new();
+
+        let conversation_id = terminal.update(&mut app, |view, ctx| {
+            let conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    let conversation_id =
+                        history.start_new_conversation(view.id(), false, false, false, ctx);
+                    history.set_server_conversation_token_for_conversation(
+                        conversation_id,
+                        server_token.to_string(),
+                    );
+                    history.update_conversation_status(
+                        view.id(),
+                        conversation_id,
+                        crate::ai::agent::conversation::ConversationStatus::InProgress,
+                        ctx,
+                    );
+                    conversation_id
+                });
+            OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+                service.enqueue_event_batch(
+                    conversation_id,
+                    vec![PendingEvent {
+                        event_id: "event-1".to_string(),
+                        source_agent_id: "parent-agent".to_string(),
+                        attempt_count: 0,
+                        detail: PendingEventDetail::Message {
+                            message_id: "message-1".to_string(),
+                            addresses: vec!["child-agent".to_string()],
+                            subject: "Continue implementation".to_string(),
+                            message_body: "Apply the requested revision.".to_string(),
+                        },
+                    }],
+                    ctx,
+                );
+            });
+            view.ai_controller().update(ctx, |controller, ctx| {
+                controller.execute_warp_agent_prompt_from_shared_session_injection(
+                    "Wake for a new agent message.".to_string(),
+                    Some(server_token),
+                    vec![],
+                    ParticipantId::new(),
+                    ctx,
+                );
+            });
+            conversation_id
+        });
+
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let exchanges = history
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .all_exchanges();
+            let inputs = &exchanges
+                .last()
+                .expect("shared-session wake should create an exchange")
+                .input;
+
+            let [
+                AIAgentInput::MessagesReceivedFromAgents { messages },
+                AIAgentInput::UserQuery { query, .. },
+            ] = inputs.as_slice()
+            else {
+                panic!("expected one hydrated message input followed by one wake query");
+            };
+            assert_eq!(query, "Wake for a new agent message.");
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].message_id, "message-1");
+            assert_eq!(messages[0].sender_agent_id, "parent-agent");
+            assert_eq!(messages[0].message_body, "Apply the requested revision.");
+        });
+        OrchestrationEventService::handle(&app).update(&mut app, |service, ctx| {
+            assert!(!service.has_pending_events(conversation_id));
+            assert!(
+                service
+                    .drain_events_for_request(conversation_id, ctx)
+                    .is_none(),
+                "the joined message must not be available for a second delivery"
+            );
+        });
+    });
+}
 fn team_for_test(uid: i64, name: &str) -> Team {
     Team {
         uid: uid.into(),

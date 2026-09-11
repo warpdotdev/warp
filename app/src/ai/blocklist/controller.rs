@@ -840,6 +840,22 @@ impl BlocklistAIController {
             }
             InputQueryType::AIInputType { ai_input } => ai_input,
         };
+
+        let mut has_piggybacked_events = false;
+        let mut other_task_event_inputs = None;
+        if matches!(&entrypoint_type, EntrypointType::SharedSession)
+            && let Some((mut event_inputs, event_task_id)) = OrchestrationEventService::handle(ctx)
+                .update(ctx, |service, ctx| {
+                    service.drain_events_for_request(conversation_id, ctx)
+                })
+        {
+            has_piggybacked_events = true;
+            if event_task_id == task_id {
+                inputs.append(&mut event_inputs);
+            } else {
+                other_task_event_inputs = Some((event_task_id, event_inputs));
+            }
+        }
         inputs.push(ai_input);
 
         // Piggyback any pending orchestration config updates for this conversation.
@@ -855,17 +871,25 @@ impl BlocklistAIController {
         }
 
         let scope = ResolvedTeamScope::from_scope(&self.team_context(ctx));
+        let mut request_input = RequestInput::for_task(
+            inputs,
+            task_id,
+            &self.active_session,
+            self.get_current_response_initiator(),
+            conversation_id,
+            self.terminal_surface_id,
+            &scope,
+            ctx,
+        );
+        if let Some((event_task_id, event_inputs)) = other_task_event_inputs {
+            request_input
+                .input_messages
+                .entry(event_task_id)
+                .or_default()
+                .extend(event_inputs);
+        }
         let send_result = self.send_request_input(
-            RequestInput::for_task(
-                inputs,
-                task_id,
-                &self.active_session,
-                self.get_current_response_initiator(),
-                conversation_id,
-                self.terminal_surface_id,
-                &scope,
-                ctx,
-            ),
+            request_input,
             Some(RequestMetadata {
                 is_autodetected_user_query: !self.input_model.as_ref(ctx).is_input_type_locked(),
                 entrypoint: entrypoint_type,
@@ -883,6 +907,11 @@ impl BlocklistAIController {
             if !taken_dirty_events.is_empty() {
                 AIDocumentModel::handle(ctx).update(ctx, |model, _| {
                     model.set_dirty_orchestration_events(conversation_id, taken_dirty_events);
+                });
+            }
+            if has_piggybacked_events {
+                OrchestrationEventService::handle(ctx).update(ctx, |service, ctx| {
+                    service.requeue_awaiting_events(conversation_id, ctx);
                 });
             }
         }
@@ -1149,8 +1178,8 @@ impl BlocklistAIController {
         );
     }
 
-    /// Sends the given user query to the AI model, with additional referenced attachments.
-    pub fn send_user_query_in_conversation_with_attachments(
+    /// Sends a shared-session query to the AI model, with additional referenced attachments.
+    fn send_shared_session_query_in_conversation_with_attachments(
         &mut self,
         query: String,
         conversation_id: AIConversationId,
@@ -1164,7 +1193,7 @@ impl BlocklistAIController {
             participant_id,
             false, // skip_running_command_detection
             additional_attachments,
-            EntrypointType::UserInitiated,
+            EntrypointType::SharedSession,
             /*is_queued_prompt*/ false,
             /*queued_query_id*/ None,
             ctx,
