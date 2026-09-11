@@ -11,6 +11,7 @@ use cloud_object_models::CodeForge;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use repo_metadata::{DirectoryWatcher, RepoMetadataEvent, RepoMetadataModel, RepositoryIdentifier};
+use session_sharing_protocol::common::ParticipantId;
 use tempfile::TempDir;
 use warp_cli::agent::Harness;
 use warp_cli::skill::SkillSpec;
@@ -47,7 +48,8 @@ use crate::ai::blocklist::orchestration_events::{
     OrchestrationEventService, PendingEvent, PendingEventDetail,
 };
 use crate::ai::blocklist::{
-    BlocklistAIHistoryModel, RequestInput, ResponseStream, ResponseStreamId,
+    BlocklistAIHistoryModel, QueuedQuery, QueuedQueryModel, QueuedQueryOrigin, RequestInput,
+    ResponseStream, ResponseStreamId,
 };
 use crate::ai::cloud_environments::{GithubRepo, SourceRepo};
 use crate::ai::llms::LLMId;
@@ -1593,6 +1595,138 @@ fn driver_wired_for_terminal(
         driver.execute_run(AgentRunPrompt::Local(String::new()), ctx)
     });
     driver_handle
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        // The driver's own skip_initial_turn dispatch drains an (empty, at this point) startup
+        // queue for `id` here, so it doesn't disturb the mock stream created above.
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        // A row queued for this conversation after setup has finished keeps the driver from
+        // exiting even once the (unrelated, pre-existing) stream finishes successfully.
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "followup".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn native_startup_queue_prevents_exit_until_a_local_row_is_removed() {
+    // Regression test: exit-deferral must not be specific to shared-session-injected rows --
+    // a plain local row (e.g. queued via `/queue` against this same conversation) has to hold
+    // the run open exactly the same way, since `dispatch_queued_warp_agent_prompt` dispatches
+    // either kind identically.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let (terminal_id, controller) = terminal.read(&app, |terminal, _| {
+            (terminal.id(), terminal.ai_controller().clone())
+        });
+        let (id, stream) =
+            conversation_with_in_progress_mock_stream(&mut app, terminal_id, &controller);
+        controller.update(&mut app, |controller, ctx| {
+            controller.bind_native_prompt_conversation(Some(id), ctx);
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+
+        let queued_id = QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            queue.append(
+                id,
+                QueuedQuery::new(
+                    "local followup".into(),
+                    QueuedQueryOrigin::QueueSlashCommand,
+                ),
+                ctx,
+            )
+        });
+        complete_mock_stream_successfully(&mut app, &stream);
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(!service.is_conversation_exiting(id));
+        });
+        QueuedQueryModel::handle(&app).update(&mut app, |queue, ctx| {
+            assert!(queue.remove_by_id(id, queued_id, ctx).is_some());
+        });
+        OrchestrationEventService::handle(&app).read(&app, |service, _| {
+            assert!(service.is_conversation_exiting(id));
+        });
+    });
+}
+
+#[test]
+fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "first".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                ctx,
+            );
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "second".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                ctx,
+            );
+            id
+        });
+        let _driver = driver_wired_for_terminal(&mut app, terminal, None);
+        // Only the head ("first") is sent as soon as setup finishes; "second" stays queued for
+        // the next natural request boundary (a tool-result follow-up) or the conversation going
+        // idle, rather than being dispatched right away and interrupting "first"'s barely-started
+        // stream before it produces any output.
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            let conversation = history.conversation(&id).unwrap();
+            assert_eq!(conversation.exchange_count(), 1);
+            assert_eq!(conversation.status(), &ConversationStatus::InProgress);
+        });
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["second"],
+            );
+        });
+    });
 }
 
 /// QUALITY-1801 regression: a child agent's message, queued in

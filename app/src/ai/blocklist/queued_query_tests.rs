@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use session_sharing_protocol::common::ParticipantId;
 use warpui::{App, SingletonEntity};
 
 use super::{
@@ -44,6 +45,100 @@ where
 
 fn user_query(text: &str) -> QueuedQuery {
     QueuedQuery::new(text.to_owned(), QueuedQueryOrigin::QueueSlashCommand)
+}
+
+#[test]
+fn native_setup_barrier_blocks_dispatch_until_finished() {
+    with_model(|mut app, model, _| {
+        let id = AIConversationId::new();
+        model.update(&mut app, |queue, ctx| {
+            queue.begin_native_setup(id, ctx);
+            assert!(queue.is_dispatch_blocked(id));
+            assert!(queue.has_pending_native_injections(id));
+
+            queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "first".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            assert!(queue.has_pending_native_injections(id));
+
+            // The barrier -- not `clear_queue` itself -- is what gates when a caller is
+            // allowed to dispatch; the row sits untouched until then.
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.is_dispatch_blocked(id));
+            assert!(queue.has_pending_native_injections(id));
+
+            let cleared = queue.clear_queue(id, ctx);
+            assert_eq!(cleared.len(), 1);
+            assert_eq!(cleared[0].text(), "first");
+            assert!(!queue.has_pending_native_injections(id));
+
+            // Idempotent once already released.
+            queue.finish_native_setup(id, ctx);
+            assert!(!queue.is_dispatch_blocked(id));
+        });
+    });
+}
+
+#[test]
+fn clear_queue_removes_every_row_regardless_of_origin_in_fifo_order() {
+    with_model(|mut app, model, events| {
+        let id = AIConversationId::new();
+        let (shared, local, command) = model.update(&mut app, |queue, ctx| {
+            let shared = queue.append(
+                id,
+                QueuedQuery::new_shared_session_prompt(
+                    "shared".into(),
+                    ParticipantId::new(),
+                    vec![],
+                ),
+                ctx,
+            );
+            let local = queue.append(id, user_query("local"), ctx);
+            let command = queue.append(id, command_query("ls"), ctx);
+            (shared, local, command)
+        });
+        events.borrow_mut().clear();
+
+        let cleared = model.update(&mut app, |queue, ctx| queue.clear_queue(id, ctx));
+        assert_eq!(
+            cleared.iter().map(QueuedQuery::text).collect::<Vec<_>>(),
+            vec!["shared", "local", "ls"],
+            "every row is cleared regardless of origin, in FIFO order"
+        );
+        assert_eq!(cleared[0].id(), shared);
+        assert_eq!(cleared[1].id(), local);
+        assert_eq!(cleared[2].id(), command);
+
+        model.read(&app, |queue, _| {
+            assert!(!queue.has_queue(id));
+            assert!(!queue.has_pending_native_injections(id));
+        });
+
+        let evts = events.borrow();
+        assert_eq!(evts.len(), 3);
+        assert!(evts.iter().all(|e| matches!(
+            e,
+            QueuedQueryEvent::Removed { conversation_id, .. } if *conversation_id == id
+        )));
+    });
+}
+
+#[test]
+fn clear_queue_no_ops_when_nothing_queued() {
+    with_model(|mut app, model, events| {
+        let id = AIConversationId::new();
+        events.borrow_mut().clear();
+
+        let cleared = model.update(&mut app, |queue, ctx| queue.clear_queue(id, ctx));
+        assert!(cleared.is_empty());
+        assert!(events.borrow().is_empty());
+    });
 }
 
 fn initial_cloud_mode_query(text: &str) -> QueuedQuery {
@@ -877,6 +972,34 @@ fn command_in_flight_flag_arms_and_clears() {
 
         model.update(&mut app, |m, _| m.clear_command_in_flight(conv));
         model.read(&app, |m, _| assert!(!m.has_command_in_flight(conv)));
+    });
+}
+
+#[test]
+fn download_in_flight_flag_arms_and_clears() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+
+        // Arming works even with an empty queue -- the whole point is to cover the gap after a
+        // shared-session row has already been removed but before its download-gated request has
+        // actually been sent.
+        model.update(&mut app, |m, _| m.arm_download_in_flight(conv));
+        model.read(&app, |m, _| assert!(m.has_pending_native_injections(conv)));
+
+        model.update(&mut app, |m, _| m.clear_download_in_flight(conv));
+        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+    });
+}
+
+#[test]
+fn clear_download_in_flight_is_a_no_op_when_nothing_was_armed() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        // Every synchronous dispatch path clears unconditionally, including the two that never
+        // needed a download in the first place; this must not panic or create a stray entry.
+        model.update(&mut app, |m, _| m.clear_download_in_flight(conv));
+        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
     });
 }
 

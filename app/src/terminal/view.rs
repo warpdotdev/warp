@@ -5469,6 +5469,14 @@ impl TerminalView {
                 && let Some(reason) = self.finish_reason_for_conversation(*conversation_id, ctx)
             {
                 self.drain_queued_prompts(*conversation_id, reason, ctx);
+            } else if QueuedQueryModel::as_ref(ctx).has_queue(*conversation_id) {
+                log::info!(
+                    "event=turn_drain_deferred terminal_id={:?} conversation_id={conversation_id} active_subagent={has_active_subagent} has_finished_block={} queue_len={}",
+                    self.view_id,
+                    self.finish_reason_for_conversation(*conversation_id, ctx)
+                        .is_some(),
+                    QueuedQueryModel::as_ref(ctx).queue(*conversation_id).len(),
+                );
             }
 
             // If the most recent action in the current interaction turn created or updated a plan
@@ -5541,6 +5549,7 @@ impl TerminalView {
         let id = QueuedQueryModel::handle(ctx).update(ctx, |model, ctx| {
             model.append(conversation_id, QueuedQuery::new(prompt, origin), ctx)
         });
+        self.maybe_dispatch_steering_prompt_now(conversation_id, ctx);
         Some(id)
     }
 
@@ -5575,6 +5584,7 @@ impl TerminalView {
                     ctx,
                 );
             });
+            self.maybe_dispatch_steering_prompt_now(conversation_id, ctx);
         } else {
             self.send_user_query_after_next_conversation_finished(
                 prompt, /* show_close_button */ true, /* show_send_now_button */ false,
@@ -5583,9 +5593,33 @@ impl TerminalView {
         }
     }
 
+    /// If `conversation_id`'s queue is in `Steering` mode and nothing is currently streaming for
+    /// it, attempts to dispatch the just-queued row immediately rather than waiting for a future
+    /// turn-completion event that may never come (e.g. the conversation has nothing else in
+    /// flight right now). No-ops when a stream is already active for the conversation --
+    /// `Steering`'s piggyback-on-next-request and idle-drain mechanisms pick the row up once
+    /// that stream's turn produces a natural boundary, so firing here too would interrupt it.
+    fn maybe_dispatch_steering_prompt_now(
+        &mut self,
+        conversation_id: AIConversationId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !QueuedQueryModel::as_ref(ctx).is_steering(conversation_id) {
+            return;
+        }
+        if self
+            .ai_controller
+            .as_ref(ctx)
+            .has_active_stream_for_conversation(conversation_id, ctx)
+        {
+            return;
+        }
+        self.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
+    }
+
     /// Drains one prompt from the queued-query singleton for `conversation_id` when that
     /// conversation finishes.
-    fn drain_queued_prompts(
+    pub(crate) fn drain_queued_prompts(
         &mut self,
         conversation_id: AIConversationId,
         finish_reason: FinishReason,
@@ -5597,6 +5631,9 @@ impl TerminalView {
                 let first_row_is_in_edit_mode =
                     QueuedQueryModel::as_ref(ctx).first_row_is_in_edit_mode(conversation_id);
                 if first_row_is_in_edit_mode && !input_is_empty {
+                    log::info!(
+                        "event=turn_drain_deferred conversation_id={conversation_id} reason=editing_head_with_local_draft",
+                    );
                     return;
                 }
 
@@ -5605,6 +5642,27 @@ impl TerminalView {
                 let action = QueuedQueryModel::as_ref(ctx).peek_autofire(conversation_id);
                 match action {
                     Some(AutofireAction::Submit { query_id, text }) => {
+                        if QueuedQueryModel::as_ref(ctx)
+                            .queue(conversation_id)
+                            .iter()
+                            .any(|row| {
+                                row.id() == query_id && row.shared_session_prompt().is_some()
+                            })
+                        {
+                            // Shared-session injections are normally dispatched via `Steering`'s
+                            // piggyback-on-next-request mechanism, or immediately when queued
+                            // while idle; reaching one here means neither applied (e.g. a prior
+                            // dispatch was deferred because a CLI subagent was active), so try
+                            // dispatching the head row now that this turn finished.
+                            self.ai_controller.update(ctx, |controller, ctx| {
+                                controller.dispatch_queued_warp_agent_prompt(
+                                    conversation_id,
+                                    None,
+                                    ctx,
+                                );
+                            });
+                            return;
+                        }
                         self.input.update(ctx, |input, ctx| {
                             input.submit_queued_prompt_for_active_pane(
                                 text,

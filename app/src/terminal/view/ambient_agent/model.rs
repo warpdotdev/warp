@@ -965,6 +965,11 @@ impl AmbientAgentViewModel {
         let request = RunFollowupRequest {
             message: prompt.clone(),
         };
+        if self.pending_followup_prompt.is_some() {
+            log::warn!(
+                "event=viewer_followup_slot_replaced task_id={task_id} route=setup_failure_debug",
+            );
+        }
         self.pending_followup_prompt = Some(prompt);
         ctx.emit(AmbientAgentViewModelEvent::FollowupDispatched);
 
@@ -1001,6 +1006,9 @@ impl AmbientAgentViewModel {
             None,
         );
 
+        if self.pending_followup_prompt.is_some() {
+            log::warn!("event=viewer_followup_slot_replaced task_id={task_id} route=run_followup",);
+        }
         self.pending_followup_prompt = Some(prompt);
         self.status = Status::WaitingForSession {
             progress: AgentProgress::new(),

@@ -18,9 +18,7 @@ use crate::ai::agent::conversation::{AIConversationId, ConversationStatus, TaskS
 use crate::ai::agent::{AIAgentActionId, AIAgentAttachment, EntrypointType};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::attachment_utils::{
-    DownloadedAttachment, build_file_attachment_map, download_file, sanitize_filename,
-};
+use crate::ai::attachment_utils::{build_file_attachment_map, download_task_file_attachments};
 use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::local_agent_task_sync_model::LocalAgentTaskSyncModel;
@@ -677,7 +675,18 @@ impl BlocklistAIController {
         participant_id: ParticipantId,
         ctx: &mut ModelContext<Self>,
     ) {
-        // Map server token to sharer's local conversation ID
+        // Route through the bound native conversation, if any -- see
+        // `route_native_startup_injection`'s doc comment for why this must fully own dispatch
+        // once bound, rather than falling back to token resolution below.
+        if self.route_native_startup_injection(
+            &prompt,
+            server_conversation_token.as_ref(),
+            &attachments,
+            &participant_id,
+            ctx,
+        ) {
+            return;
+        }
         let conversation_id = server_conversation_token
             .and_then(|id| self.find_existing_conversation_by_server_token(&id.to_string(), ctx))
             .and_then(
@@ -769,65 +778,16 @@ impl BlocklistAIController {
         };
 
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
-        let server_api = ServerApiProvider::as_ref(ctx).get();
-        let attachment_ids: Vec<String> = file_downloads.iter().map(|(id, _)| id.clone()).collect();
+        let http_client = ServerApiProvider::as_ref(ctx).get_http_client();
 
-        // Fetch presigned download URLs from the server, download files to disk,
-        // then build the attachment map from only the successfully downloaded files.
         ctx.spawn(
-            async move {
-                let download_urls = match ai_client
-                    .download_task_attachments(&task_id, &attachment_ids)
-                    .await
-                {
-                    Ok(resp) => resp
-                        .attachments
-                        .into_iter()
-                        .map(|att| (att.attachment_id, att.download_url))
-                        .collect::<std::collections::HashMap<_, _>>(),
-                    Err(e) => {
-                        report_error!(
-                            e.context("Failed to get download URLs for task"),
-                            extra: { "task_id" => %task_id }
-                        );
-                        return vec![];
-                    }
-                };
-
-                if let Err(e) = async_fs::create_dir_all(&attachment_dir).await {
-                    report_error!(
-                        anyhow::Error::new(e).context("Failed to create attachments directory")
-                    );
-                    return vec![];
-                }
-
-                let mut downloaded = Vec::new();
-                for (attachment_id, file_name) in &file_downloads {
-                    let Some(url) = download_urls.get(attachment_id) else {
-                        log::warn!("No download URL for attachment {attachment_id}");
-                        continue;
-                    };
-                    let safe_name = sanitize_filename(file_name).to_string();
-                    let dest = attachment_dir.join(format!("{attachment_id}_{safe_name}"));
-
-                    match download_file(server_api.http_client(), url, &dest).await {
-                        Ok(_) => {
-                            downloaded.push(DownloadedAttachment {
-                                file_id: attachment_id.clone(),
-                                file_name: safe_name,
-                                file_path: dest.to_string_lossy().into_owned(),
-                            });
-                        }
-                        Err(e) => {
-                            report_error!(
-                                e.context("Failed to download attachment"),
-                                extra: { "file_name" => %safe_name }
-                            );
-                        }
-                    }
-                }
-                downloaded
-            },
+            download_task_file_attachments(
+                ai_client,
+                http_client,
+                task_id,
+                attachment_dir,
+                file_downloads,
+            ),
             move |controller, downloaded, ctx| {
                 let file_attachments = build_file_attachment_map(&downloaded);
                 controller.send_warp_agent_prompt_from_shared_session_injection(

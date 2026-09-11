@@ -4318,6 +4318,22 @@ impl Input {
         ctx: &mut ViewContext<Self>,
     ) {
         // Read the origin before dispatch; the row is removed once it fires.
+        if QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id) {
+            return;
+        }
+        if QueuedQueryModel::as_ref(ctx)
+            .queue(conversation_id)
+            .iter()
+            .any(|row| row.id() == query_id && row.shared_session_prompt().is_some())
+        {
+            // "Send now" targets the clicked row specifically, which may not be the queue head
+            // (e.g. after reordering) -- passing `query_id` through dispatches that exact row
+            // instead of whatever currently happens to be at the head.
+            self.ai_controller.update(ctx, |controller, ctx| {
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, Some(query_id), ctx);
+            });
+            return;
+        }
         let origin = QueuedQueryModel::as_ref(ctx)
             .queue(conversation_id)
             .iter()
