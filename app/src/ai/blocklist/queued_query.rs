@@ -389,6 +389,7 @@ impl QueuedQueryModel {
     /// dispatch was deferred because a CLI subagent was active), or a dispatched row's file
     /// attachments are still downloading (see [`Self::arm_download_in_flight`]). Used by the
     /// ambient driver to know whether to keep the run alive for pending injections.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn has_pending_native_injections(&self, conversation_id: AIConversationId) -> bool {
         self.queues.get(&conversation_id).is_some_and(|state| {
             state.native_setup_pending || !state.queue.is_empty() || state.download_in_flight
