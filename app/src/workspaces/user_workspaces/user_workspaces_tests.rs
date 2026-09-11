@@ -2304,15 +2304,14 @@ fn operation_scope_resolver_preserves_a_window_team_missing_from_workspace_metad
         UserWorkspaces::handle(&app).update(&mut app, |user_workspaces, ctx| {
             user_workspaces.set_team_for_window(window_id, task_team_uid, ctx);
         });
-        let view = view.downgrade();
-        let display_scope = UserWorkspaces::team_context_resolver(view.clone());
-        let operation_scope = UserWorkspaces::team_context_for_operation_resolver(view);
+        let resolvers = UserWorkspaces::team_context_resolvers(view.downgrade());
+        let (policy_scope, operation_scope) = resolvers.into_parts();
 
         app.read(|ctx| {
             assert_eq!(
-                display_scope(ctx).team_uid(),
+                policy_scope(ctx).team_uid(),
                 None,
-                "stale workspace metadata cannot resolve the task-owned team for display"
+                "stale workspace metadata cannot resolve the task-owned team for policy reads"
             );
             assert_eq!(
                 operation_scope(ctx).team_uid(),

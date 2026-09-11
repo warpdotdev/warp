@@ -70,7 +70,7 @@ use crate::ai::get_relevant_files::controller::GetRelevantFilesController;
 use crate::terminal::TerminalModel;
 use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::ModelEventDispatcher;
-use crate::workspaces::user_workspaces::{TeamContextForOperationResolver, TeamContextResolver};
+use crate::workspaces::user_workspaces::TeamContextResolvers;
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 /// The status of an action from an AI output.
@@ -264,7 +264,7 @@ impl BlocklistAIActionModel {
         model_event_dispatcher: &ModelHandle<ModelEventDispatcher>,
         get_relevant_files_controller: ModelHandle<GetRelevantFilesController>,
         terminal_view_id: EntityId,
-        team_context_resolvers: (TeamContextResolver, TeamContextForOperationResolver),
+        team_context_resolvers: TeamContextResolvers,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         let executor = ctx.add_model(|ctx| {

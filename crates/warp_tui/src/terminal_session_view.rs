@@ -1555,9 +1555,7 @@ impl TuiTerminalSessionView {
             )
         });
         let get_relevant_files_controller = ctx.add_model(GetRelevantFilesController::new);
-        let team_context_resolver = UserWorkspaces::team_context_resolver(ctx.handle());
-        let team_context_for_operation_resolver =
-            UserWorkspaces::team_context_for_operation_resolver(ctx.handle());
+        let team_context_resolvers = UserWorkspaces::team_context_resolvers(ctx.handle());
         let action_model = ctx.add_model(|ctx| {
             BlocklistAIActionModel::new(
                 model.clone(),
@@ -1565,7 +1563,7 @@ impl TuiTerminalSessionView {
                 &model_events,
                 get_relevant_files_controller,
                 terminal_surface_id,
-                (team_context_resolver, team_context_for_operation_resolver),
+                team_context_resolvers,
                 ctx,
             )
         });

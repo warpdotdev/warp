@@ -280,8 +280,8 @@ pub use crate::util::time_format::format_elapsed_seconds;
 pub use crate::voice::transcriber::{Transcriber, VoiceTranscriber};
 pub use crate::workspaces::update_manager::TeamUpdateManager;
 pub use crate::workspaces::user_workspaces::{
-    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextForOperationResolver,
-    TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+    ResolvedTeamScope, TeamContext, TeamContextForOperation, TeamContextResolver,
+    TeamContextResolvers, TeamScope, UserWorkspaces, UserWorkspacesEvent,
 };
 pub use crate::workspaces::workspace::{AiCreditsUsageAndCostType, UsageVisibilityGranularity};
 
