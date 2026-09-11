@@ -74,21 +74,24 @@ fn task_scoped_catalog_accepts_only_enabled_factory_models() {
             validate_agent_mode_base_model_id_for_task(selected, Some(&catalog), ctx).is_ok()
         }));
         assert!(app.read(|ctx| {
-            validate_agent_mode_base_model_id_for_task(foreign, Some(&catalog), ctx).is_err()
+            let error = validate_agent_mode_base_model_id_for_task(foreign, Some(&catalog), ctx)
+                .expect_err("disabled Factory models must be rejected");
+            error.to_string().contains("currently unavailable")
         }));
         assert!(app.read(|ctx| {
-            validate_agent_mode_base_model_id_for_task(
+            let error = validate_agent_mode_base_model_id_for_task(
                 "custom-router:factory:factory-uid:missing",
                 Some(&catalog),
                 ctx,
             )
-            .is_err()
+            .expect_err("missing Factory models must be rejected");
+            error.to_string().contains("not available for this task")
         }));
     });
 }
 
 #[test]
-fn factory_model_requires_an_available_task_catalog() {
+fn factory_model_requires_a_fresh_task_catalog() {
     App::test((), |app| async move {
         let model_id = "custom-router:factory:factory-uid:balanced";
         let catalog = TaskScopedModelCatalog::unavailable();
@@ -98,12 +101,33 @@ fn factory_model_requires_an_available_task_catalog() {
         });
         assert!(err.to_string().contains("task-scoped agent model list"));
         assert!(
-            app.read(
-                |ctx| validate_agent_mode_base_model_id_for_task(model_id, None, ctx).is_err()
-            ),
+            app.read(|ctx| {
+                let error = validate_agent_mode_base_model_id_for_task(model_id, None, ctx)
+                    .expect_err("Factory models must not use the workspace catalog");
+                error
+                    .to_string()
+                    .contains("requires a task-scoped model catalog")
+            }),
             "missing catalog must not fall back to the workspace model list"
         );
     });
+}
+
+#[test]
+fn task_scoped_catalog_rejects_stale_factory_entries() {
+    let old_model_id = "custom-router:factory:factory-uid:balanced";
+    let current_model_id = "custom-router:factory:factory-uid:review";
+    let current_catalog = TaskScopedModelCatalog::from_model_ids([current_model_id.into()], []);
+
+    assert!(
+        current_catalog
+            .validate_factory_model_id(current_model_id)
+            .is_ok()
+    );
+    let error = current_catalog
+        .validate_factory_model_id(old_model_id)
+        .expect_err("a refreshed task catalog must not retain an old Factory entry");
+    assert!(error.to_string().contains("not available for this task"));
 }
 
 #[test]

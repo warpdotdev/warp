@@ -32,7 +32,7 @@ pub const LOCAL_CUSTOM_ROUTER_PREFIX: &str = "custom-router:local:";
 
 /// The `config_key` prefix for cloud/team (server-synced) custom model routers.
 pub const CLOUD_CUSTOM_ROUTER_PREFIX: &str = "custom-router:cloud:";
-/// The `config_key` prefix for Factory-scoped (server-snapshotted) custom model routers.
+/// The `config_key` prefix for Factory-scoped custom model routers resolved by the server.
 pub const FACTORY_CUSTOM_ROUTER_PREFIX: &str = "custom-router:factory:";
 
 /// The routing strategy for a custom model router.
