@@ -4326,11 +4326,11 @@ impl Input {
             .iter()
             .any(|row| row.id() == query_id && row.shared_session_prompt().is_some())
         {
-            // "Send now" on a shared-session-injected row dispatches it immediately, the same
-            // way `BlocklistAIController::dispatch_next_shared_session_row` otherwise dispatches
-            // the head row once it's safe to do so.
+            // "Send now" targets the clicked row specifically, which may not be the queue head
+            // (e.g. after reordering) -- passing `query_id` through dispatches that exact row
+            // instead of whatever currently happens to be at the head.
             self.ai_controller.update(ctx, |controller, ctx| {
-                controller.dispatch_next_shared_session_row(conversation_id, ctx);
+                controller.dispatch_queued_warp_agent_prompt(conversation_id, Some(query_id), ctx);
             });
             return;
         }

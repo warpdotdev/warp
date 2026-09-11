@@ -64,7 +64,7 @@ fn startup_injections_queued_before_the_initial_prompt_are_dispatched_one_at_a_t
         // the head of the backlog.
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
-            controller.dispatch_next_shared_session_row(id, ctx);
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
@@ -115,7 +115,7 @@ fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() 
         });
         let initial_streams = controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
-            controller.dispatch_next_shared_session_row(id, ctx);
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
             assert!(!QueuedQueryModel::as_ref(ctx).has_queue(id));
             controller
                 .in_flight_response_streams
@@ -158,6 +158,123 @@ fn live_injection_while_a_turn_is_active_is_queued_instead_of_interrupting_it() 
                 user_queries_in_order(history, id),
                 vec!["prompt1".to_owned()],
                 "prompt2 should not have been sent yet"
+            );
+        });
+    });
+}
+
+#[test]
+fn dispatch_queued_warp_agent_prompt_with_an_explicit_id_targets_that_row_not_the_head() {
+    // Regression test: "Send now" on a specific queued row must dispatch that exact row, even
+    // when it isn't the head, rather than silently substituting whatever's at the head.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let participant = ParticipantId::new();
+        let (id, second_row_id) = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "prompt2".into(),
+                None,
+                vec![],
+                participant.clone(),
+                ctx,
+            );
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "prompt3".into(),
+                None,
+                vec![],
+                participant.clone(),
+                ctx,
+            );
+            let second_row_id = QueuedQueryModel::as_ref(ctx).queue(id)[1].id();
+            (id, second_row_id)
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.dispatch_queued_warp_agent_prompt(id, Some(second_row_id), ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["prompt2"],
+                "the targeted row (prompt3) should be dispatched and removed; prompt2 -- the \
+                 head -- should be untouched"
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                vec!["prompt3".to_owned()],
+                "the explicitly targeted row should have been sent"
+            );
+        });
+    });
+}
+
+#[test]
+fn dispatch_queued_warp_agent_prompt_respects_fifo_order_across_mixed_row_kinds() {
+    // Regression test: the automatic (head-only) dispatch path must not special-case shared-
+    // session rows -- a local prompt sitting ahead of a shared-session row in the queue must
+    // still be the one dispatched, not silently skipped.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
+        let terminal = add_window_with_terminal(&mut app, None);
+        let controller = terminal.read(&app, |terminal, _| terminal.ai_controller().clone());
+        let id = controller.update(&mut app, |controller, ctx| {
+            let id = controller.bind_native_prompt_conversation(None, ctx);
+            QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.append(
+                    id,
+                    QueuedQuery::new("local prompt".into(), QueuedQueryOrigin::QueueSlashCommand),
+                    ctx,
+                );
+            });
+            controller.execute_warp_agent_prompt_from_shared_session_injection(
+                "shared prompt".into(),
+                None,
+                vec![],
+                ParticipantId::new(),
+                ctx,
+            );
+            id
+        });
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.enter_agent_view(None, Some(id), AgentViewEntryOrigin::Cli, ctx);
+        });
+
+        controller.update(&mut app, |controller, ctx| {
+            controller.send_user_query_in_conversation("initial".into(), id, None, ctx);
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
+        });
+
+        QueuedQueryModel::handle(&app).read(&app, |queue, _| {
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["shared prompt"],
+                "the local prompt at the head should have been dispatched, in FIFO order; the \
+                 shared-session row behind it should still be waiting"
+            );
+        });
+        BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
+            assert_eq!(
+                user_queries_in_order(history, id),
+                vec!["initial".to_owned(), "local prompt".to_owned()],
             );
         });
     });
@@ -232,7 +349,7 @@ fn drained_injection_stages_attachments_and_attributes_the_exchange_to_its_parti
         });
         controller.update(&mut app, |controller, ctx| {
             controller.send_user_query_in_conversation("prompt1".into(), id, None, ctx);
-            controller.dispatch_next_shared_session_row(id, ctx);
+            controller.dispatch_queued_warp_agent_prompt(id, None, ctx);
         });
 
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {

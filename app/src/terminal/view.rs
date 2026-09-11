@@ -5654,7 +5654,11 @@ impl TerminalView {
                             // dispatch was deferred because a CLI subagent was active), so try
                             // dispatching the head row now that this turn finished.
                             self.ai_controller.update(ctx, |controller, ctx| {
-                                controller.dispatch_next_shared_session_row(conversation_id, ctx);
+                                controller.dispatch_queued_warp_agent_prompt(
+                                    conversation_id,
+                                    None,
+                                    ctx,
+                                );
                             });
                             return;
                         }

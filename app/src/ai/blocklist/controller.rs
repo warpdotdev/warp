@@ -2865,6 +2865,22 @@ impl BlocklistAIController {
             .has_active_stream_for_conversation(conversation_id, app)
     }
 
+    /// True when nothing prevents dispatching a fresh, automatic request for `conversation_id`
+    /// right now: native setup (if any) has finished, and no response stream is currently
+    /// active. Every automatic dispatch trigger -- the post-enqueue idle fast path and the
+    /// FIFO-head case of [`Self::dispatch_queued_warp_agent_prompt`] -- must check this before
+    /// firing, so two dispatch attempts can never race and cancel each other. Does not apply to
+    /// an explicit user override (e.g. "Send now"), which is allowed to interrupt an active
+    /// stream on purpose.
+    pub(crate) fn can_dispatch_queued_warp_agent_prompt(
+        &self,
+        conversation_id: AIConversationId,
+        ctx: &AppContext,
+    ) -> bool {
+        !QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(conversation_id)
+            && !self.has_active_stream_for_conversation(conversation_id, ctx)
+    }
+
     #[cfg(test)]
     pub fn register_mock_stream_for_test(
         &mut self,

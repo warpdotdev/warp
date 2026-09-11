@@ -1641,7 +1641,7 @@ fn native_startup_queue_prevents_exit_until_pending_rows_are_removed() {
 }
 
 #[test]
-fn native_promptless_setup_dispatches_every_queued_prompt_at_once() {
+fn native_promptless_setup_dispatches_only_the_head_queued_prompt() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
@@ -1665,16 +1665,24 @@ fn native_promptless_setup_dispatches_every_queued_prompt_at_once() {
             id
         });
         let _driver = driver_wired_for_terminal(&mut app, terminal, None);
-        // Both queued prompts are sent as soon as setup finishes, without waiting for either
-        // turn to complete: "first" is interrupted by "second" the same way a live follow-up
-        // submitted mid-stream would interrupt it.
+        // Only the head ("first") is sent as soon as setup finishes; "second" stays queued for
+        // the next natural request boundary (a tool-result follow-up) or the conversation going
+        // idle, rather than being dispatched right away and interrupting "first"'s barely-started
+        // stream before it produces any output.
         BlocklistAIHistoryModel::handle(&app).read(&app, |history, _| {
             let conversation = history.conversation(&id).unwrap();
-            assert_eq!(conversation.exchange_count(), 2);
+            assert_eq!(conversation.exchange_count(), 1);
             assert_eq!(conversation.status(), &ConversationStatus::InProgress);
         });
         QueuedQueryModel::handle(&app).read(&app, |queue, _| {
-            assert!(!queue.has_queue(id));
+            assert_eq!(
+                queue
+                    .queue(id)
+                    .iter()
+                    .map(QueuedQuery::text)
+                    .collect::<Vec<_>>(),
+                vec!["second"],
+            );
         });
     });
 }

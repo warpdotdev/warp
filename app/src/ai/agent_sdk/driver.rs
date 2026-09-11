@@ -4021,7 +4021,7 @@ impl AgentDriver {
 
             // Dispatch any shared-session startup follow-up that arrived while the initial
             // prompt was being prepared. Must run after the update above returns, since
-            // `dispatch_next_shared_session_row` targets this terminal surface's *active*
+            // `dispatch_queued_warp_agent_prompt` targets this terminal surface's *active*
             // conversation, which the initial send just set. If more than one row accumulated,
             // the rest are picked up one at a time by `Steering`'s piggyback-on-next-request
             // mechanism or the idle-triggered drain, not flushed here all at once.
@@ -4029,7 +4029,11 @@ impl AgentDriver {
                 self.terminal_driver.update(ctx, |td, ctx| {
                     td.with_terminal_view(ctx, |terminal, ctx| {
                         terminal.ai_controller().update(ctx, |controller, ctx| {
-                            controller.dispatch_next_shared_session_row(conversation_id, ctx);
+                            controller.dispatch_queued_warp_agent_prompt(
+                                conversation_id,
+                                None,
+                                ctx,
+                            );
                         });
                     });
                 });
@@ -4042,11 +4046,13 @@ impl AgentDriver {
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
                 queue.finish_native_setup(conversation_id, ctx);
             });
+            // No prompt was ever sent for a promptless run, so the conversation is definitely
+            // idle here: `drain_queued_prompts` alone is sufficient, since it already detects a
+            // shared-session head row and delegates to the controller itself. A separate,
+            // preceding dispatch call would race it -- starting a second row's stream before the
+            // first produced any output cancels the first, silently dropping it.
             self.terminal_driver.update(ctx, |td, ctx| {
                 td.with_terminal_view(ctx, |terminal, ctx| {
-                    terminal.ai_controller().update(ctx, |controller, ctx| {
-                        controller.dispatch_next_shared_session_row(conversation_id, ctx);
-                    });
                     terminal.drain_queued_prompts(conversation_id, FinishReason::Complete, ctx);
                 });
             });
