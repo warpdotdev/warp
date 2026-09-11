@@ -67,15 +67,15 @@ fn native_setup_barrier_blocks_dispatch_until_finished() {
             );
             assert!(queue.has_pending_native_injections(id));
 
-            // The barrier -- not `drain_shared_session_injections` itself -- is what gates
-            // when a caller is allowed to drain; the row sits untouched until then.
+            // The barrier -- not `clear_queue` itself -- is what gates when a caller is
+            // allowed to dispatch; the row sits untouched until then.
             queue.finish_native_setup(id, ctx);
             assert!(!queue.is_dispatch_blocked(id));
             assert!(queue.has_pending_native_injections(id));
 
-            let drained = queue.drain_shared_session_injections(id, ctx);
-            assert_eq!(drained.len(), 1);
-            assert_eq!(drained[0].text(), "first");
+            let cleared = queue.clear_queue(id, ctx);
+            assert_eq!(cleared.len(), 1);
+            assert_eq!(cleared[0].text(), "first");
             assert!(!queue.has_pending_native_injections(id));
 
             // Idempotent once already released.
@@ -86,51 +86,42 @@ fn native_setup_barrier_blocks_dispatch_until_finished() {
 }
 
 #[test]
-fn drain_shared_session_injections_removes_only_shared_session_rows_in_fifo_order() {
+fn clear_queue_removes_every_row_regardless_of_origin_in_fifo_order() {
     with_model(|mut app, model, events| {
         let id = AIConversationId::new();
-        let (first, second, local) = model.update(&mut app, |queue, ctx| {
-            let first = queue.append(
+        let (shared, local, command) = model.update(&mut app, |queue, ctx| {
+            let shared = queue.append(
                 id,
                 QueuedQuery::new_shared_session_prompt(
-                    "first".into(),
+                    "shared".into(),
                     ParticipantId::new(),
                     vec![],
                 ),
                 ctx,
             );
             let local = queue.append(id, user_query("local"), ctx);
-            let second = queue.append(
-                id,
-                QueuedQuery::new_shared_session_prompt(
-                    "second".into(),
-                    ParticipantId::new(),
-                    vec![],
-                ),
-                ctx,
-            );
-            (first, second, local)
+            let command = queue.append(id, command_query("ls"), ctx);
+            (shared, local, command)
         });
         events.borrow_mut().clear();
 
-        let drained = model.update(&mut app, |queue, ctx| {
-            queue.drain_shared_session_injections(id, ctx)
-        });
+        let cleared = model.update(&mut app, |queue, ctx| queue.clear_queue(id, ctx));
         assert_eq!(
-            drained.iter().map(QueuedQuery::text).collect::<Vec<_>>(),
-            vec!["first", "second"]
+            cleared.iter().map(QueuedQuery::text).collect::<Vec<_>>(),
+            vec!["shared", "local", "ls"],
+            "every row is cleared regardless of origin, in FIFO order"
         );
-        assert_eq!(drained[0].id(), first);
-        assert_eq!(drained[1].id(), second);
+        assert_eq!(cleared[0].id(), shared);
+        assert_eq!(cleared[1].id(), local);
+        assert_eq!(cleared[2].id(), command);
 
         model.read(&app, |queue, _| {
-            let remaining = queue.queue(id);
-            assert_eq!(remaining.len(), 1);
-            assert_eq!(remaining[0].id(), local);
+            assert!(!queue.has_queue(id));
+            assert!(!queue.has_pending_native_injections(id));
         });
 
         let evts = events.borrow();
-        assert_eq!(evts.len(), 2);
+        assert_eq!(evts.len(), 3);
         assert!(evts.iter().all(|e| matches!(
             e,
             QueuedQueryEvent::Removed { conversation_id, .. } if *conversation_id == id
@@ -139,18 +130,14 @@ fn drain_shared_session_injections_removes_only_shared_session_rows_in_fifo_orde
 }
 
 #[test]
-fn drain_shared_session_injections_no_ops_when_nothing_queued() {
+fn clear_queue_no_ops_when_nothing_queued() {
     with_model(|mut app, model, events| {
         let id = AIConversationId::new();
-        append_user(&model, &mut app, id, "local only");
         events.borrow_mut().clear();
 
-        let drained = model.update(&mut app, |queue, ctx| {
-            queue.drain_shared_session_injections(id, ctx)
-        });
-        assert!(drained.is_empty());
+        let cleared = model.update(&mut app, |queue, ctx| queue.clear_queue(id, ctx));
+        assert!(cleared.is_empty());
         assert!(events.borrow().is_empty());
-        model.read(&app, |queue, _| assert_eq!(queue.queue(id).len(), 1));
     });
 }
 

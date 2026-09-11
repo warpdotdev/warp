@@ -53,8 +53,9 @@ impl BlocklistAIController {
         self.native_prompt_conversation_id
     }
 
-    /// Unbinds this controller from its native conversation, dropping any startup follow-ups
-    /// that never made it out (e.g. the run ended before setup finished).
+    /// Unbinds this controller from its native conversation, dropping any prompts still queued
+    /// for it (e.g. the run ended before setup finished, or before a dispatch that was deferred
+    /// behind an active CLI subagent could go out).
     pub(crate) fn unbind_native_prompt_conversation(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(id) = self.native_prompt_conversation_id.take() else {
             return;
@@ -66,7 +67,7 @@ impl BlocklistAIController {
             self.terminal_surface_id,
         );
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
-            queue.drain_shared_session_injections(id, ctx);
+            queue.clear_queue(id, ctx);
         });
     }
 

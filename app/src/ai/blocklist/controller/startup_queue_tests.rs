@@ -468,6 +468,9 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
 
 #[test]
 fn unbind_native_prompt_conversation_drops_any_prompts_still_queued() {
+    // Covers both a shared-session-injected row and a plain local row (e.g. from `/queue`
+    // against this same conversation while it's native-bound) -- unbinding must clear the
+    // whole queue, not just the shared-session-injected rows within it.
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
@@ -481,7 +484,17 @@ fn unbind_native_prompt_conversation_drops_any_prompts_still_queued() {
                     ParticipantId::new(),
                     ctx,
                 );
-                assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 1);
+                QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                    queue.append(
+                        id,
+                        QueuedQuery::new(
+                            "local pending".into(),
+                            QueuedQueryOrigin::QueueSlashCommand,
+                        ),
+                        ctx,
+                    );
+                });
+                assert_eq!(QueuedQueryModel::as_ref(ctx).queue(id).len(), 2);
 
                 controller.unbind_native_prompt_conversation(ctx);
 

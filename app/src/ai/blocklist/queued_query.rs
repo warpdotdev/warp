@@ -321,7 +321,7 @@ impl QueuedQueryModel {
 
     /// Clears the native setup barrier once the initial prompt has actually been sent. Does
     /// *not* dispatch any prompt that arrived in the meantime -- the caller
-    /// (`BlocklistAIController::dispatch_next_shared_session_row`) does that immediately
+    /// (`BlocklistAIController::dispatch_queued_warp_agent_prompt`) does that immediately
     /// afterward, once it's safe to do so (see that method's doc comment for why the two can't
     /// be combined into one step here).
     pub(crate) fn finish_native_setup(
@@ -379,24 +379,21 @@ impl QueuedQueryModel {
     }
 
     /// True when `conversation_id` still has native startup work outstanding: either setup
-    /// hasn't finished yet, or one or more shared-session follow-ups are still queued waiting
-    /// to be drained (e.g. a drain was deferred because a CLI subagent was active). Used by the
-    /// ambient driver to know whether to keep the run alive for pending injections.
+    /// hasn't finished yet, or one or more rows are still queued waiting to be dispatched (e.g.
+    /// a dispatch was deferred because a CLI subagent was active). Used by the ambient driver to
+    /// know whether to keep the run alive for pending injections.
     pub(crate) fn has_pending_native_injections(&self, conversation_id: AIConversationId) -> bool {
-        self.queues.get(&conversation_id).is_some_and(|state| {
-            state.native_setup_pending
-                || state
-                    .queue
-                    .iter()
-                    .any(|row| row.shared_session_prompt().is_some())
-        })
+        self.queues
+            .get(&conversation_id)
+            .is_some_and(|state| state.native_setup_pending || !state.queue.is_empty())
     }
 
-    /// Removes and returns every shared-session-injected row queued for `conversation_id`, in
-    /// FIFO order, emitting a `Removed` event for each. Used by
-    /// `BlocklistAIController::unbind_native_prompt_conversation` to drop any startup follow-ups
-    /// that never made it out when the run ends.
-    pub(crate) fn drain_shared_session_injections(
+    /// Removes and returns every row queued for `conversation_id`, in FIFO order, emitting a
+    /// `Removed` event for each. Used by
+    /// `BlocklistAIController::unbind_native_prompt_conversation` to drop any prompts that never
+    /// made it out when the run ends, regardless of whether they were queued locally or via a
+    /// shared-session injection.
+    pub(crate) fn clear_queue(
         &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
@@ -404,25 +401,15 @@ impl QueuedQueryModel {
         let Some(state) = self.queues.get_mut(&conversation_id) else {
             return Vec::new();
         };
-        let mut drained = Vec::new();
-        state.queue.retain(|row| {
-            if row.shared_session_prompt().is_some() {
-                drained.push(row.clone());
-                false
-            } else {
-                true
-            }
-        });
-        for row in &drained {
-            if state.editing == Some(row.id) {
-                state.editing = None;
-            }
+        let cleared = std::mem::take(&mut state.queue);
+        state.editing = None;
+        for row in &cleared {
             ctx.emit(QueuedQueryEvent::Removed {
                 conversation_id,
                 query_id: row.id,
             });
         }
-        drained
+        cleared
     }
 
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
@@ -468,7 +455,7 @@ impl QueuedQueryModel {
                 // Steering-mode conversations don't rely on this event to deliver queued rows:
                 // they're dispatched one at a time as soon as a natural request boundary occurs
                 // (see `BlocklistAIController::steer_head_prompt_for_request` and
-                // `dispatch_next_shared_session_row`). `TerminalView`'s own turn-completion
+                // `dispatch_queued_warp_agent_prompt`). `TerminalView`'s own turn-completion
                 // drain (`drain_queued_prompts`) remains the fallback for both modes once a
                 // turn genuinely finishes.
             }

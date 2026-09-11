@@ -1612,7 +1612,7 @@ impl BlocklistAIController {
     /// Only pops a plain, unlocked, non-edited prompt row (`AutofireAction::Submit`); a shell
     /// command, a row being edited, or a shared-session row carrying a file attachment that
     /// still needs downloading are left queued for `TerminalView::drain_queued_prompts` (or, for
-    /// a shared-session row, `Self::dispatch_next_shared_session_row`) to handle once the
+    /// a shared-session row, `Self::dispatch_queued_warp_agent_prompt`) to handle once the
     /// conversation goes idle, since none of those can be folded synchronously into an
     /// already-in-flight request.
     fn steer_head_prompt_for_request(
