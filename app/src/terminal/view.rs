@@ -6162,6 +6162,7 @@ impl TerminalView {
             }
             BlocklistAIHistoryEvent::UpdatedStreamingExchange { exchange_id, .. } => self
                 .ai_block_for_exchange(exchange_id)
+                .filter(|handle| handle.as_ref(ctx).receives_live_output_updates())
                 .cloned()
                 .into_iter()
                 .collect(),

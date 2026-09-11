@@ -22,7 +22,7 @@ use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionId, AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutput,
     AIAgentOutputMessage, AIAgentOutputMessageType, AIAgentOutputStatus, AgentReviewCommentBatch,
-    MessageId, Shared, TodoOperation, UserQueryMode,
+    FinishedAIAgentOutput, MessageId, Shared, TodoOperation, UserQueryMode,
 };
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::task::TaskPrincipalInfo;
@@ -1807,6 +1807,75 @@ fn streaming_exchange_targets_only_its_ai_block() {
             assert_eq!(targets, HashSet::from([expected_block_id]));
             assert!(!targets.contains(&other_block_id));
         });
+    })
+}
+
+#[test]
+fn fork_replay_does_not_reprocess_completed_restored_output() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let original_view = add_window_with_terminal(&mut app, None);
+        let restored_view = add_window_with_terminal(&mut app, None);
+
+        let restored_conversation = original_view.update(&mut app, |view, ctx| {
+            let (conversation_id, _, exchange_id, response_stream_id) =
+                append_exchange_and_handle_event(
+                    view,
+                    agent_view_user_query_input("completed"),
+                    ctx,
+                );
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                let conversation = history
+                    .conversation_mut(&conversation_id)
+                    .expect("conversation should exist");
+                let mut exchange = conversation
+                    .remove_exchange(exchange_id)
+                    .expect("exchange should exist");
+                exchange.output_status = AIAgentOutputStatus::Finished {
+                    finished_output: FinishedAIAgentOutput::Success {
+                        output: Shared::new(AIAgentOutput::default()),
+                    },
+                };
+                conversation
+                    .append_reassigned_exchange(&response_stream_id, exchange, view.view_id, ctx)
+                    .expect("completed exchange should append");
+                conversation.clone()
+            })
+        });
+        let conversation_id = restored_conversation.id();
+        restored_view.update(&mut app, |view, ctx| {
+            view.restore_conversation_after_view_creation(
+                RestoredAIConversation::new(restored_conversation),
+                true,
+                RestoreConversationEntryBehavior::EnterRestoredConversation,
+                ctx,
+            );
+        });
+
+        let ai_block = restored_view.read(&app, |view, _| {
+            view.last_ai_block()
+                .expect("restored AI block should exist")
+                .clone()
+        });
+        assert!(ai_block.read(&app, |block, _| block.is_restored()));
+        assert!(ai_block.read(&app, |block, ctx| block.is_ai_output_complete(ctx)));
+        let output_updates = Rc::new(RefCell::new(0));
+        let observed_output_updates = output_updates.clone();
+        app.update(|ctx| {
+            ctx.subscribe_to_view(&ai_block, move |_, event, _| {
+                if matches!(event, AIBlockEvent::AIOutputUpdated) {
+                    *observed_output_updates.borrow_mut() += 1;
+                }
+            });
+        });
+
+        restored_view.update(&mut app, |view, ctx| {
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.on_forked_conversation(conversation_id, view.view_id, ctx);
+            });
+        });
+
+        assert_eq!(*output_updates.borrow(), 0);
     })
 }
 

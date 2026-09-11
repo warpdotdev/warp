@@ -988,6 +988,7 @@ pub struct AIBlock {
 
     time_to_first_token: OnceCell<Duration>,
     time_to_last_token: Option<Duration>,
+    receives_live_output_updates: bool,
 
     /// The number of blocks that were attached as context to this AI block's query.
     num_attached_context_blocks: usize,
@@ -1479,6 +1480,7 @@ impl AIBlock {
         }
 
         let is_passive = model.request_type(ctx).is_passive();
+        let receives_live_output_updates = model.status(ctx).is_streaming();
 
         let mut me = Self {
             model,
@@ -1499,6 +1501,7 @@ impl AIBlock {
             state_handles: Default::default(),
             time_to_first_token: OnceCell::new(),
             time_to_last_token: None,
+            receives_live_output_updates,
             num_attached_context_blocks,
             has_attached_context_selected_text,
             finish_reason: None,
@@ -1604,6 +1607,10 @@ impl AIBlock {
 
     pub(crate) fn contains_todo_list(&self) -> bool {
         !self.todo_list_states.is_empty()
+    }
+
+    pub(crate) fn receives_live_output_updates(&self) -> bool {
+        self.receives_live_output_updates
     }
 
     /// Set the shell launch data for this block, re-running link detection on the
