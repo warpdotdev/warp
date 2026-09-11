@@ -15,7 +15,7 @@ pub use claude::{CacheCreation, ClaudeUsage, extract_claude};
 pub use codex::{CodexUsage, extract_codex};
 use serde::Serialize;
 
-pub const PARSER_VERSION: i32 = 1;
+pub const PARSER_VERSION: i32 = 2;
 pub const MAX_SCOPE_LENGTH: usize = 256;
 pub const MAX_SCOPE_ENTRIES: usize = 64;
 const MAX_IDENTITIES: usize = 100_000;
@@ -27,25 +27,10 @@ pub type ReasonCounts = BTreeMap<ReasonCode, u32>;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasonCode {
-    MissingFile,
-    UnreadableFile,
-    IncompleteTrailingRecord,
-    MalformedRecord,
-    SubagentDiscoveryIncomplete,
-    UncapturedDescendants,
-    RootOnly,
-    UnsupportedRecord,
-    MissingUsage,
-    InvalidCounter,
-    CounterOverflow,
-    MissingIdentity,
-    ConflictingResponse,
-    ConflictingTool,
-    AmbiguousCounterDecrease,
-    UnreconciledDelta,
-    UnattributedUsage,
-    CollectionLimit,
-    InvalidIdentifier,
+    IncompleteInput,
+    InvalidData,
+    AmbiguousAccounting,
+    ResourceLimit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -93,8 +78,6 @@ pub struct UsagePayload<T> {
     pub usage: Option<T>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub attribution: Vec<AttributedUsage<T>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unattributed: Option<T>,
     #[serde(rename = "toolCalls", skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<ToolCalls>,
 }
@@ -157,16 +140,17 @@ impl Findings {
     fn capture(&mut self, diagnostics: &CaptureDiagnostics) {
         for file in std::iter::once(&diagnostics.root).chain(diagnostics.subagents.values()) {
             match file.status {
-                JsonlReadStatus::Missing => self.reason(ReasonCode::MissingFile),
-                JsonlReadStatus::Unreadable => self.reason(ReasonCode::UnreadableFile),
+                JsonlReadStatus::Missing | JsonlReadStatus::Unreadable => {
+                    self.reason(ReasonCode::IncompleteInput)
+                }
                 JsonlReadStatus::Readable => {}
             }
             if file.malformed_records > 0 {
-                let count = self.reasons.entry(ReasonCode::MalformedRecord).or_default();
+                let count = self.reasons.entry(ReasonCode::InvalidData).or_default();
                 *count = count.saturating_add(file.malformed_records);
             }
             if file.incomplete_trailing_record {
-                self.reason(ReasonCode::IncompleteTrailingRecord);
+                self.reason(ReasonCode::IncompleteInput);
             }
             if !file.is_complete() {
                 self.tokens_partial = true;
@@ -176,7 +160,7 @@ impl Findings {
         if diagnostics.subagent_discovery_incomplete {
             self.tokens_partial = true;
             self.tools_partial = true;
-            self.reason(ReasonCode::SubagentDiscoveryIncomplete);
+            self.reason(ReasonCode::IncompleteInput);
         }
     }
 
@@ -191,7 +175,7 @@ impl Findings {
 
 fn identifier(value: &str, findings: &mut Findings) -> bool {
     if value.is_empty() || value.len() > MAX_SCOPE_LENGTH {
-        findings.limit(ReasonCode::InvalidIdentifier);
+        findings.limit(ReasonCode::ResourceLimit);
         false
     } else {
         true

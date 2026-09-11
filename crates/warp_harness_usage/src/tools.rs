@@ -19,7 +19,7 @@ impl Tools {
             id.filter(|id| !id.is_empty()),
             name.filter(|name| !name.is_empty()),
         ) else {
-            findings.tool(ReasonCode::MissingIdentity);
+            findings.tool(ReasonCode::InvalidData);
             return;
         };
         if !identifier(id, findings) || !identifier(name, findings) {
@@ -28,11 +28,12 @@ impl Tools {
         let key = (session.to_owned(), id.to_owned());
         if let Some(existing) = self.calls.get_mut(&key) {
             if existing.as_deref().is_some_and(|existing| existing != name) {
+                // Conflicting names make this call identity unreliable, so exclude it.
                 *existing = None;
-                findings.tool(ReasonCode::ConflictingTool);
+                findings.tool(ReasonCode::AmbiguousAccounting);
             }
         } else if self.calls.len() >= MAX_IDENTITIES {
-            findings.limit(ReasonCode::CollectionLimit);
+            findings.limit(ReasonCode::ResourceLimit);
         } else {
             self.calls.insert(key, Some(name.to_owned()));
         }
@@ -43,13 +44,13 @@ impl Tools {
         let mut total = 0_i64;
         for name in self.calls.into_values().flatten() {
             if !by_name.contains_key(&name) && by_name.len() >= MAX_TOOL_NAMES {
-                findings.limit(ReasonCode::CollectionLimit);
+                findings.limit(ReasonCode::ResourceLimit);
                 return None;
             }
             let count = by_name.entry(name).or_insert(0_i64);
             let (Some(next_total), Some(next_count)) = (total.checked_add(1), count.checked_add(1))
             else {
-                findings.tool(ReasonCode::CounterOverflow);
+                findings.tool(ReasonCode::ResourceLimit);
                 return None;
             };
             total = next_total;

@@ -61,6 +61,42 @@ fn evolving_responses_do_not_deduplicate_distinct_tool_blocks() {
 }
 
 #[test]
+fn known_metadata_does_not_degrade_usage_coverage() {
+    let snapshot = capture(&[
+        json!({"type":"permission-mode","mode":"default"}),
+        json!({"type":"attachment","attachment":{"type":"deferred_tools_delta"}}),
+        json!({"type":"ai-title","title":"A title"}),
+        response("a", json!({"input_tokens":10}), json!([])),
+    ]);
+    assert_eq!(
+        serde_json::to_value(&snapshot.payload).unwrap()["usage"],
+        json!({"input_tokens":10})
+    );
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+    assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
+}
+
+#[test]
+fn empty_optional_classification_is_unknown() {
+    let snapshot = capture(&[json!({
+        "type":"assistant",
+        "message": {
+            "id":"a",
+            "model":"claude-a",
+            "usage":{"input_tokens":10,"inference_geo":""},
+            "content":[]
+        }
+    })]);
+    let payload = serde_json::to_value(&snapshot.payload).unwrap();
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Known);
+    assert_eq!(payload["usage"], json!({"input_tokens":10}));
+    assert_eq!(
+        payload["attribution"],
+        json!([{"model":"claude-a","usage":{"input_tokens":10}}])
+    );
+}
+
+#[test]
 fn conflicting_response_does_not_discard_independent_tool_data() {
     let snapshot = capture(&[
         response("a", json!({"input_tokens":10,"output_tokens":3}), json!([])),
@@ -78,7 +114,7 @@ fn conflicting_response_does_not_discard_independent_tool_data() {
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(snapshot.coverage.tool_status, CoverageStatus::Known);
     assert_eq!(
-        snapshot.coverage.reason_codes[&ReasonCode::ConflictingResponse],
+        snapshot.coverage.reason_codes[&ReasonCode::AmbiguousAccounting],
         1
     );
 }
@@ -122,13 +158,13 @@ fn overflow_omits_the_counter_without_rounding_large_integers() {
         snapshot
             .coverage
             .reason_codes
-            .contains_key(&ReasonCode::CounterOverflow)
+            .contains_key(&ReasonCode::ResourceLimit)
     );
     assert!(
         snapshot
             .coverage
             .reason_codes
-            .contains_key(&ReasonCode::InvalidCounter)
+            .contains_key(&ReasonCode::InvalidData)
     );
 }
 
@@ -170,7 +206,7 @@ fn subagent_counts_are_included_without_claiming_unreadable_scope() {
         snapshot
             .coverage
             .reason_codes
-            .contains_key(&ReasonCode::SubagentDiscoveryIncomplete)
+            .contains_key(&ReasonCode::IncompleteInput)
     );
 }
 

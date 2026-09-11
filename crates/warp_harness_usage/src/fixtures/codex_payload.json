@@ -1,9 +1,9 @@
 {
   "usage": {"input_tokens":120,"cached_input_tokens":24,"output_tokens":36,"reasoning_output_tokens":12,"total_tokens":156},
   "attribution": [
+    {"usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":130}},
     {"model":"codex-a","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}},
     {"model":"codex-b","usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}}
   ],
-  "unattributed": {"input_tokens":100,"cached_input_tokens":20,"output_tokens":30,"reasoning_output_tokens":10,"total_tokens":130},
   "toolCalls": {"total":2,"byName":{"apply_patch":1,"shell":1}}
 }
