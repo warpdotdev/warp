@@ -1166,9 +1166,10 @@ impl VerticalTabsPanelState {
         });
     }
 
-    /// Returns the indices (in original order) of tab groups that have at least
-    /// one pane matching the current search query. Returns all indices when the
-    /// query is empty.
+    /// Returns the indices (in original order) of tab groups that match the
+    /// current search query — either through a pane's own text or, in Panes
+    /// display mode, through the tab's custom title rendered as the group
+    /// header. Returns all indices when the query is empty.
     pub(super) fn matching_tab_indices(
         &self,
         tabs: &[TabData],
@@ -1204,47 +1205,60 @@ impl VerticalTabsPanelState {
                         )
                     }
                     VerticalTabsResolvedMode::Panes | VerticalTabsResolvedMode::FocusedSession => {
-                        pane_ids_for_display_granularity(
-                            &visible_pane_ids,
-                            pane_group.focused_pane_id(app),
-                            display_granularity,
-                        )
-                        .into_iter()
-                        .any(|pane_id| {
-                            let title_override = (!uses_outer_group_container(display_granularity))
-                                .then(|| pane_group.custom_title(app))
-                                .flatten();
-                            let ms = MouseStateHandle::default();
-                            PaneProps::new(
-                                pane_group,
-                                pane_id,
-                                tab.pane_group.id(),
-                                *tab_index == active_tab_index,
-                                false,
-                                false,
-                                PaneRowState {
-                                    mouse_state: ms,
-                                    title_mouse_state: None,
-                                    pane_color: None,
-                                    badge_mouse_states: PaneRowBadgeMouseStates::default(),
-                                },
-                                self.detail_hover_state(tab.pane_group.window_id(app)),
+                        // In `Tabs`-granularity modes the tab's custom title
+                        // rides along as the row's `title_override`, so it
+                        // already participates in matching. In Panes mode the
+                        // same title is rendered as the group header instead —
+                        // never on a pane row — so it must be matched
+                        // separately, or a renamed tab becomes unfindable by
+                        // its visible name (#9666).
+                        let title_override = (!uses_outer_group_container(display_granularity))
+                            .then(|| pane_group.custom_title(app))
+                            .flatten();
+                        let tab_custom_title_matches = custom_tab_title_matches_query(
+                            pane_group.custom_title(app).as_deref(),
+                            uses_outer_group_container(display_granularity),
+                            &query_lower,
+                        );
+                        tab_custom_title_matches
+                            || pane_ids_for_display_granularity(
+                                &visible_pane_ids,
+                                pane_group.focused_pane_id(app),
                                 display_granularity,
-                                true,
-                                title_override.clone(),
-                                None,
-                                None,
-                                false,
-                                None,
-                                false,
-                                None,
-                                tab.pinned,
-                                false,
-                                None,
-                                app,
                             )
-                            .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
-                        })
+                            .into_iter()
+                            .any(|pane_id| {
+                                let ms = MouseStateHandle::default();
+                                PaneProps::new(
+                                    pane_group,
+                                    pane_id,
+                                    tab.pane_group.id(),
+                                    *tab_index == active_tab_index,
+                                    false,
+                                    false,
+                                    PaneRowState {
+                                        mouse_state: ms,
+                                        title_mouse_state: None,
+                                        pane_color: None,
+                                        badge_mouse_states: PaneRowBadgeMouseStates::default(),
+                                    },
+                                    self.detail_hover_state(tab.pane_group.window_id(app)),
+                                    display_granularity,
+                                    true,
+                                    title_override.clone(),
+                                    None,
+                                    None,
+                                    false,
+                                    None,
+                                    false,
+                                    None,
+                                    tab.pinned,
+                                    false,
+                                    None,
+                                    app,
+                                )
+                                .is_some_and(|props| pane_matches_query(&props, &query_lower, app))
+                            })
                     }
                 }
             })
@@ -1812,6 +1826,17 @@ fn render_groups(
                         let title_override = (!uses_outer_group_container)
                             .then(|| pane_group.custom_title(app))
                             .flatten();
+                        // Panes mode renders the tab's custom title as the
+                        // group header — never on a pane row — so it cannot
+                        // ride along in the per-pane search fragments. Match
+                        // it separately (#9666): a tab whose visible header
+                        // name matches keeps all of its display panes, while
+                        // pane rows continue matching by their own text.
+                        let tab_custom_title_matches = custom_tab_title_matches_query(
+                            pane_group.custom_title(app).as_deref(),
+                            uses_outer_group_container,
+                            &query_lower,
+                        );
                         let matching_ids: Vec<PaneId> = pane_ids_for_display_granularity(
                             &visible_pane_ids,
                             pane_group.focused_pane_id(app),
@@ -1819,6 +1844,9 @@ fn render_groups(
                         )
                         .into_iter()
                         .filter(|&pane_id| {
+                            if tab_custom_title_matches {
+                                return true;
+                            }
                             let Some(mouse_state) =
                                 state.pane_row_mouse_states.borrow().get(&pane_id).cloned()
                             else {
@@ -4024,6 +4052,27 @@ fn pane_matches_query(props: &PaneProps<'_>, query_lower: &str, app: &AppContext
 
 fn uses_outer_group_container(display_granularity: VerticalTabsDisplayGranularity) -> bool {
     matches!(display_granularity, VerticalTabsDisplayGranularity::Panes)
+}
+
+/// Whether a tab's custom title should admit the tab under an active sidebar
+/// search in Panes display mode.
+///
+/// In `Panes` granularity the custom title is rendered as the group header —
+/// never as a pane-row title — so it cannot ride along in the per-pane search
+/// fragments (which mirror what each row displays). This gate matches the
+/// header's text instead, so a renamed tab stays findable by the name the
+/// sidebar renders for it (#9666).
+///
+/// `Tabs`-granularity modes route the custom title through
+/// `display_title_override`, where it already participates in matching, so
+/// this helper is inert there.
+fn custom_tab_title_matches_query(
+    custom_title: Option<&str>,
+    uses_outer_group_container: bool,
+    query_lower: &str,
+) -> bool {
+    uses_outer_group_container
+        && custom_title.is_some_and(|title| title.to_lowercase().contains(query_lower))
 }
 
 /// Decides whether to render the tab-group header above a multi-row group in
