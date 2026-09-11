@@ -1072,6 +1072,7 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
             launch_mode.add_url(intent);
         }
         web_intent_parser::set_context_flags_from_current_url();
+        uri::browser_url_handler::install_viewer_history_listener();
     }
 
     // Collect errors that occur in run_internal() before the Sentry client is initialized,

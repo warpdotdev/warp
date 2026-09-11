@@ -90,6 +90,33 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     AgentNotificationsModel, GlobalResourceHandlesProvider, ObjectActions, experiments, workspace,
 };
+
+#[test]
+fn background_and_anchored_child_joins_do_not_consume_viewer_entry_navigation() {
+    let entry_view_id = warpui::EntityId::new();
+    let background_child_view_id = warpui::EntityId::new();
+    let anchored_child_view_id = warpui::EntityId::new();
+    let mut pending_view_id = Some(entry_view_id);
+
+    assert!(!take_matching_viewer_entry(
+        &mut pending_view_id,
+        background_child_view_id
+    ));
+    assert!(!take_matching_viewer_entry(
+        &mut pending_view_id,
+        anchored_child_view_id
+    ));
+    assert_eq!(pending_view_id, Some(entry_view_id));
+    assert!(take_matching_viewer_entry(
+        &mut pending_view_id,
+        entry_view_id
+    ));
+    assert_eq!(pending_view_id, None);
+    assert!(!take_matching_viewer_entry(
+        &mut pending_view_id,
+        entry_view_id
+    ));
+}
 pub(crate) fn initialize_app(app: &mut App) {
     initialize_settings_for_tests(app);
 

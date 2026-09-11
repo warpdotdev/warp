@@ -1,5 +1,6 @@
 mod docker;
 pub mod parse_url_paths;
+pub(crate) mod viewer_location;
 pub mod web_intent_parser;
 
 pub(crate) mod browser_url_resolution;

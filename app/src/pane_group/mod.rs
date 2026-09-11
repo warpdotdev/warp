@@ -160,7 +160,9 @@ use crate::terminal::{
 };
 use crate::undo_close::{UndoCloseStack, UndoCloseStackEvent};
 #[cfg(target_family = "wasm")]
-use crate::uri::browser_url_handler::update_browser_url;
+use crate::uri::browser_url_handler::update_browser_url_from_origin;
+#[cfg(target_family = "wasm")]
+use crate::uri::browser_url_resolution::BrowserNavigationOrigin;
 use crate::util::bindings::{CustomAction, is_binding_pty_compliant};
 #[cfg(feature = "local_fs")]
 use crate::util::openable_file_type::FileTarget;
@@ -964,6 +966,8 @@ pub struct PaneGroup {
     /// run id. Re-driven from the shared `TasksUpdated` subscription until
     /// every child in the server-reported list has a local conversation.
     pending_parent_child_seeds: HashMap<AmbientAgentTaskId, PendingParentChildSeed>,
+    #[cfg(target_family = "wasm")]
+    settled_initial_child_anchors: HashSet<AmbientAgentTaskId>,
 
     /// Test-only: counts `spawn_ancestor_list_fetch_if_needed` dispatches, so
     /// tests can assert that a burst of `TasksUpdated` re-drives coalesces
@@ -3224,6 +3228,8 @@ impl PaneGroup {
             pending_remote_child_hydrations: HashMap::new(),
             pending_child_hydrations: HashMap::new(),
             pending_parent_child_seeds: HashMap::new(),
+            #[cfg(target_family = "wasm")]
+            settled_initial_child_anchors: HashSet::new(),
             #[cfg(test)]
             parent_child_seed_fetch_dispatch_count: 0,
             failed_viewer_child_sessions: HashMap::new(),
@@ -7058,7 +7064,12 @@ impl PaneGroup {
         log::debug!("Url for pane should be updated pane_id: {pane_id:?}, url: {url:?}");
         #[cfg(target_family = "wasm")]
         if pane_id == self.focused_pane_id(ctx) {
-            update_browser_url(url, false);
+            let origin = if self.child_agent_panes.values().any(|id| *id == pane_id) {
+                BrowserNavigationOrigin::Incidental
+            } else {
+                BrowserNavigationOrigin::AutomaticRootRouteChange
+            };
+            update_browser_url_from_origin(url, origin);
         }
 
         let _ = ctx;
@@ -7072,12 +7083,22 @@ impl PaneGroup {
         let initial_load_complete = UpdateManager::as_ref(ctx).initial_load_complete();
         ctx.spawn(initial_load_complete, move |me, _, ctx| {
             if let Some(pane) = me.focused_pane_content(ctx) {
+                let focused_pane_id = me.focused_pane_id(ctx);
+                let origin = if me
+                    .child_agent_panes
+                    .values()
+                    .any(|id| *id == focused_pane_id)
+                {
+                    BrowserNavigationOrigin::Incidental
+                } else {
+                    BrowserNavigationOrigin::AutomaticRootRouteChange
+                };
                 match pane.shareable_link(ctx) {
                     Ok(crate::pane_group::pane::ShareableLink::Base) => {
-                        update_browser_url(None, false)
+                        update_browser_url_from_origin(None, origin)
                     }
                     Ok(crate::pane_group::pane::ShareableLink::Pane { url }) => {
-                        update_browser_url(Some(url), false)
+                        update_browser_url_from_origin(Some(url), origin)
                     }
                     Err(crate::pane_group::pane::ShareableLinkError::Expected) => {}
                     Err(crate::pane_group::pane::ShareableLinkError::Unexpected(message)) => {
@@ -7276,6 +7297,27 @@ impl PaneGroup {
         conversation_id: AIConversationId,
         ctx: &mut ViewContext<Self>,
     ) {
+        #[cfg(target_family = "wasm")]
+        let origin = crate::uri::browser_url_resolution::BrowserNavigationOrigin::ChangedSelection;
+        #[cfg(not(target_family = "wasm"))]
+        let origin = ();
+        self.swap_active_pane_to_conversation_with_origin(
+            focused_pane_id,
+            conversation_id,
+            origin,
+            ctx,
+        );
+    }
+
+    pub fn swap_active_pane_to_conversation_with_origin(
+        &mut self,
+        focused_pane_id: PaneId,
+        conversation_id: AIConversationId,
+        #[cfg(target_family = "wasm")]
+        origin: crate::uri::browser_url_resolution::BrowserNavigationOrigin,
+        #[cfg(not(target_family = "wasm"))] _origin: (),
+        ctx: &mut ViewContext<Self>,
+    ) {
         let from_child_panes = self.child_agent_panes.get(&conversation_id).copied();
         let from_visible_pane = self
             .find_visible_terminal_pane_for_conversation(conversation_id, ctx)
@@ -7319,6 +7361,8 @@ impl PaneGroup {
             }
             ctx.emit(Event::TerminalViewStateChanged);
             ctx.emit(Event::AppStateChanged);
+            #[cfg(target_family = "wasm")]
+            self.update_browser_url_for_orchestration_selection(conversation_id, origin, ctx);
             return;
         }
 
@@ -7343,6 +7387,8 @@ impl PaneGroup {
             }
             ctx.emit(Event::TerminalViewStateChanged);
             ctx.emit(Event::AppStateChanged);
+            #[cfg(target_family = "wasm")]
+            self.update_browser_url_for_orchestration_selection(conversation_id, origin, ctx);
             return;
         }
 
@@ -7358,6 +7404,8 @@ impl PaneGroup {
             }
             ctx.emit(Event::TerminalViewStateChanged);
             ctx.emit(Event::AppStateChanged);
+            #[cfg(target_family = "wasm")]
+            self.update_browser_url_for_orchestration_selection(conversation_id, origin, ctx);
             return;
         }
 
@@ -7384,6 +7432,22 @@ impl PaneGroup {
 
         ctx.emit(Event::TerminalViewStateChanged);
         ctx.emit(Event::AppStateChanged);
+        #[cfg(target_family = "wasm")]
+        self.update_browser_url_for_orchestration_selection(conversation_id, origin, ctx);
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn update_browser_url_for_orchestration_selection(
+        &self,
+        conversation_id: AIConversationId,
+        origin: crate::uri::browser_url_resolution::BrowserNavigationOrigin,
+        ctx: &AppContext,
+    ) {
+        let child_run_id = BlocklistAIHistoryModel::as_ref(ctx)
+            .conversation(&conversation_id)
+            .filter(|conversation| conversation.parent_conversation_id().is_some())
+            .and_then(AIConversation::task_id);
+        crate::uri::browser_url_handler::update_viewer_selection(child_run_id, origin);
     }
 
     /// Reveal the child agent pane for `conversation_id` as a visible
