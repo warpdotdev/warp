@@ -169,6 +169,17 @@ pub trait PathCompletionContext: Send + Sync {
         None
     }
 
+    /// Returns the value of the named POSIX-style environment variable (as referenced via
+    /// `$VAR`/`${VAR}`), used to expand a path completion token that begins with a complete
+    /// variable reference immediately followed by a path separator (e.g. `$PROJECT/src`).
+    ///
+    /// Returns `None` when the variable is unset or its value is otherwise unavailable. In that
+    /// case, callers should suggest nothing for the token rather than falling back to treating it
+    /// as a literal relative path.
+    fn environment_variable(&self, _name: &str) -> Option<&str> {
+        None
+    }
+
     fn shell_family(&self) -> ShellFamily;
 
     /// The current working directory, which is used to determine how relative path suggestions
