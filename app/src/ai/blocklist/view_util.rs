@@ -161,7 +161,7 @@ pub fn failed_output_presentation(
         RenderableAIError::TransientNetworkError { .. } => {
             FailedOutputPresentation::Message(error.to_string())
         }
-        RenderableAIError::AgentStreamFailure(error_message)
+        RenderableAIError::AgentStreamFailure { error_message }
         | RenderableAIError::Other { error_message, .. } => {
             FailedOutputPresentation::Message(format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}"))
         }

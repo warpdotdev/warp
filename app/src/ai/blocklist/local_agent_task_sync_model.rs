@@ -638,7 +638,7 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::AgentStreamNetworkError,
             )),
         ),
-        RenderableAIError::AgentStreamFailure(error_message) => (
+        RenderableAIError::AgentStreamFailure { error_message } => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
                 error_message,

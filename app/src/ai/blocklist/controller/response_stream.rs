@@ -412,10 +412,6 @@ impl ResponseStream {
         &self.id
     }
 
-    pub(super) fn current_attempt_started(&self) -> bool {
-        self.init_received || self.has_received_client_actions
-    }
-
     /// Returns true if we should attempt to resume the conversation after the stream finishes.
     pub fn should_resume_conversation_after_stream_finished(&self) -> bool {
         self.pending_resume.is_some()

@@ -3059,11 +3059,6 @@ impl BlocklistAIController {
                             .as_ref(ctx)
                             .should_resume_conversation_after_stream_finished();
                         let mut renderable_error: RenderableAIError = (&e).into();
-                        if let RenderableAIError::TransientNetworkError { stream_started, .. } =
-                            &mut renderable_error
-                        {
-                            *stream_started = response_stream.as_ref(ctx).current_attempt_started();
-                        }
                         if let RenderableAIError::Other {
                             will_attempt_resume,
                             waiting_for_network,
@@ -3367,7 +3362,9 @@ impl BlocklistAIController {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::AgentStreamFailure(error_message.to_owned()),
+                        RenderableAIError::AgentStreamFailure {
+                            error_message: error_message.to_owned(),
+                        },
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
@@ -3407,7 +3404,9 @@ impl BlocklistAIController {
                 let error_message = "The LLM is currently unavailable.";
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::AgentStreamFailure(error_message.to_owned()),
+                        RenderableAIError::AgentStreamFailure {
+                            error_message: error_message.to_owned(),
+                        },
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,
@@ -3470,7 +3469,7 @@ impl BlocklistAIController {
                 );
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_with_error(
-                        RenderableAIError::AgentStreamFailure(error_message),
+                        RenderableAIError::AgentStreamFailure { error_message },
                         /*recovery_pending*/ false,
                         stream_id,
                         conversation_id,

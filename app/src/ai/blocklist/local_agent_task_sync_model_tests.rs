@@ -184,26 +184,11 @@ fn transient_network_error_has_network_error_code() {
 }
 
 #[test]
-fn started_transient_network_error_has_network_error_code() {
-    assert_update(
-        classify_renderable_error(&RenderableAIError::TransientNetworkError {
-            kind: TransientNetworkErrorKind::UnfinishedExchange,
-            will_attempt_resume: false,
-            stream_started: true,
-            waiting_for_network: false,
-        }),
-        AgentTaskState::Error,
-        Some(PlatformErrorCode::AgentStreamNetworkError),
-        Some("Debug info: stream completed with an unfinished exchange"),
-    );
-}
-
-#[test]
 fn server_finished_stream_error_has_stream_failure_code() {
     assert_update(
-        classify_renderable_error(&RenderableAIError::AgentStreamFailure(
-            "The LLM is currently unavailable.".into(),
-        )),
+        classify_renderable_error(&RenderableAIError::AgentStreamFailure {
+            error_message: "The LLM is currently unavailable.".into(),
+        }),
         AgentTaskState::Error,
         Some(PlatformErrorCode::AgentStreamFailure),
         Some("LLM is currently unavailable"),
