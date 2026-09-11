@@ -1,0 +1,24 @@
+{
+  "usage": {
+    "input_tokens": 17,
+    "output_tokens": 3,
+    "cache_read_input_tokens": 4,
+    "cache_creation_input_tokens": 5,
+    "cache_creation": {"ephemeral_5m_input_tokens": 2, "ephemeral_1h_input_tokens": 3}
+  },
+  "attribution": [{
+    "model": "claude-a",
+    "service_tier": "standard",
+    "inference_geo": "us",
+    "speed": "fast",
+    "usage": {
+      "input_tokens": 10,
+      "output_tokens": 3,
+      "cache_read_input_tokens": 4,
+      "cache_creation_input_tokens": 5,
+      "cache_creation": {"ephemeral_5m_input_tokens": 2, "ephemeral_1h_input_tokens": 3}
+    }
+  }],
+  "unattributed": {"input_tokens": 7, "output_tokens": 0},
+  "toolCalls": {"total": 2, "byName": {"Read": 2}}
+}
