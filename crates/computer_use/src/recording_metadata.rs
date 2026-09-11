@@ -7,7 +7,14 @@ use tokio::process::Command;
 use crate::RecordingError;
 
 pub(super) async fn video_duration(input: &Path) -> Result<Duration, RecordingError> {
-    let output = Command::new("ffmpeg")
+    video_duration_with_ffmpeg(Path::new("ffmpeg"), input).await
+}
+
+pub(super) async fn video_duration_with_ffmpeg(
+    ffmpeg: &Path,
+    input: &Path,
+) -> Result<Duration, RecordingError> {
+    let output = Command::new(ffmpeg)
         .args(["-hide_banner", "-i"])
         .arg(input)
         .stdin(Stdio::null())
