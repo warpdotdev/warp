@@ -467,6 +467,27 @@ fn native_initial_prompt_uses_its_bound_conversation_without_agent_view() {
 }
 
 #[test]
+fn unbind_native_prompt_conversation_releases_the_setup_barrier() {
+    // Regression test: unbinding while setup never finished must not leave the conversation
+    // permanently dispatch-blocked, since nothing else would ever release that barrier.
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        let terminal = add_window_with_terminal(&mut app, None);
+        terminal.update(&mut app, |terminal, ctx| {
+            terminal.ai_controller().update(ctx, |controller, ctx| {
+                let id = controller.bind_native_prompt_conversation(None, ctx);
+                assert!(QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
+
+                controller.unbind_native_prompt_conversation(ctx);
+
+                assert!(!QueuedQueryModel::as_ref(ctx).is_dispatch_blocked(id));
+                assert!(!QueuedQueryModel::as_ref(ctx).has_pending_native_injections(id));
+            });
+        });
+    });
+}
+
+#[test]
 fn unbind_native_prompt_conversation_drops_any_prompts_still_queued() {
     // Covers both a shared-session-injected row and a plain local row (e.g. from `/queue`
     // against this same conversation while it's native-bound) -- unbinding must clear the

@@ -22,6 +22,7 @@ impl BlocklistAIController {
     /// delivering startup follow-ups, so `route_native_startup_injection` knows which
     /// conversation to target for the rest of this run. Idempotent: returns the existing
     /// binding if one is already in place.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn bind_native_prompt_conversation(
         &mut self,
         restored_conversation_id: Option<AIConversationId>,
@@ -49,13 +50,17 @@ impl BlocklistAIController {
         id
     }
 
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn native_prompt_conversation_id(&self) -> Option<AIConversationId> {
         self.native_prompt_conversation_id
     }
 
     /// Unbinds this controller from its native conversation, dropping any prompts still queued
     /// for it (e.g. the run ended before setup finished, or before a dispatch that was deferred
-    /// behind an active CLI subagent could go out).
+    /// behind an active CLI subagent could go out) and releasing the native setup barrier if it
+    /// was still held -- otherwise this conversation would stay permanently dispatch-blocked for
+    /// any future local queueing against it, since nothing else would ever release that barrier.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn unbind_native_prompt_conversation(&mut self, ctx: &mut ModelContext<Self>) {
         let Some(id) = self.native_prompt_conversation_id.take() else {
             return;
@@ -68,6 +73,7 @@ impl BlocklistAIController {
         );
         QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
             queue.clear_queue(id, ctx);
+            queue.finish_native_setup(id, ctx);
         });
     }
 
@@ -204,8 +210,12 @@ impl BlocklistAIController {
         );
         if row.shared_session_prompt().is_some() {
             // `send_native_startup_injection` takes ownership of the row directly rather than
-            // re-resolving it by id, so it's safe to remove up front.
+            // re-resolving it by id, so it's safe to remove up front. Arming the in-flight
+            // marker first (in the same update call, before removal's `Removed` event is
+            // delivered) keeps `has_pending_native_injections` true across the async download
+            // gap that can follow -- see that method's doc comment.
             QueuedQueryModel::handle(ctx).update(ctx, |queue, ctx| {
+                queue.arm_download_in_flight(conversation_id);
                 queue.remove_fired_row(conversation_id, row_id, ctx);
             });
             self.send_native_startup_injection(conversation_id, row, ctx);
@@ -337,7 +347,10 @@ impl BlocklistAIController {
 
     /// Sends the fully-resolved `text`/`file_attachments` into `conversation_id`, via the same
     /// path used for a live (non-startup) shared-session follow-up targeting an existing
-    /// conversation (`send_warp_agent_prompt_from_shared_session_injection`).
+    /// conversation (`send_warp_agent_prompt_from_shared_session_injection`). Every path that
+    /// removed a row via [`QueuedQueryModel::arm_download_in_flight`] funnels through here, so
+    /// clearing that marker unconditionally at the top covers all of them, including the two
+    /// synchronous paths that never needed a download in the first place.
     fn dispatch_native_startup_injection(
         &mut self,
         conversation_id: AIConversationId,
@@ -346,6 +359,9 @@ impl BlocklistAIController {
         file_attachments: HashMap<String, AIAgentAttachment>,
         ctx: &mut ModelContext<Self>,
     ) {
+        QueuedQueryModel::handle(ctx).update(ctx, |queue, _ctx| {
+            queue.clear_download_in_flight(conversation_id);
+        });
         if FeatureFlag::AgentView.is_enabled() {
             self.context_model.update(ctx, |context_model, ctx| {
                 context_model.set_pending_query_state_for_existing_conversation(

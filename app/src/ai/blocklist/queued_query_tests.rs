@@ -976,6 +976,34 @@ fn command_in_flight_flag_arms_and_clears() {
 }
 
 #[test]
+fn download_in_flight_flag_arms_and_clears() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+
+        // Arming works even with an empty queue -- the whole point is to cover the gap after a
+        // shared-session row has already been removed but before its download-gated request has
+        // actually been sent.
+        model.update(&mut app, |m, _| m.arm_download_in_flight(conv));
+        model.read(&app, |m, _| assert!(m.has_pending_native_injections(conv)));
+
+        model.update(&mut app, |m, _| m.clear_download_in_flight(conv));
+        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+    });
+}
+
+#[test]
+fn clear_download_in_flight_is_a_no_op_when_nothing_was_armed() {
+    with_model(|mut app, model, _events| {
+        let conv = AIConversationId::new();
+        // Every synchronous dispatch path clears unconditionally, including the two that never
+        // needed a download in the first place; this must not panic or create a stray entry.
+        model.update(&mut app, |m, _| m.clear_download_in_flight(conv));
+        model.read(&app, |m, _| assert!(!m.has_pending_native_injections(conv)));
+    });
+}
+
+#[test]
 fn delete_conversation_clears_in_flight_command() {
     with_model(|mut app, model, _events| {
         let history = BlocklistAIHistoryModel::handle(&app);

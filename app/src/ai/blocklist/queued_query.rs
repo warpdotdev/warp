@@ -232,6 +232,10 @@ struct ConversationQueueState {
     /// dispatched and cleared when it finishes; keeps the queue accepting new rows while the
     /// agent is idle and gates the next drain until the command completes.
     command_in_flight: bool,
+    /// True while a shared-session row's file-attachment download is in flight, after the row
+    /// has already been removed from `queue` but before the resulting request has actually been
+    /// sent. See [`QueuedQueryModel::arm_download_in_flight`].
+    download_in_flight: bool,
     /// Manual queue toggle made during an agent-requested long-running command. Cleared when
     /// the command ends; never touches `queue_next_prompt_override`.
     queue_next_lrc_prompt_override: Option<bool>,
@@ -307,6 +311,7 @@ impl Entity for QueuedQueryModel {
 impl SingletonEntity for QueuedQueryModel {}
 
 impl QueuedQueryModel {
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn begin_native_setup(
         &mut self,
         conversation_id: AIConversationId,
@@ -350,6 +355,7 @@ impl QueuedQueryModel {
     }
 
     /// Sets the delivery mode for `conversation_id`'s queue. See [`QueuedPromptDeliveryMode`].
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn set_delivery_mode(
         &mut self,
         conversation_id: AIConversationId,
@@ -379,13 +385,36 @@ impl QueuedQueryModel {
     }
 
     /// True when `conversation_id` still has native startup work outstanding: either setup
-    /// hasn't finished yet, or one or more rows are still queued waiting to be dispatched (e.g.
-    /// a dispatch was deferred because a CLI subagent was active). Used by the ambient driver to
-    /// know whether to keep the run alive for pending injections.
+    /// hasn't finished yet, one or more rows are still queued waiting to be dispatched (e.g. a
+    /// dispatch was deferred because a CLI subagent was active), or a dispatched row's file
+    /// attachments are still downloading (see [`Self::arm_download_in_flight`]). Used by the
+    /// ambient driver to know whether to keep the run alive for pending injections.
     pub(crate) fn has_pending_native_injections(&self, conversation_id: AIConversationId) -> bool {
+        self.queues.get(&conversation_id).is_some_and(|state| {
+            state.native_setup_pending || !state.queue.is_empty() || state.download_in_flight
+        })
+    }
+
+    /// Marks `conversation_id` as having a shared-session row's file-attachment download in
+    /// flight. Called right before the row is removed from the queue to start that download, so
+    /// [`Self::has_pending_native_injections`] stays true across the gap between removing the
+    /// row and the resulting request actually being sent -- otherwise the ambient driver could
+    /// see an empty queue and a terminal conversation status and exit before the download
+    /// completes and the prompt goes out.
+    pub(crate) fn arm_download_in_flight(&mut self, conversation_id: AIConversationId) {
         self.queues
-            .get(&conversation_id)
-            .is_some_and(|state| state.native_setup_pending || !state.queue.is_empty())
+            .entry(conversation_id)
+            .or_default()
+            .download_in_flight = true;
+    }
+
+    /// Clears the marker set by [`Self::arm_download_in_flight`], once the request it was
+    /// guarding has actually been sent (successfully or not). Safe to call unconditionally, even
+    /// when nothing was armed (e.g. a row with no file attachments never needed a download).
+    pub(crate) fn clear_download_in_flight(&mut self, conversation_id: AIConversationId) {
+        if let Some(state) = self.queues.get_mut(&conversation_id) {
+            state.download_in_flight = false;
+        }
     }
 
     /// Removes and returns every row queued for `conversation_id`, in FIFO order, emitting a
@@ -393,6 +422,7 @@ impl QueuedQueryModel {
     /// `BlocklistAIController::unbind_native_prompt_conversation` to drop any prompts that never
     /// made it out when the run ends, regardless of whether they were queued locally or via a
     /// shared-session injection.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(crate) fn clear_queue(
         &mut self,
         conversation_id: AIConversationId,
