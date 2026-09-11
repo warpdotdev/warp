@@ -2,6 +2,25 @@ use super::*;
 use crate::util::git::{
     BranchEntry, parse_range, parse_unified_diff_header, sort_branches_main_first,
 };
+async fn file_content_at_head(
+    repo_path: &Path,
+    file_path: &str,
+    status: &GitFileStatus,
+) -> Option<String> {
+    let source =
+        LocalDiffStateModel::resolve_file_content_at_head(repo_path, file_path, status).await?;
+    LocalDiffStateModel::get_file_content(repo_path, &source).await
+}
+
+async fn file_content_size_at_head(
+    repo_path: &Path,
+    file_path: &str,
+    status: &GitFileStatus,
+) -> Option<usize> {
+    let source =
+        LocalDiffStateModel::resolve_file_content_at_head(repo_path, file_path, status).await?;
+    LocalDiffStateModel::get_file_content_size(repo_path, &source).await
+}
 
 #[test]
 fn test_parse_range_with_comma() {
@@ -311,21 +330,13 @@ async fn untracked_directory_has_no_baseline_content() {
     std::fs::write(repo_dir.path().join("new-file.txt"), "hello\n").expect("write file");
 
     // No baseline for a directory entry, so no editor is constructed for it.
-    let dir_content = LocalDiffStateModel::get_file_content_at_head(
-        repo_dir.path(),
-        "nested-repo/",
-        &GitFileStatus::Untracked,
-    )
-    .await;
+    let dir_content =
+        file_content_at_head(repo_dir.path(), "nested-repo/", &GitFileStatus::Untracked).await;
     assert_eq!(dir_content, None);
 
     // Regular untracked files keep their empty baseline.
-    let file_content = LocalDiffStateModel::get_file_content_at_head(
-        repo_dir.path(),
-        "new-file.txt",
-        &GitFileStatus::Untracked,
-    )
-    .await;
+    let file_content =
+        file_content_at_head(repo_dir.path(), "new-file.txt", &GitFileStatus::Untracked).await;
     assert_eq!(file_content, Some(String::new()));
 }
 
@@ -358,7 +369,7 @@ async fn renamed_file_content_at_head_reads_old_path() {
     std::fs::rename(repo_path.join("old.txt"), repo_path.join("new.txt"))
         .expect("rename old.txt to new.txt");
 
-    let content = LocalDiffStateModel::get_file_content_at_head(
+    let content = file_content_at_head(
         repo_path,
         "new.txt",
         &GitFileStatus::Renamed {
@@ -468,9 +479,7 @@ async fn head_diff_respects_aggregate_retained_allocation_budget_boundary() {
     )
     .await
     .expect("load first file diff");
-    let first_content =
-        LocalDiffStateModel::get_file_content_at_head(repo_path, "a.txt", &GitFileStatus::Modified)
-            .await;
+    let first_content = file_content_at_head(repo_path, "a.txt", &GitFileStatus::Modified).await;
     let first_file_bytes = approx_file_diff_bytes(&first_diff.hunks, first_content.as_ref());
     assert!(first_file_bytes < MAX_DIFF_SIZE);
 
@@ -545,13 +554,10 @@ async fn head_diff_rejects_over_budget_base_content_with_small_patch() {
     .await
     .expect("load file diff");
     let diff_bytes = approx_file_diff_bytes(&file_diff.hunks, None);
-    let base_bytes = LocalDiffStateModel::get_file_content_size_at_head(
-        repo_path,
-        "large-base.txt",
-        &GitFileStatus::Modified,
-    )
-    .await
-    .expect("load base object size");
+    let base_bytes =
+        file_content_size_at_head(repo_path, "large-base.txt", &GitFileStatus::Modified)
+            .await
+            .expect("load base object size");
     assert_eq!(base_bytes, baseline.len());
     assert!(base_bytes > diff_bytes);
 
@@ -661,16 +667,11 @@ async fn head_content_size_uses_status_specific_base_path() {
     std::fs::write(repo_path.join("new.txt"), "new content\n").expect("write new file");
 
     assert_eq!(
-        LocalDiffStateModel::get_file_content_size_at_head(
-            repo_path,
-            "old.txt",
-            &GitFileStatus::Deleted,
-        )
-        .await,
+        file_content_size_at_head(repo_path, "old.txt", &GitFileStatus::Deleted,).await,
         Some(baseline.len())
     );
     assert_eq!(
-        LocalDiffStateModel::get_file_content_size_at_head(
+        file_content_size_at_head(
             repo_path,
             "new.txt",
             &GitFileStatus::Renamed {
@@ -681,25 +682,64 @@ async fn head_content_size_uses_status_specific_base_path() {
         Some(baseline.len())
     );
     assert_eq!(
-        LocalDiffStateModel::get_file_content_size_at_head(
-            repo_path,
-            "new.txt",
-            &GitFileStatus::New,
-        )
-        .await,
+        file_content_size_at_head(repo_path, "new.txt", &GitFileStatus::New,).await,
         Some(0)
     );
     assert_eq!(
-        LocalDiffStateModel::get_file_content_size_at_head(
-            repo_path,
-            "new.txt",
-            &GitFileStatus::Untracked,
-        )
-        .await,
+        file_content_size_at_head(repo_path, "new.txt", &GitFileStatus::Untracked,).await,
         Some(0)
     );
 }
 
+#[tokio::test]
+async fn resolved_head_content_uses_same_object_after_head_moves() {
+    let repo_dir = tempfile::tempdir().expect("create temp repo dir");
+    let repo_path = repo_dir.path();
+
+    run_git_command(repo_path, &["init", "-b", "main"])
+        .await
+        .expect("git init");
+    run_git_command(repo_path, &["config", "user.email", "test@test.com"])
+        .await
+        .expect("git config email");
+    run_git_command(repo_path, &["config", "user.name", "Test"])
+        .await
+        .expect("git config name");
+    let original = "original baseline\n";
+    std::fs::write(repo_path.join("file.txt"), original).expect("write original");
+    run_git_command(repo_path, &["add", "file.txt"])
+        .await
+        .expect("git add original");
+    run_git_command(repo_path, &["commit", "-m", "original"])
+        .await
+        .expect("commit original");
+
+    let source = LocalDiffStateModel::resolve_file_content_at_head(
+        repo_path,
+        "file.txt",
+        &GitFileStatus::Modified,
+    )
+    .await
+    .expect("resolve original base object");
+
+    let replacement = "a much larger replacement baseline\n";
+    std::fs::write(repo_path.join("file.txt"), replacement).expect("write replacement");
+    run_git_command(repo_path, &["add", "file.txt"])
+        .await
+        .expect("git add replacement");
+    run_git_command(repo_path, &["commit", "-m", "replacement"])
+        .await
+        .expect("commit replacement");
+
+    assert_eq!(
+        LocalDiffStateModel::get_file_content_size(repo_path, &source).await,
+        Some(original.len())
+    );
+    assert_eq!(
+        LocalDiffStateModel::get_file_content(repo_path, &source).await,
+        Some(original.to_string())
+    );
+}
 #[test]
 fn head_materialization_budget_bounds_incremental_updates() {
     let mut budget = HeadMaterializationBudget::default();
