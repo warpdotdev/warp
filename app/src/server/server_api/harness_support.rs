@@ -1,7 +1,7 @@
 // We don't directly run agent harnesses on WASM, so this code is unused.
 #![cfg_attr(target_family = "wasm", expect(dead_code))]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -11,8 +11,9 @@ use http::header::{CONTENT_TYPE, RETRY_AFTER};
 use http_client::StatusCode;
 #[cfg(test)]
 use mockall::automock;
-use serde::{Deserialize, Deserializer};
-use serde_json::{Map, Value};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
+use warp_harness_usage::{CoverageStatus, NativePayload, UsageSnapshot};
 
 use super::ServerApi;
 #[cfg(feature = "local_fs")]
@@ -42,7 +43,7 @@ pub struct UploadTarget {
 /// Execution ownership supplied only by authenticated, reporting-enabled startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct HarnessUsageContext {
-    pub schema_version: u32,
+    pub metrics_version: u32,
     pub execution_id: i64,
 }
 
@@ -56,7 +57,9 @@ where
     // Capability disagreement must not break raw transcript persistence or resume.
     Ok(serde_json::from_value::<HarnessUsageContext>(value)
         .ok()
-        .filter(|context| context.schema_version == 1 && context.execution_id > 0))
+        .filter(|context| {
+            context.metrics_version == HARNESS_USAGE_METRICS_VERSION && context.execution_id > 0
+        }))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -66,75 +69,57 @@ pub enum UsageHarness {
     Codex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HarnessUsageCoverageStatus {
-    Known,
-    Partial,
-    Unavailable,
-}
-
-#[derive(Clone, serde::Serialize)]
-pub struct HarnessUsageCoverage {
-    pub token_status: HarnessUsageCoverageStatus,
-    pub tool_status: HarnessUsageCoverageStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub captured_scope: Option<String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub reason_codes: BTreeMap<String, i64>,
-}
-
-#[derive(Clone, serde::Serialize)]
-pub struct HarnessUsageSnapshot {
-    pub coverage: HarnessUsageCoverage,
-    pub payload: Map<String, Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub session_ids: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub root_scope: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub subagent_scope: Vec<String>,
-}
 
 /// One cumulative capture, retained unchanged across publication retries.
 #[derive(Clone, serde::Serialize)]
 pub struct HarnessUsageReport {
-    pub schema_version: u32,
-    pub parser_version: u32,
+    pub metrics_version: u32,
     pub harness: UsageHarness,
     pub execution_id: i64,
     pub capture_sequence: i64,
-    pub last_updated: DateTime<Utc>,
-    pub snapshot: HarnessUsageSnapshot,
+    pub captured_at: DateTime<Utc>,
+    #[serde(serialize_with = "serialize_usage_snapshot")]
+    pub snapshot: UsageSnapshot,
 }
+pub const HARNESS_USAGE_METRICS_VERSION: u32 = 1;
 
 const HARNESS_USAGE_MAX_BODY_BYTES: usize = 1024 * 1024;
-const HARNESS_USAGE_MAX_SCOPE_BYTES: usize = 256;
-const HARNESS_USAGE_MAX_ENTRIES: usize = 64;
 const HARNESS_USAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+#[derive(Serialize)]
+struct UsageSnapshotWire<'a> {
+    payload: &'a NativePayload,
+    coverage: UsageCoverageWire,
+}
+
+#[derive(Serialize)]
+struct UsageCoverageWire {
+    token_status: CoverageStatus,
+    tool_status: CoverageStatus,
+}
+
+fn serialize_usage_snapshot<S>(snapshot: &UsageSnapshot, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    UsageSnapshotWire {
+        payload: &snapshot.payload,
+        coverage: UsageCoverageWire {
+            token_status: snapshot.coverage.token_status,
+            tool_status: snapshot.coverage.tool_status,
+        },
+    }
+    .serialize(serializer)
+}
 
 impl HarnessUsageReport {
     fn encode(&self) -> Result<Vec<u8>, HarnessUsageError> {
         let snapshot = &self.snapshot;
         let coverage = &snapshot.coverage;
-        if self.schema_version != 1
-            || self.parser_version != 1
+        if self.metrics_version != HARNESS_USAGE_METRICS_VERSION
             || self.execution_id <= 0
             || self.capture_sequence <= 0
-            || (coverage.token_status == HarnessUsageCoverageStatus::Unavailable
-                && coverage.tool_status == HarnessUsageCoverageStatus::Unavailable)
-            || snapshot.session_ids.len() > HARNESS_USAGE_MAX_ENTRIES
-            || snapshot.subagent_scope.len() > HARNESS_USAGE_MAX_ENTRIES
-            || coverage.reason_codes.len() > HARNESS_USAGE_MAX_ENTRIES
-            || snapshot
-                .session_ids
-                .iter()
-                .chain(&snapshot.subagent_scope)
-                .chain(snapshot.root_scope.iter())
-                .chain(coverage.captured_scope.iter())
-                .chain(coverage.reason_codes.keys())
-                .any(|scope| scope.len() > HARNESS_USAGE_MAX_SCOPE_BYTES)
-            || coverage.reason_codes.values().any(|count| *count < 0)
+            || (coverage.token_status == CoverageStatus::Unavailable
+                && coverage.tool_status == CoverageStatus::Unavailable)
         {
             return Err(HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport));
         }
@@ -151,7 +136,7 @@ impl HarnessUsageReport {
 #[serde(rename_all = "snake_case")]
 pub enum HarnessUsagePublicationStatus {
     Accepted,
-    Stale,
+    IgnoredOlderCapture,
     Idempotent,
 }
 
@@ -678,7 +663,7 @@ impl ServerApi {
             })?;
         if publication.execution_id <= 0
             || publication.capture_sequence <= 0
-            || (publication.status != HarnessUsagePublicationStatus::Stale
+            || (publication.status != HarnessUsagePublicationStatus::IgnoredOlderCapture
                 && (publication.execution_id != report.execution_id
                     || publication.capture_sequence != report.capture_sequence))
         {

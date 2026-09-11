@@ -8,11 +8,12 @@ use mockito::Matcher;
 use rstest::rstest;
 use serde_json::{Value, json};
 use warp_core::channel::ChannelState;
+use warp_harness_usage::{ClaudeUsage, Coverage, CoverageStatus, NativePayload, ReasonCode, ToolCalls, UsagePayload, UsageSnapshot};
 use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 
 use super::{
-    HarnessUsageContext, HarnessUsageCoverage, HarnessUsageCoverageStatus, HarnessUsageError,
-    HarnessUsageErrorKind, HarnessUsagePublicationStatus, HarnessUsageReport, HarnessUsageSnapshot,
+    HarnessUsageContext, HarnessUsageError,
+    HarnessUsageErrorKind, HarnessUsagePublicationStatus, HarnessUsageReport,
     ResolvedHarnessPrompt, ServerApi, UsageHarness, parse_harness_usage_retry_after,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -22,28 +23,32 @@ fn task_id() -> AmbientAgentTaskId {
 
 fn report() -> HarnessUsageReport {
     HarnessUsageReport {
-        schema_version: 1,
-        parser_version: 1,
+        metrics_version: 1,
         harness: UsageHarness::ClaudeCode,
         execution_id: 41,
         capture_sequence: 7,
-        last_updated: Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
-        snapshot: HarnessUsageSnapshot {
-            coverage: HarnessUsageCoverage {
-                token_status: HarnessUsageCoverageStatus::Known,
-                tool_status: HarnessUsageCoverageStatus::Partial,
-                captured_scope: Some("root_and_captured_subagents".into()),
-                reason_codes: BTreeMap::from([("subagent_discovery_incomplete".into(), 1)]),
+        captured_at: Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
+        snapshot: UsageSnapshot {
+            coverage: Coverage {
+                token_status: CoverageStatus::Known,
+                tool_status: CoverageStatus::Partial,
+                captured_scope: "root_and_captured_subagents",
+                reason_codes: BTreeMap::from([(ReasonCode::SubagentDiscoveryIncomplete, 1)]),
             },
-            payload: json!({
-                "usage": {"input_tokens": 9_007_199_254_740_993_i64},
-                "toolCalls": {"total": 1, "byName": {"Read": 1}}
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            payload: NativePayload::Claude(UsagePayload {
+                usage: Some(ClaudeUsage {
+                    input_tokens: Some(9_007_199_254_740_993),
+                    ..Default::default()
+                }),
+                attribution: Vec::new(),
+                unattributed: None,
+                tool_calls: Some(ToolCalls {
+                    total: 1,
+                    by_name: BTreeMap::from([("Read".into(), 1)]),
+                }),
+            }),
             session_ids: vec!["root".into()],
-            root_scope: Some("root".into()),
+            root_scope: "root".into(),
             subagent_scope: vec!["child".into()],
         },
     }
@@ -52,9 +57,9 @@ fn report() -> HarnessUsageReport {
 #[rstest]
 #[case(json!({"prompt": "test"}))]
 #[case(json!({"prompt": "test", "harness_usage": null}))]
-#[case(json!({"prompt": "test", "harness_usage": {"schema_version": 2, "execution_id": 41}}))]
-#[case(json!({"prompt": "test", "harness_usage": {"schema_version": 1, "execution_id": 0}}))]
-#[case(json!({"prompt": "test", "harness_usage": {"schema_version": 1}}))]
+#[case(json!({"prompt": "test", "harness_usage": {"metrics_version": 2, "execution_id": 41}}))]
+#[case(json!({"prompt": "test", "harness_usage": {"metrics_version": 1, "execution_id": 0}}))]
+#[case(json!({"prompt": "test", "harness_usage": {"metrics_version": 1}}))]
 #[case(json!({"prompt": "test", "harness_usage": "unknown"}))]
 fn incompatible_startup_preserves_prompt_without_reporting(#[case] value: Value) {
     let prompt: ResolvedHarnessPrompt = serde_json::from_value(value).unwrap();
@@ -68,14 +73,14 @@ fn startup_accepts_only_the_advertised_execution() {
     let prompt: ResolvedHarnessPrompt = serde_json::from_value(json!({
         "prompt": "test",
         "resumption_prompt": "continue",
-        "harness_usage": {"schema_version": 1, "execution_id": 41, "future_field": true}
+        "harness_usage": {"metrics_version": 1, "execution_id": 41, "future_field": true}
     }))
     .unwrap();
 
     assert_eq!(
         prompt.harness_usage,
         Some(HarnessUsageContext {
-            schema_version: 1,
+            metrics_version: 1,
             execution_id: 41
         })
     );
@@ -97,37 +102,34 @@ fn publication_wire_preserves_native_integer_precision_and_capture_time(
     assert_eq!(
         value,
         json!({
-            "schema_version": 1,
-            "parser_version": 1,
+            "metrics_version": 1,
             "harness": wire_harness,
             "execution_id": 41,
             "capture_sequence": 7,
-            "last_updated": "2026-09-10T12:00:00Z",
+            "captured_at": "2026-09-10T12:00:00Z",
             "snapshot": {
                 "coverage": {
                     "token_status": "known",
-                    "tool_status": "partial",
-                    "captured_scope": "root_and_captured_subagents",
-                    "reason_codes": {"subagent_discovery_incomplete": 1}
+                    "tool_status": "partial"
                 },
                 "payload": {
                     "usage": {"input_tokens": 9_007_199_254_740_993_i64},
                     "toolCalls": {"total": 1, "byName": {"Read": 1}}
-                },
-                "session_ids": ["root"],
-                "root_scope": "root",
-                "subagent_scope": ["child"]
+                }
             }
         })
     );
 }
 
 #[rstest]
-#[case(|report| report.schema_version = 2)]
+#[case(|report| report.metrics_version = 2)]
 #[case(|report| report.capture_sequence = 0)]
-#[case(|report| report.snapshot.root_scope = Some("a".repeat(257)))]
-#[case(|report| report.snapshot.session_ids = vec!["root".into(); 65])]
-#[case(|report| { report.snapshot.payload.insert("large".into(), json!("a".repeat(1_048_576))); })]
+#[case(|report| report.execution_id = 0)]
+#[case(|report| {
+    if let NativePayload::Claude(payload) = &mut report.snapshot.payload {
+        payload.tool_calls.as_mut().unwrap().by_name.insert("a".repeat(1_048_576), 1);
+    }
+})]
 fn invalid_reports_are_rejected_before_auth_or_network(
     #[case] invalidate: fn(&mut HarnessUsageReport),
 ) {
@@ -145,7 +147,7 @@ fn invalid_reports_are_rejected_before_auth_or_network(
 #[rstest]
 #[case("accepted", HarnessUsagePublicationStatus::Accepted, 41, 7)]
 #[case("idempotent", HarnessUsagePublicationStatus::Idempotent, 41, 7)]
-#[case("stale", HarnessUsagePublicationStatus::Stale, 42, 1)]
+#[case("ignored_older_capture", HarnessUsagePublicationStatus::IgnoredOlderCapture, 42, 1)]
 fn publication_reuses_workload_auth_but_not_an_unrelated_ambient_task(
     #[case] status: &str,
     #[case] expected_status: HarnessUsagePublicationStatus,

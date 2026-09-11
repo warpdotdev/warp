@@ -15430,6 +15430,7 @@ dependencies = [
  "warp_errors",
  "warp_files",
  "warp_graphql",
+ "warp_harness_usage",
  "warp_isolation_platform",
  "warp_js",
  "warp_logging",

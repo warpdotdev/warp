@@ -4,8 +4,32 @@ use std::path::Path;
 
 use tempfile::TempDir;
 use uuid::Uuid;
+use warp_harness_usage::{CoverageStatus, ExtractionOutcome, extract_claude};
 
 use super::*;
+#[test]
+fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = Path::new("/synthetic/project");
+    let session = Uuid::new_v4();
+    let directory = tmp.path().join("projects").join(encode_cwd(cwd));
+    fs::create_dir_all(&directory).unwrap();
+    let filename = format!("{session}.jsonl");
+    write_file(&directory, &filename,
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"a\",\"usage\":{\"input_tokens\":10}}}\n{\"type\":");
+    let (envelope, diagnostics) = read_envelope_with_diagnostics(session, cwd, tmp.path(), true).unwrap();
+    let raw = serde_json::to_vec(&envelope).unwrap();
+    write_file(&directory, &filename,
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"b\",\"usage\":{\"input_tokens\":999}}}\n");
+    let ExtractionOutcome::Usable(snapshot) = extract_claude(
+        &session.to_string(), &envelope.entries, [], &diagnostics,
+    ) else { panic!("expected observed tokens"); };
+    assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
+    assert_eq!(serde_json::to_value(snapshot.payload).unwrap()["usage"]["input_tokens"], 10);
+    let uploaded: ClaudeTranscriptEnvelope = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(uploaded.entries, envelope.entries);
+    assert!(diagnostics.root.incomplete_trailing_record);
+}
 
 fn write_file(dir: &Path, name: &str, content: &str) {
     fs::write(dir.join(name), content).unwrap();

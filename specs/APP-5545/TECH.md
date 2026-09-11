@@ -21,7 +21,7 @@ Inspected Warp revision: `6f575836c02bd80a4b2de2755e952bec1793d3df`.
 Server references are the published [storage PR #17056](https://github.com/warpdotdev/warp-server/pull/17056)
 at `47513a4e089bc1ef7312b708f9f7706c0dea96d3` and
 [API PR #17057](https://github.com/warpdotdev/warp-server/pull/17057) at
-`4b337aa0dbf20e56f8c72783b6717de578a015f1`. Their
+`48f345143bf0364334fb2260b926b857241956f4`. Their
 [successful-snapshot refactor](https://github.com/warpdotdev/warp-server/blob/47513a4e089bc1ef7312b708f9f7706c0dea96d3/specs/APP-5545/TECH.md)
 supersedes the original spec's writer-generation, immutable-source, and failure-report protocol.
 The original [native counting requirements](https://github.com/warpdotdev/warp-server/blob/02b1f4ff96977153f8e13ca58c4acde4cc552647/specs/3p-run-metrics/TECH.md#L35-L67)
@@ -34,25 +34,35 @@ Add Rust transport types and a publication method to `app/src/server/server_api/
 Reuse the existing task authentication, run headers, workload token, and HTTP client. Do not add a
 secret, decode execution identity from an unverified token, or modify generic shutdown authentication.
 
-The [current HTTP schema](https://github.com/warpdotdev/warp-server/blob/4b337aa0dbf20e56f8c72783b6717de578a015f1/public_api/openapi.yaml)
+The [current HTTP schema](https://github.com/warpdotdev/warp-server/blob/48f345143bf0364334fb2260b926b857241956f4/public_api/openapi.yaml)
 accepts `POST /api/v1/harness-support/harness-usage` with:
-- `schema_version`, `parser_version`, `harness` (`CLAUDE_CODE` or `CODEX`), `execution_id`,
-  positive `capture_sequence`, and capture-time `last_updated`.
+- `metrics_version` (1), `harness` (`CLAUDE_CODE` or `CODEX`), `execution_id`,
+  positive `capture_sequence`, and read-start `captured_at`.
 - `snapshot`: an object `payload`; `coverage` with independent `token_status` and `tool_status`,
-  captured scope and bounded reason counts; optional `session_ids`, `root_scope`, `subagent_scope`.
-- Publication status plus retained execution/capture identity in the response.
+  and no other fields. Payload contains only native metrics and necessary metric breakdowns.
+- Status `accepted`, `ignored_older_capture`, or `idempotent`, plus retained execution/capture identity.
+
+Metrics version covers both native counting and wire format. Scope is fixed per harness/version;
+missing expected inputs degrade coverage rather than change scope. Reason counts and native
+session/root/subagent/captured-scope identifiers stay producer-local, never in a publication request
+or retained metrics at any nesting level. A thin wire adapter omits these local extraction fields.
 
 The authorized read is `GET /api/v1/agent/runs/{runId}/harness-usage`. Its `usage` object contains the
 stored envelope, whose field naming differs from the snake-case publication DTO. Use explicit
 transport types and wire tests, not serialization of the stored envelope as a request. The read
 endpoint is for inspection, not a per-save prerequisite.
 
-**Server handoff required before integration:** add optional reporting context to the existing
+**Server handoff required before live enablement:** add optional reporting context to the existing
 authenticated startup/resolve-prompt exchange. Proposed shape: `harness_usage` containing
-`schema_version` and `execution_id`.
+`metrics_version` and `execution_id`.
 Missing/null means unsupported or disabled. Exact naming and error codes must be agreed with the
 API owner; these fields do not exist in the inspected published response. The response must validate
 credentials against that execution, not merely return the newest execution after generic auth.
+The client binds resolve-prompt and reporting to the same explicit task identity. Current server
+startup does not advertise the capability, so publication remains disabled until this handoff.
+The server must also expose a stable nonretryable status for same-identity conflicts: the client
+disables on HTTP 409/412, never parses error prose, and can only apply bounded retries to a generic
+HTTP 500 response from an unmapped precondition failure.
 
 Consume the context on fresh and resumed managed runs. Paths that do not perform authenticated
 server startup remain reporting-disabled. A new execution starts at 1; a process retains its counter
@@ -77,8 +87,8 @@ carry metrics. Do not reread files for extraction after serialization.
 
 Claude uses the existing root/subagent envelope. Record incomplete subagent discovery/read failures
 instead of claiming full coverage; preserve successfully captured records where raw-save compatibility
-permits. TODO files are not usage input. Codex uses its existing root rollout and explicitly reports
-root-only scope; it does not recursively search for child histories in this phase. Unknown Codex
+permits. TODO files are not usage input. Codex version 1 uses its existing root rollout; it does not
+recursively search for child histories. Unknown Codex
 session/path is unavailable and retryable, never evidence of zero activity.
 
 **Claude accounting**
@@ -112,7 +122,7 @@ session/path is unavailable and retryable, never evidence of zero activity.
 - Deduplicate both tool variants by session/call ID. Missing IDs, conflicting names for one ID, and
   unsupported invocation structures degrade tool coverage; outputs do not increment it.
 
-Both adapters return separate token/tool coverage and bounded stable reason codes. Publish only
+Both adapters return separate token/tool coverage and bounded producer-local reason codes. Publish only
 when at least one category has reliable observed data, including an established empty tool count.
 Partial totals cover observed valid subsets; absent native fields remain optional. Preserve exact
 integers above 2^53, use checked arithmetic within the server's signed-64-bit bounds, and omit unusable
@@ -122,8 +132,8 @@ the same deduplicated invocation set.
 The server treats `payload` as an object, not a provider-specific generated schema. Before landing
 extractors, fix compact v1 fixtures for native totals, model/unattributed attribution, and `toolCalls`
 with the server owners. Preserve provider field names and avoid an unbounded per-request ledger.
-Proposed publication body cap: 1 MiB, or a smaller final API limit. Mirror final scope/collection/
-identifier bounds; an oversized report is a diagnosed non-publication, not silent truncation of
+Publication body cap: 1 MiB, or a smaller final API limit. Bound local scope/collection/identifier
+state; an oversized report is a diagnosed non-publication, not silent truncation of
 counts or coverage. Do not apply this metrics-body cap to existing raw transcript uploads.
 
 ### Phase 3: One ordered save helper
@@ -143,6 +153,10 @@ The helper's flow is:
 Block snapshots may run alongside this flow, but await independent outcomes instead of fail-fast
 `try_join!`. Keep transcript-persistence success distinct from metrics success: the latter must not
 change the driver's cleanup disposition or erase resumable state.
+The final coordinator freezes the raw/block result before awaiting publication under the residual
+deadline. A metrics timeout cannot convert successful persistence into failed cleanup. Incomplete
+reads can trigger bounded fresh captures; retain the most recent successful capture if a later read
+fails. Missing required or wholly unreadable roots cannot replace raw history with an empty capture.
 
 Allocate a positive sequence before each new capture; gaps are allowed. A retry retains the exact
 report, sequence, and timestamp. Retrying an upload retains its bytes, even if a new signed target
@@ -151,7 +165,8 @@ Never add stored server totals to newly extracted totals.
 
 Use a bounded retry policy for network failures, 429s, and retryable server errors, respecting
 `Retry-After` within the remaining budget. Proposed defaults for review: at most 3 attempts per
-operation, 1s/2s backoff with jitter, and a 10s metrics-request timeout. Raw uploads keep existing
+operation, 1s/2s backoff with jitter, and a 10s metrics-request timeout. A Retry-After exceeding
+10 seconds ends that idle retry instead of prolonging the operation indefinitely. Raw uploads keep existing
 transport behavior within the enclosing save/shutdown budget. Avoid nested retries multiplying
 attempts; the helper owns retry scheduling.
 
@@ -160,7 +175,7 @@ are exhausted, release that capture; do not re-arm it indefinitely on every time
 event/periodic request can take a fresh capture. Retry an incomplete read by taking a new capture,
 not changing an existing report. Coalesced fresh requests proceed after the bounded current attempt.
 
-Treat accepted/identical-retry responses as completed. A stale response finishes that attempt without
+Treat accepted/identical-retry responses as completed. An `ignored_older_capture` response finishes that attempt without
 overwriting anything; never copy a returned replacement execution ID into the producer. Conflicting
 same-identity content or loss of execution authorization stops metrics publication for that producer
 and surfaces a bounded diagnostic. Validation errors are not transient retries. Unsupported/disabled

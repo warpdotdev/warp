@@ -91,7 +91,7 @@ use crate::server::ids::{ServerId, SyncId};
 use crate::server::server_api::ServerApiProvider;
 use crate::server::server_api::ai::{AIClient, TaskGitCredentialsError, TaskStatusUpdate};
 use crate::server::server_api::harness_support::{
-    HarnessSupportClient, ResolvePromptAttachedSkill, ResolvePromptRequest,
+    HarnessSupportClient, HarnessUsageContext, ResolvePromptAttachedSkill, ResolvePromptRequest,
 };
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     CliAgentPluginManager, plugin_manager_for,
@@ -3054,13 +3054,14 @@ impl AgentDriver {
             .map_err(|_| AgentDriverError::InvalidRuntimeState)
             .flatten()?;
 
-        let (prompt_text, system_prompt, resumption_prompt, server_context): (
+        let (prompt_text, system_prompt, resumption_prompt, server_context, usage_context): (
             Cow<'_, str>,
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<HarnessUsageContext>,
         ) = match prompt {
-            AgentRunPrompt::Local(text) => (Cow::Borrowed(text), None, None, None),
+            AgentRunPrompt::Local(text) => (Cow::Borrowed(text), None, None, None, None),
             AgentRunPrompt::ServerSide {
                 skill,
                 attachments_dir,
@@ -3076,15 +3077,17 @@ impl AgentDriver {
                     skill,
                     attachments_dir: attachments_dir.clone(),
                 };
-                let resolved = server_api
-                    .resolve_prompt(request)
-                    .await
+                let resolved = match task_id.as_ref() {
+                    Some(task_id) => server_api.resolve_prompt_for_task(task_id, request).await,
+                    None => server_api.resolve_prompt(request).await,
+                }
                     .map_err(AgentDriverError::PromptResolutionFailed)?;
                 (
                     Cow::Owned(resolved.prompt),
                     resolved.system_prompt,
                     resolved.resumption_prompt,
                     resolved.context,
+                    resolved.harness_usage,
                 )
             }
         };
@@ -3133,7 +3136,7 @@ impl AgentDriver {
                 &workspace_root,
                 &harness_working_dir,
                 task_id,
-                server_api,
+                server_api.clone(),
                 terminal_driver,
                 resume,
                 &resolved_env_vars,
@@ -3142,6 +3145,9 @@ impl AgentDriver {
                 third_party_harness_model_config.as_ref(),
             )?
             .into();
+        if let Some(reporter) = runner.usage_reporter() {
+            reporter.initialize(server_api, task_id, usage_context);
+        }
 
         let stored_runner = runner.clone();
         foreground

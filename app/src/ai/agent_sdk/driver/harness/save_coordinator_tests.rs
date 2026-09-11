@@ -13,6 +13,23 @@ use super::{
     SaveCoordinator, SaveOperation, remaining_final_save_budget, save_transcript_and_block,
 };
 use crate::ai::agent_sdk::driver::harness::SavePoint;
+#[tokio::test]
+async fn metrics_timeout_preserves_completed_persistence_and_drops_publication() {
+    let coordinator = SaveCoordinator::default();
+    let (release, released) = oneshot::channel::<()>();
+    let result = coordinator.finish(
+        future::ready(Ok(())),
+        async { let _ = released.await; },
+        Duration::from_millis(10),
+    ).await;
+    assert!(result.is_ok());
+    assert!(release.send(()).is_err());
+    assert!(coordinator.finish(
+        future::pending::<Result<()>>(),
+        future::pending(),
+        Duration::from_secs(30),
+    ).now_or_never().unwrap().is_ok());
+}
 
 #[tokio::test]
 async fn coalesces_saves_without_blocking_other_work() {
@@ -58,6 +75,7 @@ async fn coalesces_saves_without_blocking_other_work() {
                 saved.lock().push(SavePoint::Final);
                 Ok(())
             },
+            future::ready(()),
             Duration::from_secs(5),
         )
         .await
@@ -145,6 +163,7 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
                 uploaded.lock().push("final");
                 Ok(())
             },
+            future::ready(()),
             Duration::from_secs(1),
         )
         .await
@@ -167,7 +186,8 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
                     captured.store(true, Ordering::SeqCst);
                     Ok(())
                 },
-                Duration::ZERO,
+                future::ready(()),
+            Duration::ZERO,
             )
             .await
             .is_err()
@@ -179,7 +199,8 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
                     captured.store(true, Ordering::SeqCst);
                     Ok(())
                 },
-                Duration::from_secs(30),
+                future::ready(()),
+            Duration::from_secs(30),
             )
             .await
             .is_err()
@@ -200,7 +221,8 @@ async fn final_timeout_cancels_future_before_returning() {
                     uploaded.store(true, Ordering::SeqCst);
                     Ok(())
                 },
-                Duration::from_millis(10),
+                future::ready(()),
+            Duration::from_millis(10),
             )
             .await
             .is_err()
@@ -228,7 +250,7 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
     start.await.unwrap();
     assert!(
         coordinator
-            .finish(future::pending::<Result<()>>(), Duration::from_secs(5))
+            .finish(future::pending::<Result<()>>(), future::ready(()), Duration::from_secs(5))
             .now_or_never()
             .is_none()
     );
@@ -239,6 +261,7 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
                 assert!(release.send(()).is_err());
                 Ok(())
             },
+            future::ready(()),
             Duration::from_secs(5),
         )
         .await
@@ -251,13 +274,14 @@ async fn final_failure_is_retained_without_repeating_writes() {
     let result = coordinator
         .finish(
             async { Err(anyhow!("upload failed")) },
+            future::ready(()),
             Duration::from_secs(5),
         )
         .await;
     assert!(result.is_err());
     assert!(
         coordinator
-            .finish(future::pending::<Result<()>>(), Duration::from_secs(5))
+            .finish(future::pending::<Result<()>>(), future::ready(()), Duration::from_secs(5))
             .now_or_never()
             .unwrap()
             .is_err()
