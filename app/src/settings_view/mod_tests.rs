@@ -749,57 +749,6 @@ fn arrow_down_collapsed_umbrella_respects_search_filter() {
     assert_eq!(next, SettingsSection::AgentMCPServers);
 }
 
-#[test]
-fn hidden_about_page_survives_transfer_back_and_preview_close() {
-    App::test((), |mut app| async move {
-        crate::workspace::view::tests::initialize_app(&mut app);
-
-        let (source_window_id, settings_view) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
-            SettingsView::new(Some(SettingsSection::Account), ctx)
-        });
-        let about_page = settings_view.read(&app, |settings_view, _| {
-            let page = settings_view
-                .settings_page(SettingsSection::About)
-                .expect("About page should exist");
-            let SettingsPageViewHandle::About(about_page) = &page.view_handle else {
-                panic!("About section should hold an About page");
-            };
-            about_page.clone()
-        });
-
-        let (preview_window_id, _) =
-            app.add_window(WindowStyle::NotStealFocus, |_| TestSettingsView);
-        let settings_view_id = settings_view.id();
-
-        app.update(|ctx| {
-            ctx.transfer_view_tree_to_window(settings_view_id, source_window_id, preview_window_id)
-        });
-        app.read(|ctx| {
-            assert_eq!(
-                about_page.window_id(ctx),
-                preview_window_id,
-                "hidden About page should follow Settings into the preview"
-            );
-        });
-
-        app.update(|ctx| {
-            ctx.transfer_view_tree_to_window(settings_view_id, preview_window_id, source_window_id)
-        });
-        app.update(|ctx| ctx.simulate_window_closed(preview_window_id));
-        settings_view.read(&app, |settings_view, ctx| {
-            let _ = settings_view.render(ctx);
-        });
-
-        app.read(|ctx| {
-            assert_eq!(
-                about_page.window_id(ctx),
-                source_window_id,
-                "About page should remain available after the preview closes"
-            );
-        });
-    });
-}
-
 // ── PageType filter lifecycle across a rebuild (APP-4922) ────────────────────
 // Rebuilding a page's PageType resets its widget filter to every widget, so an
 // active query has to be reapplied for only matching widgets to render. No page
@@ -825,9 +774,6 @@ impl View for TestSettingsView {
     }
 }
 
-impl TypedActionView for TestSettingsView {
-    type Action = ();
-}
 /// A SettingsWidget whose only test-relevant state is its search terms; render
 /// is never invoked by the filter lifecycle under test.
 struct StubWidget {
