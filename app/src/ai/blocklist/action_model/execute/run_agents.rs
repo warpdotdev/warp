@@ -74,7 +74,7 @@ pub struct RunAgentsExecutor {
     launched_agents: HashMap<AIConversationId, HashMap<String, ExistingLaunchedAgent>>,
     start_agent_executor: ModelHandle<StartAgentExecutor>,
     terminal_view_id: EntityId,
-    team_context_resolver: TeamContextForOperationResolver,
+    team_context_for_operation_resolver: TeamContextForOperationResolver,
 }
 
 /// Lifecycle events for in-flight dispatches.
@@ -96,19 +96,19 @@ impl RunAgentsExecutor {
     pub fn new(
         start_agent_executor: ModelHandle<StartAgentExecutor>,
         terminal_view_id: EntityId,
-        team_context_resolver: TeamContextForOperationResolver,
+        team_context_for_operation_resolver: TeamContextForOperationResolver,
     ) -> Self {
         Self {
             pending: HashMap::new(),
             launched_agents: HashMap::new(),
             start_agent_executor,
             terminal_view_id,
-            team_context_resolver,
+            team_context_for_operation_resolver,
         }
     }
 
     fn team_scope(&self, ctx: &ModelContext<Self>) -> TeamContextForOperation {
-        (self.team_context_resolver)(ctx)
+        (self.team_context_for_operation_resolver)(ctx)
     }
 
     pub fn is_pending(&self, action_id: &AIAgentActionId) -> bool {
