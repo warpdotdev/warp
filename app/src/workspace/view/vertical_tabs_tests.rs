@@ -1248,10 +1248,10 @@ fn summary_search_fragments_include_hidden_overflow_values() {
 
 // Regression coverage for #9666: in Panes display mode the tab's custom title
 // is rendered as the group header — never on a pane row — so the sidebar
-// search filter never consulted it and searching a renamed tab's name
-// returned no results. The fix matches the header text separately from the
-// per-pane fragments instead of routing it through `display_title_override`,
-// which would *replace* the pane-row fragments and break pane-name matching.
+// search matches it separately from the per-pane fragments (see
+// `custom_tab_title_matches_query`) rather than routing it through
+// `display_title_override`, which would *replace* the pane-row fragments and
+// break pane-name matching.
 #[test]
 fn custom_tab_title_matches_query_matches_panes_mode_header_text() {
     // Callers pass an already-lowercased query (`query_lower`), matching the
@@ -1296,10 +1296,9 @@ fn custom_tab_title_matches_query_requires_the_title_to_contain_the_query() {
 fn panes_granularity_search_matches_custom_tab_title_and_keeps_pane_matches() {
     // End-to-end regression for #9666 through the keyboard-navigation filter
     // (`matching_tab_indices`), which must admit exactly the tabs the rendered
-    // sidebar list shows: a renamed tab (custom title `deploy`) must be found
-    // by its visible group-header name, and its pane must still be found by
-    // the pane's own custom name (`exp`) — the two failure modes of the two
-    // earlier fix attempts (#9687 replaced pane fragments; no fix shipped).
+    // sidebar list shows: a renamed tab (custom title `deploy`) is found by
+    // its visible group-header name, and its pane is still found by the
+    // pane's own custom name (`exp`).
     fn panel_state_with_query(query: &str) -> VerticalTabsPanelState {
         VerticalTabsPanelState {
             search_query: query.to_string(),
@@ -1350,9 +1349,9 @@ fn panes_granularity_search_matches_custom_tab_title_and_keeps_pane_matches() {
             vec![0]
         );
 
-        // Searching the pane's custom name still finds the same tab: the fix
-        // adds the tab title to the match set, it must not replace the pane's
-        // own searchable text.
+        // Searching the pane's custom name still finds the same tab: the
+        // tab-title match is additive, not a replacement for the pane's own
+        // searchable text.
         let panel_state = panel_state_with_query("exp");
         assert_eq!(
             app.read(|ctx| panel_state.matching_tab_indices(&tabs, active_tab_index, ctx)),
