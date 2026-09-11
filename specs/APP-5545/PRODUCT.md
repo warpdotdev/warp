@@ -69,7 +69,9 @@ implement collection or enable a production rollout.
     counts from immutable historical transcript bytes is not a guarantee of this feature.
 
 11. **Save timing.** During activity, use the existing periodic save cadence. Session updates and
-    completion/failure notifications request best-effort saves, with redundant requests coalesced.
+    existing completion/failure/cancellation notifications only request the same best-effort save,
+    with redundant requests coalesced. Metrics are extracted from native transcripts in that save
+    path, never from notification payloads; no new native notification infrastructure is required.
     Native files can still be changing at these points; incomplete observations are not labeled
     final or settled. A bounded retry can recover while the harness is idle, without requiring a
     new user message or extending the configured idle lifetime indefinitely.
@@ -83,8 +85,9 @@ implement collection or enable a production rollout.
 13. **Execution ownership.** Only the specific authenticated execution may report its observations.
     A superseded producer must not adopt its replacement's identity to get a report accepted.
     Follow-ups within the same process continue its ordering; a new execution can start a new
-    sequence while reporting the resumed cumulative history. Concurrent producers within one
-    execution are not supported.
+    sequence while reporting the resumed cumulative history. Replacing the reporting process must
+    use a new execution. Same-execution process replacement/recovery and concurrent producers within
+    one execution are not supported.
 
 14. **Operational boundaries.** Reporting must not introduce unbounded save queues, indefinite
     retries, or unlimited shutdown delays. Invalid, oversized, or overflowing counts are not
@@ -100,6 +103,6 @@ implement collection or enable a production rollout.
 
 ## Review dependency
 The startup contract must identify and authorize this producer's execution and communicate reporting
-support. Same-execution restarts additionally require safe sequence recovery; reading a retained
-snapshot alone is insufficient. The proposed handoff and unsupported restart cases are in
+support. It must not enable a replacement reporting process under an existing execution ID; reading
+a retained sequence cannot prove that old requests have finished. The proposed handoff is in
 [TECH.md](TECH.md#phase-1-execution-bound-startup-and-transport).

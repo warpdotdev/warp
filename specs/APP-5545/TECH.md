@@ -1,7 +1,7 @@
 # Third-party harness metrics: client implementation
 
 ## Context
-Implement [PRODUCT.md](PRODUCT.md) in the Warp Rust producer. This is a specs-only proposal; server
+Implement [PRODUCT.md](PRODUCT.md) in the Warp Rust producer. These specs guide the client stack; server
 storage/authentication/API work remains owned by the separate server threads. The broader issue is
 [APP-5545](https://linear.app/warpdotdev/issue/APP-5545/support-byollm-and-third-party-metrics).
 
@@ -21,7 +21,7 @@ Inspected Warp revision: `6f575836c02bd80a4b2de2755e952bec1793d3df`.
 Server references are the published [storage PR #17056](https://github.com/warpdotdev/warp-server/pull/17056)
 at `47513a4e089bc1ef7312b708f9f7706c0dea96d3` and
 [API PR #17057](https://github.com/warpdotdev/warp-server/pull/17057) at
-`c189171ff26d38ae0aeb1f5b7f51fe5f4ae565b7`. Their
+`4b337aa0dbf20e56f8c72783b6717de578a015f1`. Their
 [successful-snapshot refactor](https://github.com/warpdotdev/warp-server/blob/47513a4e089bc1ef7312b708f9f7706c0dea96d3/specs/APP-5545/TECH.md)
 supersedes the original spec's writer-generation, immutable-source, and failure-report protocol.
 The original [native counting requirements](https://github.com/warpdotdev/warp-server/blob/02b1f4ff96977153f8e13ca58c4acde4cc552647/specs/3p-run-metrics/TECH.md#L35-L67)
@@ -34,7 +34,7 @@ Add Rust transport types and a publication method to `app/src/server/server_api/
 Reuse the existing task authentication, run headers, workload token, and HTTP client. Do not add a
 secret, decode execution identity from an unverified token, or modify generic shutdown authentication.
 
-The [current HTTP schema](https://github.com/warpdotdev/warp-server/blob/c189171ff26d38ae0aeb1f5b7f51fe5f4ae565b7/public_api/openapi.yaml)
+The [current HTTP schema](https://github.com/warpdotdev/warp-server/blob/4b337aa0dbf20e56f8c72783b6717de578a015f1/public_api/openapi.yaml)
 accepts `POST /api/v1/harness-support/harness-usage` with:
 - `schema_version`, `parser_version`, `harness` (`CLAUDE_CODE` or `CODEX`), `execution_id`,
   positive `capture_sequence`, and capture-time `last_updated`.
@@ -49,16 +49,17 @@ endpoint is for inspection, not a per-save prerequisite.
 
 **Server handoff required before integration:** add optional reporting context to the existing
 authenticated startup/resolve-prompt exchange. Proposed shape: `harness_usage` containing
-`schema_version`, `execution_id`, and `last_capture_sequence` for that execution (0 if none).
+`schema_version` and `execution_id`.
 Missing/null means unsupported or disabled. Exact naming and error codes must be agreed with the
 API owner; these fields do not exist in the inspected published response. The response must validate
 credentials against that execution, not merely return the newest execution after generic auth.
 
 Consume the context on fresh and resumed managed runs. Paths that do not perform authenticated
 server startup remain reporting-disabled. A new execution starts at 1; a process retains its counter
-across follow-ups. Same-execution recovery may seed from the accepted sequence only when the previous
-producer and its in-flight requests are known to have drained. Otherwise require a new execution;
-do not implement concurrent replacement producers, infer a current ID from retained old metrics, or
+across follow-ups. Replacing that reporting process requires a new execution; same-execution recovery
+is disabled in v1. The startup/lifecycle owner must enforce this boundary rather than issue reporting
+context to competing processes. A saved sequence alone cannot prove an old request has finished, so
+do not request or use `last_capture_sequence`. Do not infer a current ID from retained old metrics or
 add a writer registry. Missing safe context disables reporting with a bounded diagnostic, not runs.
 
 ### Phase 2: Capture diagnostics and pure extractors
@@ -167,9 +168,11 @@ Keep HTTP status/error classification available to the helper instead of parsing
 ### Phase 4: Driver lifecycle and rollout
 Route periodic and post-turn saves through the helper, maintaining session-update work such as
 Codex ID discovery and Claude bridge acknowledgements before the associated capture. Request a
-coalesced save on completion/failure/cancellation notifications as well; do not rely solely on
-`SessionUpdated`. Periodic requests must not await the network inside the driver's event-selection
-loop, delaying follow-ups, exit escalation, or runtime-error handling.
+coalesced save from the existing completion/failure/cancellation handler as well; do not rely solely
+on `SessionUpdated`. These events only trigger saving; all counting uses the captured transcript.
+Do not add plugin hooks or a separate notification-based extractor. Periodic requests must not await
+the network inside the driver's event-selection loop, delaying follow-ups, exit escalation, or
+runtime-error handling.
 
 After process termination, mark the helper closing, settle/cancel bounded pending work, then attempt
 one final fresh capture before cleanup and execution-shutdown reporting. Reject late ordinary save
@@ -195,8 +198,8 @@ blocks), added to the existing O(transcript bytes) read; measure it before consi
 parsing or promising negligible latency.
 
 ## Testing and validation
-This PR only introduces specs. The following are implementation acceptance criteria, not tests
-claimed to have run. Use compact synthetic fixtures, separate Rust test files, and controlled time/
+The following are implementation acceptance criteria, not tests claimed to have run. Use compact
+synthetic fixtures, separate Rust test files, and controlled time/
 mocked transport for sequencing rather than broad end-to-end tests for every permutation.
 
 - **PRODUCT 3-8:** Claude fixtures cover evolving/conflicting duplicates, multiple tool blocks, native
@@ -209,9 +212,9 @@ mocked transport for sequencing rather than broad end-to-end tests for every per
   timeout, and no publication after closing. Assert capture bytes and metrics share input and retry
   identity/time is stable. Metrics errors must not change cleanup/resume disposition.
 - **PRODUCT 2, 10, 13:** Transport tests cover wire field names, exact integers, response statuses,
-  disabled/old startup responses, schema mismatch, limits, rejected superseded credentials, and sequence
-  recovery only for a safely drained same execution. Reuse server auth tests rather than reimplementing
-  token minting in Rust.
+  disabled/old startup responses, schema mismatch, limits, rejected superseded credentials, and a
+  counter retained across same-process follow-ups but reset only for a new execution. There is no
+  same-execution recovery path. Reuse server auth tests rather than reimplementing token minting in Rust.
 - **Build:** run repository formatting and the Clippy configurations in `script/presubmit`, focused
   `cargo nextest` tests, and build the producer. Cover native macOS development plus Linux worker
   compilation/smoke behavior before rollout; retain existing non-native cfg/trait compatibility.
@@ -245,13 +248,36 @@ No UI/browser recording or benchmark trial is required. Tests requiring services
 another platform must report blockers rather than claiming synthetic tests cover the live path.
 
 ## Parallelization
-Use one implementation owner in this worktree for the first client PR: capture types, both adapters,
-save ownership, and transport are tightly coupled enough that parallel file ownership adds overhead.
-Pure extraction can proceed while the separate server threads finish their contracts. Integration
-and local end-to-end validation follow the startup handoff; no agents are launched by this spec.
+Use three local agents in independent worktrees, based initially on the updated spec branch. Keep
+the existing spec PR #15926 at the bottom and publish three implementation layers above it with
+`gh stack`. Tests ship with their logical change, not in a fourth validation layer.
+
+1. **metrics-extractors:** native counting, additive read diagnostics, bounded coverage, and fixtures.
+   Branch `varoon/harness-usage-extractors`, worktree `../warp.varoon-harness-usage-extractors`.
+   Own `harness/usage`, read diagnostics in `claude_transcript.rs`, and its module declaration.
+   No live reporting or changes to existing save behavior.
+2. **metrics-saves:** ordered/coalesced save ownership, independent raw/block results, driver triggers,
+   and bounded closing/final saves. Branch `varoon/harness-usage-saves`, worktree
+   `../warp.varoon-harness-usage-saves`. Own the shared save helper, driver lifecycle, and runner save
+   interfaces, but not extraction or HTTP transport. Preserve cleanup/resume and Gemini behavior.
+3. **metrics-publish:** authenticated startup/transport, counting from the saved capture, report
+   retries, and end-to-end integration. Branch `varoon/harness-usage-publish`, worktree
+   `../warp.varoon-harness-usage-publish`. Own `server_api/harness_support.rs`; edit driver/runner
+   integration only after the save agent hands it off. Do not edit the separately owned server code.
+
+Local execution lets agents exchange committed branches without uploading intermediate code. The
+extraction and save agents work independently and send interface decisions early; publication first
+prepares transport against the documented server contract. The lead rebases saves onto extraction,
+then publication onto saves, resolves interface seams, and reviews the combined behavior. The lead
+alone manages shared `gh stack` state and PR descriptions. Agents return commits, changed paths, and
+validation results before their worktrees are cleaned.
+
+Serialize heavy Cargo validation using one existing build cache rather than three parallel caches.
+Each code layer must pass required checks before publication. Live local validation additionally
+requires the server startup handoff; missing capability must not be bypassed to claim success.
 
 ## Decisions to confirm in review
-- The optional startup response shape and a safe same-execution restart policy with the server owners.
+- The optional startup response shape and enforcement that a replacement producer gets a new execution.
 - Native payload/coverage fixtures, published collection/body limits, and status/error mapping before
   wiring the client to the final API.
 - The proposed retry/request/final-save budgets, which are new defaults rather than measured SLAs.
