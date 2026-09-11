@@ -341,6 +341,7 @@ fn build_create_input(args: CreateRunnerArgs, owner: GqlOwner) -> UpsertRunnerIn
                 version: args.macos_version.map(macos_version_to_gql),
             }),
         ),
+        RunnerOsArg::Windows => (None, None),
     };
 
     let instance_shape = match (args.vcpus, args.memory_gb) {
@@ -379,6 +380,7 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
     let effective_os_arg = match effective_os {
         RunnerOs::Linux => RunnerOsArg::Linux,
         RunnerOs::Macos => RunnerOsArg::Macos,
+        RunnerOs::Windows => RunnerOsArg::Windows,
     };
     validate_os_config(
         effective_os_arg,
@@ -405,6 +407,7 @@ fn build_update_input(args: &UpdateRunnerArgs, existing: &RunnerConfig) -> Resul
                 .or_else(|| existing.mac.as_ref().and_then(|m| m.version));
             (None, Some(MacOsConfigInput { version }))
         }
+        RunnerOs::Windows => (None, None),
     };
 
     // vCPUs and memory can be updated independently; each unspecified dimension
@@ -477,12 +480,13 @@ fn os_to_gql(os: RunnerOsArg) -> RunnerOs {
     match os {
         RunnerOsArg::Linux => RunnerOs::Linux,
         RunnerOsArg::Macos => RunnerOs::Macos,
+        RunnerOsArg::Windows => RunnerOs::Windows,
     }
 }
 
 /// Resolve a [`RunnerArchArg`] into a concrete [`RunnerArch`], mapping `auto`
-/// to the default architecture for the given OS (x86-64 on Linux, aarch64 on
-/// macOS).
+/// to the default architecture for the given OS (x86-64 on Linux and Windows,
+/// aarch64 on macOS).
 fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
     match arch {
         RunnerArchArg::X8664 => RunnerArch::X8664,
@@ -490,6 +494,7 @@ fn resolve_arch(arch: RunnerArchArg, os: RunnerOsArg) -> RunnerArch {
         RunnerArchArg::Auto => match os {
             RunnerOsArg::Linux => RunnerArch::X8664,
             RunnerOsArg::Macos => RunnerArch::Aarch64,
+            RunnerOsArg::Windows => RunnerArch::X8664,
         },
     }
 }
