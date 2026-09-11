@@ -433,36 +433,46 @@ fn mock_response_stream_updates_history_through_controller() {
 }
 
 #[test]
-fn explicit_stream_finished_failure_is_classified_without_init() {
+fn explicit_stream_finished_failures_are_classified_without_init() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
         let terminal = add_window_with_terminal(&mut app, None);
-        let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
-        stream.update(&mut app, |stream, ctx| {
-            stream.emit_response_event_for_test(
-                warp_multi_agent_api::ResponseEvent {
-                    r#type: Some(response_event::Type::Finished(
-                        response_event::StreamFinished {
-                            reason: Some(response_event::stream_finished::Reason::Other(
-                                Default::default(),
-                            )),
-                            conversation_usage_metadata: None,
-                            token_usage: vec![],
-                            should_refresh_model_config: false,
-                            #[allow(deprecated)]
-                            request_cost: None,
-                            request_charges: None,
-                        },
-                    )),
+
+        let reasons = [
+            response_event::stream_finished::Reason::Other(Default::default()),
+            response_event::stream_finished::Reason::LlmUnavailable(Default::default()),
+            response_event::stream_finished::Reason::InternalError(
+                response_event::stream_finished::InternalError {
+                    message: "server stream failure".to_owned(),
                 },
-                ctx,
+            ),
+        ];
+        for reason in reasons {
+            let (conversation_id, stream) = register_mock_response_stream(&terminal, &mut app);
+            stream.update(&mut app, |stream, ctx| {
+                stream.emit_response_event_for_test(
+                    warp_multi_agent_api::ResponseEvent {
+                        r#type: Some(response_event::Type::Finished(
+                            response_event::StreamFinished {
+                                reason: Some(reason),
+                                conversation_usage_metadata: None,
+                                token_usage: vec![],
+                                should_refresh_model_config: false,
+                                #[allow(deprecated)]
+                                request_cost: None,
+                                request_charges: None,
+                            },
+                        )),
+                    },
+                    ctx,
+                );
+            });
+            assert_terminal_stream_task_update(
+                &app,
+                conversation_id,
+                PlatformErrorCode::AgentStreamFailure,
             );
-        });
-        assert_terminal_stream_task_update(
-            &app,
-            conversation_id,
-            PlatformErrorCode::AgentStreamFailure,
-        );
+        }
     });
 }
 
