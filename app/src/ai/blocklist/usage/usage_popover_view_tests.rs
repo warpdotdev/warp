@@ -1,7 +1,14 @@
 use std::collections::HashMap;
 
 use super::*;
+use crate::persistence::model::{
+    AgentConversationData, ChargedUsageTotals, ConversationUsageMetadata,
+};
 use crate::settings::UsageDisplayUnit;
+
+fn identity_labels(config_key: &str) -> String {
+    config_key.to_string()
+}
 
 fn model(id: &str, warp_tokens: u32, category: &str) -> ModelTokenUsage {
     ModelTokenUsage {
@@ -21,7 +28,7 @@ fn model_usage_rows_drops_zero_token_models() {
             ..Default::default()
         },
     ];
-    let rows = model_usage_rows(&models, &HashMap::new());
+    let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].model_id, "gpt-5.5");
 }
@@ -33,7 +40,7 @@ fn model_usage_rows_sorts_primary_agent_first() {
         model("primary-model", 100, PRIMARY_AGENT_CATEGORY),
         model("auto-model", 10, "other_category"),
     ];
-    let rows = model_usage_rows(&models, &HashMap::new());
+    let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(rows[0].model_id, "primary-model");
     assert_eq!(rows[0].role, Some(ModelRole::PrimaryAgent));
 }
@@ -41,14 +48,14 @@ fn model_usage_rows_sorts_primary_agent_first() {
 #[test]
 fn model_usage_rows_assigns_full_terminal_use_role() {
     let models = vec![model("codex-model", 50, FULL_TERMINAL_USE_CATEGORY)];
-    let rows = model_usage_rows(&models, &HashMap::new());
+    let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(rows[0].role, Some(ModelRole::FullTerminalUse));
 }
 
 #[test]
 fn model_usage_rows_has_no_role_for_unknown_categories() {
     let models = vec![model("auto-model", 10, "some_other_category")];
-    let rows = model_usage_rows(&models, &HashMap::new());
+    let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(rows[0].role, None);
 }
 
@@ -76,9 +83,11 @@ fn model_usage_rows_joins_charged_usage_by_model_id() {
         model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY),
         model("codex-model", 50, FULL_TERMINAL_USE_CATEGORY),
     ];
-    let charged_usage_by_model =
-        HashMap::from([("gpt-5.5".to_string(), charged_usage_with_input_cost(36.0))]);
-    let rows = model_usage_rows(&models, &charged_usage_by_model);
+    let charged_usage_by_key = HashMap::from([(
+        ModelChargeKey::Standard("gpt-5.5".to_string()),
+        charged_usage_with_input_cost(36.0),
+    )]);
+    let rows = model_usage_rows(&models, &charged_usage_by_key, identity_labels);
     let gpt_row = rows.iter().find(|r| r.model_id == "gpt-5.5").unwrap();
     let codex_row = rows.iter().find(|r| r.model_id == "codex-model").unwrap();
     assert_eq!(gpt_row.cost, Some(CostValue::new(0.0, 36.0)));
@@ -96,14 +105,88 @@ fn model_usage_rows_adds_charged_models_missing_from_token_usage() {
         input_cost_in_cents: 3.0,
         ..Default::default()
     };
-    let charged_usage_by_model = HashMap::from([("charged-only-model".to_string(), charged_usage)]);
+    let charged_usage_by_key = HashMap::from([(
+        ModelChargeKey::CustomEndpoint("config-key".to_string()),
+        charged_usage,
+    )]);
 
-    let rows = model_usage_rows(&[], &charged_usage_by_model);
+    let rows = model_usage_rows(&[], &charged_usage_by_key, |config_key| {
+        format!("labeled-{config_key}")
+    });
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].model_id, "charged-only-model");
+    assert_eq!(rows[0].model_id, "labeled-config-key");
     assert_eq!(rows[0].tokens, 700);
     assert_eq!(rows[0].role, None);
+}
+
+/// A charged model with no token activity but web-search charges must not
+/// vanish from the row list.
+#[test]
+fn model_usage_rows_retains_charged_models_with_only_web_search_activity() {
+    let charged_usage_by_key = HashMap::from([(
+        ModelChargeKey::Standard("gpt-5.5".to_string()),
+        ModelChargedUsage {
+            web_search_count: 3,
+            web_search_cost_in_cents: 2.0,
+            ..Default::default()
+        },
+    )]);
+
+    let rows = model_usage_rows(&[], &charged_usage_by_key, identity_labels);
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].model_id, "gpt-5.5");
+    assert_eq!(rows[0].tokens, 0);
+    assert_eq!(rows[0].charged_usage.unwrap().web_search_count, 3);
+}
+
+/// A custom endpoint whose display label collides with a standard model's id
+/// must not merge its charges into the standard model's row: each charge
+/// contributes to exactly one row, so the totals are the sum of the distinct
+/// rows.
+#[test]
+fn model_usage_rows_does_not_merge_label_colliding_custom_endpoint_charges() {
+    let messages = [request_metadata_message(api::RequestCharges {
+        usage_by_category: HashMap::from([(
+            PRIMARY_AGENT_CATEGORY.to_string(),
+            charged_usage(
+                single_model_usage("gpt-5.5", 100, 100.0),
+                HashMap::new(),
+                single_model_usage("config-key", 200, 200.0),
+            ),
+        )]),
+    })];
+    let charged_usage_by_key = sum_charged_usage_by_key(messages.iter());
+    let models = vec![
+        model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY),
+        ModelTokenUsage {
+            model_id: "labeled-config-key".to_string(),
+            custom_endpoint_tokens: 200,
+            custom_endpoint_token_usage_by_category: HashMap::from([(
+                PRIMARY_AGENT_CATEGORY.to_string(),
+                200,
+            )]),
+            ..Default::default()
+        },
+    ];
+
+    let rows = model_usage_rows(&models, &charged_usage_by_key, |config_key| {
+        format!("labeled-{config_key}")
+    });
+    let totals = RowTotals::of_model_rows(&rows);
+
+    let standard_row = rows.iter().find(|r| r.model_id == "gpt-5.5").unwrap();
+    let custom_row = rows
+        .iter()
+        .find(|r| r.model_id == "labeled-config-key")
+        .unwrap();
+    assert_eq!(standard_row.tokens, 100);
+    assert_eq!(standard_row.cost, Some(CostValue::new(0.0, 100.0)));
+    assert_eq!(custom_row.tokens, 200);
+    assert_eq!(custom_row.cost, Some(CostValue::new(0.0, 200.0)));
+    assert_eq!(totals.tokens, Some(300));
+    assert_eq!(totals.cost, Some(CostValue::new(0.0, 300.0)));
 }
 
 /// The row total must equal the sum of the breakdown rows shown beneath it,
@@ -124,15 +207,15 @@ fn model_usage_row_totals_match_the_charged_usage_breakdown_rows() {
         ..Default::default()
     };
     let models = vec![model("gpt-5.5", 42, PRIMARY_AGENT_CATEGORY)];
-    let charged_usage_by_model = HashMap::from([("gpt-5.5".to_string(), charged_usage)]);
+    let charged_usage_by_key = HashMap::from([(
+        ModelChargeKey::Standard("gpt-5.5".to_string()),
+        charged_usage,
+    )]);
 
-    let rows = model_usage_rows(&models, &charged_usage_by_model);
+    let rows = model_usage_rows(&models, &charged_usage_by_key, identity_labels);
 
-    assert_eq!(rows[0].tokens, 1_000 + 500 + 300 + 200);
-    assert_eq!(
-        rows[0].cost,
-        Some(CostValue::new(0.0, 10.0 + 20.0 + 3.0 + 2.0 + 5.0))
-    );
+    assert_eq!(rows[0].tokens, 2_000);
+    assert_eq!(rows[0].cost, Some(CostValue::new(0.0, 40.0)));
 }
 
 /// Without attributed charges there is no breakdown to reconcile against, so
@@ -140,7 +223,7 @@ fn model_usage_row_totals_match_the_charged_usage_breakdown_rows() {
 #[test]
 fn model_usage_row_falls_back_to_reported_tokens_without_charged_usage() {
     let models = vec![model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY)];
-    let rows = model_usage_rows(&models, &HashMap::new());
+    let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(rows[0].tokens, 100);
     assert_eq!(rows[0].cost, None);
 }
@@ -153,24 +236,35 @@ fn row_totals_sum_the_displayed_rows() {
         model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY),
         model("codex-model", 50, FULL_TERMINAL_USE_CATEGORY),
     ];
-    let charged_usage_by_model = HashMap::from([
-        ("gpt-5.5".to_string(), charged_usage_with_input_cost(36.0)),
+    let charged_usage_by_key = HashMap::from([
         (
-            "codex-model".to_string(),
-            charged_usage_with_input_cost(14.0),
+            ModelChargeKey::Standard("gpt-5.5".to_string()),
+            ModelChargedUsage {
+                input_tokens: 100,
+                input_cost_in_cents: 36.0,
+                ..Default::default()
+            },
+        ),
+        (
+            ModelChargeKey::Standard("codex-model".to_string()),
+            ModelChargedUsage {
+                input_tokens: 50,
+                input_cost_in_cents: 14.0,
+                ..Default::default()
+            },
         ),
     ]);
-    let rows = model_usage_rows(&models, &charged_usage_by_model);
+    let rows = model_usage_rows(&models, &charged_usage_by_key, identity_labels);
     let totals = RowTotals::of_model_rows(&rows);
 
-    assert_eq!(totals.tokens, Some(rows.iter().map(|r| r.tokens).sum()));
+    assert_eq!(totals.tokens, Some(150));
     assert_eq!(totals.cost, Some(CostValue::new(0.0, 50.0)));
 }
 
 #[test]
 fn row_totals_cost_is_unknown_when_no_row_has_an_attributed_cost() {
     let models = vec![model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY)];
-    let rows = model_usage_rows(&models, &HashMap::new());
+    let rows = model_usage_rows(&models, &HashMap::new(), identity_labels);
     assert_eq!(RowTotals::of_model_rows(&rows).cost, None);
 }
 
@@ -232,11 +326,13 @@ fn single_model_usage(
 }
 
 /// Per-model rows are derived at render time by folding every persisted
-/// request's nested category → model → usage values together.
+/// request's nested category → model → usage values together. Warp/BYOK
+/// charges fold by server model id; custom-endpoint charges fold by their
+/// upstream `config_key`.
 #[test]
-fn sum_charged_usage_by_model_folds_the_nested_category_and_usage_type_maps() {
+fn sum_charged_usage_by_key_folds_the_nested_category_and_usage_type_maps() {
     #[allow(clippy::type_complexity)]
-    let cases: [(&str, Vec<api::Message>, Vec<(&str, u64, f32)>); 4] = [
+    let cases: [(&str, Vec<api::Message>, Vec<(ModelChargeKey, u64, f32)>); 4] = [
         // Sum across categories for one model.
         (
             "sums across categories",
@@ -260,10 +356,10 @@ fn sum_charged_usage_by_model_folds_the_nested_category_and_usage_type_maps() {
                     ),
                 ]),
             })],
-            vec![("gpt-5.5", 130, 15.0)],
+            vec![(ModelChargeKey::Standard("gpt-5.5".into()), 130, 15.0)],
         ),
-        // Warp, BYOK, and custom-endpoint charges for the same model id all
-        // land on one row.
+        // Warp and BYOK charges for the same model id fold together; custom
+        // endpoints stay keyed by their config_key.
         (
             "sums across usage types",
             vec![request_metadata_message(api::RequestCharges {
@@ -276,7 +372,10 @@ fn sum_charged_usage_by_model_folds_the_nested_category_and_usage_type_maps() {
                     ),
                 )]),
             })],
-            vec![("gpt-5.5", 120, 12.0), ("labeled-config-key", 7, 0.7)],
+            vec![
+                (ModelChargeKey::Standard("gpt-5.5".into()), 120, 12.0),
+                (ModelChargeKey::CustomEndpoint("config-key".into()), 7, 0.7),
+            ],
         ),
         // Several requests accumulate on the same per-model totals.
         (
@@ -303,7 +402,7 @@ fn sum_charged_usage_by_model_folds_the_nested_category_and_usage_type_maps() {
                     )]),
                 }),
             ],
-            vec![("gpt-5.5", 150, 16.0)],
+            vec![(ModelChargeKey::Standard("gpt-5.5".into()), 150, 16.0)],
         ),
         // Messages without a RequestMetadata payload or without charges
         // contribute nothing.
@@ -318,16 +417,14 @@ fn sum_charged_usage_by_model_folds_the_nested_category_and_usage_type_maps() {
     ];
 
     for (name, messages, expected_models) in cases {
-        let sums = sum_charged_usage_by_model(messages.iter(), |config_key| {
-            format!("labeled-{config_key}")
-        });
+        let sums = sum_charged_usage_by_key(messages.iter());
         assert_eq!(sums.len(), expected_models.len(), "{name}");
-        for (model_id, tokens, cost_in_cents) in expected_models {
-            let usage = sums.get(model_id).unwrap_or_else(|| panic!("{name}"));
-            assert_eq!(usage.tokens(), tokens, "{name}: {model_id}");
+        for (key, tokens, cost_in_cents) in expected_models {
+            let usage = sums.get(&key).unwrap_or_else(|| panic!("{name}"));
+            assert_eq!(usage.tokens(), tokens, "{name}: {key:?}");
             assert!(
                 (usage.cost().cost_in_cents - cost_in_cents).abs() < 1e-4,
-                "{name}: {model_id}"
+                "{name}: {key:?}"
             );
         }
     }
@@ -336,7 +433,7 @@ fn sum_charged_usage_by_model_folds_the_nested_category_and_usage_type_maps() {
 /// Web-search charges ride outside the token buckets and must survive the
 /// fold.
 #[test]
-fn sum_charged_usage_by_model_includes_web_search_charges() {
+fn sum_charged_usage_by_key_includes_web_search_charges() {
     let messages = [request_metadata_message(api::RequestCharges {
         usage_by_category: HashMap::from([(
             PRIMARY_AGENT_CATEGORY.to_string(),
@@ -356,8 +453,10 @@ fn sum_charged_usage_by_model_includes_web_search_charges() {
         )]),
     })];
 
-    let sums = sum_charged_usage_by_model(messages.iter(), |key| key.to_string());
-    let usage = sums.get("gpt-5.5").unwrap();
+    let sums = sum_charged_usage_by_key(messages.iter());
+    let usage = sums
+        .get(&ModelChargeKey::Standard("gpt-5.5".to_string()))
+        .unwrap();
     assert_eq!(usage.web_search_count, 3);
     assert_eq!(usage.web_search_cost(), CostValue::new(0.4, 2.0));
 }
@@ -490,12 +589,47 @@ fn format_searches_and_cost_appends_cost_suffix() {
 }
 
 /// A conversation whose usage metadata carries no cost figures at all renders
-/// an em dash rather than a fabricated zero.
+/// an em dash rather than a fabricated zero in credits mode; a fresh
+/// conversation's provider cost starts at a known zero in dollars mode.
 #[test]
 fn conversation_total_text_shows_em_dash_without_usage_data() {
     let conversation = AIConversation::new(false, false);
     assert_eq!(
         conversation_total_text(&conversation, UsageDisplayUnit::Credits),
+        EM_DASH
+    );
+    assert_eq!(
+        conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
+        "$0.00"
+    );
+}
+
+/// Restored conversations can carry token counts without any cost figures.
+/// `has_usage` only makes the usage button visible; it does not make an
+/// unknown cost known, so both units render an em dash rather than
+/// "0 credits" / "$0.00".
+#[test]
+fn conversation_total_text_shows_em_dash_for_token_only_metadata() {
+    let conversation = AIConversation::new_restored_synthesizing_on_empty(
+        AIConversationId::new(),
+        vec![],
+        Some(AgentConversationData {
+            conversation_usage_metadata: Some(ConversationUsageMetadata {
+                token_usage: vec![model("gpt-5.5", 100, PRIMARY_AGENT_CATEGORY)],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+    .unwrap();
+
+    assert!(conversation.usage_totals().has_usage);
+    assert_eq!(
+        conversation_total_text(&conversation, UsageDisplayUnit::Credits),
+        EM_DASH
+    );
+    assert_eq!(
+        conversation_total_text(&conversation, UsageDisplayUnit::Dollars),
         EM_DASH
     );
 }
@@ -504,7 +638,7 @@ fn conversation_total_text_shows_em_dash_without_usage_data() {
 fn conversation_total_text_uses_the_charged_usage_totals() {
     let mut conversation = AIConversation::new(false, false);
     conversation.set_credits_spent_for_test(12.5);
-    conversation.set_charged_usage_for_test(Some(crate::persistence::model::ChargedUsageTotals {
+    conversation.set_charged_usage_for_test(Some(ChargedUsageTotals {
         input_cost_in_cents: 21.0,
         input_cost_in_credits: 2.1,
         platform_cost_in_cents: 79.0,
